@@ -2,6 +2,28 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [Unreleased]
+
+### Added
+- Minimal **Annotate | Critique** tab workflow with explicit handoff actions.
+- Shared `View: Markdown | Preview` toggle for draft/result inspection.
+- `Follow latest: On|Off` + `Pull latest` controls for terminal/editor-composability.
+- Critique → Annotate handoff actions:
+  - **Send critique package to Annotate**
+  - **Send clean document to Annotate**
+- Annotate result actions:
+  - **Load response**
+  - **Load edited document** (`## Document` section)
+  - **Send response to Critique**
+
+### Changed
+- Simplified UI: removed in-critique response textbox and duplicate annotated-document panel.
+- Clarified tab-oriented labels (`Annotated Copy`, `Draft`, `To Critique`, `Critique`, `Original: ...`).
+- Auto-detect startup tab from loaded content structure (`## Critiques` + `## Document` → Critique).
+- Footer now shows explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`) alongside status text.
+- Annotate submission sends annotated-reply scaffold with source context.
+- Studio now live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
+
 ## [0.1.0-alpha.1] - 2026-02-26
 
 Initial alpha baseline.

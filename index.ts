@@ -48,6 +48,10 @@ interface PingMessage {
 	type: "ping";
 }
 
+interface GetLatestResponseMessage {
+	type: "get_latest_response";
+}
+
 interface CritiqueRequestMessage {
 	type: "critique_request";
 	requestId: string;
@@ -83,6 +87,7 @@ interface SendToEditorRequestMessage {
 type IncomingStudioMessage =
 	| HelloMessage
 	| PingMessage
+	| GetLatestResponseMessage
 	| CritiqueRequestMessage
 	| AnnotationRequestMessage
 	| SaveAsRequestMessage
@@ -351,6 +356,12 @@ function buildCritiquePrompt(document: string, lens: Lens): string {
 	return `${template}<content>\nSource: studio document\n\n${content}\n</content>`;
 }
 
+function inferStudioResponseKind(markdown: string): StudioRequestKind {
+	const lower = markdown.toLowerCase();
+	if (lower.includes("## critiques") && lower.includes("## document")) return "critique";
+	return "annotation";
+}
+
 function extractAssistantText(message: unknown): string | null {
 	const msg = message as {
 		role?: string;
@@ -413,6 +424,7 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 
 	if (msg.type === "hello") return { type: "hello" };
 	if (msg.type === "ping") return { type: "ping" };
+	if (msg.type === "get_latest_response") return { type: "get_latest_response" };
 
 	if (
 		msg.type === "critique_request" &&
@@ -566,6 +578,34 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       flex-wrap: wrap;
     }
 
+    .mode-toggle {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      overflow: hidden;
+      background: var(--panel-2);
+    }
+
+    .mode-btn {
+      border: none;
+      border-right: 1px solid var(--border);
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
+    .mode-btn:last-child {
+      border-right: none;
+    }
+
+    .mode-btn.active {
+      background: rgba(94, 161, 255, 0.18);
+      color: var(--text);
+      font-weight: 600;
+    }
+
     button, select, .file-label {
       border: 1px solid var(--border);
       background: var(--panel-2);
@@ -650,6 +690,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       flex-wrap: wrap;
     }
 
+    .badge-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
     .source-badge {
       border: 1px solid var(--border);
       background: var(--panel-2);
@@ -673,8 +720,25 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
     }
 
     #sourceText {
-      min-height: 170px;
-      max-height: 42vh;
+      min-height: 200px;
+      max-height: 62vh;
+    }
+
+    #sourcePreview {
+      min-height: 200px;
+      max-height: 62vh;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    #sourcePreview pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.5;
     }
 
     .panel-scroll {
@@ -742,16 +806,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       gap: 8px;
     }
 
-    #responseText {
-      min-height: 110px;
-      max-height: 220px;
-    }
-
     .response-actions {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-start;
       gap: 8px;
+      flex-wrap: wrap;
     }
 
     footer {
@@ -778,45 +838,64 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
   <header>
     <h1>pi-studio</h1>
     <div class="controls">
-      <label class="file-label">Load file<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
+      <div class="mode-toggle" role="group" aria-label="Studio tab">
+        <button id="modeAnnotateBtn" class="mode-btn" type="button" aria-pressed="true">Annotate</button>
+        <button id="modeCritiqueBtn" class="mode-btn" type="button" aria-pressed="false">Critique</button>
+      </div>
+      <select id="viewSelect" aria-label="View mode">
+        <option value="markdown" selected>View: Markdown</option>
+        <option value="preview">View: Preview</option>
+      </select>
+      <select id="followSelect" aria-label="Follow latest responses">
+        <option value="on" selected>Follow latest: On</option>
+        <option value="off">Follow latest: Off</option>
+      </select>
+      <button id="pullLatestBtn" type="button">Pull latest</button>
+      <button id="sendReplyBtn" type="button">Send reply</button>
       <select id="lensSelect" aria-label="Critique lens">
         <option value="auto" selected>Lens: Auto</option>
         <option value="writing">Lens: Writing</option>
         <option value="code">Lens: Code</option>
       </select>
-      <button id="critiqueBtn" type="button">Critique</button>
+      <button id="critiqueBtn" type="button">Generate critique</button>
+      <label class="file-label">Load file<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
     </div>
   </header>
 
   <main>
     <section>
-      <div class="section-header">Document</div>
+      <div id="leftSectionHeader" class="section-header">Annotated Copy</div>
       <div class="source-wrap">
         <div class="source-meta">
-          <span id="sourceBadge" class="source-badge">Source: ${initialLabel}</span>
+          <div class="badge-row">
+            <span id="sourceBadge" class="source-badge">Original: ${initialLabel}</span>
+            <span id="modeBadge" class="source-badge">Tab: Annotate</span>
+          </div>
           <div class="source-actions">
-            <button id="applyDocBtn" type="button">Apply Document</button>
             <button id="saveAsBtn" type="button">Save As…</button>
             <button id="saveOverBtn" type="button" disabled>Save Over</button>
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
-            <button id="copyDraftBtn" type="button">Copy</button>
+            <button id="copyDraftBtn" type="button">Copy draft</button>
           </div>
         </div>
-        <textarea id="sourceText" placeholder="Paste your text here, then click Critique">${initialText}</textarea>
+        <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
+        <div id="sourcePreview" class="panel-scroll" hidden><pre></pre></div>
       </div>
-      <div class="section-header">Annotated document</div>
-      <div id="documentView" class="panel-scroll"><pre>No critique yet.</pre></div>
     </section>
 
     <section>
-      <div class="section-header">Assessment + Critiques</div>
-      <div id="critiqueView" class="panel-scroll">No critique yet.</div>
+      <div id="rightSectionHeader" class="section-header">Original</div>
+      <div id="critiqueView" class="panel-scroll"><pre>No response yet.</pre></div>
       <div class="response-wrap">
-        <div class="section-header" style="padding:0;border:none;">Your response</div>
-        <textarea id="responseText" placeholder="[accept C1]\n[reject C2: reason]\n[revise C3: ...]"></textarea>
-        <div class="response-actions">
-          <span style="font-size:12px;color:var(--muted);">Click critique IDs to insert templates.</span>
-          <button id="submitBtn" type="button">Submit</button>
+        <div id="annotateActions" class="response-actions">
+          <button id="loadResponseBtn" type="button">Load response</button>
+          <button id="loadEditedBtn" type="button">Load edited document</button>
+          <button id="sendToCritiqueBtn" type="button">Send response to Critique</button>
+          <button id="copyResponseBtn" type="button">Copy response</button>
+        </div>
+        <div id="critiqueActions" class="response-actions" hidden>
+          <button id="sendPackageBtn" type="button">Send critique package to Annotate</button>
+          <button id="sendCleanBtn" type="button">Send clean document to Annotate</button>
         </div>
       </div>
     </section>
@@ -831,13 +910,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
     (() => {
       const statusEl = document.getElementById("status");
       if (statusEl) {
-        statusEl.textContent = "Studio script starting…";
+        statusEl.textContent = "WS: Connecting · Studio script starting…";
       }
 
       function hardFail(prefix, error) {
         const details = error && error.message ? error.message : String(error || "unknown error");
         if (statusEl) {
-          statusEl.textContent = prefix + ": " + details;
+          statusEl.textContent = "WS: Disconnected · " + prefix + ": " + details;
           statusEl.className = "error";
         }
       }
@@ -852,19 +931,33 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
       try {
       const sourceTextEl = document.getElementById("sourceText");
+      const sourcePreviewEl = document.getElementById("sourcePreview");
+      const leftSectionHeaderEl = document.getElementById("leftSectionHeader");
       const sourceBadgeEl = document.getElementById("sourceBadge");
+      const modeBadgeEl = document.getElementById("modeBadge");
       const critiqueViewEl = document.getElementById("critiqueView");
-      const documentViewEl = document.getElementById("documentView");
-      const responseTextEl = document.getElementById("responseText");
+      const rightSectionHeaderEl = document.getElementById("rightSectionHeader");
+      const modeAnnotateBtn = document.getElementById("modeAnnotateBtn");
+      const modeCritiqueBtn = document.getElementById("modeCritiqueBtn");
+      const viewSelect = document.getElementById("viewSelect");
+      const followSelect = document.getElementById("followSelect");
+      const pullLatestBtn = document.getElementById("pullLatestBtn");
+      const sendReplyBtn = document.getElementById("sendReplyBtn");
       const critiqueBtn = document.getElementById("critiqueBtn");
-      const submitBtn = document.getElementById("submitBtn");
-      const applyDocBtn = document.getElementById("applyDocBtn");
+      const lensSelect = document.getElementById("lensSelect");
+      const fileInput = document.getElementById("fileInput");
+      const annotateActionsEl = document.getElementById("annotateActions");
+      const critiqueActionsEl = document.getElementById("critiqueActions");
+      const loadResponseBtn = document.getElementById("loadResponseBtn");
+      const loadEditedBtn = document.getElementById("loadEditedBtn");
+      const sendToCritiqueBtn = document.getElementById("sendToCritiqueBtn");
+      const copyResponseBtn = document.getElementById("copyResponseBtn");
+      const sendPackageBtn = document.getElementById("sendPackageBtn");
+      const sendCleanBtn = document.getElementById("sendCleanBtn");
       const saveAsBtn = document.getElementById("saveAsBtn");
       const saveOverBtn = document.getElementById("saveOverBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
-      const lensSelect = document.getElementById("lensSelect");
-      const fileInput = document.getElementById("fileInput");
 
       const initialSourceState = {
         source: (document.body && document.body.dataset && document.body.dataset.initialSource) || "blank",
@@ -872,38 +965,170 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         path: (document.body && document.body.dataset && document.body.dataset.initialPath) || null,
       };
 
+      const MODES = {
+        annotate: "annotate",
+        critique: "critique",
+      };
+
       let ws = null;
+      let wsState = "Connecting";
+      let statusMessage = "Studio script starting…";
+      let statusLevel = "";
       let pendingRequestId = null;
       let pendingKind = null;
       let initialDocumentApplied = false;
-      let lastDocumentSection = "";
+      let currentView = "markdown";
+      let followLatest = true;
+      let queuedLatestResponse = null;
+      let annotateResponseMarkdown = "";
+      let critiqueResponseMarkdown = "";
+      let critiqueDocumentSection = "";
       let uiBusy = false;
+      let currentMode = MODES.annotate;
       let sourceState = {
         source: initialSourceState.source,
         label: initialSourceState.label,
         path: initialSourceState.path,
       };
 
-      function setStatus(message, level) {
-        statusEl.textContent = message;
-        statusEl.className = level || "";
+      function modeLabel(mode) {
+        return mode === MODES.critique ? "Critique" : "Annotate";
       }
+
+      function getIdleStatusForMode() {
+        if (currentMode === MODES.critique) {
+          return "Ready (Critique tab). Generate critique from the current draft.";
+        }
+        return "Ready (Annotate tab). Edit draft and send reply.";
+      }
+
+      function renderStatus() {
+        const prefix = "WS: " + wsState;
+        statusEl.textContent = prefix + " · " + statusMessage;
+        statusEl.className = statusLevel || "";
+      }
+
+      function setWsState(nextState) {
+        wsState = nextState || "Disconnected";
+        renderStatus();
+      }
+
+      function setStatus(message, level) {
+        statusMessage = message;
+        statusLevel = level || "";
+        renderStatus();
+      }
+
+      renderStatus();
 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
-        sourceBadgeEl.textContent = "Source: " + label;
+        const prefix = currentMode === MODES.critique ? "To Critique" : "Original";
+        sourceBadgeEl.textContent = prefix + ": " + label;
+      }
+
+      function renderMarkdownHtml(markdown) {
+        const safeText = typeof markdown === "string" ? markdown : "";
+        if (window.marked && typeof window.marked.parse === "function") {
+          const rawHtml = window.marked.parse(safeText);
+          return window.DOMPurify ? window.DOMPurify.sanitize(rawHtml) : rawHtml;
+        }
+        return "<pre>" + escapeHtml(safeText) + "</pre>";
+      }
+
+      function renderSourcePreview() {
+        if (currentView === "preview") {
+          sourcePreviewEl.innerHTML = renderMarkdownHtml(sourceTextEl.value || "");
+        }
+      }
+
+      function getActiveResultMarkdown() {
+        return currentMode === MODES.critique ? critiqueResponseMarkdown : annotateResponseMarkdown;
+      }
+
+      function renderActiveResult() {
+        const markdown = getActiveResultMarkdown();
+        if (!markdown || !markdown.trim()) {
+          const placeholder = currentMode === MODES.critique
+            ? "No critique yet. Click Generate critique."
+            : "No model response yet.";
+          critiqueViewEl.innerHTML = "<pre>" + escapeHtml(placeholder) + "</pre>";
+          return;
+        }
+
+        if (currentView === "preview") {
+          critiqueViewEl.innerHTML = renderMarkdownHtml(markdown);
+          return;
+        }
+
+        critiqueViewEl.innerHTML = "<pre>" + escapeHtml(markdown) + "</pre>";
+      }
+
+      function updateResultActionButtons() {
+        const hasAnnotateResponse = Boolean(annotateResponseMarkdown && annotateResponseMarkdown.trim());
+        const hasCritiqueResponse = Boolean(critiqueResponseMarkdown && critiqueResponseMarkdown.trim());
+        const editedSection = extractSection(annotateResponseMarkdown, "Document");
+        const cleanDoc = critiqueDocumentSection.replace(/\\{C\\d+\\}/g, "");
+
+        loadResponseBtn.disabled = uiBusy || !hasAnnotateResponse;
+        loadEditedBtn.disabled = uiBusy || !editedSection;
+        sendToCritiqueBtn.disabled = uiBusy || !hasAnnotateResponse;
+        copyResponseBtn.disabled = uiBusy || !hasAnnotateResponse;
+        sendPackageBtn.disabled = uiBusy || !hasCritiqueResponse;
+        sendCleanBtn.disabled = uiBusy || !cleanDoc.trim();
+
+        pullLatestBtn.disabled = uiBusy || followLatest;
+        pullLatestBtn.textContent = queuedLatestResponse ? "Pull latest *" : "Pull latest";
+      }
+
+      function updateModeUi() {
+        if (modeBadgeEl) {
+          modeBadgeEl.textContent = "Tab: " + modeLabel(currentMode);
+        }
+
+        if (modeAnnotateBtn) {
+          modeAnnotateBtn.classList.toggle("active", currentMode === MODES.annotate);
+          modeAnnotateBtn.setAttribute("aria-pressed", currentMode === MODES.annotate ? "true" : "false");
+        }
+
+        if (modeCritiqueBtn) {
+          modeCritiqueBtn.classList.toggle("active", currentMode === MODES.critique);
+          modeCritiqueBtn.setAttribute("aria-pressed", currentMode === MODES.critique ? "true" : "false");
+        }
+
+        if (leftSectionHeaderEl) {
+          leftSectionHeaderEl.textContent = currentMode === MODES.critique ? "To Critique" : "Annotated Copy";
+        }
+
+        if (rightSectionHeaderEl) {
+          rightSectionHeaderEl.textContent = currentMode === MODES.critique ? "Critique" : "Original";
+        }
+
+        sendReplyBtn.hidden = currentMode !== MODES.annotate;
+        critiqueBtn.hidden = currentMode !== MODES.critique;
+        lensSelect.hidden = currentMode !== MODES.critique;
+        annotateActionsEl.hidden = currentMode !== MODES.annotate;
+        critiqueActionsEl.hidden = currentMode !== MODES.critique;
+
+        updateSourceBadge();
+        renderActiveResult();
+        updateResultActionButtons();
       }
 
       function syncActionButtons() {
-        critiqueBtn.disabled = uiBusy;
-        submitBtn.disabled = uiBusy;
-        lensSelect.disabled = uiBusy;
         fileInput.disabled = uiBusy;
-        applyDocBtn.disabled = uiBusy || !lastDocumentSection;
         saveAsBtn.disabled = uiBusy;
         saveOverBtn.disabled = uiBusy || !(sourceState.source === "file" && sourceState.path);
         sendEditorBtn.disabled = uiBusy;
         copyDraftBtn.disabled = uiBusy;
+        viewSelect.disabled = uiBusy;
+        followSelect.disabled = uiBusy;
+        sendReplyBtn.disabled = uiBusy || currentMode !== MODES.annotate;
+        critiqueBtn.disabled = uiBusy || currentMode !== MODES.critique;
+        lensSelect.disabled = uiBusy || currentMode !== MODES.critique;
+        if (modeAnnotateBtn) modeAnnotateBtn.disabled = uiBusy;
+        if (modeCritiqueBtn) modeCritiqueBtn.disabled = uiBusy;
+        updateResultActionButtons();
       }
 
       function setBusy(busy) {
@@ -919,6 +1144,42 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         };
         updateSourceBadge();
         syncActionButtons();
+      }
+
+      function detectModeFromText(markdown) {
+        return isStructuredCritique(markdown) ? MODES.critique : MODES.annotate;
+      }
+
+      function setView(nextView) {
+        currentView = nextView === "preview" ? "preview" : "markdown";
+        viewSelect.value = currentView;
+        sourceTextEl.hidden = currentView === "preview";
+        sourcePreviewEl.hidden = currentView !== "preview";
+        if (currentView === "preview") {
+          renderSourcePreview();
+        }
+        renderActiveResult();
+      }
+
+      function setMode(nextMode, options) {
+        const target = nextMode === MODES.critique ? MODES.critique : MODES.annotate;
+        const changed = target !== currentMode;
+        currentMode = target;
+        updateModeUi();
+        syncActionButtons();
+
+        const isManual = Boolean(options && options.manual);
+        const announce = options && Object.prototype.hasOwnProperty.call(options, "announce")
+          ? Boolean(options.announce)
+          : isManual;
+
+        if (announce && changed) {
+          if (currentMode === MODES.critique) {
+            setStatus("Switched to Critique tab.");
+          } else {
+            setStatus("Switched to Annotate tab.");
+          }
+        }
       }
 
       function getToken() {
@@ -976,92 +1237,32 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         return lower.indexOf("## critiques") !== -1 && lower.indexOf("## document") !== -1;
       }
 
-      function clearActiveHighlights() {
-        document.querySelectorAll(".active").forEach((el) => el.classList.remove("active"));
+      function cleanCritiqueMarkers(text) {
+        return String(text || "").replace(/\\{C\\d+\\}/g, "");
       }
 
-      function scrollToCritique(id) {
-        clearActiveHighlights();
-        const critique = document.getElementById("critique-" + id);
-        if (critique) {
-          critique.classList.add("active");
-          critique.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }
-
-      function scrollToMarker(id) {
-        clearActiveHighlights();
-        const marker = document.querySelector('.marker[data-id="' + id + '"]');
-        if (marker) {
-          marker.classList.add("active");
-          marker.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }
-
-      function insertTemplate(id) {
-        const template = "[reject " + id + ": ]";
-        const area = responseTextEl;
-        const start = area.selectionStart === null || area.selectionStart === undefined
-          ? area.value.length
-          : area.selectionStart;
-        const end = area.selectionEnd === null || area.selectionEnd === undefined
-          ? area.value.length
-          : area.selectionEnd;
-        const prefix = area.value.slice(0, start);
-        const suffix = area.value.slice(end);
-        const needsNewline = prefix.length > 0 && !prefix.endsWith("\\n");
-        const insertion = (needsNewline ? "\\n" : "") + template;
-        area.value = prefix + insertion + suffix;
-        const cursorPos = prefix.length + insertion.length - 1;
-        area.focus();
-        area.setSelectionRange(cursorPos, cursorPos);
-      }
-
-      function renderDocument(documentSection) {
-        const content = documentSection && documentSection.length > 0 ? documentSection : sourceTextEl.value;
-        const escaped = escapeHtml(content);
-        const highlighted = escaped.replace(/\\{(C\\d+)\\}/g, '<span class="marker" data-id="$1">{$1}</span>');
-        documentViewEl.innerHTML = "<pre>" + highlighted + "</pre>";
-      }
-
-      function renderCritique(markdown) {
-        const assessment = extractSection(markdown, "Assessment");
-        const critiques = extractSection(markdown, "Critiques");
-        const documentSection = extractSection(markdown, "Document");
-
-        let critiqueMarkdown = "";
-        if (assessment) critiqueMarkdown += "## Assessment\\n\\n" + assessment + "\\n\\n";
-        if (critiques) critiqueMarkdown += "## Critiques\\n\\n" + critiques;
-        if (!critiqueMarkdown) critiqueMarkdown = markdown;
-
-        const withAnchors = critiqueMarkdown.replace(/\\*\\*(C\\d+)\\*\\*/g, '**<span class="critique-id" data-id="$1" id="critique-$1">$1</span>**');
-
-        let rendered = "<pre>" + escapeHtml(critiqueMarkdown) + "</pre>";
-        if (window.marked && typeof window.marked.parse === "function") {
-          const rawHtml = window.marked.parse(withAnchors);
-          rendered = window.DOMPurify ? window.DOMPurify.sanitize(rawHtml) : rawHtml;
-        }
-
-        critiqueViewEl.innerHTML = rendered;
-        lastDocumentSection = documentSection || "";
-        renderDocument(documentSection);
-        syncActionButtons();
-
-        const hasStructuredSections = Boolean(assessment || critiques || documentSection);
-        const hasCritiqueIds = /\\*\\*C\\d+\\*\\*/i.test(critiques);
-        const hasDocMarkers = /\\{C\\d+\\}/i.test(documentSection);
-
-        if (!hasStructuredSections) {
-          setStatus("Loaded text. Click Critique to generate structured feedback.");
-        } else if (!hasCritiqueIds || !hasDocMarkers) {
-          setStatus("Format partially recognized: rendered available sections.", "warning");
+      function handleIncomingResponse(markdown, kind) {
+        if (kind === "critique") {
+          critiqueResponseMarkdown = markdown;
+          critiqueDocumentSection = extractSection(markdown, "Document") || "";
         } else {
-          setStatus("Response received.", "success");
+          annotateResponseMarkdown = markdown;
         }
+
+        updateModeUi();
+        syncActionButtons();
+      }
+
+      function applyLatestPayload(payload) {
+        if (!payload || typeof payload.markdown !== "string") return false;
+        const responseKind = payload.kind === "critique" ? "critique" : "annotation";
+        handleIncomingResponse(payload.markdown, responseKind);
+        return true;
       }
 
       function sendMessage(message) {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
+          setWsState("Disconnected");
           setStatus("Not connected to studio server.", "error");
           return false;
         }
@@ -1075,6 +1276,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         if (message.type === "hello_ack") {
           const busy = Boolean(message.busy);
           setBusy(busy);
+          setWsState(busy ? "Submitting" : "Ready");
           if (message.activeRequestId) {
             pendingRequestId = String(message.activeRequestId);
             pendingKind = "unknown";
@@ -1095,23 +1297,28 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
               label: message.initialDocument.label || "blank",
               path: message.initialDocument.path || null,
             });
+            setMode(detectModeFromText(message.initialDocument.text), { announce: false });
+            renderSourcePreview();
             if (typeof message.initialDocument.label === "string" && message.initialDocument.label.length > 0) {
               setStatus("Loaded: " + message.initialDocument.label, "success");
             }
           }
 
-          const shouldRenderLastResponse =
-            message.lastResponse &&
-            typeof message.lastResponse.markdown === "string" &&
-            isStructuredCritique(message.lastResponse.markdown) &&
-            (!message.initialDocument || message.initialDocument.source === "last-response");
-
-          if (shouldRenderLastResponse) {
-            renderCritique(message.lastResponse.markdown);
+          if (message.lastResponse && typeof message.lastResponse.markdown === "string") {
+            const lastMarkdown = message.lastResponse.markdown;
+            if (isStructuredCritique(lastMarkdown)) {
+              critiqueResponseMarkdown = lastMarkdown;
+              critiqueDocumentSection = extractSection(lastMarkdown, "Document") || "";
+            } else {
+              annotateResponseMarkdown = lastMarkdown;
+            }
+            updateModeUi();
+            syncActionButtons();
           }
 
-          if (!busy && !loadedInitialDocument && !shouldRenderLastResponse) {
-            setStatus("Connected. Paste text and click Critique.");
+          if (!busy && !loadedInitialDocument) {
+            setMode(detectModeFromText(sourceTextEl.value), { announce: false });
+            setStatus(getIdleStatusForMode());
           }
           return;
         }
@@ -1120,7 +1327,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           pendingRequestId = typeof message.requestId === "string" ? message.requestId : pendingRequestId;
           pendingKind = typeof message.kind === "string" ? message.kind : "unknown";
           setBusy(true);
-          setStatus((pendingKind === "annotation" ? "Submitting your response…" : "Generating critique…"), "warning");
+          setWsState("Submitting");
+          if (pendingKind === "annotation") {
+            setStatus("Sending reply…", "warning");
+          } else {
+            setStatus("Generating critique…", "warning");
+          }
           return;
         }
 
@@ -1128,11 +1340,50 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           if (pendingRequestId && typeof message.requestId === "string" && message.requestId !== pendingRequestId) {
             return;
           }
+
+          const responseKind =
+            typeof message.kind === "string"
+              ? message.kind
+              : (pendingKind === "critique" ? "critique" : "annotation");
+
           pendingRequestId = null;
           pendingKind = null;
           setBusy(false);
+          setWsState("Ready");
           if (typeof message.markdown === "string") {
-            renderCritique(message.markdown);
+            handleIncomingResponse(message.markdown, responseKind);
+            if (responseKind === "critique") {
+              setMode(MODES.critique, { announce: false });
+              setStatus("Critique received.", "success");
+            } else {
+              setMode(MODES.annotate, { announce: false });
+              setStatus("Response received.", "success");
+            }
+          }
+          return;
+        }
+
+        if (message.type === "latest_response") {
+          if (pendingRequestId) return;
+          if (typeof message.markdown === "string") {
+            const payload = {
+              kind: message.kind === "critique" ? "critique" : "annotation",
+              markdown: message.markdown,
+              timestamp: message.timestamp,
+            };
+
+            if (!followLatest) {
+              queuedLatestResponse = payload;
+              updateResultActionButtons();
+              setStatus("Latest response available. Click Pull latest.", "warning");
+              return;
+            }
+
+            if (applyLatestPayload(payload)) {
+              queuedLatestResponse = null;
+              updateResultActionButtons();
+              setStatus("Updated from latest assistant response.", "success");
+            }
           }
           return;
         }
@@ -1150,6 +1401,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             });
           }
           setBusy(false);
+          setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Saved.", "success");
           return;
         }
@@ -1160,6 +1412,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             pendingKind = null;
           }
           setBusy(false);
+          setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Loaded into pi editor.", "success");
           return;
         }
@@ -1167,8 +1420,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         if (message.type === "studio_state") {
           const busy = Boolean(message.busy);
           setBusy(busy);
+          setWsState(busy ? "Submitting" : "Ready");
           if (!busy && !pendingRequestId) {
-            setStatus("Ready.");
+            setStatus(getIdleStatusForMode());
           }
           return;
         }
@@ -1179,6 +1433,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             pendingKind = null;
           }
           setBusy(false);
+          setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Studio is busy.", "warning");
           return;
         }
@@ -1189,6 +1444,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             pendingKind = null;
           }
           setBusy(false);
+          setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Request failed.", "error");
           return;
         }
@@ -1203,6 +1459,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       function connect() {
         const token = getToken();
         if (!token) {
+          setWsState("Disconnected");
           setStatus("Missing studio token in URL. Re-run /studio.", "error");
           setBusy(true);
           return;
@@ -1211,17 +1468,20 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
         const wsUrl = wsProtocol + "://" + window.location.host + "/ws?token=" + encodeURIComponent(token);
 
+        setWsState("Connecting");
         setStatus("Connecting to studio server…");
         ws = new WebSocket(wsUrl);
 
         const connectWatchdog = window.setTimeout(() => {
           if (ws && ws.readyState === WebSocket.CONNECTING) {
+            setWsState("Connecting");
             setStatus("Still connecting to studio server…", "warning");
           }
         }, 3000);
 
         ws.addEventListener("open", () => {
           window.clearTimeout(connectWatchdog);
+          setWsState("Ready");
           setStatus("Connected. Handshaking…");
           sendMessage({ type: "hello" });
         });
@@ -1231,6 +1491,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             const message = JSON.parse(event.data);
             handleServerMessage(message);
           } catch (error) {
+            setWsState("Ready");
             setStatus("Received invalid message from server.", "error");
           }
         });
@@ -1238,6 +1499,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         ws.addEventListener("close", (event) => {
           window.clearTimeout(connectWatchdog);
           setBusy(true);
+          setWsState("Disconnected");
           if (event && event.code === 4001) {
             setStatus("This tab has been invalidated by a newer /studio session.", "warning");
           } else {
@@ -1248,6 +1510,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
         ws.addEventListener("error", () => {
           window.clearTimeout(connectWatchdog);
+          setWsState("Disconnected");
           setStatus("WebSocket connection error (check /studio --status and reopen).", "error");
         });
       }
@@ -1261,8 +1524,100 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         pendingRequestId = requestId;
         pendingKind = kind;
         setBusy(true);
+        setWsState("Submitting");
         return requestId;
       }
+
+      function describeSourceForAnnotation() {
+        if (sourceState.source === "file" && sourceState.label) {
+          return "file " + sourceState.label;
+        }
+        if (sourceState.source === "last-response") {
+          return "last model response";
+        }
+        if (sourceState.label && sourceState.label !== "blank") {
+          return sourceState.label;
+        }
+        return "studio draft";
+      }
+
+      function buildAnnotationPayload(annotatedText) {
+        const sourceDescriptor = describeSourceForAnnotation();
+        let payload = "annotated reply below:\\n";
+        payload += "original source: " + sourceDescriptor + "\\n\\n---\\n\\n";
+        payload += annotatedText;
+        return payload;
+      }
+
+      function requestLatestResponse() {
+        const sent = sendMessage({ type: "get_latest_response" });
+        if (!sent) return;
+        setStatus("Requested latest assistant response.");
+      }
+
+      modeAnnotateBtn.addEventListener("click", () => {
+        setMode(MODES.annotate, { manual: true });
+      });
+
+      modeCritiqueBtn.addEventListener("click", () => {
+        setMode(MODES.critique, { manual: true });
+      });
+
+      viewSelect.addEventListener("change", () => {
+        setView(viewSelect.value);
+      });
+
+      followSelect.addEventListener("change", () => {
+        followLatest = followSelect.value !== "off";
+        if (followLatest && queuedLatestResponse) {
+          if (applyLatestPayload(queuedLatestResponse)) {
+            queuedLatestResponse = null;
+            setStatus("Applied queued latest response.", "success");
+          }
+        } else if (!followLatest) {
+          setStatus("Follow latest disabled. Use Pull latest to refresh.");
+        }
+        updateResultActionButtons();
+      });
+
+      pullLatestBtn.addEventListener("click", () => {
+        if (queuedLatestResponse) {
+          if (applyLatestPayload(queuedLatestResponse)) {
+            queuedLatestResponse = null;
+            setStatus("Pulled queued latest response.", "success");
+            updateResultActionButtons();
+          }
+          return;
+        }
+        requestLatestResponse();
+      });
+
+      sourceTextEl.addEventListener("input", () => {
+        renderSourcePreview();
+      });
+
+      sendReplyBtn.addEventListener("click", () => {
+        const annotatedText = sourceTextEl.value.trim();
+        if (!annotatedText) {
+          setStatus("Add text in the draft panel before sending reply.", "warning");
+          return;
+        }
+
+        const requestId = beginUiAction("annotation");
+        if (!requestId) return;
+
+        const sent = sendMessage({
+          type: "annotation_request",
+          requestId,
+          text: buildAnnotationPayload(annotatedText),
+        });
+
+        if (!sent) {
+          pendingRequestId = null;
+          pendingKind = null;
+          setBusy(false);
+        }
+      });
 
       critiqueBtn.addEventListener("click", () => {
         const documentText = sourceTextEl.value.trim();
@@ -1270,6 +1625,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           setStatus("Add some text to critique first.", "warning");
           return;
         }
+
+        setMode(MODES.critique, { announce: false });
 
         const requestId = beginUiAction("critique");
         if (!requestId) return;
@@ -1288,36 +1645,78 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         }
       });
 
-      submitBtn.addEventListener("click", () => {
-        const text = responseTextEl.value.trim();
-        if (!text) {
-          setStatus("Write your response first (e.g. [accept C1]).", "warning");
+      loadResponseBtn.addEventListener("click", () => {
+        if (!annotateResponseMarkdown.trim()) {
+          setStatus("No response available yet.", "warning");
+          return;
+        }
+        sourceTextEl.value = annotateResponseMarkdown;
+        renderSourcePreview();
+        setSourceState({ source: "last-response", label: "last model response", path: null });
+        setStatus("Loaded latest response into draft.", "success");
+      });
+
+      loadEditedBtn.addEventListener("click", () => {
+        const edited = extractSection(annotateResponseMarkdown, "Document");
+        if (!edited) {
+          setStatus("No ## Document section found in latest response.", "warning");
+          return;
+        }
+        sourceTextEl.value = edited;
+        renderSourcePreview();
+        setSourceState({ source: "blank", label: "edited document", path: null });
+        setStatus("Loaded edited document into draft.", "success");
+      });
+
+      sendToCritiqueBtn.addEventListener("click", () => {
+        if (!annotateResponseMarkdown.trim()) {
+          setStatus("No response available to critique.", "warning");
+          return;
+        }
+        sourceTextEl.value = annotateResponseMarkdown;
+        renderSourcePreview();
+        setSourceState({ source: "last-response", label: "last model response", path: null });
+        setMode(MODES.critique, { announce: false });
+        setStatus("Loaded response into draft. Now generate critique.", "success");
+      });
+
+      copyResponseBtn.addEventListener("click", async () => {
+        if (!annotateResponseMarkdown.trim()) {
+          setStatus("No response available yet.", "warning");
           return;
         }
 
-        const requestId = beginUiAction("annotation");
-        if (!requestId) return;
-
-        const sent = sendMessage({
-          type: "annotation_request",
-          requestId,
-          text,
-        });
-
-        if (!sent) {
-          pendingRequestId = null;
-          pendingKind = null;
-          setBusy(false);
+        try {
+          await navigator.clipboard.writeText(annotateResponseMarkdown);
+          setStatus("Copied latest response.", "success");
+        } catch (error) {
+          setStatus("Clipboard write failed in this browser context.", "warning");
         }
       });
 
-      applyDocBtn.addEventListener("click", () => {
-        if (!lastDocumentSection) {
-          setStatus("No parsed Document section is available yet.", "warning");
+      sendPackageBtn.addEventListener("click", () => {
+        if (!critiqueResponseMarkdown.trim()) {
+          setStatus("No critique package available yet.", "warning");
           return;
         }
-        sourceTextEl.value = lastDocumentSection;
-        setStatus("Applied latest Document section to the working draft.", "success");
+        sourceTextEl.value = critiqueResponseMarkdown;
+        renderSourcePreview();
+        setSourceState({ source: "blank", label: "critique package", path: null });
+        setMode(MODES.annotate, { announce: false });
+        setStatus("Sent critique package to Annotate.", "success");
+      });
+
+      sendCleanBtn.addEventListener("click", () => {
+        const clean = cleanCritiqueMarkers(critiqueDocumentSection).trim();
+        if (!clean) {
+          setStatus("No critique Document section available yet.", "warning");
+          return;
+        }
+        sourceTextEl.value = clean;
+        renderSourcePreview();
+        setSourceState({ source: "blank", label: "clean document", path: null });
+        setMode(MODES.annotate, { announce: false });
+        setStatus("Sent clean document to Annotate.", "success");
       });
 
       saveAsBtn.addEventListener("click", () => {
@@ -1412,27 +1811,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         }
       });
 
-      critiqueViewEl.addEventListener("click", (event) => {
-        const target = event.target;
-        if (!(target instanceof HTMLElement)) return;
-        const id = target.dataset && target.dataset.id;
-        if (!id) return;
-        if (!/^C\\d+$/.test(id)) return;
-
-        insertTemplate(id);
-        scrollToMarker(id);
-      });
-
-      documentViewEl.addEventListener("click", (event) => {
-        const target = event.target;
-        if (!(target instanceof HTMLElement)) return;
-        const id = target.dataset && target.dataset.id;
-        if (!id) return;
-        if (!/^C\\d+$/.test(id)) return;
-
-        scrollToCritique(id);
-      });
-
       fileInput.addEventListener("change", () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
@@ -1441,12 +1819,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         reader.onload = () => {
           const text = typeof reader.result === "string" ? reader.result : "";
           sourceTextEl.value = text;
+          renderSourcePreview();
           setSourceState({
             source: "blank",
             label: "upload: " + file.name,
             path: null,
           });
-          setStatus("Loaded file: " + file.name, "success");
+          setMode(detectModeFromText(text), { announce: false });
+          setStatus("Loaded file: " + file.name + ".", "success");
         };
         reader.onerror = () => {
           setStatus("Failed to read file.", "error");
@@ -1455,6 +1835,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       });
 
       setSourceState(initialSourceState);
+      setMode(detectModeFromText(sourceTextEl.value), { announce: false });
+      setView(currentView);
+      renderSourcePreview();
       connect();
       } catch (error) {
         hardFail("Studio UI init failed", error);
@@ -1574,6 +1957,20 @@ export default function (pi: ExtensionAPI) {
 				activeRequestId: activeRequest?.id ?? null,
 				lastResponse: lastStudioResponse,
 				initialDocument: initialStudioDocument,
+			});
+			return;
+		}
+
+		if (msg.type === "get_latest_response") {
+			if (!lastStudioResponse) {
+				sendToClient(client, { type: "info", message: "No latest assistant response is available yet." });
+				return;
+			}
+			sendToClient(client, {
+				type: "latest_response",
+				kind: lastStudioResponse.kind,
+				markdown: lastStudioResponse.markdown,
+				timestamp: lastStudioResponse.timestamp,
 			});
 			return;
 		}
@@ -1968,11 +2365,18 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		const inferredKind = inferStudioResponseKind(markdown);
 		lastStudioResponse = {
 			markdown,
 			timestamp: Date.now(),
-			kind: lastStudioResponse?.kind ?? "annotation",
+			kind: inferredKind,
 		};
+		broadcast({
+			type: "latest_response",
+			kind: inferredKind,
+			markdown,
+			timestamp: lastStudioResponse.timestamp,
+		});
 	});
 
 	pi.on("agent_end", async () => {
