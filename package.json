@@ -1,0 +1,21 @@
+{
+  "name": "pi-studio",
+  "version": "0.1.0",
+  "description": "Browser GUI for structured critique workflows in pi",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
