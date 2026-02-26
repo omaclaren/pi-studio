@@ -4,7 +4,7 @@ All notable changes to `pi-studio` are documented here.
 
 ## [0.1.0-alpha.1] - 2026-02-26
 
-Initial private alpha baseline.
+Initial alpha baseline.
 
 ### Added
 - `/studio` browser workflow with local HTTP + WebSocket server.

@@ -1,6 +1,6 @@
 # pi-studio
 
-Browser UI for structured critique workflows in pi.
+Browser UI for two-way feedback workflows in pi (annotate + structured critique loops).
 
 ## Install
 
@@ -48,9 +48,16 @@ Optional commands:
 /studio --help
 ```
 
+## Design docs
+
+- Workflow spec: [`WORKFLOW.md`](./WORKFLOW.md)
+- Backlog: [`TODO.md`](./TODO.md)
+- Changes: [`CHANGELOG.md`](./CHANGELOG.md)
+
 ## Notes
 
 - Local-only server (`127.0.0.1`) with rotating session tokens.
+- Studio URLs include a token query parameter; avoid sharing full Studio URLs in screenshots/issues.
 - One studio request at a time.
 - Browser supports: Apply Document, Save As, Save Over (file-backed drafts), Send to pi editor, and Copy draft.
 - Browser uses Markdown rendering via CDN (`marked`, `dompurify`).
