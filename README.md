@@ -55,7 +55,7 @@ From GitHub (available now):
 pi install https://github.com/omaclaren/pi-studio
 ```
 
-From npm (after publish):
+From npm:
 
 ```bash
 pi install npm:pi-studio
