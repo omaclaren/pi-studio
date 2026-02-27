@@ -1246,6 +1246,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       };
       let activePane = "left";
       let paneFocusTarget = "off";
+      let mathJaxLoadPromise = null;
 
       function getIdleStatus() {
         return "Ready. Edit text, then run or critique (insert annotation header if needed).";
@@ -1425,9 +1426,56 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         return "<pre>" + escapeHtml(safeText) + "</pre>";
       }
 
+      function ensureMathJax() {
+        if (window.MathJax && typeof window.MathJax.typesetPromise === "function") {
+          return Promise.resolve(window.MathJax);
+        }
+
+        if (mathJaxLoadPromise) return mathJaxLoadPromise;
+
+        window.MathJax = {
+          tex: {
+            inlineMath: [["$", "$"], ["\\(", "\\)"]],
+            displayMath: [["$$", "$$"], ["\\[", "\\]"]],
+            processEscapes: true,
+          },
+          options: {
+            skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"],
+          },
+        };
+
+        mathJaxLoadPromise = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
+          script.async = true;
+          script.onload = () => resolve(window.MathJax);
+          script.onerror = () => reject(new Error("Failed to load MathJax from CDN."));
+          document.head.appendChild(script);
+        });
+
+        return mathJaxLoadPromise;
+      }
+
+      function typesetMathIn(element) {
+        if (!element) return;
+
+        ensureMathJax()
+          .then((mathJax) => {
+            if (!mathJax || typeof mathJax.typesetPromise !== "function") return;
+            if (typeof mathJax.typesetClear === "function") {
+              mathJax.typesetClear([element]);
+            }
+            return mathJax.typesetPromise([element]);
+          })
+          .catch(() => {
+            // Math rendering is best-effort; keep markdown visible if CDN/network fails.
+          });
+      }
+
       function renderSourcePreview() {
         if (editorView === "preview") {
           sourcePreviewEl.innerHTML = renderMarkdownHtml(sourceTextEl.value || "");
+          typesetMathIn(sourcePreviewEl);
         }
       }
 
@@ -1440,6 +1488,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
         if (rightView === "preview") {
           critiqueViewEl.innerHTML = renderMarkdownHtml(markdown);
+          typesetMathIn(critiqueViewEl);
           return;
         }
 
