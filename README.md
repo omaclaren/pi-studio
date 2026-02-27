@@ -75,6 +75,7 @@ pi -e https://github.com/omaclaren/pi-studio
 - Preview panes render markdown via `pandoc` (`gfm+tex_math_dollars` → HTML5 + MathML), sanitized in-browser with `dompurify`.
 - Install pandoc for full preview rendering (`brew install pandoc` on macOS).
 - If `pandoc` is unavailable, preview falls back to plain markdown text with an inline warning.
+- Some screenshots may show the Grammarly browser widget. Grammarly is a separate browser extension and is not part of pi-studio, but it works alongside it.
 
 ## License
 
