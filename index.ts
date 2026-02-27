@@ -1690,11 +1690,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       }
 
       function buildPlainMarkdownHtml(markdown) {
-        return "<pre class=\"plain-markdown\">" + escapeHtml(String(markdown || "")) + "</pre>";
+        return "<pre class='plain-markdown'>" + escapeHtml(String(markdown || "")) + "</pre>";
       }
 
       function buildPreviewErrorHtml(message, markdown) {
-        return "<div class=\"preview-error\">" + escapeHtml(String(message || "Preview rendering failed.")) + "</div>" + buildPlainMarkdownHtml(markdown);
+        return "<div class='preview-error'>" + escapeHtml(String(message || "Preview rendering failed.")) + "</div>" + buildPlainMarkdownHtml(markdown);
       }
 
       function sanitizeRenderedHtml(html) {
@@ -1791,7 +1791,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         if (editorView !== "preview") return;
         const markdown = sourceTextEl.value || "";
         const nonce = ++sourcePreviewRenderNonce;
-        sourcePreviewEl.innerHTML = "<div class=\"preview-loading\">Rendering preview…</div>";
+        sourcePreviewEl.innerHTML = "<div class='preview-loading'>Rendering preview…</div>";
         void applyRenderedMarkdown(sourcePreviewEl, markdown, "source", nonce);
       }
 
@@ -1817,13 +1817,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       function renderActiveResult() {
         const markdown = latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
-          critiqueViewEl.innerHTML = "<pre class=\"plain-markdown\">No response yet. Run editor text or critique editor text.</pre>";
+          critiqueViewEl.innerHTML = "<pre class='plain-markdown'>No response yet. Run editor text or critique editor text.</pre>";
           return;
         }
 
         if (rightView === "preview") {
           const nonce = ++responsePreviewRenderNonce;
-          critiqueViewEl.innerHTML = "<div class=\"preview-loading\">Rendering preview…</div>";
+          critiqueViewEl.innerHTML = "<div class='preview-loading'>Rendering preview…</div>";
           void applyRenderedMarkdown(critiqueViewEl, markdown, "response", nonce);
           return;
         }
