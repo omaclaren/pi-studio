@@ -1098,8 +1098,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         <option value="preview">Editor: Preview</option>
       </select>
       <select id="rightViewSelect" aria-label="Response view mode">
-        <option value="markdown" selected>Response: Markdown</option>
-        <option value="preview">Response: Preview</option>
+        <option value="markdown">Response: Markdown</option>
+        <option value="preview" selected>Response: Preview</option>
       </select>
       <select id="followSelect" aria-label="Auto-update response">
         <option value="on" selected>Auto-update response: On</option>
@@ -1230,7 +1230,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       let pendingKind = null;
       let initialDocumentApplied = false;
       let editorView = "markdown";
-      let rightView = "markdown";
+      let rightView = "preview";
       let followLatest = true;
       let queuedLatestResponse = null;
       let latestResponseMarkdown = "";
