@@ -1,6 +1,6 @@
 # pi-studio
 
-Experimental pi extension that opens a local browser workspace for annotating model responses/files, running edited prompts, and requesting critiques.
+Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens a local browser workspace for annotating model responses/files, running edited prompts, and requesting critiques.
 
 Status: experimental alpha.
 
