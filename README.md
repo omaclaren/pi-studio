@@ -49,7 +49,7 @@ Status: experimental alpha.
 
 ## Install
 
-From GitHub (available now):
+From GitHub:
 
 ```bash
 pi install https://github.com/omaclaren/pi-studio
