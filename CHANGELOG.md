@@ -34,6 +34,13 @@ All notable changes to `pi-studio` are documented here.
 - Preview pane typography/style now follows the higher-fidelity `/preview-browser` rendering style more closely.
 - Hardened Studio preview HTTP handling and added client-side preview-request timeout to avoid stuck "Rendering preview…" states.
 
+### Fixed
+- Studio boot blocker caused by unescaped preview HTML class-string quotes in inline script output.
+- `hydrateLatestAssistant` now infers response kind from hydrated markdown instead of reusing stale prior kind.
+- Added explicit `return` at end of `send_to_editor_request` handler for safer future handler additions.
+- `respondText` now includes `X-Content-Type-Options: nosniff` for consistency with JSON responses.
+- If `dompurify` is unavailable, preview now falls back to escaped plain markdown instead of injecting unsanitized HTML.
+
 ## [0.1.0-alpha.1] - 2026-02-26
 
 Initial alpha baseline.

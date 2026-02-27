@@ -594,6 +594,7 @@ function respondText(res: ServerResponse, status: number, text: string): void {
 	res.writeHead(status, {
 		"Content-Type": "text/plain; charset=utf-8",
 		"Cache-Control": "no-store",
+		"X-Content-Type-Options": "nosniff",
 	});
 	res.end(text);
 }
@@ -1697,12 +1698,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         return "<div class='preview-error'>" + escapeHtml(String(message || "Preview rendering failed.")) + "</div>" + buildPlainMarkdownHtml(markdown);
       }
 
-      function sanitizeRenderedHtml(html) {
+      function sanitizeRenderedHtml(html, markdown) {
         const rawHtml = typeof html === "string" ? html : "";
         if (window.DOMPurify && typeof window.DOMPurify.sanitize === "function") {
           return window.DOMPurify.sanitize(rawHtml);
         }
-        return rawHtml;
+        return buildPreviewErrorHtml("Preview sanitizer unavailable. Showing plain markdown.", markdown);
       }
 
       async function renderMarkdownWithPandoc(markdown) {
@@ -1774,7 +1775,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             if (nonce !== responsePreviewRenderNonce || rightView !== "preview") return;
           }
 
-          targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml);
+          targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
         } catch (error) {
           if (pane === "source") {
             if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
@@ -2978,6 +2979,7 @@ export default function (pi: ExtensionAPI) {
 					message: `Failed to send editor text to pi editor: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
+			return;
 		}
 	};
 
@@ -3219,7 +3221,7 @@ export default function (pi: ExtensionAPI) {
 		lastStudioResponse = {
 			markdown: latest,
 			timestamp: Date.now(),
-			kind: lastStudioResponse?.kind ?? "annotation",
+			kind: inferStudioResponseKind(latest),
 		};
 	};
 

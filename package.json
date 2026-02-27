@@ -7,6 +7,12 @@
   "keywords": [
     "pi-package"
   ],
+  "files": [
+    "index.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "WORKFLOW.md"
+  ],
   "pi": {
     "extensions": [
       "./index.ts"
