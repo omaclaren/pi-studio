@@ -926,7 +926,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         <div id="annotateActions" class="response-actions">
           <button id="loadResponseBtn" type="button">Load Reference → Editor</button>
           <button id="loadEditedBtn" type="button">Load edited document</button>
-          <button id="sendToCritiqueBtn" type="button">Use reference in Critique</button>
           <button id="copyResponseBtn" type="button">Copy reference</button>
         </div>
         <div id="critiqueActions" class="response-actions" hidden>
@@ -988,7 +987,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       const critiqueActionsEl = document.getElementById("critiqueActions");
       const loadResponseBtn = document.getElementById("loadResponseBtn");
       const loadEditedBtn = document.getElementById("loadEditedBtn");
-      const sendToCritiqueBtn = document.getElementById("sendToCritiqueBtn");
       const copyResponseBtn = document.getElementById("copyResponseBtn");
       const sendPackageBtn = document.getElementById("sendPackageBtn");
       const sendCleanBtn = document.getElementById("sendCleanBtn");
@@ -1191,7 +1189,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         loadResponseBtn.disabled = uiBusy || !hasAnnotateResponse || annotateReferenceLoaded;
         loadResponseBtn.textContent = annotateReferenceLoaded ? "Reference already in Editor" : "Load Reference → Editor";
         loadEditedBtn.disabled = uiBusy || !editedSection;
-        sendToCritiqueBtn.disabled = uiBusy || !hasAnnotateResponse;
         copyResponseBtn.disabled = uiBusy || !hasAnnotateResponse;
         sendPackageBtn.disabled = uiBusy || !hasCritiqueResponse;
         sendCleanBtn.disabled = uiBusy || !cleanDoc.trim();
@@ -1802,18 +1799,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         renderSourcePreview();
         setSourceState({ source: "blank", label: "edited document", path: null });
         setStatus("Loaded edited document into editor.", "success");
-      });
-
-      sendToCritiqueBtn.addEventListener("click", () => {
-        if (!annotateResponseMarkdown.trim()) {
-          setStatus("No reference response available to critique.", "warning");
-          return;
-        }
-        sourceTextEl.value = annotateResponseMarkdown;
-        renderSourcePreview();
-        setSourceState({ source: "last-response", label: "last model response", path: null });
-        setMode(MODES.critique, { announce: false });
-        setStatus("Loaded response into editor. Now generate critique.", "success");
       });
 
       copyResponseBtn.addEventListener("click", async () => {

@@ -14,7 +14,7 @@ All notable changes to `pi-studio` are documented here.
 - Annotate/reference actions:
   - **Load Reference → Editor**
   - **Load edited document** (`## Document` section)
-  - **Use reference in Critique**
+  - **Copy reference**
 - Source action: **Send + Run** to submit current editor text directly to the model.
 - Right-pane reference badge with source + timestamp (when available).
 - Editor/reference sync badge (`In sync with reference` / `Edited since reference`) and guard on redundant reload.
@@ -26,6 +26,7 @@ All notable changes to `pi-studio` are documented here.
 - Footer now shows explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`) alongside status text.
 - Annotate submission sends annotated-reply scaffold with source context.
 - Studio now live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
+- Removed redundant "Use reference in Critique" action; critique target is always the current Editor text.
 
 ## [0.1.0-alpha.1] - 2026-02-26
 

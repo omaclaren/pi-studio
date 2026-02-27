@@ -58,6 +58,7 @@ Studio now uses two minimal tabs:
 Tab behavior:
 - explicit top-level tabs (**Annotate | Critique**)
 - shared Editor pane with `View: Markdown | Preview`
+- **Generate critique** always critiques current Editor text (left pane)
 - optional latest-response tracking control: `Follow latest: On|Off` with `Pull latest`
 - right pane badge shows reference source (`none`, `assistant response`, `assistant critique`) and timestamp when available
 - editor badge shows relation to current reference (`No reference loaded`, `In sync with reference`, `Edited since reference`)
