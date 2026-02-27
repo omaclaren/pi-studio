@@ -73,7 +73,7 @@ Rules:
 
 ## Required UI elements
 
-- Header actions: **Insert annotation header**, **Critique editor text** (+ critique focus), **Get latest response**, `Auto-update response: On|Off`
+- Header actions: **Insert annotation header**, **Run editor text**, **Critique editor text** (+ critique focus), **Get latest response**, `Auto-update response: On|Off`
 - Pane view toggles: `Editor: Markdown|Preview`, `Right: Markdown|Preview`
 - Source badge: `blank | last model response | file <path> | upload`
 - Response badge: `none | assistant response | assistant critique` (+ timestamp)

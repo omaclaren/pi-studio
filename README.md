@@ -57,11 +57,9 @@ Studio now uses a single always-on workspace:
 
 Top controls:
 - **Insert annotation header**: prepends/updates the annotated-reply scaffold in the editor.
+- **Run editor text**: sends current editor text to the model unchanged.
 - **Critique editor text** (+ critique focus): critiques current editor text and loads result into Response pane.
 - **Get latest response** with optional `Auto-update response: On|Off`.
-
-Editor actions:
-- **Run editor text**: sends current editor text to the model unchanged.
 
 Important:
 - Studio does **not** auto-wrap editor text with an annotation header on run.

@@ -1103,6 +1103,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       </select>
       <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
       <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
+      <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is.">Run editor text</button>
       <select id="lensSelect" aria-label="Critique focus">
         <option value="auto" selected>Critique focus: Auto</option>
         <option value="writing">Critique focus: Writing</option>
@@ -1126,7 +1127,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <button id="saveAsBtn" type="button">Save As…</button>
             <button id="saveOverBtn" type="button" disabled>Save Over</button>
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
-            <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is.">Run editor text</button>
             <button id="copyDraftBtn" type="button">Copy editor</button>
           </div>
         </div>
