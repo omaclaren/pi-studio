@@ -519,7 +519,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>pi-studio</title>
+  <title>Pi Studio: Feedback Workspace</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -584,6 +584,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       margin: 0;
       font-size: 18px;
       font-weight: 600;
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .app-subtitle {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
     }
 
     .controls {
@@ -867,7 +876,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 </head>
 <body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}">
   <header>
-    <h1>pi-studio</h1>
+    <h1>Pi Studio <span class="app-subtitle">Feedback Workspace</span></h1>
     <div class="controls">
       <div class="mode-toggle" role="group" aria-label="Studio tab">
         <button id="modeAnnotateBtn" class="mode-btn" type="button" aria-pressed="true">Annotate</button>
@@ -2570,7 +2579,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("studio", {
-		description: "Open pi-studio browser UI (/studio, /studio <file>, /studio --blank, /studio --last)",
+		description: "Open Pi Studio browser UI (/studio, /studio <file>, /studio --blank, /studio --last)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 
@@ -2691,14 +2700,14 @@ export default function (pi: ExtensionAPI) {
 			try {
 				await openUrlInDefaultBrowser(url);
 				if (initialStudioDocument?.source === "file") {
-					ctx.ui.notify(`Opened pi-studio with file loaded: ${initialStudioDocument.label}`, "info");
+					ctx.ui.notify(`Opened Pi Studio with file loaded: ${initialStudioDocument.label}`, "info");
 				} else if (initialStudioDocument?.source === "last-response") {
 					ctx.ui.notify(
-						`Opened pi-studio with last model response (${initialStudioDocument.text.length} chars).`,
+						`Opened Pi Studio with last model response (${initialStudioDocument.text.length} chars).`,
 						"info",
 					);
 				} else {
-					ctx.ui.notify("Opened pi-studio with blank editor.", "info");
+					ctx.ui.notify("Opened Pi Studio with blank editor.", "info");
 				}
 				ctx.ui.notify(`Studio URL: ${url}`, "info");
 			} catch (error) {

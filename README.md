@@ -1,6 +1,6 @@
-# pi-studio
+# Pi Studio: Feedback Workspace
 
-Browser UI for two-way feedback workflows in pi (annotate + structured critique loops).
+Browser feedback workspace for two-way feedback workflows in pi (annotate + structured critique loops).
 
 ## Install
 
