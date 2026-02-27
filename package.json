@@ -11,7 +11,8 @@
     "index.ts",
     "README.md",
     "CHANGELOG.md",
-    "WORKFLOW.md"
+    "WORKFLOW.md",
+    "assets/screenshots"
   ],
   "pi": {
     "extensions": [

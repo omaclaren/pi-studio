@@ -21,6 +21,7 @@ All notable changes to `pi-studio` are documented here.
 - Server-side `pandoc` preview rendering endpoint for Studio panes (`gfm+tex_math_dollars` → HTML5 + MathML).
 - Math delimiter normalization before preview rendering for `\(...\)` and `\[...\]` syntax (fence-aware).
 - **Load file in editor** action in top controls (browser file picker into editor).
+- README screenshot gallery for dark/light workspace and critique/annotation views.
 
 ### Changed
 - Removed Annotate/Critique tabs and related mode state.

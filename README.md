@@ -8,6 +8,24 @@ Browser feedback workspace for two-way feedback workflows in pi (annotate + stru
 > It is **not** a full IDE or standalone editor replacement.
 > Current scope: single-user, local server + browser UI, and one request at a time.
 
+## Screenshots
+
+**Dark theme workspace**
+
+![Dark workspace](./assets/screenshots/dark-workspace.png)
+
+**Dark theme critique flow**
+
+![Dark critique flow](./assets/screenshots/dark-critique.png)
+
+**Light theme workspace**
+
+![Light workspace](./assets/screenshots/light-workspace.png)
+
+**Dark theme annotation editing**
+
+![Dark annotation editing](./assets/screenshots/dark-annotation.png)
+
 ## Install
 
 ```bash
