@@ -1109,7 +1109,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       }
 
       function normalizeForCompare(text) {
-        return String(text || "").replace(/\r\n/g, "\n").trimEnd();
+        return String(text || "").replace(/\\r\\n/g, "\\n").trimEnd();
       }
 
       function isTextEquivalent(a, b) {
