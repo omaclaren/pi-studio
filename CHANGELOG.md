@@ -17,10 +17,11 @@ All notable changes to `pi-studio` are documented here.
   - **Use reference in Critique**
 - Source action: **Send + Run** to submit current editor text directly to the model.
 - Right-pane reference badge with source + timestamp (when available).
+- Editor/reference sync badge (`In sync with reference` / `Edited since reference`) and guard on redundant reload.
 
 ### Changed
 - Simplified UI: removed in-critique response textbox and duplicate annotated-document panel.
-- Clarified pane semantics and labels (`Editor`, `Reference`, `Critique`, `Editor source: ...`).
+- Clarified pane semantics and labels (`Editor`, `Reference`, `Critique`, `Editor origin: ...`).
 - Auto-detect startup tab from loaded content structure (`## Critiques` + `## Document` → Critique).
 - Footer now shows explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`) alongside status text.
 - Annotate submission sends annotated-reply scaffold with source context.

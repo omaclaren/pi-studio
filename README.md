@@ -60,6 +60,7 @@ Tab behavior:
 - shared Editor pane with `View: Markdown | Preview`
 - optional latest-response tracking control: `Follow latest: On|Off` with `Pull latest`
 - right pane badge shows reference source (`none`, `assistant response`, `assistant critique`) and timestamp when available
+- editor badge shows relation to current reference (`No reference loaded`, `In sync with reference`, `Edited since reference`)
 - Critique → Annotate handoff actions:
   - **Send critique package to Annotate** (Assessment + Critiques + Document)
   - **Send clean document to Annotate** (Document with `{C1}` markers stripped)

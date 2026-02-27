@@ -728,6 +728,16 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       white-space: nowrap;
     }
 
+    .sync-badge.sync {
+      border-color: rgba(115, 209, 61, 0.7);
+      color: var(--ok);
+    }
+
+    .sync-badge.edited {
+      border-color: rgba(249, 199, 79, 0.7);
+      color: var(--warn);
+    }
+
     .source-actions {
       display: flex;
       gap: 6px;
@@ -889,8 +899,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       <div class="source-wrap">
         <div class="source-meta">
           <div class="badge-row">
-            <span id="sourceBadge" class="source-badge">Editor source: ${initialLabel}</span>
+            <span id="sourceBadge" class="source-badge">Editor origin: ${initialLabel}</span>
             <span id="modeBadge" class="source-badge">Tab: Annotate</span>
+            <span id="syncBadge" class="source-badge sync-badge">No reference loaded</span>
           </div>
           <div class="source-actions">
             <button id="saveAsBtn" type="button">Save As…</button>
@@ -960,6 +971,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       const leftSectionHeaderEl = document.getElementById("leftSectionHeader");
       const sourceBadgeEl = document.getElementById("sourceBadge");
       const modeBadgeEl = document.getElementById("modeBadge");
+      const syncBadgeEl = document.getElementById("syncBadge");
       const critiqueViewEl = document.getElementById("critiqueView");
       const rightSectionHeaderEl = document.getElementById("rightSectionHeader");
       const referenceBadgeEl = document.getElementById("referenceBadge");
@@ -1052,7 +1064,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
-        sourceBadgeEl.textContent = "Editor source: " + label;
+        sourceBadgeEl.textContent = "Editor origin: " + label;
       }
 
       function formatReferenceTime(timestamp) {
@@ -1094,6 +1106,42 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         referenceBadgeEl.textContent = time
           ? "Reference: assistant response · " + time
           : "Reference: assistant response";
+      }
+
+      function normalizeForCompare(text) {
+        return String(text || "").replace(/\r\n/g, "\n").trimEnd();
+      }
+
+      function isTextEquivalent(a, b) {
+        return normalizeForCompare(a) === normalizeForCompare(b);
+      }
+
+      function getCurrentReferenceMarkdown() {
+        return currentMode === MODES.critique ? critiqueResponseMarkdown : annotateResponseMarkdown;
+      }
+
+      function updateSyncBadge() {
+        if (!syncBadgeEl) return;
+
+        const reference = getCurrentReferenceMarkdown();
+        const hasReference = Boolean(reference && reference.trim());
+
+        if (!hasReference) {
+          syncBadgeEl.textContent = "No reference loaded";
+          syncBadgeEl.classList.remove("sync", "edited");
+          return;
+        }
+
+        const inSync = isTextEquivalent(sourceTextEl.value, reference);
+        if (inSync) {
+          syncBadgeEl.textContent = "In sync with reference";
+          syncBadgeEl.classList.add("sync");
+          syncBadgeEl.classList.remove("edited");
+        } else {
+          syncBadgeEl.textContent = "Edited since reference";
+          syncBadgeEl.classList.add("edited");
+          syncBadgeEl.classList.remove("sync");
+        }
       }
 
       function renderMarkdownHtml(markdown) {
@@ -1138,8 +1186,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         const hasCritiqueResponse = Boolean(critiqueResponseMarkdown && critiqueResponseMarkdown.trim());
         const editedSection = extractSection(annotateResponseMarkdown, "Document");
         const cleanDoc = critiqueDocumentSection.replace(/\\{C\\d+\\}/g, "");
+        const annotateReferenceLoaded = hasAnnotateResponse && isTextEquivalent(sourceTextEl.value, annotateResponseMarkdown);
 
-        loadResponseBtn.disabled = uiBusy || !hasAnnotateResponse;
+        loadResponseBtn.disabled = uiBusy || !hasAnnotateResponse || annotateReferenceLoaded;
+        loadResponseBtn.textContent = annotateReferenceLoaded ? "Reference already in Editor" : "Load Reference → Editor";
         loadEditedBtn.disabled = uiBusy || !editedSection;
         sendToCritiqueBtn.disabled = uiBusy || !hasAnnotateResponse;
         copyResponseBtn.disabled = uiBusy || !hasAnnotateResponse;
@@ -1148,6 +1198,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
         pullLatestBtn.disabled = uiBusy || followLatest;
         pullLatestBtn.textContent = queuedLatestResponse ? "Pull latest *" : "Pull latest";
+
+        updateSyncBadge();
       }
 
       function updateModeUi() {
@@ -1677,6 +1729,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
       sourceTextEl.addEventListener("input", () => {
         renderSourcePreview();
+        updateResultActionButtons();
       });
 
       sendReplyBtn.addEventListener("click", () => {
