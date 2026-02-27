@@ -485,6 +485,12 @@ function normalizeMathDelimiters(markdown: string): string {
 	return out.join("\n");
 }
 
+function stripMathMlAnnotationTags(html: string): string {
+	return html
+		.replace(/<annotation-xml\b[\s\S]*?<\/annotation-xml>/gi, "")
+		.replace(/<annotation\b[\s\S]*?<\/annotation>/gi, "");
+}
+
 async function renderStudioMarkdownWithPandoc(markdown: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const args = ["-f", "gfm+tex_math_dollars-raw_html", "-t", "html5", "--mathml", "--no-highlight"];
@@ -527,7 +533,8 @@ async function renderStudioMarkdownWithPandoc(markdown: string): Promise<string>
 		child.once("close", (code) => {
 			if (settled) return;
 			if (code === 0) {
-				succeed(Buffer.concat(stdoutChunks).toString("utf-8"));
+				const renderedHtml = Buffer.concat(stdoutChunks).toString("utf-8");
+				succeed(stripMathMlAnnotationTags(renderedHtml));
 				return;
 			}
 			const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
@@ -1700,8 +1707,18 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
       function sanitizeRenderedHtml(html, markdown) {
         const rawHtml = typeof html === "string" ? html : "";
+        const mathAnnotationStripped = rawHtml
+          .replace(/<annotation-xml\\b[\\s\\S]*?<\\/annotation-xml>/gi, "")
+          .replace(/<annotation\\b[\\s\\S]*?<\\/annotation>/gi, "");
+
         if (window.DOMPurify && typeof window.DOMPurify.sanitize === "function") {
-          return window.DOMPurify.sanitize(rawHtml);
+          return window.DOMPurify.sanitize(mathAnnotationStripped, {
+            USE_PROFILES: {
+              html: true,
+              mathMl: true,
+              svg: true,
+            },
+          });
         }
         return buildPreviewErrorHtml("Preview sanitizer unavailable. Showing plain markdown.", markdown);
       }

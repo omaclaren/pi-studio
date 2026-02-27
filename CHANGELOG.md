@@ -40,6 +40,7 @@ All notable changes to `pi-studio` are documented here.
 - Added explicit `return` at end of `send_to_editor_request` handler for safer future handler additions.
 - `respondText` now includes `X-Content-Type-Options: nosniff` for consistency with JSON responses.
 - If `dompurify` is unavailable, preview now falls back to escaped plain markdown instead of injecting unsanitized HTML.
+- Preview sanitization now preserves MathML profile and strips MathML annotation tags to avoid duplicate raw TeX text beside rendered equations.
 
 ## [0.1.0-alpha.1] - 2026-02-26
 
