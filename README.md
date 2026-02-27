@@ -102,4 +102,6 @@ Additional behavior:
 - Studio URLs include a token query parameter; avoid sharing full Studio URLs in screenshots/issues.
 - One studio request at a time.
 - Browser supports: Save As, Save Over (file-backed editor text), Send to pi editor, Run editor text (submit editor text directly to model), Copy editor, annotation-header insertion, and response→editor load actions.
-- Browser uses Markdown rendering via CDN (`marked`, `dompurify`) with MathJax for inline/display LaTeX math rendering in preview views (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`).
+- Preview panes render markdown server-side via `pandoc` (`gfm+tex_math_dollars` → HTML5 + MathML), then sanitize in-browser with `dompurify`.
+- Math delimiters supported in preview: `$...$`, `$$...$$`, `\(...\)`, and `\[...\]` (normalized before rendering).
+- If `pandoc` is unavailable, Studio falls back to plain markdown text in preview panes and shows an inline warning.

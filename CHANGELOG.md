@@ -18,8 +18,8 @@ All notable changes to `pi-studio` are documented here.
 - Source action: **Run editor text** to submit current editor text directly to the model.
 - Active-pane focus mode with keyboard shortcuts (`Cmd/Ctrl+Esc` or `F10` to toggle, `Esc` to exit), plus in-UI footer hint.
 - Theme-aware Studio browser palette derived from active pi theme tokens (bg/text/border/accent + status colors).
-- MathJax rendering in Studio preview panes for `$...$` and `$$...$$` LaTeX math.
-- Delimiter normalization in markdown previews for `\(...\)` and `\[...\]` math syntax.
+- Server-side `pandoc` preview rendering endpoint for Studio panes (`gfm+tex_math_dollars` → HTML5 + MathML).
+- Math delimiter normalization before preview rendering for `\(...\)` and `\[...\]` syntax (fence-aware).
 - **Load file in editor** action in top controls (browser file picker into editor).
 
 ### Changed
@@ -31,6 +31,7 @@ All notable changes to `pi-studio` are documented here.
 - Running text and preparing annotated scaffolds are now separate explicit actions (no hidden header wrapping on send).
 - Critique-specific load actions now focus on notes/full views and are only shown for structured critique responses.
 - Studio still live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
+- Preview pane typography/style now follows the higher-fidelity `/preview-browser` rendering style more closely.
 
 ## [0.1.0-alpha.1] - 2026-02-26
 

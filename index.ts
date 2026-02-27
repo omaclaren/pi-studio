@@ -102,6 +102,8 @@ type IncomingStudioMessage =
 	| SendToEditorRequestMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+const PREVIEW_RENDER_MAX_CHARS = 400_000;
+const REQUEST_BODY_MAX_BYTES = 1_000_000;
 
 type StudioThemeMode = "dark" | "light";
 
@@ -418,6 +420,174 @@ function writeStudioFile(pathArg: string, cwd: string, content: string):
 			message: `Failed to write file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
 		};
 	}
+}
+
+function normalizeMathDelimitersInSegment(markdown: string): string {
+	let normalized = markdown.replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_match, expr: string) => {
+		const content = expr.trim();
+		return content.length > 0 ? `$$\n${content}\n$$` : "$$\n$$";
+	});
+
+	normalized = normalized.replace(/\\\(([\s\S]*?)\\\)/g, (_match, expr: string) => `$${expr}$`);
+	return normalized;
+}
+
+function normalizeMathDelimiters(markdown: string): string {
+	const lines = markdown.split("\n");
+	const out: string[] = [];
+	let plainBuffer: string[] = [];
+	let inFence = false;
+	let fenceChar: "`" | "~" | undefined;
+	let fenceLength = 0;
+
+	const flushPlain = () => {
+		if (plainBuffer.length === 0) return;
+		out.push(normalizeMathDelimitersInSegment(plainBuffer.join("\n")));
+		plainBuffer = [];
+	};
+
+	for (const line of lines) {
+		const trimmed = line.trimStart();
+		const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+
+		if (fenceMatch) {
+			const marker = fenceMatch[1]!;
+			const markerChar = marker[0] as "`" | "~";
+			const markerLength = marker.length;
+
+			if (!inFence) {
+				flushPlain();
+				inFence = true;
+				fenceChar = markerChar;
+				fenceLength = markerLength;
+				out.push(line);
+				continue;
+			}
+
+			if (fenceChar === markerChar && markerLength >= fenceLength) {
+				inFence = false;
+				fenceChar = undefined;
+				fenceLength = 0;
+			}
+
+			out.push(line);
+			continue;
+		}
+
+		if (inFence) {
+			out.push(line);
+		} else {
+			plainBuffer.push(line);
+		}
+	}
+
+	flushPlain();
+	return out.join("\n");
+}
+
+async function renderStudioMarkdownWithPandoc(markdown: string): Promise<string> {
+	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
+	const args = ["-f", "gfm+tex_math_dollars-raw_html", "-t", "html5", "--mathml", "--no-highlight"];
+	const normalizedMarkdown = normalizeMathDelimiters(markdown);
+
+	return await new Promise<string>((resolve, reject) => {
+		const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"] });
+		const stdoutChunks: Buffer[] = [];
+		const stderrChunks: Buffer[] = [];
+		let settled = false;
+
+		const fail = (error: Error) => {
+			if (settled) return;
+			settled = true;
+			reject(error);
+		};
+
+		const succeed = (html: string) => {
+			if (settled) return;
+			settled = true;
+			resolve(html);
+		};
+
+		child.stdout.on("data", (chunk: Buffer | string) => {
+			stdoutChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+		});
+		child.stderr.on("data", (chunk: Buffer | string) => {
+			stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+		});
+
+		child.once("error", (error) => {
+			const errno = error as NodeJS.ErrnoException;
+			if (errno.code === "ENOENT") {
+				fail(new Error("pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."));
+				return;
+			}
+			fail(error);
+		});
+
+		child.once("close", (code) => {
+			if (settled) return;
+			if (code === 0) {
+				succeed(Buffer.concat(stdoutChunks).toString("utf-8"));
+				return;
+			}
+			const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+			fail(new Error(`pandoc failed with exit code ${code}${stderr ? `: ${stderr}` : ""}`));
+		});
+
+		child.stdin.end(normalizedMarkdown);
+	});
+}
+
+function readRequestBody(req: IncomingMessage, maxBytes: number): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		let totalBytes = 0;
+		let settled = false;
+
+		const fail = (error: Error) => {
+			if (settled) return;
+			settled = true;
+			reject(error);
+		};
+
+		const succeed = (body: string) => {
+			if (settled) return;
+			settled = true;
+			resolve(body);
+		};
+
+		req.on("data", (chunk: Buffer | string) => {
+			const bufferChunk = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+			totalBytes += bufferChunk.length;
+			if (totalBytes > maxBytes) {
+				fail(new Error(`Request body exceeds ${maxBytes} bytes.`));
+				try {
+					req.destroy();
+				} catch {
+					// ignore
+				}
+				return;
+			}
+			chunks.push(bufferChunk);
+		});
+
+		req.on("error", (error) => {
+			fail(error instanceof Error ? error : new Error(String(error)));
+		});
+
+		req.on("end", () => {
+			succeed(Buffer.concat(chunks).toString("utf-8"));
+		});
+	});
+}
+
+function respondJson(res: ServerResponse, status: number, payload: unknown): void {
+	res.writeHead(status, {
+		"Content-Type": "application/json; charset=utf-8",
+		"Cache-Control": "no-store",
+		"X-Content-Type-Options": "nosniff",
+	});
+	res.end(JSON.stringify(payload));
 }
 
 function respondText(res: ServerResponse, status: number, text: string): void {
@@ -980,15 +1150,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       background: var(--panel-2);
     }
 
-    #sourcePreview pre {
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      font-size: 13px;
-      line-height: 1.5;
-    }
-
     .panel-scroll {
       min-height: 0;
       overflow: auto;
@@ -997,13 +1158,130 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       font-size: 14px;
     }
 
-    #documentView pre {
+    .rendered-markdown {
+      overflow-wrap: anywhere;
+      line-height: 1.58;
+      font-size: 15px;
+    }
+
+    .rendered-markdown h1,
+    .rendered-markdown h2,
+    .rendered-markdown h3,
+    .rendered-markdown h4,
+    .rendered-markdown h5,
+    .rendered-markdown h6 {
+      margin-top: 1.2em;
+      margin-bottom: 0.5em;
+      line-height: 1.25;
+    }
+
+    .rendered-markdown h1 {
+      font-size: 2em;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.3em;
+    }
+
+    .rendered-markdown h2 {
+      font-size: 1.5em;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.25em;
+    }
+
+    .rendered-markdown p,
+    .rendered-markdown ul,
+    .rendered-markdown ol,
+    .rendered-markdown blockquote,
+    .rendered-markdown table {
+      margin-top: 0;
+      margin-bottom: 1em;
+    }
+
+    .rendered-markdown a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .rendered-markdown a:hover {
+      text-decoration: underline;
+    }
+
+    .rendered-markdown blockquote {
+      margin-left: 0;
+      padding: 0 1em;
+      border-left: 0.25em solid var(--border);
+      color: var(--muted);
+    }
+
+    .rendered-markdown pre {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      overflow: auto;
+      margin-top: 0;
+      margin-bottom: 1em;
+    }
+
+    .rendered-markdown code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.9em;
+    }
+
+    .rendered-markdown :not(pre) > code {
+      background: rgba(127, 127, 127, 0.16);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.12em 0.35em;
+    }
+
+    .rendered-markdown table {
+      border-collapse: collapse;
+      display: block;
+      max-width: 100%;
+      overflow: auto;
+    }
+
+    .rendered-markdown th,
+    .rendered-markdown td {
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+    }
+
+    .rendered-markdown hr {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin: 1.25em 0;
+    }
+
+    .rendered-markdown img {
+      max-width: 100%;
+    }
+
+    .rendered-markdown math[display="block"] {
+      display: block;
+      margin: 1em 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .plain-markdown {
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 13px;
       line-height: 1.5;
+    }
+
+    .preview-loading {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .preview-error {
+      color: var(--warn);
+      margin-bottom: 0.75em;
+      font-size: 12px;
     }
 
     .marker {
@@ -1028,22 +1306,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       font-weight: 600;
       text-decoration: underline;
       text-underline-offset: 2px;
-    }
-
-    #critiqueView h1, #critiqueView h2, #critiqueView h3 {
-      margin-top: 1.1em;
-      margin-bottom: 0.5em;
-    }
-
-    #critiqueView p, #critiqueView ul, #critiqueView ol, #critiqueView blockquote {
-      margin-top: 0;
-      margin-bottom: 0.85em;
-    }
-
-    #critiqueView code {
-      background: rgba(127, 127, 127, 0.16);
-      border-radius: 4px;
-      padding: 0.1em 0.35em;
     }
 
     .response-wrap {
@@ -1085,6 +1347,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       color: var(--muted);
       font-size: 11px;
       white-space: nowrap;
+      font-style: normal;
     }
 
     footer.error { color: var(--error); }
@@ -1139,7 +1402,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           </div>
         </div>
         <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
-        <div id="sourcePreview" class="panel-scroll" hidden><pre></pre></div>
+        <div id="sourcePreview" class="panel-scroll rendered-markdown" hidden><pre class="plain-markdown"></pre></div>
       </div>
     </section>
 
@@ -1148,7 +1411,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       <div class="reference-meta">
         <span id="referenceBadge" class="source-badge">Latest response: none</span>
       </div>
-      <div id="critiqueView" class="panel-scroll"><pre>No response yet.</pre></div>
+      <div id="critiqueView" class="panel-scroll rendered-markdown"><pre class="plain-markdown">No response yet.</pre></div>
       <div class="response-wrap">
         <div id="responseActions" class="response-actions">
           <select id="followSelect" aria-label="Auto-update response">
@@ -1170,8 +1433,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     <span class="shortcut-hint">Focus pane: Cmd/Ctrl+Esc (or F10), Esc to exit</span>
   </footer>
 
-  <!-- Defer CDN scripts so studio can boot/connect even if CDN is slow or blocked. -->
-  <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Defer sanitizer script so studio can boot/connect even if CDN is slow or blocked. -->
   <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
   <script>
     (() => {
@@ -1254,7 +1516,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       };
       let activePane = "left";
       let paneFocusTarget = "off";
-      let mathJaxLoadPromise = null;
+      let sourcePreviewRenderTimer = null;
+      let sourcePreviewRenderNonce = 0;
+      let responsePreviewRenderNonce = 0;
 
       function getIdleStatus() {
         return "Ready. Edit text, then run or critique (insert annotation header if needed).";
@@ -1425,144 +1689,126 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         }
       }
 
-      function normalizeMathDelimitersInSegment(markdown) {
-        let normalized = String(markdown || "");
-        normalized = normalized.split("\\\\[").join("$$\\n");
-        normalized = normalized.split("\\\\]").join("\\n$$");
-        normalized = normalized.split("\\\\(").join("$");
-        normalized = normalized.split("\\\\)").join("$");
-        return normalized;
+      function buildPlainMarkdownHtml(markdown) {
+        return "<pre class=\"plain-markdown\">" + escapeHtml(String(markdown || "")) + "</pre>";
       }
 
-      function normalizeMathDelimiters(markdown) {
-        const lines = String(markdown || "").split("\\n");
-        const out = [];
-        let plainBuffer = [];
-        let inFence = false;
-        let fenceChar = undefined;
-        let fenceLength = 0;
-
-        const flushPlain = () => {
-          if (plainBuffer.length === 0) return;
-          out.push(normalizeMathDelimitersInSegment(plainBuffer.join("\\n")));
-          plainBuffer = [];
-        };
-
-        for (const line of lines) {
-          const trimmed = line.trimStart();
-          const fenceMatch = trimmed.match(/^([\x60]{3,}|~{3,})/);
-
-          if (fenceMatch) {
-            const marker = fenceMatch[1];
-            const markerChar = marker[0];
-            const markerLength = marker.length;
-
-            if (!inFence) {
-              flushPlain();
-              inFence = true;
-              fenceChar = markerChar;
-              fenceLength = markerLength;
-              out.push(line);
-              continue;
-            }
-
-            if (fenceChar === markerChar && markerLength >= fenceLength) {
-              inFence = false;
-              fenceChar = undefined;
-              fenceLength = 0;
-            }
-
-            out.push(line);
-            continue;
-          }
-
-          if (inFence) {
-            out.push(line);
-          } else {
-            plainBuffer.push(line);
-          }
-        }
-
-        flushPlain();
-        return out.join("\\n");
+      function buildPreviewErrorHtml(message, markdown) {
+        return "<div class=\"preview-error\">" + escapeHtml(String(message || "Preview rendering failed.")) + "</div>" + buildPlainMarkdownHtml(markdown);
       }
 
-      function renderMarkdownHtml(markdown) {
-        const safeText = normalizeMathDelimiters(typeof markdown === "string" ? markdown : "");
-        if (window.marked && typeof window.marked.parse === "function") {
-          const rawHtml = window.marked.parse(safeText);
-          return window.DOMPurify ? window.DOMPurify.sanitize(rawHtml) : rawHtml;
+      function sanitizeRenderedHtml(html) {
+        const rawHtml = typeof html === "string" ? html : "";
+        if (window.DOMPurify && typeof window.DOMPurify.sanitize === "function") {
+          return window.DOMPurify.sanitize(rawHtml);
         }
-        return "<pre>" + escapeHtml(safeText) + "</pre>";
+        return rawHtml;
       }
 
-      function ensureMathJax() {
-        if (window.MathJax && typeof window.MathJax.typesetPromise === "function") {
-          return Promise.resolve(window.MathJax);
+      async function renderMarkdownWithPandoc(markdown) {
+        const token = getToken();
+        if (!token) {
+          throw new Error("Missing Studio token in URL.");
         }
 
-        if (mathJaxLoadPromise) return mathJaxLoadPromise;
-
-        window.MathJax = {
-          tex: {
-            inlineMath: [["$", "$"], ["\\(", "\\)"]],
-            displayMath: [["$$", "$$"], ["\\[", "\\]"]],
-            processEscapes: true,
+        const response = await fetch("/render-preview?token=" + encodeURIComponent(token), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
-          options: {
-            skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"],
-          },
-        };
-
-        mathJaxLoadPromise = new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
-          script.async = true;
-          script.onload = () => resolve(window.MathJax);
-          script.onerror = () => reject(new Error("Failed to load MathJax from CDN."));
-          document.head.appendChild(script);
+          body: JSON.stringify({ markdown: String(markdown || "") }),
         });
 
-        return mathJaxLoadPromise;
+        const rawBody = await response.text();
+        let payload = null;
+        try {
+          payload = rawBody ? JSON.parse(rawBody) : null;
+        } catch {
+          payload = null;
+        }
+
+        if (!response.ok) {
+          const message = payload && typeof payload.error === "string"
+            ? payload.error
+            : "Preview request failed with HTTP " + response.status + ".";
+          throw new Error(message);
+        }
+
+        if (!payload || payload.ok !== true || typeof payload.html !== "string") {
+          const message = payload && typeof payload.error === "string"
+            ? payload.error
+            : "Preview renderer returned an invalid payload.";
+          throw new Error(message);
+        }
+
+        return payload.html;
       }
 
-      function typesetMathIn(element) {
-        if (!element) return;
+      async function applyRenderedMarkdown(targetEl, markdown, pane, nonce) {
+        try {
+          const renderedHtml = await renderMarkdownWithPandoc(markdown);
 
-        ensureMathJax()
-          .then((mathJax) => {
-            if (!mathJax || typeof mathJax.typesetPromise !== "function") return;
-            if (typeof mathJax.typesetClear === "function") {
-              mathJax.typesetClear([element]);
-            }
-            return mathJax.typesetPromise([element]);
-          })
-          .catch(() => {
-            // Math rendering is best-effort; keep markdown visible if CDN/network fails.
-          });
+          if (pane === "source") {
+            if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
+          } else {
+            if (nonce !== responsePreviewRenderNonce || rightView !== "preview") return;
+          }
+
+          targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml);
+        } catch (error) {
+          if (pane === "source") {
+            if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
+          } else {
+            if (nonce !== responsePreviewRenderNonce || rightView !== "preview") return;
+          }
+
+          const detail = error && error.message ? error.message : String(error || "unknown error");
+          targetEl.innerHTML = buildPreviewErrorHtml("Preview renderer unavailable (" + detail + "). Showing plain markdown.", markdown);
+        }
+      }
+
+      function renderSourcePreviewNow() {
+        if (editorView !== "preview") return;
+        const markdown = sourceTextEl.value || "";
+        const nonce = ++sourcePreviewRenderNonce;
+        sourcePreviewEl.innerHTML = "<div class=\"preview-loading\">Rendering preview…</div>";
+        void applyRenderedMarkdown(sourcePreviewEl, markdown, "source", nonce);
+      }
+
+      function scheduleSourcePreviewRender(delayMs) {
+        if (sourcePreviewRenderTimer) {
+          window.clearTimeout(sourcePreviewRenderTimer);
+          sourcePreviewRenderTimer = null;
+        }
+
+        if (editorView !== "preview") return;
+
+        const delay = typeof delayMs === "number" ? Math.max(0, delayMs) : 180;
+        sourcePreviewRenderTimer = window.setTimeout(() => {
+          sourcePreviewRenderTimer = null;
+          renderSourcePreviewNow();
+        }, delay);
       }
 
       function renderSourcePreview() {
-        if (editorView === "preview") {
-          sourcePreviewEl.innerHTML = renderMarkdownHtml(sourceTextEl.value || "");
-          typesetMathIn(sourcePreviewEl);
-        }
+        scheduleSourcePreviewRender(0);
       }
 
       function renderActiveResult() {
         const markdown = latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
-          critiqueViewEl.innerHTML = "<pre>No response yet. Run editor text or critique editor text.</pre>";
+          critiqueViewEl.innerHTML = "<pre class=\"plain-markdown\">No response yet. Run editor text or critique editor text.</pre>";
           return;
         }
 
         if (rightView === "preview") {
-          critiqueViewEl.innerHTML = renderMarkdownHtml(markdown);
-          typesetMathIn(critiqueViewEl);
+          const nonce = ++responsePreviewRenderNonce;
+          critiqueViewEl.innerHTML = "<div class=\"preview-loading\">Rendering preview…</div>";
+          void applyRenderedMarkdown(critiqueViewEl, markdown, "response", nonce);
           return;
         }
 
-        critiqueViewEl.innerHTML = "<pre>" + escapeHtml(markdown) + "</pre>";
+        critiqueViewEl.innerHTML = buildPlainMarkdownHtml(markdown);
       }
 
       function updateResultActionButtons() {
@@ -1646,6 +1892,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         editorViewSelect.value = editorView;
         sourceTextEl.hidden = editorView === "preview";
         sourcePreviewEl.hidden = editorView !== "preview";
+
+        if (editorView !== "preview" && sourcePreviewRenderTimer) {
+          window.clearTimeout(sourcePreviewRenderTimer);
+          sourcePreviewRenderTimer = null;
+        }
+
         if (editorView === "preview") {
           renderSourcePreview();
         }
@@ -2129,7 +2381,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       });
 
       sourceTextEl.addEventListener("input", () => {
-        renderSourcePreview();
+        scheduleSourcePreviewRender();
         updateResultActionButtons();
       });
 
@@ -2710,45 +2962,117 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const handleHttpRequest = (req: IncomingMessage, res: ServerResponse) => {
-		if (!serverState) {
-			respondText(res, 503, "Studio server not ready");
-			return;
-		}
+		void (async () => {
+			if (!serverState) {
+				respondText(res, 503, "Studio server not ready");
+				return;
+			}
 
-		const host = req.headers.host ?? `127.0.0.1:${serverState.port}`;
-		const requestUrl = new URL(req.url ?? "/", `http://${host}`);
+			const host = req.headers.host ?? `127.0.0.1:${serverState.port}`;
+			const requestUrl = new URL(req.url ?? "/", `http://${host}`);
 
-		if (requestUrl.pathname === "/health") {
-			respondText(res, 200, "ok");
-			return;
-		}
+			if (requestUrl.pathname === "/health") {
+				respondText(res, 200, "ok");
+				return;
+			}
 
-		if (requestUrl.pathname === "/favicon.ico") {
-			res.writeHead(204, { "Cache-Control": "no-store" });
-			res.end();
-			return;
-		}
+			if (requestUrl.pathname === "/favicon.ico") {
+				res.writeHead(204, { "Cache-Control": "no-store" });
+				res.end();
+				return;
+			}
 
-		if (requestUrl.pathname !== "/") {
-			respondText(res, 404, "Not found");
-			return;
-		}
+			if (requestUrl.pathname === "/render-preview") {
+				const token = requestUrl.searchParams.get("token") ?? "";
+				if (token !== serverState.token) {
+					respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+					return;
+				}
 
-		const token = requestUrl.searchParams.get("token") ?? "";
-		if (token !== serverState.token) {
-			respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
-			return;
-		}
+				const method = (req.method ?? "GET").toUpperCase();
+				if (method !== "POST") {
+					res.setHeader("Allow", "POST");
+					respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+					return;
+				}
 
-		res.writeHead(200, {
-			"Content-Type": "text/html; charset=utf-8",
-			"Cache-Control": "no-store",
-			"X-Content-Type-Options": "nosniff",
-			"Referrer-Policy": "no-referrer",
-			"Cross-Origin-Opener-Policy": "same-origin",
-			"Cross-Origin-Resource-Policy": "same-origin",
+				let rawBody = "";
+				try {
+					rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					const status = message.includes("exceeds") ? 413 : 400;
+					respondJson(res, status, { ok: false, error: message });
+					return;
+				}
+
+				let parsedBody: unknown;
+				try {
+					parsedBody = rawBody ? JSON.parse(rawBody) : {};
+				} catch {
+					respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+					return;
+				}
+
+				const markdown =
+					parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { markdown?: unknown }).markdown === "string"
+						? (parsedBody as { markdown: string }).markdown
+						: null;
+
+				if (markdown === null) {
+					respondJson(res, 400, { ok: false, error: "Missing markdown string in request body." });
+					return;
+				}
+
+				if (markdown.length > PREVIEW_RENDER_MAX_CHARS) {
+					respondJson(res, 413, {
+						ok: false,
+						error: `Preview text exceeds ${PREVIEW_RENDER_MAX_CHARS} characters.`,
+					});
+					return;
+				}
+
+				try {
+					const html = await renderStudioMarkdownWithPandoc(markdown);
+					respondJson(res, 200, { ok: true, html, renderer: "pandoc" });
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					respondJson(res, 500, { ok: false, error: `Preview render failed: ${message}` });
+				}
+				return;
+			}
+
+			if (requestUrl.pathname !== "/") {
+				respondText(res, 404, "Not found");
+				return;
+			}
+
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
+				return;
+			}
+
+			res.writeHead(200, {
+				"Content-Type": "text/html; charset=utf-8",
+				"Cache-Control": "no-store",
+				"X-Content-Type-Options": "nosniff",
+				"Referrer-Policy": "no-referrer",
+				"Cross-Origin-Opener-Policy": "same-origin",
+				"Cross-Origin-Resource-Policy": "same-origin",
+			});
+			res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme));
+		})().catch((error) => {
+			if (res.headersSent) {
+				try {
+					res.end();
+				} catch {
+					// ignore
+				}
+				return;
+			}
+			respondText(res, 500, `Studio server error: ${error instanceof Error ? error.message : String(error)}`);
 		});
-		res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme));
 	};
 
 	const ensureServer = async (): Promise<StudioServerState> => {
