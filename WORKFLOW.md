@@ -15,9 +15,9 @@ Studio uses a **single workspace** (no tab/mode switching):
 
 ## Core actions
 
-## 1) Send reply (annotated feedback)
+## 1) Insert annotation header (optional prep)
 
-Uses `annotated-reply` compatible prompt shape:
+Adds/updates an `annotated-reply` compatible scaffold in the editor:
 
 ```md
 annotated reply below:
@@ -25,10 +25,16 @@ original source: <last model response | file <path> | studio editor>
 
 ---
 
-<annotated text>
+<your text>
 ```
 
-## 2) Request critique (structured review request)
+Studio does **not** auto-send this scaffold; it is an explicit editor transform.
+
+## 2) Run editor text (plain send)
+
+Sends current editor text to the model unchanged.
+
+## 3) Critique editor text (structured review request)
 
 Critiques current editor text and expects/handles structured output:
 - `## Assessment`
@@ -42,12 +48,12 @@ Critiques current editor text and expects/handles structured output:
 Right pane always shows the **latest assistant response** (reply or critique).
 
 When response is structured critique, Studio enables additional helpers:
-- **Load full critique package → Editor**
-- **Load clean revised document** (strips `{C#}` markers)
+- **Load critique package into editor**
+- **Load critique document (without markers)** (strips `{C#}` markers)
 
 Always-available response helpers:
-- **Load latest response → Editor**
-- **Load revised document** (if `## Document` is present)
+- **Load response into editor**
+- **Load critique document (with markers)** (if `## Document` is present)
 - **Copy response**
 
 ---
@@ -67,7 +73,7 @@ Rules:
 
 ## Required UI elements
 
-- Header actions: **Send reply**, **Request critique** (+ focus), **Pull latest**, `Follow latest: On|Off`
+- Header actions: **Insert annotation header**, **Critique editor text** (+ critique focus), **Get latest response**, `Auto-update response: On|Off`
 - Pane view toggles: `Editor: Markdown|Preview`, `Right: Markdown|Preview`
 - Source badge: `blank | last model response | file <path> | upload`
 - Response badge: `none | assistant response | assistant critique` (+ timestamp)
@@ -79,11 +85,12 @@ Rules:
 ## Acceptance criteria
 
 1. `/studio --last` opens with editor loaded and no required mode selection.
-2. **Send reply** sends annotated-reply scaffold and returns response to right pane.
-3. **Request critique** runs on current editor text and returns structured package when model complies.
-4. Structured critique helpers enable/disable correctly.
-5. Loading response/document back into editor never loses draft unexpectedly.
-6. Terminal↔studio roundtrip remains intact (save, editor handoff, reopen).
+2. **Run editor text** sends the current editor content as-is and returns response to right pane.
+3. **Insert annotation header** updates the scaffold source metadata without duplicating headers.
+4. **Critique editor text** runs on current editor text and returns structured package when model complies.
+5. Structured critique helpers enable/disable correctly.
+6. Loading response/document back into editor never loses draft unexpectedly.
+7. Terminal↔studio roundtrip remains intact (save, editor handoff, reopen).
 
 ---
 

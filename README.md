@@ -56,16 +56,23 @@ Studio now uses a single always-on workspace:
 - **Right pane (Response):** latest assistant response (normal reply or critique).
 
 Top controls:
-- **Send reply**: sends annotated-reply style prompt from current editor text.
-- **Request critique** (+ focus): critiques current editor text and loads result into Response pane.
-- **Pull latest** with optional `Follow latest: On|Off`.
+- **Insert annotation header**: prepends/updates the annotated-reply scaffold in the editor.
+- **Critique editor text** (+ critique focus): critiques current editor text and loads result into Response pane.
+- **Get latest response** with optional `Auto-update response: On|Off`.
+
+Editor actions:
+- **Run editor text**: sends current editor text to the model unchanged.
+
+Important:
+- Studio does **not** auto-wrap editor text with an annotation header on run.
+- If you want annotated-reply format, click **Insert annotation header** first, then run.
 
 Response actions:
-- **Load latest response → Editor**
-- **Load revised document** (when response includes a `## Document` section)
+- **Load response into editor**
+- **Load critique document (with markers)** (from `## Document`)
 - **Copy response**
-- **Load full critique package → Editor** (for structured critique responses)
-- **Load clean revised document** (strips `{C#}` markers)
+- **Load critique package into editor** (full structured critique)
+- **Load critique document (without markers)** (strips `{C#}` markers)
 
 Additional behavior:
 - independent pane view toggles (`Editor: Markdown|Preview`, `Right: Markdown|Preview`)
@@ -86,5 +93,5 @@ Additional behavior:
 - Local-only server (`127.0.0.1`) with rotating session tokens.
 - Studio URLs include a token query parameter; avoid sharing full Studio URLs in screenshots/issues.
 - One studio request at a time.
-- Browser supports: Save As, Save Over (file-backed editor text), Send to pi editor, Send + Run (submit editor text directly to model), Copy editor, and response→editor load actions.
+- Browser supports: Save As, Save Over (file-backed editor text), Send to pi editor, Run editor text (submit editor text directly to model), Copy editor, annotation-header insertion, and response→editor load actions.
 - Browser uses Markdown rendering via CDN (`marked`, `dompurify`).

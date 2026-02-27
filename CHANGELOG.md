@@ -6,16 +6,17 @@ All notable changes to `pi-studio` are documented here.
 
 ### Added
 - Single-workspace flow (no mode switching): always-on **Editor** pane + **Response** pane.
-- Top-level actions for both workflows in one place: **Send reply** and **Request critique**.
+- Explicit annotation scaffold action: **Insert annotation header** (upserts header and source metadata in-editor).
+- Clear top-level critique controls: **Critique editor text** + **Critique focus**.
 - Unified response actions:
-  - **Load latest response → Editor**
-  - **Load revised document**
+  - **Load response into editor**
+  - **Load critique document (with markers)**
   - **Copy response**
-  - **Load full critique package → Editor**
-  - **Load clean revised document**
+  - **Load critique package into editor**
+  - **Load critique document (without markers)**
 - Independent Markdown/Preview toggles for Editor and right pane.
-- `Follow latest: On|Off` + `Pull latest` controls for terminal/editor-composability.
-- Source action: **Send + Run** to submit current editor text directly to the model.
+- `Auto-update response: On|Off` + `Get latest response` controls for terminal/editor-composability.
+- Source action: **Run editor text** to submit current editor text directly to the model.
 - Active-pane focus mode with keyboard shortcuts (`Cmd/Ctrl+Esc` or `F10` to toggle, `Esc` to exit), plus in-UI footer hint.
 - Theme-aware Studio browser palette derived from active pi theme tokens (bg/text/border/accent + status colors).
 
@@ -25,7 +26,7 @@ All notable changes to `pi-studio` are documented here.
 - Response badge now reports response type + timestamp (`assistant response` / `assistant critique`).
 - Editor sync badge now tracks relation to latest response (`No response loaded`, `In sync with response`, `Edited since response`).
 - Footer continues to show explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`) alongside status text.
-- Annotate submission still sends annotated-reply scaffold with source context.
+- Running text and preparing annotated scaffolds are now separate explicit actions (no hidden header wrapping on send).
 - Studio still live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
 
 ## [0.1.0-alpha.1] - 2026-02-26

@@ -1097,18 +1097,18 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         <option value="markdown" selected>Right: Markdown</option>
         <option value="preview">Right: Preview</option>
       </select>
-      <select id="followSelect" aria-label="Follow latest responses">
-        <option value="on" selected>Follow latest: On</option>
-        <option value="off">Follow latest: Off</option>
+      <select id="followSelect" aria-label="Auto-update response">
+        <option value="on" selected>Auto-update response: On</option>
+        <option value="off">Auto-update response: Off</option>
       </select>
-      <button id="pullLatestBtn" type="button">Pull latest</button>
-      <button id="sendReplyBtn" type="button">Send reply</button>
+      <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
+      <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
       <select id="lensSelect" aria-label="Critique focus">
-        <option value="auto" selected>Focus: Auto</option>
-        <option value="writing">Focus: Writing</option>
-        <option value="code">Focus: Code</option>
+        <option value="auto" selected>Critique focus: Auto</option>
+        <option value="writing">Critique focus: Writing</option>
+        <option value="code">Critique focus: Code</option>
       </select>
-      <button id="critiqueBtn" type="button">Request critique</button>
+      <button id="critiqueBtn" type="button">Critique editor text</button>
       <label class="file-label">Load file<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
     </div>
   </header>
@@ -1126,7 +1126,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <button id="saveAsBtn" type="button">Save As…</button>
             <button id="saveOverBtn" type="button" disabled>Save Over</button>
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
-            <button id="sendRunBtn" type="button">Send + Run</button>
+            <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is.">Run editor text</button>
             <button id="copyDraftBtn" type="button">Copy editor</button>
           </div>
         </div>
@@ -1143,11 +1143,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       <div id="critiqueView" class="panel-scroll"><pre>No response yet.</pre></div>
       <div class="response-wrap">
         <div id="responseActions" class="response-actions">
-          <button id="loadResponseBtn" type="button">Load latest response → Editor</button>
-          <button id="loadEditedBtn" type="button">Load revised document</button>
+          <button id="loadResponseBtn" type="button">Load response into editor</button>
+          <button id="loadEditedBtn" type="button">Load critique document (with markers)</button>
           <button id="copyResponseBtn" type="button">Copy response</button>
-          <button id="sendPackageBtn" type="button">Load full critique package → Editor</button>
-          <button id="sendCleanBtn" type="button">Load clean revised document</button>
+          <button id="sendPackageBtn" type="button">Load critique package into editor</button>
+          <button id="sendCleanBtn" type="button">Load critique document (without markers)</button>
         </div>
       </div>
     </section>
@@ -1199,7 +1199,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const rightViewSelect = document.getElementById("rightViewSelect");
       const followSelect = document.getElementById("followSelect");
       const pullLatestBtn = document.getElementById("pullLatestBtn");
-      const sendReplyBtn = document.getElementById("sendReplyBtn");
+      const insertHeaderBtn = document.getElementById("insertHeaderBtn");
       const critiqueBtn = document.getElementById("critiqueBtn");
       const lensSelect = document.getElementById("lensSelect");
       const fileInput = document.getElementById("fileInput");
@@ -1246,7 +1246,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       let paneFocusTarget = "off";
 
       function getIdleStatus() {
-        return "Ready. Edit text, then Send reply or Request critique.";
+        return "Ready. Edit text, then run or critique (insert annotation header if needed).";
       }
 
       function renderStatus() {
@@ -1432,7 +1432,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       function renderActiveResult() {
         const markdown = latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
-          critiqueViewEl.innerHTML = "<pre>No response yet. Send reply or request critique.</pre>";
+          critiqueViewEl.innerHTML = "<pre>No response yet. Run editor text or critique editor text.</pre>";
           return;
         }
 
@@ -1454,14 +1454,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         const responseLoaded = hasResponse && isTextEquivalent(sourceTextEl.value, responseMarkdown);
 
         loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded;
-        loadResponseBtn.textContent = responseLoaded ? "Latest response already in Editor" : "Load latest response → Editor";
+        loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
         loadEditedBtn.disabled = uiBusy || !editedSection;
         copyResponseBtn.disabled = uiBusy || !hasResponse;
         sendPackageBtn.disabled = uiBusy || !latestResponseIsStructuredCritique;
         sendCleanBtn.disabled = uiBusy || !cleanDoc;
 
         pullLatestBtn.disabled = uiBusy || followLatest;
-        pullLatestBtn.textContent = queuedLatestResponse ? "Pull latest *" : "Pull latest";
+        pullLatestBtn.textContent = queuedLatestResponse ? "Get latest response *" : "Get latest response";
 
         updateSyncBadge();
       }
@@ -1491,7 +1491,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         editorViewSelect.disabled = uiBusy;
         rightViewSelect.disabled = uiBusy;
         followSelect.disabled = uiBusy;
-        sendReplyBtn.disabled = uiBusy;
+        insertHeaderBtn.disabled = uiBusy;
         critiqueBtn.disabled = uiBusy;
         lensSelect.disabled = uiBusy;
         updateResultActionButtons();
@@ -1678,11 +1678,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           setBusy(true);
           setWsState("Submitting");
           if (pendingKind === "annotation") {
-            setStatus("Sending reply…", "warning");
+            setStatus("Sending annotated reply…", "warning");
           } else if (pendingKind === "critique") {
-            setStatus("Requesting critique…", "warning");
+            setStatus("Running critique…", "warning");
           } else if (pendingKind === "direct") {
-            setStatus("Sending to model…", "warning");
+            setStatus("Running editor text…", "warning");
           } else {
             setStatus("Submitting…", "warning");
           }
@@ -1728,7 +1728,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             if (!followLatest) {
               queuedLatestResponse = payload;
               updateResultActionButtons();
-              setStatus("New response available — click Pull latest.", "warning");
+              setStatus("New response available — click Get latest response.", "warning");
               return;
             }
 
@@ -1894,12 +1894,48 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         return "studio editor";
       }
 
-      function buildAnnotationPayload(annotatedText) {
+      function buildAnnotationHeader() {
         const sourceDescriptor = describeSourceForAnnotation();
-        let payload = "annotated reply below:\\n";
-        payload += "original source: " + sourceDescriptor + "\\n\\n---\\n\\n";
-        payload += annotatedText;
-        return payload;
+        let header = "annotated reply below:\\n";
+        header += "original source: " + sourceDescriptor + "\\n\\n---\\n\\n";
+        return header;
+      }
+
+      function stripAnnotationHeader(text) {
+        const normalized = String(text || "").replace(/\\r\\n/g, "\\n");
+        if (!normalized.toLowerCase().startsWith("annotated reply below:")) {
+          return { hadHeader: false, body: normalized };
+        }
+
+        const dividerIndex = normalized.indexOf("\\n---");
+        if (dividerIndex < 0) {
+          return { hadHeader: false, body: normalized };
+        }
+
+        let cursor = dividerIndex + 4;
+        while (cursor < normalized.length && normalized[cursor] === "\\n") {
+          cursor += 1;
+        }
+
+        return {
+          hadHeader: true,
+          body: normalized.slice(cursor),
+        };
+      }
+
+      function insertOrUpdateAnnotationHeader() {
+        const stripped = stripAnnotationHeader(sourceTextEl.value);
+        const updated = buildAnnotationHeader() + stripped.body;
+
+        if (isTextEquivalent(sourceTextEl.value, updated)) {
+          setStatus("Annotation header already up to date.");
+          return;
+        }
+
+        sourceTextEl.value = updated;
+        renderSourcePreview();
+        updateResultActionButtons();
+        setStatus(stripped.hadHeader ? "Updated annotation header source." : "Inserted annotation header.", "success");
       }
 
       function requestLatestResponse() {
@@ -1936,7 +1972,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             setStatus("Applied queued response.", "success");
           }
         } else if (!followLatest) {
-          setStatus("Follow latest is off. Use Pull latest to refresh.");
+          setStatus("Auto-update is off. Use Get latest response.");
         }
         updateResultActionButtons();
       });
@@ -1958,33 +1994,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         updateResultActionButtons();
       });
 
-      sendReplyBtn.addEventListener("click", () => {
-        const annotatedText = sourceTextEl.value.trim();
-        if (!annotatedText) {
-          setStatus("Add editor text before sending reply.", "warning");
-          return;
-        }
-
-        const requestId = beginUiAction("annotation");
-        if (!requestId) return;
-
-        const sent = sendMessage({
-          type: "annotation_request",
-          requestId,
-          text: buildAnnotationPayload(annotatedText),
-        });
-
-        if (!sent) {
-          pendingRequestId = null;
-          pendingKind = null;
-          setBusy(false);
-        }
+      insertHeaderBtn.addEventListener("click", () => {
+        insertOrUpdateAnnotationHeader();
       });
 
       critiqueBtn.addEventListener("click", () => {
         const documentText = sourceTextEl.value.trim();
         if (!documentText) {
-          setStatus("Add editor text before requesting critique.", "warning");
+          setStatus("Add editor text before critique.", "warning");
           return;
         }
 
@@ -2019,13 +2036,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       loadEditedBtn.addEventListener("click", () => {
         const edited = extractSection(latestResponseMarkdown, "Document");
         if (!edited) {
-          setStatus("No revised document (## Document) found in latest response.", "warning");
+          setStatus("No critique document (## Document) found in latest response.", "warning");
           return;
         }
         sourceTextEl.value = edited;
         renderSourcePreview();
-        setSourceState({ source: "blank", label: "revised document", path: null });
-        setStatus("Loaded revised document into editor.", "success");
+        setSourceState({ source: "blank", label: "critique document (with markers)", path: null });
+        setStatus("Loaded critique document (with markers) into editor.", "success");
       });
 
       copyResponseBtn.addEventListener("click", async () => {
@@ -2044,13 +2061,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
       sendPackageBtn.addEventListener("click", () => {
         if (!latestResponseIsStructuredCritique || !latestResponseMarkdown.trim()) {
-          setStatus("Latest response is not a full critique package.", "warning");
+          setStatus("Latest response is not a structured critique package.", "warning");
           return;
         }
         sourceTextEl.value = latestResponseMarkdown;
         renderSourcePreview();
-        setSourceState({ source: "blank", label: "full critique package", path: null });
-        setStatus("Loaded full critique package into editor.", "success");
+        setSourceState({ source: "blank", label: "critique package", path: null });
+        setStatus("Loaded critique package into editor.", "success");
       });
 
       sendCleanBtn.addEventListener("click", () => {
@@ -2058,13 +2075,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           ? cleanCritiqueMarkers(latestResponseDocumentSection).trim()
           : "";
         if (!clean) {
-          setStatus("No clean revised document found in latest critique.", "warning");
+          setStatus("No critique document found to load without markers.", "warning");
           return;
         }
         sourceTextEl.value = clean;
         renderSourcePreview();
-        setSourceState({ source: "blank", label: "clean revised document", path: null });
-        setStatus("Loaded clean revised document into editor.", "success");
+        setSourceState({ source: "blank", label: "critique document (without markers)", path: null });
+        setStatus("Loaded critique document (without markers) into editor.", "success");
       });
 
       saveAsBtn.addEventListener("click", () => {
