@@ -18,6 +18,7 @@ All notable changes to `pi-studio` are documented here.
 - Source action: **Send + Run** to submit current editor text directly to the model.
 - Right-pane reference badge with source + timestamp (when available).
 - Editor/reference sync badge (`In sync with reference` / `Edited since reference`) and guard on redundant reload.
+- Active-pane focus mode with keyboard shortcuts (`Cmd/Ctrl+Esc` or `F10` to toggle, `Esc` to exit).
 
 ### Changed
 - Simplified UI: removed in-critique response textbox and duplicate annotated-document panel.

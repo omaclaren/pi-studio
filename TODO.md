@@ -3,7 +3,7 @@
 ## Near term
 - [x] Add a simple **Text | Rendered** toggle for the editor/source panel (`View: Markdown | Preview`).
 - [x] Add explicit in-UI WS diagnostics (footer WS phase: Connecting/Ready/Submitting/Disconnected).
-- [ ] Add keyboard shortcut(s) to make the active pane full-screen / distraction-free (or similar to Zed `Cmd+Esc`).
+- [x] Add keyboard shortcut(s) to make the active pane full-screen / distraction-free (or similar to Zed `Cmd+Esc`).
 - [x] Add a Studio **Send + Run** action (submit directly to model from Studio, not only send to pi editor).
 - [ ] Add a "copy Studio URL" action and avoid line-wrap confusion in terminal notifications.
 - [ ] Tighten structured-critique detection and document exact accepted format.

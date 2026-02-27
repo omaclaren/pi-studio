@@ -678,6 +678,27 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       overflow: hidden;
     }
 
+    section.pane-active {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(94, 161, 255, 0.35);
+    }
+
+    body.pane-focus-left main,
+    body.pane-focus-right main {
+      grid-template-columns: 1fr;
+    }
+
+    body.pane-focus-left #rightPane,
+    body.pane-focus-right #leftPane {
+      display: none;
+    }
+
+    body.pane-focus-left #leftPane,
+    body.pane-focus-right #rightPane {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(94, 161, 255, 0.4);
+    }
+
     .section-header {
       padding: 10px 12px;
       border-bottom: 1px solid var(--border);
@@ -903,7 +924,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
   </header>
 
   <main>
-    <section>
+    <section id="leftPane">
       <div id="leftSectionHeader" class="section-header">Editor</div>
       <div class="source-wrap">
         <div class="source-meta">
@@ -925,7 +946,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       </div>
     </section>
 
-    <section>
+    <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">Reference</div>
       <div class="reference-meta">
         <span id="referenceBadge" class="source-badge">Reference: none</span>
@@ -976,6 +997,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       try {
       const sourceTextEl = document.getElementById("sourceText");
       const sourcePreviewEl = document.getElementById("sourcePreview");
+      const leftPaneEl = document.getElementById("leftPane");
+      const rightPaneEl = document.getElementById("rightPane");
       const leftSectionHeaderEl = document.getElementById("leftSectionHeader");
       const sourceBadgeEl = document.getElementById("sourceBadge");
       const modeBadgeEl = document.getElementById("modeBadge");
@@ -1038,6 +1061,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         label: initialSourceState.label,
         path: initialSourceState.path,
       };
+      let activePane = "left";
+      let paneFocusTarget = "off";
 
       function modeLabel(mode) {
         return mode === MODES.critique ? "Critique" : "Annotate";
@@ -1072,6 +1097,82 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
         sourceBadgeEl.textContent = "Editor origin: " + label;
+      }
+
+      function applyPaneFocusClasses() {
+        document.body.classList.remove("pane-focus-left", "pane-focus-right");
+        if (paneFocusTarget === "left") {
+          document.body.classList.add("pane-focus-left");
+        } else if (paneFocusTarget === "right") {
+          document.body.classList.add("pane-focus-right");
+        }
+      }
+
+      function setActivePane(nextPane) {
+        activePane = nextPane === "right" ? "right" : "left";
+
+        if (leftPaneEl) leftPaneEl.classList.toggle("pane-active", activePane === "left");
+        if (rightPaneEl) rightPaneEl.classList.toggle("pane-active", activePane === "right");
+
+        if (paneFocusTarget !== "off" && paneFocusTarget !== activePane) {
+          paneFocusTarget = activePane;
+          applyPaneFocusClasses();
+        }
+      }
+
+      function paneLabel(pane) {
+        if (pane === "right") {
+          return currentMode === MODES.critique ? "Critique" : "Reference";
+        }
+        return "Editor";
+      }
+
+      function togglePaneFocus() {
+        if (paneFocusTarget === activePane) {
+          paneFocusTarget = "off";
+          applyPaneFocusClasses();
+          setStatus("Pane focus off.");
+          return;
+        }
+
+        paneFocusTarget = activePane;
+        applyPaneFocusClasses();
+        setStatus("Focused " + paneLabel(activePane) + " pane. Press Esc to exit.");
+      }
+
+      function exitPaneFocus() {
+        if (paneFocusTarget === "off") return false;
+        paneFocusTarget = "off";
+        applyPaneFocusClasses();
+        setStatus("Pane focus off.");
+        return true;
+      }
+
+      function handlePaneShortcut(event) {
+        if (!event) return;
+
+        const key = typeof event.key === "string" ? event.key : "";
+        const isToggleShortcut =
+          (key === "Escape" && (event.metaKey || event.ctrlKey))
+          || key === "F10";
+
+        if (isToggleShortcut) {
+          event.preventDefault();
+          togglePaneFocus();
+          return;
+        }
+
+        if (
+          key === "Escape"
+          && !event.metaKey
+          && !event.ctrlKey
+          && !event.altKey
+          && !event.shiftKey
+        ) {
+          if (exitPaneFocus()) {
+            event.preventDefault();
+          }
+        }
       }
 
       function formatReferenceTime(timestamp) {
@@ -1696,12 +1797,26 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         setStatus("Requested latest assistant response.");
       }
 
+      if (leftPaneEl) {
+        leftPaneEl.addEventListener("mousedown", () => setActivePane("left"));
+        leftPaneEl.addEventListener("focusin", () => setActivePane("left"));
+      }
+
+      if (rightPaneEl) {
+        rightPaneEl.addEventListener("mousedown", () => setActivePane("right"));
+        rightPaneEl.addEventListener("focusin", () => setActivePane("right"));
+      }
+
+      window.addEventListener("keydown", handlePaneShortcut);
+
       modeAnnotateBtn.addEventListener("click", () => {
         setMode(MODES.annotate, { manual: true });
+        setActivePane("left");
       });
 
       modeCritiqueBtn.addEventListener("click", () => {
         setMode(MODES.critique, { manual: true });
+        setActivePane("right");
       });
 
       viewSelect.addEventListener("change", () => {
@@ -1989,6 +2104,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
       setSourceState(initialSourceState);
       setMode(detectModeFromText(sourceTextEl.value), { announce: false });
+      setActivePane(currentMode === MODES.critique ? "right" : "left");
       setView(currentView);
       renderSourcePreview();
       connect();
