@@ -49,17 +49,19 @@ Status: experimental alpha.
 
 ## Install
 
-```bash
-pi install npm:pi-studio
-```
-
-Or from GitHub:
+From GitHub (available now):
 
 ```bash
 pi install https://github.com/omaclaren/pi-studio
 ```
 
-Or run directly:
+From npm (after publish):
+
+```bash
+pi install npm:pi-studio
+```
+
+Run without installing:
 
 ```bash
 pi -e https://github.com/omaclaren/pi-studio
