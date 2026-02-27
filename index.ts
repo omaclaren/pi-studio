@@ -905,6 +905,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       display: flex;
       flex-direction: column;
       gap: 8px;
+      flex: 1 1 auto;
+      min-height: 0;
     }
 
     .source-meta {
@@ -955,13 +957,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     #sourceText {
-      min-height: 200px;
-      max-height: 62vh;
+      flex: 1 1 auto;
+      min-height: 180px;
+      max-height: none;
     }
 
     #sourcePreview {
-      min-height: 200px;
-      max-height: 62vh;
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: none;
       border: 1px solid var(--border);
       border-radius: 8px;
       background: var(--panel-2);
