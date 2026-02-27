@@ -1982,7 +1982,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         sourceTextEl.value = critiqueResponseMarkdown;
         renderSourcePreview();
         setSourceState({ source: "blank", label: "critique package", path: null });
-        setMode(MODES.annotate, { announce: false });
         setStatus("Loaded critique package into editor.", "success");
       });
 
@@ -1995,7 +1994,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         sourceTextEl.value = clean;
         renderSourcePreview();
         setSourceState({ source: "blank", label: "clean document", path: null });
-        setMode(MODES.annotate, { announce: false });
         setStatus("Loaded clean document into editor.", "success");
       });
 

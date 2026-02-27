@@ -28,6 +28,7 @@ All notable changes to `pi-studio` are documented here.
 - Annotate submission sends annotated-reply scaffold with source context.
 - Studio now live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
 - Removed redundant "Use reference in Critique" action; critique target is always the current Editor text.
+- Critique tab editor-load actions now keep the user in Critique tab (no forced switch to Annotate).
 
 ## [0.1.0-alpha.1] - 2026-02-26
 
