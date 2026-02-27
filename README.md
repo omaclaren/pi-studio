@@ -57,12 +57,12 @@ Studio now uses two minimal tabs:
 
 Tab behavior:
 - explicit top-level tabs (**Annotate | Critique**)
-- shared Editor pane with `View: Markdown | Preview`
+- independent view toggles for each pane (`Editor: Markdown|Preview`, `Right: Markdown|Preview`)
 - **Generate critique** always critiques current Editor text (left pane)
 - optional latest-response tracking control: `Follow latest: On|Off` with `Pull latest`
 - right pane badge shows reference source (`none`, `assistant response`, `assistant critique`) and timestamp when available
 - editor badge shows relation to current reference (`No reference loaded`, `In sync with reference`, `Edited since reference`)
-- keyboard shortcuts: `Cmd/Ctrl+Esc` (or `F10`) toggles active-pane focus mode; `Esc` exits focus mode
+- keyboard shortcuts: `Cmd/Ctrl+Esc` (or `F10`) toggles active-pane focus mode; `Esc` exits focus mode (shown as a footer hint)
 - Critique → Annotate handoff actions:
   - **Send critique package to Annotate** (Assessment + Critiques + Document)
   - **Send clean document to Annotate** (Document with `{C1}` markers stripped)

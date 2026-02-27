@@ -6,7 +6,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Added
 - Minimal **Annotate | Critique** tab workflow with explicit handoff actions.
-- Shared `View: Markdown | Preview` toggle for editor/reference inspection.
+- Independent Markdown/Preview toggles for Editor and right pane.
 - `Follow latest: On|Off` + `Pull latest` controls for terminal/editor-composability.
 - Critique → Annotate handoff actions:
   - **Send critique package to Annotate**
@@ -18,7 +18,7 @@ All notable changes to `pi-studio` are documented here.
 - Source action: **Send + Run** to submit current editor text directly to the model.
 - Right-pane reference badge with source + timestamp (when available).
 - Editor/reference sync badge (`In sync with reference` / `Edited since reference`) and guard on redundant reload.
-- Active-pane focus mode with keyboard shortcuts (`Cmd/Ctrl+Esc` or `F10` to toggle, `Esc` to exit).
+- Active-pane focus mode with keyboard shortcuts (`Cmd/Ctrl+Esc` or `F10` to toggle, `Esc` to exit), plus in-UI footer hint.
 
 ### Changed
 - Simplified UI: removed in-critique response textbox and duplicate annotated-document panel.

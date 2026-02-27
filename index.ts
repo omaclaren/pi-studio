@@ -882,6 +882,22 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       font-size: 12px;
       min-height: 32px;
       background: var(--panel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    #status {
+      flex: 1 1 auto;
+      min-width: 240px;
+    }
+
+    .shortcut-hint {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
     }
 
     footer.error { color: var(--error); }
@@ -903,9 +919,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         <button id="modeAnnotateBtn" class="mode-btn" type="button" aria-pressed="true">Annotate</button>
         <button id="modeCritiqueBtn" class="mode-btn" type="button" aria-pressed="false">Critique</button>
       </div>
-      <select id="viewSelect" aria-label="View mode">
-        <option value="markdown" selected>View: Markdown</option>
-        <option value="preview">View: Preview</option>
+      <select id="editorViewSelect" aria-label="Editor view mode">
+        <option value="markdown" selected>Editor: Markdown</option>
+        <option value="preview">Editor: Preview</option>
+      </select>
+      <select id="rightViewSelect" aria-label="Right pane view mode">
+        <option value="markdown" selected>Right: Markdown</option>
+        <option value="preview">Right: Preview</option>
       </select>
       <select id="followSelect" aria-label="Follow latest responses">
         <option value="on" selected>Follow latest: On</option>
@@ -966,7 +986,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
     </section>
   </main>
 
-  <footer id="status">Booting studio…</footer>
+  <footer>
+    <span id="status">Booting studio…</span>
+    <span class="shortcut-hint">Focus pane: Cmd/Ctrl+Esc (or F10), Esc to exit</span>
+  </footer>
 
   <!-- Defer CDN scripts so studio can boot/connect even if CDN is slow or blocked. -->
   <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -1008,7 +1031,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       const referenceBadgeEl = document.getElementById("referenceBadge");
       const modeAnnotateBtn = document.getElementById("modeAnnotateBtn");
       const modeCritiqueBtn = document.getElementById("modeCritiqueBtn");
-      const viewSelect = document.getElementById("viewSelect");
+      const editorViewSelect = document.getElementById("editorViewSelect");
+      const rightViewSelect = document.getElementById("rightViewSelect");
       const followSelect = document.getElementById("followSelect");
       const pullLatestBtn = document.getElementById("pullLatestBtn");
       const sendReplyBtn = document.getElementById("sendReplyBtn");
@@ -1046,7 +1070,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       let pendingRequestId = null;
       let pendingKind = null;
       let initialDocumentApplied = false;
-      let currentView = "markdown";
+      let editorView = "markdown";
+      let rightView = "markdown";
       let followLatest = true;
       let queuedLatestResponse = null;
       let annotateResponseMarkdown = "";
@@ -1262,7 +1287,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       }
 
       function renderSourcePreview() {
-        if (currentView === "preview") {
+        if (editorView === "preview") {
           sourcePreviewEl.innerHTML = renderMarkdownHtml(sourceTextEl.value || "");
         }
       }
@@ -1281,7 +1306,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           return;
         }
 
-        if (currentView === "preview") {
+        if (rightView === "preview") {
           critiqueViewEl.innerHTML = renderMarkdownHtml(markdown);
           return;
         }
@@ -1351,7 +1376,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         sendEditorBtn.disabled = uiBusy;
         sendRunBtn.disabled = uiBusy;
         copyDraftBtn.disabled = uiBusy;
-        viewSelect.disabled = uiBusy;
+        editorViewSelect.disabled = uiBusy;
+        rightViewSelect.disabled = uiBusy;
         followSelect.disabled = uiBusy;
         sendReplyBtn.disabled = uiBusy || currentMode !== MODES.annotate;
         critiqueBtn.disabled = uiBusy || currentMode !== MODES.critique;
@@ -1380,14 +1406,19 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         return isStructuredCritique(markdown) ? MODES.critique : MODES.annotate;
       }
 
-      function setView(nextView) {
-        currentView = nextView === "preview" ? "preview" : "markdown";
-        viewSelect.value = currentView;
-        sourceTextEl.hidden = currentView === "preview";
-        sourcePreviewEl.hidden = currentView !== "preview";
-        if (currentView === "preview") {
+      function setEditorView(nextView) {
+        editorView = nextView === "preview" ? "preview" : "markdown";
+        editorViewSelect.value = editorView;
+        sourceTextEl.hidden = editorView === "preview";
+        sourcePreviewEl.hidden = editorView !== "preview";
+        if (editorView === "preview") {
           renderSourcePreview();
         }
+      }
+
+      function setRightView(nextView) {
+        rightView = nextView === "preview" ? "preview" : "markdown";
+        rightViewSelect.value = rightView;
         renderActiveResult();
       }
 
@@ -1819,8 +1850,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         setActivePane("right");
       });
 
-      viewSelect.addEventListener("change", () => {
-        setView(viewSelect.value);
+      editorViewSelect.addEventListener("change", () => {
+        setEditorView(editorViewSelect.value);
+      });
+
+      rightViewSelect.addEventListener("change", () => {
+        setRightView(rightViewSelect.value);
       });
 
       followSelect.addEventListener("change", () => {
@@ -2105,7 +2140,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       setSourceState(initialSourceState);
       setMode(detectModeFromText(sourceTextEl.value), { announce: false });
       setActivePane(currentMode === MODES.critique ? "right" : "left");
-      setView(currentView);
+      setEditorView(editorView);
+      setRightView(rightView);
       renderSourcePreview();
       connect();
       } catch (error) {
