@@ -74,9 +74,10 @@ Rules:
 
 ## Required UI elements
 
-- Header actions: **Insert annotation header**, **Run editor text**, **Critique editor text** (+ critique focus), **Load file in editor**
+- Header actions: **Save As…**, **Save Over** (file-backed), **Load file in editor**
+- Header view toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
+- Editor actions: **Insert annotation header**, **Run editor text**, **Critique editor text** (+ critique focus), **Send to pi editor**, **Copy editor**
 - Response actions include `Auto-update response: On|Off` + **Get latest response**
-- Pane view toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
 - Source badge: `blank | last model response | file <path> | upload`
 - Response badge: `none | assistant response | assistant critique` (+ timestamp)
 - Sync badge: `No response loaded | In sync with response | Edited since response`

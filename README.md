@@ -56,10 +56,15 @@ Studio now uses a single always-on workspace:
 - **Right pane (Response):** latest assistant response (normal reply or critique).
 
 Top controls:
+- **Save As…** and **Save Over** (when file-backed)
+- **Load file in editor**: imports a local file into the editor pane.
+- pane view toggles (`Editor: Markdown|Preview`, `Response: Markdown|Preview`)
+
+Editor actions:
 - **Insert annotation header**: prepends/updates the annotated-reply scaffold in the editor.
 - **Run editor text**: sends current editor text to the model unchanged.
 - **Critique editor text** (+ critique focus): critiques current editor text and loads result into Response pane.
-- **Load file in editor**: imports a local file into the editor pane.
+- **Send to pi editor**, **Copy editor**
 
 Important:
 - Studio does **not** auto-wrap editor text with an annotation header on run.
@@ -73,7 +78,6 @@ Response actions:
 - **Copy response**
 
 Additional behavior:
-- independent pane view toggles (`Editor: Markdown|Preview`, `Response: Markdown|Preview`)
 - editor sync badge (`No response loaded`, `In sync with response`, `Edited since response`)
 - response badge with source + timestamp (`assistant response` / `assistant critique`)
 - theme-aware palette from the active pi theme at `/studio` launch (re-open Studio after changing themes)

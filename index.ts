@@ -951,7 +951,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       align-items: center;
     }
 
-    .source-actions button {
+    .source-actions button,
+    .source-actions select {
       padding: 6px 9px;
       font-size: 12px;
     }
@@ -1101,14 +1102,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         <option value="markdown">Response: Markdown</option>
         <option value="preview" selected>Response: Preview</option>
       </select>
-      <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
-      <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is.">Run editor text</button>
-      <select id="lensSelect" aria-label="Critique focus">
-        <option value="auto" selected>Critique focus: Auto</option>
-        <option value="writing">Critique focus: Writing</option>
-        <option value="code">Critique focus: Code</option>
-      </select>
-      <button id="critiqueBtn" type="button">Critique editor text</button>
+      <button id="saveAsBtn" type="button">Save As…</button>
+      <button id="saveOverBtn" type="button" disabled>Save Over</button>
       <label class="file-label">Load file in editor<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
     </div>
   </header>
@@ -1123,8 +1118,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <span id="syncBadge" class="source-badge sync-badge">No response loaded</span>
           </div>
           <div class="source-actions">
-            <button id="saveAsBtn" type="button">Save As…</button>
-            <button id="saveOverBtn" type="button" disabled>Save Over</button>
+            <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
+            <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is.">Run editor text</button>
+            <select id="lensSelect" aria-label="Critique focus">
+              <option value="auto" selected>Critique focus: Auto</option>
+              <option value="writing">Critique focus: Writing</option>
+              <option value="code">Critique focus: Code</option>
+            </select>
+            <button id="critiqueBtn" type="button">Critique editor text</button>
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
             <button id="copyDraftBtn" type="button">Copy editor</button>
           </div>
