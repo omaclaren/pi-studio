@@ -2,6 +2,12 @@
 
 Browser feedback workspace for two-way feedback workflows in pi (annotate + structured critique loops).
 
+> ⚠️ **Status: Experimental (alpha)**
+>
+> Pi Studio is a local-first browser workspace for critical feedback and annotation workflows in pi.
+> It is **not** a full IDE or standalone editor replacement.
+> Current scope: single-user, local server + browser UI, and one request at a time.
+
 ## Install
 
 ```bash
