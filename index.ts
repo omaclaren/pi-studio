@@ -791,6 +791,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       gap: 8px;
     }
 
+    .app-logo {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 21px;
+      line-height: 1;
+      display: inline-block;
+    }
+
     .app-subtitle {
       font-size: 12px;
       font-weight: 500;
@@ -1092,7 +1100,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 </head>
 <body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}">
   <header>
-    <h1>Pi Studio <span class="app-subtitle">Feedback Workspace</span></h1>
+    <h1><span class="app-logo" aria-hidden="true">π</span> Pi Studio <span class="app-subtitle">Feedback Workspace</span></h1>
     <div class="controls">
       <select id="editorViewSelect" aria-label="Editor view mode">
         <option value="markdown" selected>Editor: Markdown</option>
