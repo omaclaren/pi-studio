@@ -71,6 +71,7 @@ Additional behavior:
 - independent pane view toggles (`Editor: Markdown|Preview`, `Right: Markdown|Preview`)
 - editor sync badge (`No response loaded`, `In sync with response`, `Edited since response`)
 - response badge with source + timestamp (`assistant response` / `assistant critique`)
+- theme-aware palette from the active pi theme at `/studio` launch (re-open Studio after changing themes)
 - keyboard shortcuts: `Cmd/Ctrl+Esc` (or `F10`) toggles active-pane focus mode; `Esc` exits focus mode
 - footer status includes explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`)
 

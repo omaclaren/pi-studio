@@ -17,6 +17,7 @@ All notable changes to `pi-studio` are documented here.
 - `Follow latest: On|Off` + `Pull latest` controls for terminal/editor-composability.
 - Source action: **Send + Run** to submit current editor text directly to the model.
 - Active-pane focus mode with keyboard shortcuts (`Cmd/Ctrl+Esc` or `F10` to toggle, `Esc` to exit), plus in-UI footer hint.
+- Theme-aware Studio browser palette derived from active pi theme tokens (bg/text/border/accent + status colors).
 
 ### Changed
 - Removed Annotate/Critique tabs and related mode state.

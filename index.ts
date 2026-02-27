@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext, SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, SessionEntry, Theme } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
@@ -102,6 +102,220 @@ type IncomingStudioMessage =
 	| SendToEditorRequestMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+
+type StudioThemeMode = "dark" | "light";
+
+interface StudioPalette {
+	bg: string;
+	panel: string;
+	panel2: string;
+	border: string;
+	text: string;
+	muted: string;
+	accent: string;
+	warn: string;
+	error: string;
+	ok: string;
+	markerBg: string;
+	markerBorder: string;
+	accentSoft: string;
+	accentSoftStrong: string;
+	okBorder: string;
+	warnBorder: string;
+}
+
+interface StudioThemeStyle {
+	mode: StudioThemeMode;
+	palette: StudioPalette;
+}
+
+const DARK_STUDIO_PALETTE: StudioPalette = {
+	bg: "#0f1117",
+	panel: "#171b24",
+	panel2: "#11161f",
+	border: "#2d3748",
+	text: "#e6edf3",
+	muted: "#9aa5b1",
+	accent: "#5ea1ff",
+	warn: "#f9c74f",
+	error: "#ff6b6b",
+	ok: "#73d13d",
+	markerBg: "rgba(94, 161, 255, 0.25)",
+	markerBorder: "rgba(94, 161, 255, 0.65)",
+	accentSoft: "rgba(94, 161, 255, 0.35)",
+	accentSoftStrong: "rgba(94, 161, 255, 0.40)",
+	okBorder: "rgba(115, 209, 61, 0.70)",
+	warnBorder: "rgba(249, 199, 79, 0.70)",
+};
+
+const LIGHT_STUDIO_PALETTE: StudioPalette = {
+	bg: "#f5f7fb",
+	panel: "#ffffff",
+	panel2: "#f8fafc",
+	border: "#d0d7de",
+	text: "#1f2328",
+	muted: "#57606a",
+	accent: "#0969da",
+	warn: "#9a6700",
+	error: "#cf222e",
+	ok: "#1a7f37",
+	markerBg: "rgba(9, 105, 218, 0.13)",
+	markerBorder: "rgba(9, 105, 218, 0.45)",
+	accentSoft: "rgba(9, 105, 218, 0.28)",
+	accentSoftStrong: "rgba(9, 105, 218, 0.35)",
+	okBorder: "rgba(26, 127, 55, 0.55)",
+	warnBorder: "rgba(154, 103, 0, 0.55)",
+};
+
+function getStudioThemeMode(theme?: Theme): StudioThemeMode {
+	const name = (theme?.name ?? "").toLowerCase();
+	return name.includes("light") ? "light" : "dark";
+}
+
+function toHexByte(value: number): string {
+	const clamped = Math.max(0, Math.min(255, Math.round(value)));
+	return clamped.toString(16).padStart(2, "0");
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+	return `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}`;
+}
+
+function xterm256ToHex(index: number): string {
+	const basic16 = [
+		"#000000",
+		"#800000",
+		"#008000",
+		"#808000",
+		"#000080",
+		"#800080",
+		"#008080",
+		"#c0c0c0",
+		"#808080",
+		"#ff0000",
+		"#00ff00",
+		"#ffff00",
+		"#0000ff",
+		"#ff00ff",
+		"#00ffff",
+		"#ffffff",
+	];
+
+	if (index >= 0 && index < basic16.length) {
+		return basic16[index]!;
+	}
+
+	if (index >= 16 && index <= 231) {
+		const i = index - 16;
+		const r = Math.floor(i / 36);
+		const g = Math.floor((i % 36) / 6);
+		const b = i % 6;
+		const values = [0, 95, 135, 175, 215, 255];
+		return rgbToHex(values[r]!, values[g]!, values[b]!);
+	}
+
+	if (index >= 232 && index <= 255) {
+		const gray = 8 + (index - 232) * 10;
+		return rgbToHex(gray, gray, gray);
+	}
+
+	return "#000000";
+}
+
+function ansiColorToCss(ansi: string): string | undefined {
+	const trueColorMatch = ansi.match(/\x1b\[(?:38|48);2;(\d{1,3});(\d{1,3});(\d{1,3})m/);
+	if (trueColorMatch) {
+		return rgbToHex(Number(trueColorMatch[1]), Number(trueColorMatch[2]), Number(trueColorMatch[3]));
+	}
+
+	const indexedMatch = ansi.match(/\x1b\[(?:38|48);5;(\d{1,3})m/);
+	if (indexedMatch) {
+		return xterm256ToHex(Number(indexedMatch[1]));
+	}
+
+	return undefined;
+}
+
+function safeThemeColor(getter: () => string): string | undefined {
+	try {
+		return ansiColorToCss(getter());
+	} catch {
+		return undefined;
+	}
+}
+
+function hexToRgb(color: string): { r: number; g: number; b: number } | null {
+	const value = color.trim();
+	const long = value.match(/^#([0-9a-fA-F]{6})$/);
+	if (long) {
+		const hex = long[1]!;
+		return {
+			r: Number.parseInt(hex.slice(0, 2), 16),
+			g: Number.parseInt(hex.slice(2, 4), 16),
+			b: Number.parseInt(hex.slice(4, 6), 16),
+		};
+	}
+
+	const short = value.match(/^#([0-9a-fA-F]{3})$/);
+	if (short) {
+		const hex = short[1]!;
+		return {
+			r: Number.parseInt(hex[0]! + hex[0]!, 16),
+			g: Number.parseInt(hex[1]! + hex[1]!, 16),
+			b: Number.parseInt(hex[2]! + hex[2]!, 16),
+		};
+	}
+
+	return null;
+}
+
+function withAlpha(color: string, alpha: number, fallback: string): string {
+	const rgb = hexToRgb(color);
+	if (!rgb) return fallback;
+	const clamped = Math.max(0, Math.min(1, alpha));
+	return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${clamped.toFixed(2)})`;
+}
+
+function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
+	const mode = getStudioThemeMode(theme);
+	const fallback = mode === "light" ? LIGHT_STUDIO_PALETTE : DARK_STUDIO_PALETTE;
+
+	if (!theme) {
+		return {
+			mode,
+			palette: fallback,
+		};
+	}
+
+	const accent =
+		safeThemeColor(() => theme.getFgAnsi("mdLink"))
+		?? safeThemeColor(() => theme.getFgAnsi("accent"))
+		?? fallback.accent;
+	const warn = safeThemeColor(() => theme.getFgAnsi("warning")) ?? fallback.warn;
+	const error = safeThemeColor(() => theme.getFgAnsi("error")) ?? fallback.error;
+	const ok = safeThemeColor(() => theme.getFgAnsi("success")) ?? fallback.ok;
+
+	const palette: StudioPalette = {
+		bg: safeThemeColor(() => theme.getBgAnsi("customMessageBg")) ?? fallback.bg,
+		panel: safeThemeColor(() => theme.getBgAnsi("toolPendingBg")) ?? fallback.panel,
+		panel2: safeThemeColor(() => theme.getBgAnsi("selectedBg")) ?? fallback.panel2,
+		border: safeThemeColor(() => theme.getFgAnsi("border")) ?? fallback.border,
+		text: safeThemeColor(() => theme.getFgAnsi("text")) ?? fallback.text,
+		muted: safeThemeColor(() => theme.getFgAnsi("muted")) ?? fallback.muted,
+		accent,
+		warn,
+		error,
+		ok,
+		markerBg: withAlpha(accent, mode === "light" ? 0.13 : 0.25, fallback.markerBg),
+		markerBorder: withAlpha(accent, mode === "light" ? 0.45 : 0.65, fallback.markerBorder),
+		accentSoft: withAlpha(accent, mode === "light" ? 0.28 : 0.35, fallback.accentSoft),
+		accentSoftStrong: withAlpha(accent, mode === "light" ? 0.35 : 0.40, fallback.accentSoftStrong),
+		okBorder: withAlpha(ok, mode === "light" ? 0.55 : 0.70, fallback.okBorder),
+		warnBorder: withAlpha(warn, mode === "light" ? 0.55 : 0.70, fallback.warnBorder),
+	};
+
+	return { mode, palette };
+}
 
 function createSessionToken(): string {
 	return randomUUID();
@@ -508,11 +722,12 @@ function buildStudioUrl(port: number, token: string): string {
 	return `http://127.0.0.1:${port}/?token=${encoded}`;
 }
 
-function buildStudioHtml(initialDocument: InitialStudioDocument | null): string {
+function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: Theme): string {
 	const initialText = escapeHtmlForInline(initialDocument?.text ?? "");
 	const initialSource = initialDocument?.source ?? "blank";
 	const initialLabel = escapeHtmlForInline(initialDocument?.label ?? "blank");
 	const initialPath = escapeHtmlForInline(initialDocument?.path ?? "");
+	const style = getStudioThemeStyle(theme);
 
 	return `<!doctype html>
 <html>
@@ -522,36 +737,23 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
   <title>Pi Studio: Feedback Workspace</title>
   <style>
     :root {
-      color-scheme: light dark;
-      --bg: #0f1117;
-      --panel: #171b24;
-      --panel-2: #11161f;
-      --border: #2d3748;
-      --text: #e6edf3;
-      --muted: #9aa5b1;
-      --accent: #5ea1ff;
-      --warn: #f9c74f;
-      --error: #ff6b6b;
-      --ok: #73d13d;
-      --marker-bg: rgba(94, 161, 255, 0.25);
-      --marker-border: rgba(94, 161, 255, 0.65);
-    }
-
-    @media (prefers-color-scheme: light) {
-      :root {
-        --bg: #f5f7fb;
-        --panel: #ffffff;
-        --panel-2: #f8fafc;
-        --border: #d0d7de;
-        --text: #1f2328;
-        --muted: #57606a;
-        --accent: #0969da;
-        --warn: #9a6700;
-        --error: #cf222e;
-        --ok: #1a7f37;
-        --marker-bg: rgba(9, 105, 218, 0.13);
-        --marker-border: rgba(9, 105, 218, 0.45);
-      }
+      color-scheme: ${style.mode};
+      --bg: ${style.palette.bg};
+      --panel: ${style.palette.panel};
+      --panel-2: ${style.palette.panel2};
+      --border: ${style.palette.border};
+      --text: ${style.palette.text};
+      --muted: ${style.palette.muted};
+      --accent: ${style.palette.accent};
+      --warn: ${style.palette.warn};
+      --error: ${style.palette.error};
+      --ok: ${style.palette.ok};
+      --marker-bg: ${style.palette.markerBg};
+      --marker-border: ${style.palette.markerBorder};
+      --accent-soft: ${style.palette.accentSoft};
+      --accent-soft-strong: ${style.palette.accentSoftStrong};
+      --ok-border: ${style.palette.okBorder};
+      --warn-border: ${style.palette.warnBorder};
     }
 
     * { box-sizing: border-box; }
@@ -652,7 +854,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
     section.pane-active {
       border-color: var(--accent);
-      box-shadow: inset 0 0 0 1px rgba(94, 161, 255, 0.35);
+      box-shadow: inset 0 0 0 1px var(--accent-soft);
     }
 
     body.pane-focus-left main,
@@ -668,7 +870,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
     body.pane-focus-left #leftPane,
     body.pane-focus-right #rightPane {
       border-color: var(--accent);
-      box-shadow: inset 0 0 0 1px rgba(94, 161, 255, 0.4);
+      box-shadow: inset 0 0 0 1px var(--accent-soft-strong);
     }
 
     .section-header {
@@ -731,12 +933,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
     }
 
     .sync-badge.sync {
-      border-color: rgba(115, 209, 61, 0.7);
+      border-color: var(--ok-border);
       color: var(--ok);
     }
 
     .sync-badge.edited {
-      border-color: rgba(249, 199, 79, 0.7);
+      border-color: var(--warn-border);
       color: var(--warn);
     }
 
@@ -2397,7 +2599,7 @@ export default function (pi: ExtensionAPI) {
 			"Cross-Origin-Opener-Policy": "same-origin",
 			"Cross-Origin-Resource-Policy": "same-origin",
 		});
-		res.end(buildStudioHtml(initialStudioDocument));
+		res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme));
 	};
 
 	const ensureServer = async (): Promise<StudioServerState> => {
