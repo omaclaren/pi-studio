@@ -33,7 +33,7 @@ Open studio with a file preloaded (for terminal ↔ studio workflow):
 /studio ./path/to/draft.md
 ```
 
-Force startup mode:
+Force startup source:
 
 ```bash
 /studio --last
@@ -48,24 +48,30 @@ Optional commands:
 /studio --help
 ```
 
-## Tabs
+## Workflow
 
-Studio now uses two minimal tabs:
+Studio now uses a single always-on workspace:
 
-- **Annotate**: edit/annotate in the Editor pane and **Send reply**.
-- **Critique**: run **Generate critique** on current editor text.
+- **Left pane (Editor):** edit/annotate working text.
+- **Right pane (Response):** latest assistant response (normal reply or critique).
 
-Tab behavior:
-- explicit top-level tabs (**Annotate | Critique**)
-- independent view toggles for each pane (`Editor: Markdown|Preview`, `Right: Markdown|Preview`)
-- **Generate critique** always critiques current Editor text (left pane)
-- optional latest-response tracking control: `Follow latest: On|Off` with `Pull latest`
-- right pane badge shows reference source (`none`, `assistant response`, `assistant critique`) and timestamp when available
-- editor badge shows relation to current reference (`No reference loaded`, `In sync with reference`, `Edited since reference`)
-- keyboard shortcuts: `Cmd/Ctrl+Esc` (or `F10`) toggles active-pane focus mode; `Esc` exits focus mode (shown as a footer hint)
-- Critique → Editor load actions:
-  - **Load critique package → Editor** (Assessment + Critiques + Document)
-  - **Load clean document → Editor** (Document with `{C1}` markers stripped)
+Top controls:
+- **Send reply**: sends annotated-reply style prompt from current editor text.
+- **Request critique** (+ focus): critiques current editor text and loads result into Response pane.
+- **Pull latest** with optional `Follow latest: On|Off`.
+
+Response actions:
+- **Load latest response → Editor**
+- **Load revised document** (when response includes a `## Document` section)
+- **Copy response**
+- **Load full critique package → Editor** (for structured critique responses)
+- **Load clean revised document** (strips `{C#}` markers)
+
+Additional behavior:
+- independent pane view toggles (`Editor: Markdown|Preview`, `Right: Markdown|Preview`)
+- editor sync badge (`No response loaded`, `In sync with response`, `Edited since response`)
+- response badge with source + timestamp (`assistant response` / `assistant critique`)
+- keyboard shortcuts: `Cmd/Ctrl+Esc` (or `F10`) toggles active-pane focus mode; `Esc` exits focus mode
 - footer status includes explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`)
 
 ## Design docs
@@ -79,5 +85,5 @@ Tab behavior:
 - Local-only server (`127.0.0.1`) with rotating session tokens.
 - Studio URLs include a token query parameter; avoid sharing full Studio URLs in screenshots/issues.
 - One studio request at a time.
-- Browser supports: Save As, Save Over (file-backed editor text), Send to pi editor, Send + Run (submit editor text directly to model), Copy editor, and tab handoff actions between Annotate/Critique.
+- Browser supports: Save As, Save Over (file-backed editor text), Send to pi editor, Send + Run (submit editor text directly to model), Copy editor, and response→editor load actions.
 - Browser uses Markdown rendering via CDN (`marked`, `dompurify`).

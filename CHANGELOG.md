@@ -5,30 +5,27 @@ All notable changes to `pi-studio` are documented here.
 ## [Unreleased]
 
 ### Added
-- Minimal **Annotate | Critique** tab workflow with explicit handoff actions.
+- Single-workspace flow (no mode switching): always-on **Editor** pane + **Response** pane.
+- Top-level actions for both workflows in one place: **Send reply** and **Request critique**.
+- Unified response actions:
+  - **Load latest response → Editor**
+  - **Load revised document**
+  - **Copy response**
+  - **Load full critique package → Editor**
+  - **Load clean revised document**
 - Independent Markdown/Preview toggles for Editor and right pane.
 - `Follow latest: On|Off` + `Pull latest` controls for terminal/editor-composability.
-- Critique → Editor load actions:
-  - **Load critique package → Editor**
-  - **Load clean document → Editor**
-- Annotate/reference actions:
-  - **Load Reference → Editor**
-  - **Load edited document** (`## Document` section)
-  - **Copy reference**
 - Source action: **Send + Run** to submit current editor text directly to the model.
-- Right-pane reference badge with source + timestamp (when available).
-- Editor/reference sync badge (`In sync with reference` / `Edited since reference`) and guard on redundant reload.
 - Active-pane focus mode with keyboard shortcuts (`Cmd/Ctrl+Esc` or `F10` to toggle, `Esc` to exit), plus in-UI footer hint.
 
 ### Changed
-- Simplified UI: removed in-critique response textbox and duplicate annotated-document panel.
-- Clarified pane semantics and labels (`Editor`, `Reference`, `Critique`, `Editor origin: ...`).
-- Auto-detect startup tab from loaded content structure (`## Critiques` + `## Document` → Critique).
-- Footer now shows explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`) alongside status text.
-- Annotate submission sends annotated-reply scaffold with source context.
-- Studio now live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
-- Removed redundant "Use reference in Critique" action; critique target is always the current Editor text.
-- Critique tab editor-load actions now keep the user in Critique tab (no forced switch to Annotate).
+- Removed Annotate/Critique tabs and related mode state.
+- Right pane now always shows the latest assistant output (reply or critique).
+- Response badge now reports response type + timestamp (`assistant response` / `assistant critique`).
+- Editor sync badge now tracks relation to latest response (`No response loaded`, `In sync with response`, `Edited since response`).
+- Footer continues to show explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`) alongside status text.
+- Annotate submission still sends annotated-reply scaffold with source context.
+- Studio still live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
 
 ## [0.1.0-alpha.1] - 2026-02-26
 

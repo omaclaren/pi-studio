@@ -602,34 +602,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       flex-wrap: wrap;
     }
 
-    .mode-toggle {
-      display: inline-flex;
-      border: 1px solid var(--border);
-      border-radius: 9px;
-      overflow: hidden;
-      background: var(--panel-2);
-    }
-
-    .mode-btn {
-      border: none;
-      border-right: 1px solid var(--border);
-      border-radius: 0;
-      background: transparent;
-      color: var(--muted);
-      padding: 8px 10px;
-      font-size: 13px;
-    }
-
-    .mode-btn:last-child {
-      border-right: none;
-    }
-
-    .mode-btn.active {
-      background: rgba(94, 161, 255, 0.18);
-      color: var(--text);
-      font-weight: 600;
-    }
-
     button, select, .file-label {
       border: 1px solid var(--border);
       background: var(--panel-2);
@@ -915,10 +887,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
   <header>
     <h1>Pi Studio <span class="app-subtitle">Feedback Workspace</span></h1>
     <div class="controls">
-      <div class="mode-toggle" role="group" aria-label="Studio tab">
-        <button id="modeAnnotateBtn" class="mode-btn" type="button" aria-pressed="true">Annotate</button>
-        <button id="modeCritiqueBtn" class="mode-btn" type="button" aria-pressed="false">Critique</button>
-      </div>
       <select id="editorViewSelect" aria-label="Editor view mode">
         <option value="markdown" selected>Editor: Markdown</option>
         <option value="preview">Editor: Preview</option>
@@ -933,12 +901,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       </select>
       <button id="pullLatestBtn" type="button">Pull latest</button>
       <button id="sendReplyBtn" type="button">Send reply</button>
-      <select id="lensSelect" aria-label="Critique lens">
-        <option value="auto" selected>Lens: Auto</option>
-        <option value="writing">Lens: Writing</option>
-        <option value="code">Lens: Code</option>
+      <select id="lensSelect" aria-label="Critique focus">
+        <option value="auto" selected>Focus: Auto</option>
+        <option value="writing">Focus: Writing</option>
+        <option value="code">Focus: Code</option>
       </select>
-      <button id="critiqueBtn" type="button">Generate critique</button>
+      <button id="critiqueBtn" type="button">Request critique</button>
       <label class="file-label">Load file<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
     </div>
   </header>
@@ -950,8 +918,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         <div class="source-meta">
           <div class="badge-row">
             <span id="sourceBadge" class="source-badge">Editor origin: ${initialLabel}</span>
-            <span id="modeBadge" class="source-badge">Tab: Annotate</span>
-            <span id="syncBadge" class="source-badge sync-badge">No reference loaded</span>
+            <span id="syncBadge" class="source-badge sync-badge">No response loaded</span>
           </div>
           <div class="source-actions">
             <button id="saveAsBtn" type="button">Save As…</button>
@@ -967,20 +934,18 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
     </section>
 
     <section id="rightPane">
-      <div id="rightSectionHeader" class="section-header">Reference</div>
+      <div id="rightSectionHeader" class="section-header">Response</div>
       <div class="reference-meta">
-        <span id="referenceBadge" class="source-badge">Reference: none</span>
+        <span id="referenceBadge" class="source-badge">Latest response: none</span>
       </div>
-      <div id="critiqueView" class="panel-scroll"><pre>No reference yet.</pre></div>
+      <div id="critiqueView" class="panel-scroll"><pre>No response yet.</pre></div>
       <div class="response-wrap">
-        <div id="annotateActions" class="response-actions">
-          <button id="loadResponseBtn" type="button">Load Reference → Editor</button>
-          <button id="loadEditedBtn" type="button">Load edited document</button>
-          <button id="copyResponseBtn" type="button">Copy reference</button>
-        </div>
-        <div id="critiqueActions" class="response-actions" hidden>
-          <button id="sendPackageBtn" type="button">Load critique package → Editor</button>
-          <button id="sendCleanBtn" type="button">Load clean document → Editor</button>
+        <div id="responseActions" class="response-actions">
+          <button id="loadResponseBtn" type="button">Load latest response → Editor</button>
+          <button id="loadEditedBtn" type="button">Load revised document</button>
+          <button id="copyResponseBtn" type="button">Copy response</button>
+          <button id="sendPackageBtn" type="button">Load full critique package → Editor</button>
+          <button id="sendCleanBtn" type="button">Load clean revised document</button>
         </div>
       </div>
     </section>
@@ -1024,13 +989,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       const rightPaneEl = document.getElementById("rightPane");
       const leftSectionHeaderEl = document.getElementById("leftSectionHeader");
       const sourceBadgeEl = document.getElementById("sourceBadge");
-      const modeBadgeEl = document.getElementById("modeBadge");
       const syncBadgeEl = document.getElementById("syncBadge");
       const critiqueViewEl = document.getElementById("critiqueView");
       const rightSectionHeaderEl = document.getElementById("rightSectionHeader");
       const referenceBadgeEl = document.getElementById("referenceBadge");
-      const modeAnnotateBtn = document.getElementById("modeAnnotateBtn");
-      const modeCritiqueBtn = document.getElementById("modeCritiqueBtn");
       const editorViewSelect = document.getElementById("editorViewSelect");
       const rightViewSelect = document.getElementById("rightViewSelect");
       const followSelect = document.getElementById("followSelect");
@@ -1039,8 +1001,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       const critiqueBtn = document.getElementById("critiqueBtn");
       const lensSelect = document.getElementById("lensSelect");
       const fileInput = document.getElementById("fileInput");
-      const annotateActionsEl = document.getElementById("annotateActions");
-      const critiqueActionsEl = document.getElementById("critiqueActions");
       const loadResponseBtn = document.getElementById("loadResponseBtn");
       const loadEditedBtn = document.getElementById("loadEditedBtn");
       const copyResponseBtn = document.getElementById("copyResponseBtn");
@@ -1058,11 +1018,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         path: (document.body && document.body.dataset && document.body.dataset.initialPath) || null,
       };
 
-      const MODES = {
-        annotate: "annotate",
-        critique: "critique",
-      };
-
       let ws = null;
       let wsState = "Connecting";
       let statusMessage = "Studio script starting…";
@@ -1074,13 +1029,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       let rightView = "markdown";
       let followLatest = true;
       let queuedLatestResponse = null;
-      let annotateResponseMarkdown = "";
-      let annotateResponseTimestamp = 0;
-      let critiqueResponseMarkdown = "";
-      let critiqueResponseTimestamp = 0;
-      let critiqueDocumentSection = "";
+      let latestResponseMarkdown = "";
+      let latestResponseTimestamp = 0;
+      let latestResponseKind = "annotation";
+      let latestResponseDocumentSection = "";
+      let latestResponseIsStructuredCritique = false;
       let uiBusy = false;
-      let currentMode = MODES.annotate;
       let sourceState = {
         source: initialSourceState.source,
         label: initialSourceState.label,
@@ -1089,15 +1043,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       let activePane = "left";
       let paneFocusTarget = "off";
 
-      function modeLabel(mode) {
-        return mode === MODES.critique ? "Critique" : "Annotate";
-      }
-
-      function getIdleStatusForMode() {
-        if (currentMode === MODES.critique) {
-          return "Ready (Critique tab). Generate critique from the current editor text.";
-        }
-        return "Ready (Annotate tab). Edit editor text and send reply or Send + Run.";
+      function getIdleStatus() {
+        return "Ready. Edit text, then Send reply or Request critique.";
       }
 
       function renderStatus() {
@@ -1147,7 +1094,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
       function paneLabel(pane) {
         if (pane === "right") {
-          return currentMode === MODES.critique ? "Critique" : "Reference";
+          return "Response";
         }
         return "Editor";
       }
@@ -1156,20 +1103,20 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         if (paneFocusTarget === activePane) {
           paneFocusTarget = "off";
           applyPaneFocusClasses();
-          setStatus("Pane focus off.");
+          setStatus("Focus mode off.");
           return;
         }
 
         paneFocusTarget = activePane;
         applyPaneFocusClasses();
-        setStatus("Focused " + paneLabel(activePane) + " pane. Press Esc to exit.");
+        setStatus("Focus mode: " + paneLabel(activePane) + " pane (Esc to exit).");
       }
 
       function exitPaneFocus() {
         if (paneFocusTarget === "off") return false;
         paneFocusTarget = "off";
         applyPaneFocusClasses();
-        setStatus("Pane focus off.");
+        setStatus("Focus mode off.");
         return true;
       }
 
@@ -1216,29 +1163,17 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       function updateReferenceBadge() {
         if (!referenceBadgeEl) return;
 
-        if (currentMode === MODES.critique) {
-          const hasCritique = Boolean(critiqueResponseMarkdown && critiqueResponseMarkdown.trim());
-          if (!hasCritique) {
-            referenceBadgeEl.textContent = "Reference: none";
-            return;
-          }
-          const time = formatReferenceTime(critiqueResponseTimestamp);
-          referenceBadgeEl.textContent = time
-            ? "Reference: assistant critique · " + time
-            : "Reference: assistant critique";
+        const hasResponse = Boolean(latestResponseMarkdown && latestResponseMarkdown.trim());
+        if (!hasResponse) {
+          referenceBadgeEl.textContent = "Latest response: none";
           return;
         }
 
-        const hasReference = Boolean(annotateResponseMarkdown && annotateResponseMarkdown.trim());
-        if (!hasReference) {
-          referenceBadgeEl.textContent = "Reference: none";
-          return;
-        }
-
-        const time = formatReferenceTime(annotateResponseTimestamp);
+        const time = formatReferenceTime(latestResponseTimestamp);
+        const responseLabel = latestResponseKind === "critique" ? "assistant critique" : "assistant response";
         referenceBadgeEl.textContent = time
-          ? "Reference: assistant response · " + time
-          : "Reference: assistant response";
+          ? "Latest response: " + responseLabel + " · " + time
+          : "Latest response: " + responseLabel;
       }
 
       function normalizeForCompare(text) {
@@ -1249,29 +1184,29 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         return normalizeForCompare(a) === normalizeForCompare(b);
       }
 
-      function getCurrentReferenceMarkdown() {
-        return currentMode === MODES.critique ? critiqueResponseMarkdown : annotateResponseMarkdown;
+      function getCurrentResponseMarkdown() {
+        return latestResponseMarkdown;
       }
 
       function updateSyncBadge() {
         if (!syncBadgeEl) return;
 
-        const reference = getCurrentReferenceMarkdown();
-        const hasReference = Boolean(reference && reference.trim());
+        const response = getCurrentResponseMarkdown();
+        const hasResponse = Boolean(response && response.trim());
 
-        if (!hasReference) {
-          syncBadgeEl.textContent = "No reference loaded";
+        if (!hasResponse) {
+          syncBadgeEl.textContent = "No response loaded";
           syncBadgeEl.classList.remove("sync", "edited");
           return;
         }
 
-        const inSync = isTextEquivalent(sourceTextEl.value, reference);
+        const inSync = isTextEquivalent(sourceTextEl.value, response);
         if (inSync) {
-          syncBadgeEl.textContent = "In sync with reference";
+          syncBadgeEl.textContent = "In sync with response";
           syncBadgeEl.classList.add("sync");
           syncBadgeEl.classList.remove("edited");
         } else {
-          syncBadgeEl.textContent = "Edited since reference";
+          syncBadgeEl.textContent = "Edited since response";
           syncBadgeEl.classList.add("edited");
           syncBadgeEl.classList.remove("sync");
         }
@@ -1292,17 +1227,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         }
       }
 
-      function getActiveResultMarkdown() {
-        return currentMode === MODES.critique ? critiqueResponseMarkdown : annotateResponseMarkdown;
-      }
-
       function renderActiveResult() {
-        const markdown = getActiveResultMarkdown();
+        const markdown = latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
-          const placeholder = currentMode === MODES.critique
-            ? "No critique yet. Click Generate critique."
-            : "No reference yet.";
-          critiqueViewEl.innerHTML = "<pre>" + escapeHtml(placeholder) + "</pre>";
+          critiqueViewEl.innerHTML = "<pre>No response yet. Send reply or request critique.</pre>";
           return;
         }
 
@@ -1315,18 +1243,20 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       }
 
       function updateResultActionButtons() {
-        const hasAnnotateResponse = Boolean(annotateResponseMarkdown && annotateResponseMarkdown.trim());
-        const hasCritiqueResponse = Boolean(critiqueResponseMarkdown && critiqueResponseMarkdown.trim());
-        const editedSection = extractSection(annotateResponseMarkdown, "Document");
-        const cleanDoc = critiqueDocumentSection.replace(/\\{C\\d+\\}/g, "");
-        const annotateReferenceLoaded = hasAnnotateResponse && isTextEquivalent(sourceTextEl.value, annotateResponseMarkdown);
+        const responseMarkdown = getCurrentResponseMarkdown();
+        const hasResponse = Boolean(responseMarkdown && responseMarkdown.trim());
+        const editedSection = extractSection(responseMarkdown, "Document");
+        const cleanDoc = latestResponseIsStructuredCritique
+          ? cleanCritiqueMarkers(latestResponseDocumentSection).trim()
+          : "";
+        const responseLoaded = hasResponse && isTextEquivalent(sourceTextEl.value, responseMarkdown);
 
-        loadResponseBtn.disabled = uiBusy || !hasAnnotateResponse || annotateReferenceLoaded;
-        loadResponseBtn.textContent = annotateReferenceLoaded ? "Reference already in Editor" : "Load Reference → Editor";
+        loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded;
+        loadResponseBtn.textContent = responseLoaded ? "Latest response already in Editor" : "Load latest response → Editor";
         loadEditedBtn.disabled = uiBusy || !editedSection;
-        copyResponseBtn.disabled = uiBusy || !hasAnnotateResponse;
-        sendPackageBtn.disabled = uiBusy || !hasCritiqueResponse;
-        sendCleanBtn.disabled = uiBusy || !cleanDoc.trim();
+        copyResponseBtn.disabled = uiBusy || !hasResponse;
+        sendPackageBtn.disabled = uiBusy || !latestResponseIsStructuredCritique;
+        sendCleanBtn.disabled = uiBusy || !cleanDoc;
 
         pullLatestBtn.disabled = uiBusy || followLatest;
         pullLatestBtn.textContent = queuedLatestResponse ? "Pull latest *" : "Pull latest";
@@ -1334,34 +1264,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         updateSyncBadge();
       }
 
-      function updateModeUi() {
-        if (modeBadgeEl) {
-          modeBadgeEl.textContent = "Tab: " + modeLabel(currentMode);
-        }
-
-        if (modeAnnotateBtn) {
-          modeAnnotateBtn.classList.toggle("active", currentMode === MODES.annotate);
-          modeAnnotateBtn.setAttribute("aria-pressed", currentMode === MODES.annotate ? "true" : "false");
-        }
-
-        if (modeCritiqueBtn) {
-          modeCritiqueBtn.classList.toggle("active", currentMode === MODES.critique);
-          modeCritiqueBtn.setAttribute("aria-pressed", currentMode === MODES.critique ? "true" : "false");
-        }
-
+      function refreshResponseUi() {
         if (leftSectionHeaderEl) {
           leftSectionHeaderEl.textContent = "Editor";
         }
 
         if (rightSectionHeaderEl) {
-          rightSectionHeaderEl.textContent = currentMode === MODES.critique ? "Critique" : "Reference";
+          rightSectionHeaderEl.textContent = "Response";
         }
-
-        sendReplyBtn.hidden = currentMode !== MODES.annotate;
-        critiqueBtn.hidden = currentMode !== MODES.critique;
-        lensSelect.hidden = currentMode !== MODES.critique;
-        annotateActionsEl.hidden = currentMode !== MODES.annotate;
-        critiqueActionsEl.hidden = currentMode !== MODES.critique;
 
         updateSourceBadge();
         updateReferenceBadge();
@@ -1379,11 +1289,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         editorViewSelect.disabled = uiBusy;
         rightViewSelect.disabled = uiBusy;
         followSelect.disabled = uiBusy;
-        sendReplyBtn.disabled = uiBusy || currentMode !== MODES.annotate;
-        critiqueBtn.disabled = uiBusy || currentMode !== MODES.critique;
-        lensSelect.disabled = uiBusy || currentMode !== MODES.critique;
-        if (modeAnnotateBtn) modeAnnotateBtn.disabled = uiBusy;
-        if (modeCritiqueBtn) modeCritiqueBtn.disabled = uiBusy;
+        sendReplyBtn.disabled = uiBusy;
+        critiqueBtn.disabled = uiBusy;
+        lensSelect.disabled = uiBusy;
         updateResultActionButtons();
       }
 
@@ -1402,10 +1310,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         syncActionButtons();
       }
 
-      function detectModeFromText(markdown) {
-        return isStructuredCritique(markdown) ? MODES.critique : MODES.annotate;
-      }
-
       function setEditorView(nextView) {
         editorView = nextView === "preview" ? "preview" : "markdown";
         editorViewSelect.value = editorView;
@@ -1420,27 +1324,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         rightView = nextView === "preview" ? "preview" : "markdown";
         rightViewSelect.value = rightView;
         renderActiveResult();
-      }
-
-      function setMode(nextMode, options) {
-        const target = nextMode === MODES.critique ? MODES.critique : MODES.annotate;
-        const changed = target !== currentMode;
-        currentMode = target;
-        updateModeUi();
-        syncActionButtons();
-
-        const isManual = Boolean(options && options.manual);
-        const announce = options && Object.prototype.hasOwnProperty.call(options, "announce")
-          ? Boolean(options.announce)
-          : isManual;
-
-        if (announce && changed) {
-          if (currentMode === MODES.critique) {
-            setStatus("Switched to Critique tab.");
-          } else {
-            setStatus("Switched to Annotate tab.");
-          }
-        }
       }
 
       function getToken() {
@@ -1508,16 +1391,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             ? timestamp
             : Date.now();
 
-        if (kind === "critique") {
-          critiqueResponseMarkdown = markdown;
-          critiqueResponseTimestamp = responseTimestamp;
-          critiqueDocumentSection = extractSection(markdown, "Document") || "";
-        } else {
-          annotateResponseMarkdown = markdown;
-          annotateResponseTimestamp = responseTimestamp;
-        }
+        latestResponseMarkdown = markdown;
+        latestResponseKind = kind === "critique" ? "critique" : "annotation";
+        latestResponseTimestamp = responseTimestamp;
+        latestResponseIsStructuredCritique = isStructuredCritique(markdown);
+        latestResponseDocumentSection = latestResponseIsStructuredCritique
+          ? (extractSection(markdown, "Document") || "")
+          : "";
 
-        updateModeUi();
+        refreshResponseUi();
         syncActionButtons();
       }
 
@@ -1531,7 +1413,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       function sendMessage(message) {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
           setWsState("Disconnected");
-          setStatus("Not connected to studio server.", "error");
+          setStatus("Not connected to Studio server.", "error");
           return false;
         }
         ws.send(JSON.stringify(message));
@@ -1565,10 +1447,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
               label: message.initialDocument.label || "blank",
               path: message.initialDocument.path || null,
             });
-            setMode(detectModeFromText(message.initialDocument.text), { announce: false });
+            refreshResponseUi();
             renderSourcePreview();
             if (typeof message.initialDocument.label === "string" && message.initialDocument.label.length > 0) {
-              setStatus("Loaded: " + message.initialDocument.label, "success");
+              setStatus("Loaded " + message.initialDocument.label + ".", "success");
             }
           }
 
@@ -1582,8 +1464,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           }
 
           if (!busy && !loadedInitialDocument) {
-            setMode(detectModeFromText(sourceTextEl.value), { announce: false });
-            setStatus(getIdleStatusForMode());
+            refreshResponseUi();
+            setStatus(getIdleStatus());
           }
           return;
         }
@@ -1596,11 +1478,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           if (pendingKind === "annotation") {
             setStatus("Sending reply…", "warning");
           } else if (pendingKind === "critique") {
-            setStatus("Generating critique…", "warning");
+            setStatus("Requesting critique…", "warning");
           } else if (pendingKind === "direct") {
-            setStatus("Sending editor text to model…", "warning");
+            setStatus("Sending to model…", "warning");
           } else {
-            setStatus("Submitting request…", "warning");
+            setStatus("Submitting…", "warning");
           }
           return;
         }
@@ -1622,15 +1504,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           if (typeof message.markdown === "string") {
             handleIncomingResponse(message.markdown, responseKind, message.timestamp);
             if (responseKind === "critique") {
-              setMode(MODES.critique, { announce: false });
-              setStatus("Critique received.", "success");
+              setStatus("Critique ready.", "success");
+            } else if (responseKind === "direct") {
+              setStatus("Model response ready.", "success");
             } else {
-              setMode(MODES.annotate, { announce: false });
-              if (responseKind === "direct") {
-                setStatus("Model response received.", "success");
-              } else {
-                setStatus("Response received.", "success");
-              }
+              setStatus("Response ready.", "success");
             }
           }
           return;
@@ -1648,14 +1526,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             if (!followLatest) {
               queuedLatestResponse = payload;
               updateResultActionButtons();
-              setStatus("Latest response available. Click Pull latest.", "warning");
+              setStatus("New response available — click Pull latest.", "warning");
               return;
             }
 
             if (applyLatestPayload(payload)) {
               queuedLatestResponse = null;
               updateResultActionButtons();
-              setStatus("Updated from latest assistant response.", "success");
+              setStatus("Updated from latest response.", "success");
             }
           }
           return;
@@ -1695,7 +1573,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
           if (!busy && !pendingRequestId) {
-            setStatus(getIdleStatusForMode());
+            setStatus(getIdleStatus());
           }
           return;
         }
@@ -1733,7 +1611,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         const token = getToken();
         if (!token) {
           setWsState("Disconnected");
-          setStatus("Missing studio token in URL. Re-run /studio.", "error");
+          setStatus("Missing Studio token in URL. Re-run /studio.", "error");
           setBusy(true);
           return;
         }
@@ -1742,20 +1620,20 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         const wsUrl = wsProtocol + "://" + window.location.host + "/ws?token=" + encodeURIComponent(token);
 
         setWsState("Connecting");
-        setStatus("Connecting to studio server…");
+        setStatus("Connecting to Studio server…");
         ws = new WebSocket(wsUrl);
 
         const connectWatchdog = window.setTimeout(() => {
           if (ws && ws.readyState === WebSocket.CONNECTING) {
             setWsState("Connecting");
-            setStatus("Still connecting to studio server…", "warning");
+            setStatus("Still connecting…", "warning");
           }
         }, 3000);
 
         ws.addEventListener("open", () => {
           window.clearTimeout(connectWatchdog);
           setWsState("Ready");
-          setStatus("Connected. Handshaking…");
+          setStatus("Connected. Syncing…");
           sendMessage({ type: "hello" });
         });
 
@@ -1765,7 +1643,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             handleServerMessage(message);
           } catch (error) {
             setWsState("Ready");
-            setStatus("Received invalid message from server.", "error");
+            setStatus("Received invalid server message.", "error");
           }
         });
 
@@ -1774,17 +1652,17 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           setBusy(true);
           setWsState("Disconnected");
           if (event && event.code === 4001) {
-            setStatus("This tab has been invalidated by a newer /studio session.", "warning");
+            setStatus("This tab was invalidated by a newer /studio session.", "warning");
           } else {
             const code = event && typeof event.code === "number" ? event.code : 0;
-            setStatus("Disconnected from studio server (code " + code + "). Re-run /studio.", "error");
+            setStatus("Disconnected (code " + code + "). Re-run /studio.", "error");
           }
         });
 
         ws.addEventListener("error", () => {
           window.clearTimeout(connectWatchdog);
           setWsState("Disconnected");
-          setStatus("WebSocket connection error (check /studio --status and reopen).", "error");
+          setStatus("WebSocket error. Check /studio --status and reopen.", "error");
         });
       }
 
@@ -1825,7 +1703,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       function requestLatestResponse() {
         const sent = sendMessage({ type: "get_latest_response" });
         if (!sent) return;
-        setStatus("Requested latest assistant response.");
+        setStatus("Requested latest response.");
       }
 
       if (leftPaneEl) {
@@ -1840,16 +1718,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
 
       window.addEventListener("keydown", handlePaneShortcut);
 
-      modeAnnotateBtn.addEventListener("click", () => {
-        setMode(MODES.annotate, { manual: true });
-        setActivePane("left");
-      });
-
-      modeCritiqueBtn.addEventListener("click", () => {
-        setMode(MODES.critique, { manual: true });
-        setActivePane("right");
-      });
-
       editorViewSelect.addEventListener("change", () => {
         setEditorView(editorViewSelect.value);
       });
@@ -1863,10 +1731,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         if (followLatest && queuedLatestResponse) {
           if (applyLatestPayload(queuedLatestResponse)) {
             queuedLatestResponse = null;
-            setStatus("Applied queued latest response.", "success");
+            setStatus("Applied queued response.", "success");
           }
         } else if (!followLatest) {
-          setStatus("Follow latest disabled. Use Pull latest to refresh.");
+          setStatus("Follow latest is off. Use Pull latest to refresh.");
         }
         updateResultActionButtons();
       });
@@ -1875,7 +1743,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         if (queuedLatestResponse) {
           if (applyLatestPayload(queuedLatestResponse)) {
             queuedLatestResponse = null;
-            setStatus("Pulled queued latest response.", "success");
+            setStatus("Pulled queued response.", "success");
             updateResultActionButtons();
           }
           return;
@@ -1891,7 +1759,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       sendReplyBtn.addEventListener("click", () => {
         const annotatedText = sourceTextEl.value.trim();
         if (!annotatedText) {
-          setStatus("Add text in the editor panel before sending reply.", "warning");
+          setStatus("Add editor text before sending reply.", "warning");
           return;
         }
 
@@ -1914,11 +1782,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       critiqueBtn.addEventListener("click", () => {
         const documentText = sourceTextEl.value.trim();
         if (!documentText) {
-          setStatus("Add some text to critique first.", "warning");
+          setStatus("Add editor text before requesting critique.", "warning");
           return;
         }
-
-        setMode(MODES.critique, { announce: false });
 
         const requestId = beginUiAction("critique");
         if (!requestId) return;
@@ -1938,69 +1804,71 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       });
 
       loadResponseBtn.addEventListener("click", () => {
-        if (!annotateResponseMarkdown.trim()) {
-          setStatus("No reference available yet.", "warning");
+        if (!latestResponseMarkdown.trim()) {
+          setStatus("No response available yet.", "warning");
           return;
         }
-        sourceTextEl.value = annotateResponseMarkdown;
+        sourceTextEl.value = latestResponseMarkdown;
         renderSourcePreview();
         setSourceState({ source: "last-response", label: "last model response", path: null });
-        setStatus("Loaded reference into editor.", "success");
+        setStatus("Loaded latest response into editor.", "success");
       });
 
       loadEditedBtn.addEventListener("click", () => {
-        const edited = extractSection(annotateResponseMarkdown, "Document");
+        const edited = extractSection(latestResponseMarkdown, "Document");
         if (!edited) {
-          setStatus("No ## Document section found in latest response.", "warning");
+          setStatus("No revised document (## Document) found in latest response.", "warning");
           return;
         }
         sourceTextEl.value = edited;
         renderSourcePreview();
-        setSourceState({ source: "blank", label: "edited document", path: null });
-        setStatus("Loaded edited document into editor.", "success");
+        setSourceState({ source: "blank", label: "revised document", path: null });
+        setStatus("Loaded revised document into editor.", "success");
       });
 
       copyResponseBtn.addEventListener("click", async () => {
-        if (!annotateResponseMarkdown.trim()) {
-          setStatus("No reference available yet.", "warning");
+        if (!latestResponseMarkdown.trim()) {
+          setStatus("No response available yet.", "warning");
           return;
         }
 
         try {
-          await navigator.clipboard.writeText(annotateResponseMarkdown);
-          setStatus("Copied reference.", "success");
+          await navigator.clipboard.writeText(latestResponseMarkdown);
+          setStatus("Copied response.", "success");
         } catch (error) {
-          setStatus("Clipboard write failed in this browser context.", "warning");
+          setStatus("Clipboard write failed.", "warning");
         }
       });
 
       sendPackageBtn.addEventListener("click", () => {
-        if (!critiqueResponseMarkdown.trim()) {
-          setStatus("No critique package available yet.", "warning");
+        if (!latestResponseIsStructuredCritique || !latestResponseMarkdown.trim()) {
+          setStatus("Latest response is not a full critique package.", "warning");
           return;
         }
-        sourceTextEl.value = critiqueResponseMarkdown;
+        sourceTextEl.value = latestResponseMarkdown;
         renderSourcePreview();
-        setSourceState({ source: "blank", label: "critique package", path: null });
-        setStatus("Loaded critique package into editor.", "success");
+        setSourceState({ source: "blank", label: "full critique package", path: null });
+        setStatus("Loaded full critique package into editor.", "success");
       });
 
       sendCleanBtn.addEventListener("click", () => {
-        const clean = cleanCritiqueMarkers(critiqueDocumentSection).trim();
+        const clean = latestResponseIsStructuredCritique
+          ? cleanCritiqueMarkers(latestResponseDocumentSection).trim()
+          : "";
         if (!clean) {
-          setStatus("No critique Document section available yet.", "warning");
+          setStatus("No clean revised document found in latest critique.", "warning");
           return;
         }
         sourceTextEl.value = clean;
         renderSourcePreview();
-        setSourceState({ source: "blank", label: "clean document", path: null });
-        setStatus("Loaded clean document into editor.", "success");
+        setSourceState({ source: "blank", label: "clean revised document", path: null });
+        setStatus("Loaded clean revised document into editor.", "success");
       });
 
       saveAsBtn.addEventListener("click", () => {
         const content = sourceTextEl.value;
         if (!content.trim()) {
-          setStatus("Nothing to save. Editor is empty.", "warning");
+          setStatus("Editor is empty. Nothing to save.", "warning");
           return;
         }
 
@@ -2054,7 +1922,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       sendEditorBtn.addEventListener("click", () => {
         const content = sourceTextEl.value;
         if (!content.trim()) {
-          setStatus("Nothing to send. Editor is empty.", "warning");
+          setStatus("Editor is empty. Nothing to send.", "warning");
           return;
         }
 
@@ -2077,7 +1945,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       sendRunBtn.addEventListener("click", () => {
         const content = sourceTextEl.value;
         if (!content.trim()) {
-          setStatus("Nothing to run. Editor is empty.", "warning");
+          setStatus("Editor is empty. Nothing to run.", "warning");
           return;
         }
 
@@ -2100,15 +1968,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       copyDraftBtn.addEventListener("click", async () => {
         const content = sourceTextEl.value;
         if (!content.trim()) {
-          setStatus("Nothing to copy. Editor is empty.", "warning");
+          setStatus("Editor is empty. Nothing to copy.", "warning");
           return;
         }
 
         try {
           await navigator.clipboard.writeText(content);
-          setStatus("Editor text copied to clipboard.", "success");
+          setStatus("Copied editor text.", "success");
         } catch (error) {
-          setStatus("Clipboard write failed in this browser context.", "warning");
+          setStatus("Clipboard write failed.", "warning");
         }
       });
 
@@ -2126,8 +1994,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
             label: "upload: " + file.name,
             path: null,
           });
-          setMode(detectModeFromText(text), { announce: false });
-          setStatus("Loaded file: " + file.name + ".", "success");
+          refreshResponseUi();
+          setStatus("Loaded file " + file.name + ".", "success");
         };
         reader.onerror = () => {
           setStatus("Failed to read file.", "error");
@@ -2136,8 +2004,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
       });
 
       setSourceState(initialSourceState);
-      setMode(detectModeFromText(sourceTextEl.value), { announce: false });
-      setActivePane(currentMode === MODES.critique ? "right" : "left");
+      refreshResponseUi();
+      setActivePane("left");
       setEditorView(editorView);
       setRightView(rightView);
       renderSourcePreview();

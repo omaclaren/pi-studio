@@ -1,37 +1,23 @@
-# pi-studio workflow spec (v0.1 draft)
+# pi-studio workflow spec (v0.2 draft)
 
 ## Goal
 
-Define a natural two-way feedback interface where:
+Keep Studio simple while supporting both loops:
 
-1. **User → model** feedback on any model output is easy (annotate/reply workflow).
-2. **Model → user** critique/revision workflow is structured when requested.
+1. **User → model feedback** (annotated reply)
+2. **Model → user critique** (structured critique package)
 
-This spec keeps studio aligned with `pi-annotated-reply` while preserving the stronger critique loop.
-
----
-
-## Principles
-
-- **Default to low-friction.** If content is plain prose/code, user should annotate and submit immediately.
-- **Structure only when useful.** Critique mode is explicit and constrained.
-- **Stable handoff format.** Studio and terminal commands should produce compatible prompts.
-- **Human-in-the-loop first.** User decisions are primary; model suggestions are optional.
+Studio uses a **single workspace** (no tab/mode switching):
+- left pane: **Editor**
+- right pane: **Response**
 
 ---
 
-## Modes
+## Core actions
 
-## 1) Annotate mode (default for general outputs)
+## 1) Send reply (annotated feedback)
 
-Use when loaded content is a normal assistant response or file text.
-
-### UX
-- Left panel: editable source text.
-- Right panel: simple guidance + optional quick templates.
-- Primary action: **Submit annotation**.
-
-### Prompt contract (compatible with `annotated-reply`)
+Uses `annotated-reply` compatible prompt shape:
 
 ```md
 annotated reply below:
@@ -39,92 +25,64 @@ original source: <last model response | file <path> | studio editor>
 
 ---
 
-<user-annotated text>
+<annotated text>
 ```
 
-User can use any inline style (e.g. `[note]`, `[[question]]`, line comments).
+## 2) Request critique (structured review request)
 
----
-
-## 2) Critique mode (structured review loop)
-
-Use when user clicks **Critique** or when content is already in critique schema.
-
-### Expected model format
-
+Critiques current editor text and expects/handles structured output:
 - `## Assessment`
-- `## Critiques`
-  - `**C1** ...`, `**C2** ...`
-- `## Document`
-  - full doc with `{C1}`, `{C2}`, ... markers
-
-### UX
-- Right panel renders assessment + critique IDs.
-- Left panel shows document with marker highlights.
-- User records decisions (`accept/reject/revise/question`) per critique.
-- Primary action: **Submit decisions**.
-
-### Decision payload format
-
-```md
-[accept C1]
-[reject C2: reason]
-[revise C3: change request]
-[question C4: clarification]
-```
-
-Optional global note at end.
+- `## Critiques` with `**C1**`, `**C2**`, ...
+- `## Document` with `{C1}`, `{C2}`, ... markers
 
 ---
 
-## Mode selection rules
+## Response handling
 
-On load (`/studio`, `/studio --last`, `/studio <file>`):
+Right pane always shows the **latest assistant response** (reply or critique).
 
-1. If content has structured sections (`## Critiques` + `## Document`) → start in **Critique mode**.
-2. Otherwise → start in **Annotate mode**.
+When response is structured critique, Studio enables additional helpers:
+- **Load full critique package → Editor**
+- **Load clean revised document** (strips `{C#}` markers)
 
-User can manually switch modes anytime.
+Always-available response helpers:
+- **Load latest response → Editor**
+- **Load revised document** (if `## Document` is present)
+- **Copy response**
 
 ---
 
-## State machine (minimal)
+## State model (minimal)
 
-- `idle:annotate`
-- `submitting:annotate`
-- `idle:critique`
-- `submitting:critique`
-- `idle:decisions`
-- `submitting:decisions`
+- `idle`
+- `submitting`
 - `error`
 
 Rules:
-- one in-flight request at a time.
-- preserve unsent user text during mode switches.
-- on response, transition based on detected structure.
+- one in-flight request at a time
+- preserve editor draft across all actions
+- latest assistant message can be auto-followed or manually pulled
 
 ---
 
 ## Required UI elements
 
-- Mode toggle: **Annotate | Critique**
+- Header actions: **Send reply**, **Request critique** (+ focus), **Pull latest**, `Follow latest: On|Off`
+- Pane view toggles: `Editor: Markdown|Preview`, `Right: Markdown|Preview`
 - Source badge: `blank | last model response | file <path> | upload`
-- Footer status with clear phases (`Ready`, `Submitting…`, `Response received`, errors)
-- Existing actions remain: Apply Document, Save As, Save Over, Send to pi editor, Send + Run, Copy
-
-Optional next:
-- unresolved critique counter
-- quick decision buttons on critique IDs
+- Response badge: `none | assistant response | assistant critique` (+ timestamp)
+- Sync badge: `No response loaded | In sync with response | Edited since response`
+- Footer WS/status phases: `Connecting`, `Ready`, `Submitting`, `Disconnected`
 
 ---
 
 ## Acceptance criteria
 
-1. `/studio --last` with plain assistant text opens in Annotate mode without format warning.
-2. Submitting annotation sends annotated-reply compatible prompt and receives normal assistant response.
-3. Clicking **Critique** on same text yields structured critique rendering when model complies.
-4. Decision submission (`[accept C1]` etc.) produces revised response loop.
-5. User can go back to Annotate mode and continue free-form feedback without losing editor text.
+1. `/studio --last` opens with editor loaded and no required mode selection.
+2. **Send reply** sends annotated-reply scaffold and returns response to right pane.
+3. **Request critique** runs on current editor text and returns structured package when model complies.
+4. Structured critique helpers enable/disable correctly.
+5. Loading response/document back into editor never loses draft unexpectedly.
 6. Terminal↔studio roundtrip remains intact (save, editor handoff, reopen).
 
 ---
@@ -133,12 +91,4 @@ Optional next:
 
 - Multi-document tabs
 - Multi-user collaboration
-- Heavy schema validation or strict parser enforcement
-
----
-
-## Implementation notes
-
-- Reuse existing assistant text extraction + source tracking.
-- Keep current WebSocket protocol; add `mode` in client state only initially.
-- Maintain backward compatibility: existing critique requests still work unchanged.
+- Heavy schema validation
