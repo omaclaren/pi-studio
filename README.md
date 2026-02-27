@@ -59,13 +59,14 @@ Top controls:
 - **Insert annotation header**: prepends/updates the annotated-reply scaffold in the editor.
 - **Run editor text**: sends current editor text to the model unchanged.
 - **Critique editor text** (+ critique focus): critiques current editor text and loads result into Response pane.
-- **Get latest response** with optional `Auto-update response: On|Off`.
+- **Load file in editor**: imports a local file into the editor pane.
 
 Important:
 - Studio does **not** auto-wrap editor text with an annotation header on run.
 - If you want annotated-reply format, click **Insert annotation header** first, then run.
 
 Response actions:
+- **Auto-update response: On|Off** + **Get latest response**
 - **Load response into editor** (shown for non-critique responses)
 - **Load critique (notes)** (`## Assessment` + `## Critiques`, shown for structured critique responses)
 - **Load critique (full)** (full structured critique response)

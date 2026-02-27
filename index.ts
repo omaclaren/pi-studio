@@ -1101,11 +1101,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         <option value="markdown">Response: Markdown</option>
         <option value="preview" selected>Response: Preview</option>
       </select>
-      <select id="followSelect" aria-label="Auto-update response">
-        <option value="on" selected>Auto-update response: On</option>
-        <option value="off">Auto-update response: Off</option>
-      </select>
-      <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
       <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
       <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is.">Run editor text</button>
       <select id="lensSelect" aria-label="Critique focus">
@@ -1114,7 +1109,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         <option value="code">Critique focus: Code</option>
       </select>
       <button id="critiqueBtn" type="button">Critique editor text</button>
-      <label class="file-label">Load file<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
+      <label class="file-label">Load file in editor<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
     </div>
   </header>
 
@@ -1147,6 +1142,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       <div id="critiqueView" class="panel-scroll"><pre>No response yet.</pre></div>
       <div class="response-wrap">
         <div id="responseActions" class="response-actions">
+          <select id="followSelect" aria-label="Auto-update response">
+            <option value="on" selected>Auto-update response: On</option>
+            <option value="off">Auto-update response: Off</option>
+          </select>
+          <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
           <button id="loadResponseBtn" type="button">Load response into editor</button>
           <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique (notes)</button>
           <button id="loadCritiqueFullBtn" type="button" hidden>Load critique (full)</button>
