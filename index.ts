@@ -979,8 +979,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
           <button id="copyResponseBtn" type="button">Copy reference</button>
         </div>
         <div id="critiqueActions" class="response-actions" hidden>
-          <button id="sendPackageBtn" type="button">Send critique package to Annotate</button>
-          <button id="sendCleanBtn" type="button">Send clean document to Annotate</button>
+          <button id="sendPackageBtn" type="button">Load critique package → Editor</button>
+          <button id="sendCleanBtn" type="button">Load clean document → Editor</button>
         </div>
       </div>
     </section>
@@ -1983,7 +1983,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         renderSourcePreview();
         setSourceState({ source: "blank", label: "critique package", path: null });
         setMode(MODES.annotate, { announce: false });
-        setStatus("Sent critique package to Annotate.", "success");
+        setStatus("Loaded critique package into editor.", "success");
       });
 
       sendCleanBtn.addEventListener("click", () => {
@@ -1996,7 +1996,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null): string 
         renderSourcePreview();
         setSourceState({ source: "blank", label: "clean document", path: null });
         setMode(MODES.annotate, { announce: false });
-        setStatus("Sent clean document to Annotate.", "success");
+        setStatus("Loaded clean document into editor.", "success");
       });
 
       saveAsBtn.addEventListener("click", () => {

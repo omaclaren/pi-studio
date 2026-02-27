@@ -8,9 +8,9 @@ All notable changes to `pi-studio` are documented here.
 - Minimal **Annotate | Critique** tab workflow with explicit handoff actions.
 - Independent Markdown/Preview toggles for Editor and right pane.
 - `Follow latest: On|Off` + `Pull latest` controls for terminal/editor-composability.
-- Critique → Annotate handoff actions:
-  - **Send critique package to Annotate**
-  - **Send clean document to Annotate**
+- Critique → Editor load actions:
+  - **Load critique package → Editor**
+  - **Load clean document → Editor**
 - Annotate/reference actions:
   - **Load Reference → Editor**
   - **Load edited document** (`## Document` section)

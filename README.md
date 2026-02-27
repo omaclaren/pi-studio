@@ -63,9 +63,9 @@ Tab behavior:
 - right pane badge shows reference source (`none`, `assistant response`, `assistant critique`) and timestamp when available
 - editor badge shows relation to current reference (`No reference loaded`, `In sync with reference`, `Edited since reference`)
 - keyboard shortcuts: `Cmd/Ctrl+Esc` (or `F10`) toggles active-pane focus mode; `Esc` exits focus mode (shown as a footer hint)
-- Critique → Annotate handoff actions:
-  - **Send critique package to Annotate** (Assessment + Critiques + Document)
-  - **Send clean document to Annotate** (Document with `{C1}` markers stripped)
+- Critique → Editor load actions:
+  - **Load critique package → Editor** (Assessment + Critiques + Document)
+  - **Load clean document → Editor** (Document with `{C1}` markers stripped)
 - footer status includes explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`)
 
 ## Design docs
