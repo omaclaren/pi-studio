@@ -1711,13 +1711,33 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           throw new Error("Missing Studio token in URL.");
         }
 
-        const response = await fetch("/render-preview?token=" + encodeURIComponent(token), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ markdown: String(markdown || "") }),
-        });
+        if (typeof fetch !== "function") {
+          throw new Error("Browser fetch API is unavailable.");
+        }
+
+        const controller = typeof AbortController === "function" ? new AbortController() : null;
+        const timeoutId = controller ? window.setTimeout(() => controller.abort(), 8000) : null;
+
+        let response;
+        try {
+          response = await fetch("/render-preview?token=" + encodeURIComponent(token), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ markdown: String(markdown || "") }),
+            signal: controller ? controller.signal : undefined,
+          });
+        } catch (error) {
+          if (error && error.name === "AbortError") {
+            throw new Error("Preview request timed out.");
+          }
+          throw error;
+        } finally {
+          if (timeoutId) {
+            window.clearTimeout(timeoutId);
+          }
+        }
 
         const rawBody = await response.text();
         let payload = null;
@@ -2961,118 +2981,121 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const handleRenderPreviewRequest = async (req: IncomingMessage, res: ServerResponse) => {
+		let rawBody = "";
+		try {
+			rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const status = message.includes("exceeds") ? 413 : 400;
+			respondJson(res, status, { ok: false, error: message });
+			return;
+		}
+
+		let parsedBody: unknown;
+		try {
+			parsedBody = rawBody ? JSON.parse(rawBody) : {};
+		} catch {
+			respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+			return;
+		}
+
+		const markdown =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { markdown?: unknown }).markdown === "string"
+				? (parsedBody as { markdown: string }).markdown
+				: null;
+
+		if (markdown === null) {
+			respondJson(res, 400, { ok: false, error: "Missing markdown string in request body." });
+			return;
+		}
+
+		if (markdown.length > PREVIEW_RENDER_MAX_CHARS) {
+			respondJson(res, 413, {
+				ok: false,
+				error: `Preview text exceeds ${PREVIEW_RENDER_MAX_CHARS} characters.`,
+			});
+			return;
+		}
+
+		try {
+			const html = await renderStudioMarkdownWithPandoc(markdown);
+			respondJson(res, 200, { ok: true, html, renderer: "pandoc" });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			respondJson(res, 500, { ok: false, error: `Preview render failed: ${message}` });
+		}
+	};
+
 	const handleHttpRequest = (req: IncomingMessage, res: ServerResponse) => {
-		void (async () => {
-			if (!serverState) {
-				respondText(res, 503, "Studio server not ready");
-				return;
-			}
+		if (!serverState) {
+			respondText(res, 503, "Studio server not ready");
+			return;
+		}
 
+		let requestUrl: URL;
+		try {
 			const host = req.headers.host ?? `127.0.0.1:${serverState.port}`;
-			const requestUrl = new URL(req.url ?? "/", `http://${host}`);
+			requestUrl = new URL(req.url ?? "/", `http://${host}`);
+		} catch (error) {
+			respondText(res, 400, `Invalid request URL: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
 
-			if (requestUrl.pathname === "/health") {
-				respondText(res, 200, "ok");
-				return;
-			}
+		if (requestUrl.pathname === "/health") {
+			respondText(res, 200, "ok");
+			return;
+		}
 
-			if (requestUrl.pathname === "/favicon.ico") {
-				res.writeHead(204, { "Cache-Control": "no-store" });
-				res.end();
-				return;
-			}
+		if (requestUrl.pathname === "/favicon.ico") {
+			res.writeHead(204, { "Cache-Control": "no-store" });
+			res.end();
+			return;
+		}
 
-			if (requestUrl.pathname === "/render-preview") {
-				const token = requestUrl.searchParams.get("token") ?? "";
-				if (token !== serverState.token) {
-					respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
-					return;
-				}
-
-				const method = (req.method ?? "GET").toUpperCase();
-				if (method !== "POST") {
-					res.setHeader("Allow", "POST");
-					respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
-					return;
-				}
-
-				let rawBody = "";
-				try {
-					rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					const status = message.includes("exceeds") ? 413 : 400;
-					respondJson(res, status, { ok: false, error: message });
-					return;
-				}
-
-				let parsedBody: unknown;
-				try {
-					parsedBody = rawBody ? JSON.parse(rawBody) : {};
-				} catch {
-					respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
-					return;
-				}
-
-				const markdown =
-					parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { markdown?: unknown }).markdown === "string"
-						? (parsedBody as { markdown: string }).markdown
-						: null;
-
-				if (markdown === null) {
-					respondJson(res, 400, { ok: false, error: "Missing markdown string in request body." });
-					return;
-				}
-
-				if (markdown.length > PREVIEW_RENDER_MAX_CHARS) {
-					respondJson(res, 413, {
-						ok: false,
-						error: `Preview text exceeds ${PREVIEW_RENDER_MAX_CHARS} characters.`,
-					});
-					return;
-				}
-
-				try {
-					const html = await renderStudioMarkdownWithPandoc(markdown);
-					respondJson(res, 200, { ok: true, html, renderer: "pandoc" });
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					respondJson(res, 500, { ok: false, error: `Preview render failed: ${message}` });
-				}
-				return;
-			}
-
-			if (requestUrl.pathname !== "/") {
-				respondText(res, 404, "Not found");
-				return;
-			}
-
+		if (requestUrl.pathname === "/render-preview") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
-				respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
 				return;
 			}
 
-			res.writeHead(200, {
-				"Content-Type": "text/html; charset=utf-8",
-				"Cache-Control": "no-store",
-				"X-Content-Type-Options": "nosniff",
-				"Referrer-Policy": "no-referrer",
-				"Cross-Origin-Opener-Policy": "same-origin",
-				"Cross-Origin-Resource-Policy": "same-origin",
-			});
-			res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme));
-		})().catch((error) => {
-			if (res.headersSent) {
-				try {
-					res.end();
-				} catch {
-					// ignore
-				}
+			const method = (req.method ?? "GET").toUpperCase();
+			if (method !== "POST") {
+				res.setHeader("Allow", "POST");
+				respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
 				return;
 			}
-			respondText(res, 500, `Studio server error: ${error instanceof Error ? error.message : String(error)}`);
+
+			void handleRenderPreviewRequest(req, res).catch((error) => {
+				respondJson(res, 500, {
+					ok: false,
+					error: `Preview render failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
+		if (requestUrl.pathname !== "/") {
+			respondText(res, 404, "Not found");
+			return;
+		}
+
+		const token = requestUrl.searchParams.get("token") ?? "";
+		if (token !== serverState.token) {
+			respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
+			return;
+		}
+
+		res.writeHead(200, {
+			"Content-Type": "text/html; charset=utf-8",
+			"Cache-Control": "no-store",
+			"X-Content-Type-Options": "nosniff",
+			"Referrer-Policy": "no-referrer",
+			"Cross-Origin-Opener-Policy": "same-origin",
+			"Cross-Origin-Resource-Policy": "same-origin",
 		});
+		res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme));
 	};
 
 	const ensureServer = async (): Promise<StudioServerState> => {

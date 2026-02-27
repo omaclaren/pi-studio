@@ -32,6 +32,7 @@ All notable changes to `pi-studio` are documented here.
 - Critique-specific load actions now focus on notes/full views and are only shown for structured critique responses.
 - Studio still live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
 - Preview pane typography/style now follows the higher-fidelity `/preview-browser` rendering style more closely.
+- Hardened Studio preview HTTP handling and added client-side preview-request timeout to avoid stuck "Rendering preview…" states.
 
 ## [0.1.0-alpha.1] - 2026-02-26
 

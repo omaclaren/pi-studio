@@ -103,5 +103,6 @@ Additional behavior:
 - One studio request at a time.
 - Browser supports: Save As, Save Over (file-backed editor text), Send to pi editor, Run editor text (submit editor text directly to model), Copy editor, annotation-header insertion, and response→editor load actions.
 - Preview panes render markdown server-side via `pandoc` (`gfm+tex_math_dollars` → HTML5 + MathML), then sanitize in-browser with `dompurify`.
+- Install `pandoc` for full preview rendering (`brew install pandoc` on macOS).
 - Math delimiters supported in preview: `$...$`, `$$...$$`, `\(...\)`, and `\[...\]` (normalized before rendering).
 - If `pandoc` is unavailable, Studio falls back to plain markdown text in preview panes and shows an inline warning.
