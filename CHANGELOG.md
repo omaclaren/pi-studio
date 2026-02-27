@@ -43,6 +43,9 @@ All notable changes to `pi-studio` are documented here.
 - If `dompurify` is unavailable, preview now falls back to escaped plain markdown instead of injecting unsanitized HTML.
 - Preview sanitization now preserves MathML profile and strips MathML annotation tags to avoid duplicate raw TeX text beside rendered equations.
 
+### Changed
+- Added npm metadata fields (`repository`, `homepage`, `bugs`) so npm package page links to GitHub.
+
 ## [0.1.0-alpha.1] - 2026-02-26
 
 Initial alpha baseline.

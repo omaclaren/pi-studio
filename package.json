@@ -4,6 +4,14 @@
   "description": "Browser GUI for structured critique workflows in pi",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omaclaren/pi-studio.git"
+  },
+  "homepage": "https://github.com/omaclaren/pi-studio#readme",
+  "bugs": {
+    "url": "https://github.com/omaclaren/pi-studio/issues"
+  },
   "keywords": [
     "pi-package"
   ],
