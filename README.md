@@ -63,7 +63,7 @@ Studio now uses a single always-on workspace:
 
 Top controls:
 - **Save As…** and **Save Over** (when file-backed)
-- **Load file in editor**: prompts for a file path (resolved relative to current pi session directory) and loads it into the editor pane.
+- **Load file in editor**: opens the browser file picker and loads the selected file into the editor pane.
 - pane view toggles (`Editor: Markdown|Preview`, `Response: Markdown|Preview`)
 
 Editor actions:

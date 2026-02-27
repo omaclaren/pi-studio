@@ -74,7 +74,7 @@ Rules:
 
 ## Required UI elements
 
-- Header actions: **Save As…**, **Save Over** (file-backed), **Load file in editor** (path resolved relative to current session directory)
+- Header actions: **Save As…**, **Save Over** (file-backed), **Load file in editor**
 - Header view toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
 - Editor actions: **Insert annotation header**, **Run editor text**, **Critique editor text** (+ critique focus), **Send to pi editor**, **Copy editor**
 - Response actions include `Auto-update response: On|Off` + **Get latest response**

@@ -20,7 +20,7 @@ All notable changes to `pi-studio` are documented here.
 - Theme-aware Studio browser palette derived from active pi theme tokens (bg/text/border/accent + status colors).
 - MathJax rendering in Studio preview panes for `$...$` and `$$...$$` LaTeX math.
 - Delimiter normalization in markdown previews for `\(...\)` and `\[...\]` math syntax.
-- Path-based **Load file in editor** action (path prompt resolved relative to current pi session directory).
+- **Load file in editor** action in top controls (browser file picker into editor).
 
 ### Changed
 - Removed Annotate/Critique tabs and related mode state.
