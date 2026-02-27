@@ -63,7 +63,7 @@ Studio now uses a single always-on workspace:
 
 Top controls:
 - **Save As…** and **Save Over** (when file-backed)
-- **Load file in editor**: imports a local file into the editor pane.
+- **Load file in editor**: prompts for a file path (resolved relative to current pi session directory) and loads it into the editor pane.
 - pane view toggles (`Editor: Markdown|Preview`, `Response: Markdown|Preview`)
 
 Editor actions:
@@ -102,4 +102,4 @@ Additional behavior:
 - Studio URLs include a token query parameter; avoid sharing full Studio URLs in screenshots/issues.
 - One studio request at a time.
 - Browser supports: Save As, Save Over (file-backed editor text), Send to pi editor, Run editor text (submit editor text directly to model), Copy editor, annotation-header insertion, and response→editor load actions.
-- Browser uses Markdown rendering via CDN (`marked`, `dompurify`) with MathJax for inline/display LaTeX math rendering in preview views.
+- Browser uses Markdown rendering via CDN (`marked`, `dompurify`) with MathJax for inline/display LaTeX math rendering in preview views (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`).

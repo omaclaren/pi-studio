@@ -90,6 +90,12 @@ interface SendToEditorRequestMessage {
 	content: string;
 }
 
+interface LoadFileRequestMessage {
+	type: "load_file_request";
+	requestId: string;
+	path: string;
+}
+
 type IncomingStudioMessage =
 	| HelloMessage
 	| PingMessage
@@ -99,7 +105,8 @@ type IncomingStudioMessage =
 	| SendRunRequestMessage
 	| SaveAsRequestMessage
 	| SaveOverRequestMessage
-	| SendToEditorRequestMessage;
+	| SendToEditorRequestMessage
+	| LoadFileRequestMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -707,6 +714,14 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
+	if (msg.type === "load_file_request" && typeof msg.requestId === "string" && typeof msg.path === "string") {
+		return {
+			type: "load_file_request",
+			requestId: msg.requestId,
+			path: msg.path,
+		};
+	}
+
 	return null;
 }
 
@@ -1112,7 +1127,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       </select>
       <button id="saveAsBtn" type="button">Save As…</button>
       <button id="saveOverBtn" type="button" disabled>Save Over</button>
-      <label class="file-label">Load file in editor<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
+      <button id="loadFileBtn" type="button" title="Load a file path relative to current pi session directory.">Load file in editor</button>
     </div>
   </header>
 
@@ -1214,7 +1229,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const insertHeaderBtn = document.getElementById("insertHeaderBtn");
       const critiqueBtn = document.getElementById("critiqueBtn");
       const lensSelect = document.getElementById("lensSelect");
-      const fileInput = document.getElementById("fileInput");
+      const loadFileBtn = document.getElementById("loadFileBtn");
       const loadResponseBtn = document.getElementById("loadResponseBtn");
       const loadCritiqueNotesBtn = document.getElementById("loadCritiqueNotesBtn");
       const loadCritiqueFullBtn = document.getElementById("loadCritiqueFullBtn");
@@ -1425,8 +1440,70 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         }
       }
 
+      function normalizeMathDelimitersInSegment(markdown) {
+        let normalized = String(markdown || "");
+        normalized = normalized.split("\\\\[").join("$$\\n");
+        normalized = normalized.split("\\\\]").join("\\n$$");
+        normalized = normalized.split("\\\\(").join("$");
+        normalized = normalized.split("\\\\)").join("$");
+        return normalized;
+      }
+
+      function normalizeMathDelimiters(markdown) {
+        const lines = String(markdown || "").split("\\n");
+        const out = [];
+        let plainBuffer = [];
+        let inFence = false;
+        let fenceChar = undefined;
+        let fenceLength = 0;
+
+        const flushPlain = () => {
+          if (plainBuffer.length === 0) return;
+          out.push(normalizeMathDelimitersInSegment(plainBuffer.join("\\n")));
+          plainBuffer = [];
+        };
+
+        for (const line of lines) {
+          const trimmed = line.trimStart();
+          const fenceMatch = trimmed.match(/^([\x60]{3,}|~{3,})/);
+
+          if (fenceMatch) {
+            const marker = fenceMatch[1];
+            const markerChar = marker[0];
+            const markerLength = marker.length;
+
+            if (!inFence) {
+              flushPlain();
+              inFence = true;
+              fenceChar = markerChar;
+              fenceLength = markerLength;
+              out.push(line);
+              continue;
+            }
+
+            if (fenceChar === markerChar && markerLength >= fenceLength) {
+              inFence = false;
+              fenceChar = undefined;
+              fenceLength = 0;
+            }
+
+            out.push(line);
+            continue;
+          }
+
+          if (inFence) {
+            out.push(line);
+          } else {
+            plainBuffer.push(line);
+          }
+        }
+
+        flushPlain();
+        return out.join("\\n");
+      }
+
       function renderMarkdownHtml(markdown) {
-        const safeText = typeof markdown === "string" ? markdown : "";
+        const safeText = normalizeMathDelimiters(typeof markdown === "string" ? markdown : "");
         if (window.marked && typeof window.marked.parse === "function") {
           const rawHtml = window.marked.parse(safeText);
           return window.DOMPurify ? window.DOMPurify.sanitize(rawHtml) : rawHtml;
@@ -1549,7 +1626,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       }
 
       function syncActionButtons() {
-        fileInput.disabled = uiBusy;
+        loadFileBtn.disabled = uiBusy;
         saveAsBtn.disabled = uiBusy;
         saveOverBtn.disabled = uiBusy || !(sourceState.source === "file" && sourceState.path);
         sendEditorBtn.disabled = uiBusy;
@@ -1815,6 +1892,32 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
               setStatus("Updated from latest response.", "success");
             }
           }
+          return;
+        }
+
+        if (message.type === "loaded_file") {
+          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+          }
+          setBusy(false);
+          setWsState("Ready");
+
+          if (typeof message.content === "string") {
+            sourceTextEl.value = message.content;
+            renderSourcePreview();
+          }
+
+          if (message.path || message.label) {
+            setSourceState({
+              source: "file",
+              label: message.label || message.path || "file",
+              path: message.path || null,
+            });
+          }
+
+          refreshResponseUi();
+          setStatus(typeof message.message === "string" ? message.message : "Loaded file into editor.", "success");
           return;
         }
 
@@ -2269,27 +2372,27 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         }
       });
 
-      fileInput.addEventListener("change", () => {
-        const file = fileInput.files && fileInput.files[0];
-        if (!file) return;
+      loadFileBtn.addEventListener("click", () => {
+        const suggested = (sourceState && sourceState.source === "file" && sourceState.label)
+          ? sourceState.label
+          : "./";
+        const path = window.prompt("Load file path (relative to current pi session directory):", suggested);
+        if (!path || !path.trim()) return;
 
-        const reader = new FileReader();
-        reader.onload = () => {
-          const text = typeof reader.result === "string" ? reader.result : "";
-          sourceTextEl.value = text;
-          renderSourcePreview();
-          setSourceState({
-            source: "blank",
-            label: "upload: " + file.name,
-            path: null,
-          });
-          refreshResponseUi();
-          setStatus("Loaded file " + file.name + ".", "success");
-        };
-        reader.onerror = () => {
-          setStatus("Failed to read file.", "error");
-        };
-        reader.readAsText(file);
+        const requestId = beginUiAction("load_file");
+        if (!requestId) return;
+
+        const sent = sendMessage({
+          type: "load_file_request",
+          requestId,
+          path,
+        });
+
+        if (!sent) {
+          pendingRequestId = null;
+          pendingKind = null;
+          setBusy(false);
+        }
       });
 
       setSourceState(initialSourceState);
@@ -2525,6 +2628,46 @@ export default function (pi: ExtensionAPI) {
 					message: `Failed to send editor text to model: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
+			return;
+		}
+
+		if (msg.type === "load_file_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			if (isStudioBusy()) {
+				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
+				return;
+			}
+
+			const requestedPath = msg.path.trim();
+			if (!requestedPath) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Missing file path." });
+				return;
+			}
+
+			const file = readStudioFile(requestedPath, studioCwd);
+			if (!file.ok) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: file.message });
+				return;
+			}
+
+			initialStudioDocument = {
+				text: file.text,
+				label: file.label,
+				source: "file",
+				path: file.resolvedPath,
+			};
+
+			sendToClient(client, {
+				type: "loaded_file",
+				requestId: msg.requestId,
+				path: file.resolvedPath,
+				label: file.label,
+				content: file.text,
+				message: `Loaded ${file.label} into editor.`,
+			});
 			return;
 		}
 
