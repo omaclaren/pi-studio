@@ -66,14 +66,13 @@ Important:
 - If you want annotated-reply format, click **Insert annotation header** first, then run.
 
 Response actions:
-- **Load response into editor**
-- **Load critique document (with markers)** (from `## Document`)
+- **Load response into editor** (shown for non-critique responses)
+- **Load critique (notes)** (`## Assessment` + `## Critiques`, shown for structured critique responses)
+- **Load critique (full)** (full structured critique response)
 - **Copy response**
-- **Load critique package into editor** (full structured critique)
-- **Load critique document (without markers)** (strips `{C#}` markers)
 
 Additional behavior:
-- independent pane view toggles (`Editor: Markdown|Preview`, `Right: Markdown|Preview`)
+- independent pane view toggles (`Editor: Markdown|Preview`, `Response: Markdown|Preview`)
 - editor sync badge (`No response loaded`, `In sync with response`, `Edited since response`)
 - response badge with source + timestamp (`assistant response` / `assistant critique`)
 - theme-aware palette from the active pi theme at `/studio` launch (re-open Studio after changing themes)

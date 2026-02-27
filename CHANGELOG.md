@@ -9,11 +9,10 @@ All notable changes to `pi-studio` are documented here.
 - Explicit annotation scaffold action: **Insert annotation header** (upserts header and source metadata in-editor).
 - Clear top-level critique controls: **Critique editor text** + **Critique focus**.
 - Unified response actions:
-  - **Load response into editor**
-  - **Load critique document (with markers)**
+  - **Load response into editor** (for non-critique responses)
+  - **Load critique (notes)**
+  - **Load critique (full)**
   - **Copy response**
-  - **Load critique package into editor**
-  - **Load critique document (without markers)**
 - Independent Markdown/Preview toggles for Editor and right pane.
 - `Auto-update response: On|Off` + `Get latest response` controls for terminal/editor-composability.
 - Source action: **Run editor text** to submit current editor text directly to the model.
@@ -27,6 +26,7 @@ All notable changes to `pi-studio` are documented here.
 - Editor sync badge now tracks relation to latest response (`No response loaded`, `In sync with response`, `Edited since response`).
 - Footer continues to show explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`) alongside status text.
 - Running text and preparing annotated scaffolds are now separate explicit actions (no hidden header wrapping on send).
+- Critique-specific load actions now focus on notes/full views and are only shown for structured critique responses.
 - Studio still live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
 
 ## [0.1.0-alpha.1] - 2026-02-26

@@ -48,12 +48,13 @@ Critiques current editor text and expects/handles structured output:
 Right pane always shows the **latest assistant response** (reply or critique).
 
 When response is structured critique, Studio enables additional helpers:
-- **Load critique package into editor**
-- **Load critique document (without markers)** (strips `{C#}` markers)
+- **Load critique (notes)** (`## Assessment` + `## Critiques`)
+- **Load critique (full)** (`## Assessment` + `## Critiques` + `## Document`)
 
-Always-available response helpers:
+For non-critique responses:
 - **Load response into editor**
-- **Load critique document (with markers)** (if `## Document` is present)
+
+Always available:
 - **Copy response**
 
 ---
@@ -74,7 +75,7 @@ Rules:
 ## Required UI elements
 
 - Header actions: **Insert annotation header**, **Run editor text**, **Critique editor text** (+ critique focus), **Get latest response**, `Auto-update response: On|Off`
-- Pane view toggles: `Editor: Markdown|Preview`, `Right: Markdown|Preview`
+- Pane view toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
 - Source badge: `blank | last model response | file <path> | upload`
 - Response badge: `none | assistant response | assistant critique` (+ timestamp)
 - Sync badge: `No response loaded | In sync with response | Edited since response`
@@ -88,8 +89,8 @@ Rules:
 2. **Run editor text** sends the current editor content as-is and returns response to right pane.
 3. **Insert annotation header** updates the scaffold source metadata without duplicating headers.
 4. **Critique editor text** runs on current editor text and returns structured package when model complies.
-5. Structured critique helpers enable/disable correctly.
-6. Loading response/document back into editor never loses draft unexpectedly.
+5. Structured critique helpers (`Load critique (notes)` / `Load critique (full)`) enable only when critique structure is present.
+6. Loading response/critique back into editor never loses draft unexpectedly.
 7. Terminal↔studio roundtrip remains intact (save, editor handoff, reopen).
 
 ---

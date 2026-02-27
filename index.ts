@@ -1093,9 +1093,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         <option value="markdown" selected>Editor: Markdown</option>
         <option value="preview">Editor: Preview</option>
       </select>
-      <select id="rightViewSelect" aria-label="Right pane view mode">
-        <option value="markdown" selected>Right: Markdown</option>
-        <option value="preview">Right: Preview</option>
+      <select id="rightViewSelect" aria-label="Response view mode">
+        <option value="markdown" selected>Response: Markdown</option>
+        <option value="preview">Response: Preview</option>
       </select>
       <select id="followSelect" aria-label="Auto-update response">
         <option value="on" selected>Auto-update response: On</option>
@@ -1144,10 +1144,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       <div class="response-wrap">
         <div id="responseActions" class="response-actions">
           <button id="loadResponseBtn" type="button">Load response into editor</button>
-          <button id="loadEditedBtn" type="button">Load critique document (with markers)</button>
+          <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique (notes)</button>
+          <button id="loadCritiqueFullBtn" type="button" hidden>Load critique (full)</button>
           <button id="copyResponseBtn" type="button">Copy response</button>
-          <button id="sendPackageBtn" type="button">Load critique package into editor</button>
-          <button id="sendCleanBtn" type="button">Load critique document (without markers)</button>
         </div>
       </div>
     </section>
@@ -1204,10 +1203,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const lensSelect = document.getElementById("lensSelect");
       const fileInput = document.getElementById("fileInput");
       const loadResponseBtn = document.getElementById("loadResponseBtn");
-      const loadEditedBtn = document.getElementById("loadEditedBtn");
+      const loadCritiqueNotesBtn = document.getElementById("loadCritiqueNotesBtn");
+      const loadCritiqueFullBtn = document.getElementById("loadCritiqueFullBtn");
       const copyResponseBtn = document.getElementById("copyResponseBtn");
-      const sendPackageBtn = document.getElementById("sendPackageBtn");
-      const sendCleanBtn = document.getElementById("sendCleanBtn");
       const saveAsBtn = document.getElementById("saveAsBtn");
       const saveOverBtn = document.getElementById("saveOverBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
@@ -1234,7 +1232,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       let latestResponseMarkdown = "";
       let latestResponseTimestamp = 0;
       let latestResponseKind = "annotation";
-      let latestResponseDocumentSection = "";
       let latestResponseIsStructuredCritique = false;
       let uiBusy = false;
       let sourceState = {
@@ -1447,18 +1444,26 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       function updateResultActionButtons() {
         const responseMarkdown = getCurrentResponseMarkdown();
         const hasResponse = Boolean(responseMarkdown && responseMarkdown.trim());
-        const editedSection = extractSection(responseMarkdown, "Document");
-        const cleanDoc = latestResponseIsStructuredCritique
-          ? cleanCritiqueMarkers(latestResponseDocumentSection).trim()
-          : "";
         const responseLoaded = hasResponse && isTextEquivalent(sourceTextEl.value, responseMarkdown);
+        const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
 
-        loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded;
+        const critiqueNotes = isCritiqueResponse ? buildCritiqueNotesMarkdown(responseMarkdown) : "";
+        const critiqueNotesLoaded = Boolean(critiqueNotes) && isTextEquivalent(sourceTextEl.value, critiqueNotes);
+
+        loadResponseBtn.hidden = isCritiqueResponse;
+        loadCritiqueNotesBtn.hidden = !isCritiqueResponse;
+        loadCritiqueFullBtn.hidden = !isCritiqueResponse;
+
+        loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse;
         loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
-        loadEditedBtn.disabled = uiBusy || !editedSection;
+
+        loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
+        loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique (notes)";
+
+        loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded;
+        loadCritiqueFullBtn.textContent = responseLoaded ? "Critique (full) already in editor" : "Load critique (full)";
+
         copyResponseBtn.disabled = uiBusy || !hasResponse;
-        sendPackageBtn.disabled = uiBusy || !latestResponseIsStructuredCritique;
-        sendCleanBtn.disabled = uiBusy || !cleanDoc;
 
         pullLatestBtn.disabled = uiBusy || followLatest;
         pullLatestBtn.textContent = queuedLatestResponse ? "Get latest response *" : "Get latest response";
@@ -1577,14 +1582,27 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         return collected.join("\\n").trim();
       }
 
+      function buildCritiqueNotesMarkdown(markdown) {
+        if (!markdown || typeof markdown !== "string") return "";
+
+        const assessment = extractSection(markdown, "Assessment");
+        const critiques = extractSection(markdown, "Critiques");
+        const parts = [];
+
+        if (assessment) {
+          parts.push("## Assessment\\n\\n" + assessment);
+        }
+        if (critiques) {
+          parts.push("## Critiques\\n\\n" + critiques);
+        }
+
+        return parts.join("\\n\\n").trim();
+      }
+
       function isStructuredCritique(markdown) {
         if (!markdown || typeof markdown !== "string") return false;
         const lower = markdown.toLowerCase();
         return lower.indexOf("## critiques") !== -1 && lower.indexOf("## document") !== -1;
-      }
-
-      function cleanCritiqueMarkers(text) {
-        return String(text || "").replace(/\\{C\\d+\\}/g, "");
       }
 
       function handleIncomingResponse(markdown, kind, timestamp) {
@@ -1597,9 +1615,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         latestResponseKind = kind === "critique" ? "critique" : "annotation";
         latestResponseTimestamp = responseTimestamp;
         latestResponseIsStructuredCritique = isStructuredCritique(markdown);
-        latestResponseDocumentSection = latestResponseIsStructuredCritique
-          ? (extractSection(markdown, "Document") || "")
-          : "";
 
         refreshResponseUi();
         syncActionButtons();
@@ -2030,19 +2045,37 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         sourceTextEl.value = latestResponseMarkdown;
         renderSourcePreview();
         setSourceState({ source: "last-response", label: "last model response", path: null });
-        setStatus("Loaded latest response into editor.", "success");
+        setStatus("Loaded response into editor.", "success");
       });
 
-      loadEditedBtn.addEventListener("click", () => {
-        const edited = extractSection(latestResponseMarkdown, "Document");
-        if (!edited) {
-          setStatus("No critique document (## Document) found in latest response.", "warning");
+      loadCritiqueNotesBtn.addEventListener("click", () => {
+        if (!latestResponseIsStructuredCritique || !latestResponseMarkdown.trim()) {
+          setStatus("Latest response is not a structured critique response.", "warning");
           return;
         }
-        sourceTextEl.value = edited;
+
+        const notes = buildCritiqueNotesMarkdown(latestResponseMarkdown);
+        if (!notes) {
+          setStatus("No critique notes (Assessment/Critiques) found in latest response.", "warning");
+          return;
+        }
+
+        sourceTextEl.value = notes;
         renderSourcePreview();
-        setSourceState({ source: "blank", label: "critique document (with markers)", path: null });
-        setStatus("Loaded critique document (with markers) into editor.", "success");
+        setSourceState({ source: "blank", label: "critique notes", path: null });
+        setStatus("Loaded critique notes into editor.", "success");
+      });
+
+      loadCritiqueFullBtn.addEventListener("click", () => {
+        if (!latestResponseIsStructuredCritique || !latestResponseMarkdown.trim()) {
+          setStatus("Latest response is not a structured critique response.", "warning");
+          return;
+        }
+
+        sourceTextEl.value = latestResponseMarkdown;
+        renderSourcePreview();
+        setSourceState({ source: "blank", label: "critique (full)", path: null });
+        setStatus("Loaded critique (full) into editor.", "success");
       });
 
       copyResponseBtn.addEventListener("click", async () => {
@@ -2057,31 +2090,6 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         } catch (error) {
           setStatus("Clipboard write failed.", "warning");
         }
-      });
-
-      sendPackageBtn.addEventListener("click", () => {
-        if (!latestResponseIsStructuredCritique || !latestResponseMarkdown.trim()) {
-          setStatus("Latest response is not a structured critique package.", "warning");
-          return;
-        }
-        sourceTextEl.value = latestResponseMarkdown;
-        renderSourcePreview();
-        setSourceState({ source: "blank", label: "critique package", path: null });
-        setStatus("Loaded critique package into editor.", "success");
-      });
-
-      sendCleanBtn.addEventListener("click", () => {
-        const clean = latestResponseIsStructuredCritique
-          ? cleanCritiqueMarkers(latestResponseDocumentSection).trim()
-          : "";
-        if (!clean) {
-          setStatus("No critique document found to load without markers.", "warning");
-          return;
-        }
-        sourceTextEl.value = clean;
-        renderSourcePreview();
-        setSourceState({ source: "blank", label: "critique document (without markers)", path: null });
-        setStatus("Loaded critique document (without markers) into editor.", "success");
       });
 
       saveAsBtn.addEventListener("click", () => {
