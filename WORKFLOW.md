@@ -35,7 +35,7 @@ Use when loaded content is a normal assistant response or file text.
 
 ```md
 annotated reply below:
-original source: <last model response | file <path> | studio draft>
+original source: <last model response | file <path> | studio editor>
 
 ---
 
@@ -110,7 +110,7 @@ Rules:
 - Mode toggle: **Annotate | Critique**
 - Source badge: `blank | last model response | file <path> | upload`
 - Footer status with clear phases (`Ready`, `Submitting…`, `Response received`, errors)
-- Existing actions remain: Apply Document, Save As, Save Over, Send to pi editor, Copy
+- Existing actions remain: Apply Document, Save As, Save Over, Send to pi editor, Send + Run, Copy
 
 Optional next:
 - unresolved critique counter
@@ -124,7 +124,7 @@ Optional next:
 2. Submitting annotation sends annotated-reply compatible prompt and receives normal assistant response.
 3. Clicking **Critique** on same text yields structured critique rendering when model complies.
 4. Decision submission (`[accept C1]` etc.) produces revised response loop.
-5. User can go back to Annotate mode and continue free-form feedback without losing draft.
+5. User can go back to Annotate mode and continue free-form feedback without losing editor text.
 6. Terminal↔studio roundtrip remains intact (save, editor handoff, reopen).
 
 ---

@@ -52,13 +52,14 @@ Optional commands:
 
 Studio now uses two minimal tabs:
 
-- **Annotate**: edit/annotate draft and **Send reply**.
-- **Critique**: run **Generate critique** on current draft.
+- **Annotate**: edit/annotate in the Editor pane and **Send reply**.
+- **Critique**: run **Generate critique** on current editor text.
 
 Tab behavior:
 - explicit top-level tabs (**Annotate | Critique**)
-- shared draft pane with `View: Markdown | Preview`
+- shared Editor pane with `View: Markdown | Preview`
 - optional latest-response tracking control: `Follow latest: On|Off` with `Pull latest`
+- right pane badge shows reference source (`none`, `assistant response`, `assistant critique`) and timestamp when available
 - Critique → Annotate handoff actions:
   - **Send critique package to Annotate** (Assessment + Critiques + Document)
   - **Send clean document to Annotate** (Document with `{C1}` markers stripped)
@@ -75,5 +76,5 @@ Tab behavior:
 - Local-only server (`127.0.0.1`) with rotating session tokens.
 - Studio URLs include a token query parameter; avoid sharing full Studio URLs in screenshots/issues.
 - One studio request at a time.
-- Browser supports: Save As, Save Over (file-backed drafts), Send to pi editor, Copy draft, and tab handoff actions between Annotate/Critique.
+- Browser supports: Save As, Save Over (file-backed editor text), Send to pi editor, Send + Run (submit editor text directly to model), Copy editor, and tab handoff actions between Annotate/Critique.
 - Browser uses Markdown rendering via CDN (`marked`, `dompurify`).
