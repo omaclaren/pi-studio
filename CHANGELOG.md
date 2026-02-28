@@ -22,7 +22,7 @@ All notable changes to `pi-studio` are documented here.
 - Math delimiter normalization before preview rendering for `\(...\)` and `\[...\]` syntax (fence-aware).
 - **Load file in editor** action in top controls (browser file picker into editor).
 - README screenshot gallery for dark/light workspace and critique/annotation views.
-- Response-side markdown highlighting toggle (`Highlight response: Off|On`) in `Response: Markdown` view, with local preference persistence.
+- Response-side markdown highlighting toggle (`Highlight markdown: Off|On`) in `Response: Markdown` view, with local preference persistence.
 - Obsidian wiki-image syntax normalization (`![[path]]`, `![[path|alt]]`) before pandoc preview rendering.
 
 ### Changed

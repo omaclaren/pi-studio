@@ -1504,8 +1504,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
             <button id="copyDraftBtn" type="button">Copy editor text</button>
             <select id="highlightSelect" aria-label="Editor syntax highlighting">
-              <option value="off" selected>Highlight editor: Off</option>
-              <option value="on">Highlight editor: On</option>
+              <option value="off" selected>Highlight markdown: Off</option>
+              <option value="on">Highlight markdown: On</option>
             </select>
           </div>
         </div>
@@ -1530,8 +1530,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <option value="off">Auto-update response: Off</option>
           </select>
           <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
-            <option value="off" selected>Highlight response: Off</option>
-            <option value="on">Highlight response: On</option>
+            <option value="off" selected>Highlight markdown: Off</option>
+            <option value="on">Highlight markdown: On</option>
           </select>
           <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
           <button id="loadResponseBtn" type="button">Load response into editor</button>
