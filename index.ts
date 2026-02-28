@@ -491,10 +491,16 @@ function stripMathMlAnnotationTags(html: string): string {
 		.replace(/<annotation\b[\s\S]*?<\/annotation>/gi, "");
 }
 
+function normalizeObsidianImages(markdown: string): string {
+	return markdown
+		.replace(/!\[\[([^|\]]+)\|([^\]]+)\]\]/g, "![$2]($1)")
+		.replace(/!\[\[([^\]]+)\]\]/g, "![]($1)");
+}
+
 async function renderStudioMarkdownWithPandoc(markdown: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const args = ["-f", "gfm+tex_math_dollars-raw_html", "-t", "html5", "--mathml", "--no-highlight"];
-	const normalizedMarkdown = normalizeMathDelimiters(markdown);
+	const normalizedMarkdown = normalizeObsidianImages(normalizeMathDelimiters(markdown));
 
 	return await new Promise<string>((resolve, reject) => {
 		const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"] });
@@ -1362,6 +1368,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       line-height: 1.5;
     }
 
+    .response-markdown-highlight {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
     .preview-loading {
       color: var(--muted);
       font-style: italic;
@@ -1514,6 +1529,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <option value="on" selected>Auto-update response: On</option>
             <option value="off">Auto-update response: Off</option>
           </select>
+          <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
+            <option value="off" selected>Highlight response: Off</option>
+            <option value="on">Highlight response: On</option>
+          </select>
           <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
           <button id="loadResponseBtn" type="button">Load response into editor</button>
           <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique (notes)</button>
@@ -1570,6 +1589,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const editorViewSelect = document.getElementById("editorViewSelect");
       const rightViewSelect = document.getElementById("rightViewSelect");
       const followSelect = document.getElementById("followSelect");
+      const responseHighlightSelect = document.getElementById("responseHighlightSelect");
       const pullLatestBtn = document.getElementById("pullLatestBtn");
       const insertHeaderBtn = document.getElementById("insertHeaderBtn");
       const critiqueBtn = document.getElementById("critiqueBtn");
@@ -1617,10 +1637,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       let paneFocusTarget = "off";
       const EDITOR_HIGHLIGHT_MAX_CHARS = 80_000;
       const EDITOR_HIGHLIGHT_STORAGE_KEY = "piStudio.editorHighlightEnabled";
+      const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
+      const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
       let sourcePreviewRenderTimer = null;
       let sourcePreviewRenderNonce = 0;
       let responsePreviewRenderNonce = 0;
       let editorHighlightEnabled = false;
+      let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
 
       function getIdleStatus() {
@@ -1946,6 +1969,19 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           return;
         }
 
+        if (responseHighlightEnabled) {
+          if (markdown.length > RESPONSE_HIGHLIGHT_MAX_CHARS) {
+            critiqueViewEl.innerHTML = buildPreviewErrorHtml(
+              "Response is too large for markdown highlighting. Showing plain markdown.",
+              markdown,
+            );
+            return;
+          }
+
+          critiqueViewEl.innerHTML = "<div class='response-markdown-highlight'>" + highlightMarkdown(markdown) + "</div>";
+          return;
+        }
+
         critiqueViewEl.innerHTML = buildPlainMarkdownHtml(markdown);
       }
 
@@ -2005,6 +2041,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         editorViewSelect.disabled = uiBusy;
         rightViewSelect.disabled = uiBusy;
         followSelect.disabled = uiBusy;
+        if (responseHighlightSelect) responseHighlightSelect.disabled = uiBusy || rightView !== "markdown";
         insertHeaderBtn.disabled = uiBusy;
         critiqueBtn.disabled = uiBusy;
         lensSelect.disabled = uiBusy;
@@ -2052,6 +2089,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         rightView = nextView === "preview" ? "preview" : "markdown";
         rightViewSelect.value = rightView;
         renderActiveResult();
+        syncActionButtons();
       }
 
       function getToken() {
@@ -2225,22 +2263,38 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         sourceHighlightEl.scrollLeft = sourceTextEl.scrollLeft;
       }
 
-      function readStoredEditorHighlightEnabled() {
+      function readStoredToggle(storageKey) {
         if (!window.localStorage) return false;
         try {
-          return window.localStorage.getItem(EDITOR_HIGHLIGHT_STORAGE_KEY) === "on";
+          return window.localStorage.getItem(storageKey) === "on";
         } catch {
           return false;
         }
       }
 
-      function persistEditorHighlightEnabled(enabled) {
+      function persistStoredToggle(storageKey, enabled) {
         if (!window.localStorage) return;
         try {
-          window.localStorage.setItem(EDITOR_HIGHLIGHT_STORAGE_KEY, enabled ? "on" : "off");
+          window.localStorage.setItem(storageKey, enabled ? "on" : "off");
         } catch {
           // ignore storage failures
         }
+      }
+
+      function readStoredEditorHighlightEnabled() {
+        return readStoredToggle(EDITOR_HIGHLIGHT_STORAGE_KEY);
+      }
+
+      function readStoredResponseHighlightEnabled() {
+        return readStoredToggle(RESPONSE_HIGHLIGHT_STORAGE_KEY);
+      }
+
+      function persistEditorHighlightEnabled(enabled) {
+        persistStoredToggle(EDITOR_HIGHLIGHT_STORAGE_KEY, enabled);
+      }
+
+      function persistResponseHighlightEnabled(enabled) {
+        persistStoredToggle(RESPONSE_HIGHLIGHT_STORAGE_KEY, enabled);
       }
 
       function updateEditorHighlightState() {
@@ -2281,6 +2335,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           highlightSelect.value = editorHighlightEnabled ? "on" : "off";
         }
         updateEditorHighlightState();
+      }
+
+      function setResponseHighlightEnabled(enabled) {
+        responseHighlightEnabled = Boolean(enabled);
+        persistResponseHighlightEnabled(responseHighlightEnabled);
+        if (responseHighlightSelect) {
+          responseHighlightSelect.value = responseHighlightEnabled ? "on" : "off";
+        }
+        renderActiveResult();
       }
 
       function extractSection(markdown, title) {
@@ -2726,6 +2789,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         });
       }
 
+      if (responseHighlightSelect) {
+        responseHighlightSelect.addEventListener("change", () => {
+          setResponseHighlightEnabled(responseHighlightSelect.value === "on");
+        });
+      }
+
       pullLatestBtn.addEventListener("click", () => {
         if (queuedLatestResponse) {
           if (applyLatestPayload(queuedLatestResponse)) {
@@ -2976,6 +3045,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const initialHighlightEnabled = readStoredEditorHighlightEnabled()
         || Boolean(highlightSelect && highlightSelect.value === "on");
       setEditorHighlightEnabled(initialHighlightEnabled);
+
+      const initialResponseHighlightEnabled = readStoredResponseHighlightEnabled()
+        || Boolean(responseHighlightSelect && responseHighlightSelect.value === "on");
+      setResponseHighlightEnabled(initialResponseHighlightEnabled);
 
       setEditorView(editorView);
       setRightView(rightView);

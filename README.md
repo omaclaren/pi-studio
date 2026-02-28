@@ -33,6 +33,7 @@ Status: experimental alpha.
   - critique: **Load critique (notes)** / **Load critique (full)**
 - File actions: **Save As…**, **Save Over**, **Load file in editor**
 - View toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
+- Optional markdown highlighting toggles for editor and response markdown views
 - Theme-aware browser UI based on current pi theme
 
 ## Commands
@@ -73,6 +74,7 @@ pi -e https://github.com/omaclaren/pi-studio
 - One studio request at a time.
 - Studio URLs include a token query parameter; avoid sharing full Studio URLs.
 - Preview panes render markdown via `pandoc` (`gfm+tex_math_dollars` → HTML5 + MathML), sanitized in-browser with `dompurify`.
+- Preview rendering normalizes Obsidian wiki-image syntax (`![[path]]`, `![[path|alt]]`) into standard markdown images.
 - Install pandoc for full preview rendering (`brew install pandoc` on macOS).
 - If `pandoc` is unavailable, preview falls back to plain markdown text with an inline warning.
 - Some screenshots may show the Grammarly browser widget. Grammarly is a separate browser extension and is not part of pi-studio, but it works alongside it.
