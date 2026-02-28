@@ -1143,10 +1143,91 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       font-size: 12px;
     }
 
+    .editor-highlight-wrap {
+      position: relative;
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      overflow: hidden;
+    }
+
+    .editor-highlight {
+      position: absolute;
+      inset: 0;
+      margin: 0;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px;
+      overflow: auto;
+      pointer-events: none;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text);
+      background: transparent;
+    }
+
     #sourceText {
+      position: relative;
+      z-index: 1;
       flex: 1 1 auto;
       min-height: 180px;
       max-height: none;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      resize: none;
+    }
+
+    #sourceText.highlight-active {
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+      caret-color: var(--text);
+      background: transparent;
+    }
+
+    #sourceText.highlight-active::selection {
+      background: var(--accent-soft);
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hl-heading {
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .hl-fence {
+      color: var(--muted);
+    }
+
+    .hl-code {
+      color: var(--ok);
+    }
+
+    .hl-list {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .hl-quote {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .hl-link {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+
+    .hl-url {
+      color: var(--muted);
     }
 
     #sourcePreview {
@@ -1407,9 +1488,16 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <button id="critiqueBtn" type="button">Critique editor text</button>
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
             <button id="copyDraftBtn" type="button">Copy editor</button>
+            <select id="highlightSelect" aria-label="Editor syntax highlighting">
+              <option value="off" selected>Highlight editor: Off</option>
+              <option value="on">Highlight editor: On</option>
+            </select>
           </div>
         </div>
-        <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
+        <div id="sourceEditorWrap" class="editor-highlight-wrap">
+          <pre id="sourceHighlight" class="editor-highlight" aria-hidden="true"></pre>
+          <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
+        </div>
         <div id="sourcePreview" class="panel-scroll rendered-markdown" hidden><pre class="plain-markdown"></pre></div>
       </div>
     </section>
@@ -1467,7 +1555,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       });
 
       try {
+      const sourceEditorWrapEl = document.getElementById("sourceEditorWrap");
       const sourceTextEl = document.getElementById("sourceText");
+      const sourceHighlightEl = document.getElementById("sourceHighlight");
       const sourcePreviewEl = document.getElementById("sourcePreview");
       const leftPaneEl = document.getElementById("leftPane");
       const rightPaneEl = document.getElementById("rightPane");
@@ -1494,6 +1584,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const sendEditorBtn = document.getElementById("sendEditorBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
+      const highlightSelect = document.getElementById("highlightSelect");
 
       const initialSourceState = {
         source: (document.body && document.body.dataset && document.body.dataset.initialSource) || "blank",
@@ -1524,9 +1615,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       };
       let activePane = "left";
       let paneFocusTarget = "off";
+      const EDITOR_HIGHLIGHT_MAX_CHARS = 80_000;
+      const EDITOR_HIGHLIGHT_STORAGE_KEY = "piStudio.editorHighlightEnabled";
       let sourcePreviewRenderTimer = null;
       let sourcePreviewRenderNonce = 0;
       let responsePreviewRenderNonce = 0;
+      let editorHighlightEnabled = false;
+      let editorHighlightRenderRaf = null;
 
       function getIdleStatus() {
         return "Ready. Edit text, then run or critique (insert annotation header if needed).";
@@ -1829,7 +1924,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       }
 
       function renderSourcePreview() {
-        scheduleSourcePreviewRender(0);
+        if (editorView === "preview") {
+          scheduleSourcePreviewRender(0);
+        }
+        if (editorHighlightEnabled && editorView === "markdown") {
+          scheduleEditorHighlightRender();
+        }
       }
 
       function renderActiveResult() {
@@ -1901,6 +2001,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         sendEditorBtn.disabled = uiBusy;
         sendRunBtn.disabled = uiBusy;
         copyDraftBtn.disabled = uiBusy;
+        if (highlightSelect) highlightSelect.disabled = uiBusy;
         editorViewSelect.disabled = uiBusy;
         rightViewSelect.disabled = uiBusy;
         followSelect.disabled = uiBusy;
@@ -1928,17 +2029,23 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       function setEditorView(nextView) {
         editorView = nextView === "preview" ? "preview" : "markdown";
         editorViewSelect.value = editorView;
-        sourceTextEl.hidden = editorView === "preview";
-        sourcePreviewEl.hidden = editorView !== "preview";
 
-        if (editorView !== "preview" && sourcePreviewRenderTimer) {
+        const showPreview = editorView === "preview";
+        if (sourceEditorWrapEl) {
+          sourceEditorWrapEl.style.display = showPreview ? "none" : "flex";
+        }
+        sourcePreviewEl.hidden = !showPreview;
+
+        if (!showPreview && sourcePreviewRenderTimer) {
           window.clearTimeout(sourcePreviewRenderTimer);
           sourcePreviewRenderTimer = null;
         }
 
-        if (editorView === "preview") {
+        if (showPreview) {
           renderSourcePreview();
         }
+
+        updateEditorHighlightState();
       }
 
       function setRightView(nextView) {
@@ -1967,6 +2074,213 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           .replace(/>/g, "&gt;")
           .replace(/\"/g, "&quot;")
           .replace(/'/g, "&#39;");
+      }
+
+      function wrapHighlight(className, text) {
+        return "<span class='" + className + "'>" + escapeHtml(String(text || "")) + "</span>";
+      }
+
+      function highlightInlineMarkdown(text) {
+        const source = String(text || "");
+        const pattern = /(\\x60[^\\x60]*\\x60)|(\\[[^\\]]+\\]\\([^)]+\\))/g;
+        let lastIndex = 0;
+        let out = "";
+
+        let match;
+        while ((match = pattern.exec(source)) !== null) {
+          const token = match[0] || "";
+          const start = typeof match.index === "number" ? match.index : 0;
+
+          if (start > lastIndex) {
+            out += escapeHtml(source.slice(lastIndex, start));
+          }
+
+          if (match[1]) {
+            out += wrapHighlight("hl-code", token);
+          } else if (match[2]) {
+            const linkMatch = token.match(/^\\[([^\\]]+)\\]\\(([^)]+)\\)$/);
+            if (linkMatch) {
+              out += wrapHighlight("hl-link", "[" + linkMatch[1] + "]");
+              out += "(" + wrapHighlight("hl-url", linkMatch[2]) + ")";
+            } else {
+              out += escapeHtml(token);
+            }
+          } else {
+            out += escapeHtml(token);
+          }
+
+          lastIndex = start + token.length;
+        }
+
+        if (lastIndex < source.length) {
+          out += escapeHtml(source.slice(lastIndex));
+        }
+
+        return out;
+      }
+
+      function highlightMarkdown(text) {
+        const lines = String(text || "").replace(/\\r\\n/g, "\\n").split("\\n");
+        const out = [];
+        let inFence = false;
+        let fenceChar = null;
+        let fenceLength = 0;
+
+        for (const line of lines) {
+          const fenceMatch = line.match(/^(\\s*)([\\x60]{3,}|~{3,})(.*)$/);
+          if (fenceMatch) {
+            const marker = fenceMatch[2] || "";
+            const markerChar = marker.charAt(0);
+            const markerLength = marker.length;
+
+            if (!inFence) {
+              inFence = true;
+              fenceChar = markerChar;
+              fenceLength = markerLength;
+            } else if (fenceChar === markerChar && markerLength >= fenceLength) {
+              inFence = false;
+              fenceChar = null;
+              fenceLength = 0;
+            }
+
+            out.push(wrapHighlight("hl-fence", line));
+            continue;
+          }
+
+          if (inFence) {
+            out.push(line.length > 0 ? wrapHighlight("hl-code", line) : "");
+            continue;
+          }
+
+          const headingMatch = line.match(/^(\\s{0,3})(#{1,6}\\s+)(.*)$/);
+          if (headingMatch) {
+            out.push(escapeHtml(headingMatch[1] || "") + wrapHighlight("hl-heading", (headingMatch[2] || "") + (headingMatch[3] || "")));
+            continue;
+          }
+
+          const quoteMatch = line.match(/^(\\s{0,3}>\\s?)(.*)$/);
+          if (quoteMatch) {
+            out.push(wrapHighlight("hl-quote", quoteMatch[1] || "") + highlightInlineMarkdown(quoteMatch[2] || ""));
+            continue;
+          }
+
+          const listMatch = line.match(/^(\\s*)([-*+]|\\d+\\.)(\\s+)(.*)$/);
+          if (listMatch) {
+            out.push(
+              escapeHtml(listMatch[1] || "")
+              + wrapHighlight("hl-list", listMatch[2] || "")
+              + escapeHtml(listMatch[3] || "")
+              + highlightInlineMarkdown(listMatch[4] || ""),
+            );
+            continue;
+          }
+
+          out.push(highlightInlineMarkdown(line));
+        }
+
+        return out.join("<br>");
+      }
+
+      function renderEditorHighlightNow() {
+        if (!sourceHighlightEl) return;
+        if (!editorHighlightEnabled || editorView !== "markdown") {
+          sourceHighlightEl.innerHTML = "";
+          return;
+        }
+
+        const text = sourceTextEl.value || "";
+        if (text.length > EDITOR_HIGHLIGHT_MAX_CHARS) {
+          sourceHighlightEl.textContent = text;
+          syncEditorHighlightScroll();
+          return;
+        }
+
+        sourceHighlightEl.innerHTML = highlightMarkdown(text);
+        syncEditorHighlightScroll();
+      }
+
+      function scheduleEditorHighlightRender() {
+        if (editorHighlightRenderRaf !== null) {
+          if (typeof window.cancelAnimationFrame === "function") {
+            window.cancelAnimationFrame(editorHighlightRenderRaf);
+          } else {
+            window.clearTimeout(editorHighlightRenderRaf);
+          }
+          editorHighlightRenderRaf = null;
+        }
+
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+
+        editorHighlightRenderRaf = schedule(() => {
+          editorHighlightRenderRaf = null;
+          renderEditorHighlightNow();
+        });
+      }
+
+      function syncEditorHighlightScroll() {
+        if (!sourceHighlightEl) return;
+        sourceHighlightEl.scrollTop = sourceTextEl.scrollTop;
+        sourceHighlightEl.scrollLeft = sourceTextEl.scrollLeft;
+      }
+
+      function readStoredEditorHighlightEnabled() {
+        if (!window.localStorage) return false;
+        try {
+          return window.localStorage.getItem(EDITOR_HIGHLIGHT_STORAGE_KEY) === "on";
+        } catch {
+          return false;
+        }
+      }
+
+      function persistEditorHighlightEnabled(enabled) {
+        if (!window.localStorage) return;
+        try {
+          window.localStorage.setItem(EDITOR_HIGHLIGHT_STORAGE_KEY, enabled ? "on" : "off");
+        } catch {
+          // ignore storage failures
+        }
+      }
+
+      function updateEditorHighlightState() {
+        const enabled = editorHighlightEnabled && editorView === "markdown";
+
+        sourceTextEl.classList.toggle("highlight-active", enabled);
+
+        if (sourceHighlightEl) {
+          sourceHighlightEl.hidden = !enabled;
+        }
+
+        if (!enabled) {
+          if (editorHighlightRenderRaf !== null) {
+            if (typeof window.cancelAnimationFrame === "function") {
+              window.cancelAnimationFrame(editorHighlightRenderRaf);
+            } else {
+              window.clearTimeout(editorHighlightRenderRaf);
+            }
+            editorHighlightRenderRaf = null;
+          }
+
+          if (sourceHighlightEl) {
+            sourceHighlightEl.innerHTML = "";
+            sourceHighlightEl.scrollTop = 0;
+            sourceHighlightEl.scrollLeft = 0;
+          }
+          return;
+        }
+
+        scheduleEditorHighlightRender();
+        syncEditorHighlightScroll();
+      }
+
+      function setEditorHighlightEnabled(enabled) {
+        editorHighlightEnabled = Boolean(enabled);
+        persistEditorHighlightEnabled(editorHighlightEnabled);
+        if (highlightSelect) {
+          highlightSelect.value = editorHighlightEnabled ? "on" : "off";
+        }
+        updateEditorHighlightState();
       }
 
       function extractSection(markdown, title) {
@@ -2406,6 +2720,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         updateResultActionButtons();
       });
 
+      if (highlightSelect) {
+        highlightSelect.addEventListener("change", () => {
+          setEditorHighlightEnabled(highlightSelect.value === "on");
+        });
+      }
+
       pullLatestBtn.addEventListener("click", () => {
         if (queuedLatestResponse) {
           if (applyLatestPayload(queuedLatestResponse)) {
@@ -2419,8 +2739,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       });
 
       sourceTextEl.addEventListener("input", () => {
-        scheduleSourcePreviewRender();
+        renderSourcePreview();
         updateResultActionButtons();
+      });
+
+      sourceTextEl.addEventListener("scroll", () => {
+        if (!editorHighlightEnabled || editorView !== "markdown") return;
+        syncEditorHighlightScroll();
       });
 
       insertHeaderBtn.addEventListener("click", () => {
@@ -2647,6 +2972,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       setSourceState(initialSourceState);
       refreshResponseUi();
       setActivePane("left");
+
+      const initialHighlightEnabled = readStoredEditorHighlightEnabled()
+        || Boolean(highlightSelect && highlightSelect.value === "on");
+      setEditorHighlightEnabled(initialHighlightEnabled);
+
       setEditorView(editorView);
       setRightView(rightView);
       renderSourcePreview();
