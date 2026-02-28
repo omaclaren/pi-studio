@@ -33,7 +33,7 @@ Status: experimental alpha.
   - critique: **Load critique (notes)** / **Load critique (full)**
 - File actions: **Save As…**, **Save file**, **Load file in editor**
 - View toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
-- Optional markdown highlighting toggles for editor and response markdown views (including fenced-code token colors for common languages)
+- Optional markdown highlighting toggles for editor and response markdown views
 - Theme-aware browser UI based on current pi theme
 
 ## Commands
