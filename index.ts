@@ -1477,9 +1477,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         <option value="markdown">Response: Markdown</option>
         <option value="preview" selected>Response: Preview</option>
       </select>
-      <button id="saveAsBtn" type="button">Save As…</button>
-      <button id="saveOverBtn" type="button" disabled>Save file</button>
-      <label class="file-label">Load file in editor<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
+      <button id="saveAsBtn" type="button" title="Save editor text to a new file path.">Save As…</button>
+      <button id="saveOverBtn" type="button" title="Overwrite current file with editor text." disabled>Save file</button>
+      <label class="file-label" title="Load a local file into editor text.">Load file in editor<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
     </div>
   </header>
 
