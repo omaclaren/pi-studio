@@ -1478,8 +1478,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <span id="syncBadge" class="source-badge sync-badge">No response loaded</span>
           </div>
           <div class="source-actions">
-            <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
             <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is.">Run editor text</button>
+            <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
             <select id="lensSelect" aria-label="Critique focus">
               <option value="auto" selected>Critique focus: Auto</option>
               <option value="writing">Critique focus: Writing</option>
