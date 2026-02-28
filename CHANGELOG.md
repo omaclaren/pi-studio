@@ -32,6 +32,7 @@ All notable changes to `pi-studio` are documented here.
 - Editor sync badge now tracks relation to latest response (`No response loaded`, `In sync with response`, `Edited since response`).
 - Footer continues to show explicit WS phase (`Connecting`, `Ready`, `Submitting`, `Disconnected`) alongside status text.
 - Running text and preparing annotated scaffolds are now separate explicit actions (no hidden header wrapping on send).
+- Renamed file-backed header action from **Save Over** to **Save file**, with tooltip showing the current overwrite target.
 - Critique-specific load actions now focus on notes/full views and are only shown for structured critique responses.
 - Studio still live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
 - Preview pane typography/style now follows the higher-fidelity `/preview-browser` rendering style more closely.

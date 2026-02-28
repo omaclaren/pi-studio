@@ -31,7 +31,7 @@ Status: experimental alpha.
 - Response load helpers:
   - non-critique: **Load response into editor**
   - critique: **Load critique (notes)** / **Load critique (full)**
-- File actions: **Save As…**, **Save Over**, **Load file in editor**
+- File actions: **Save As…**, **Save file**, **Load file in editor**
 - View toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
 - Optional markdown highlighting toggles for editor and response markdown views
 - Theme-aware browser UI based on current pi theme

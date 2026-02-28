@@ -1478,7 +1478,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         <option value="preview" selected>Response: Preview</option>
       </select>
       <button id="saveAsBtn" type="button">Save As…</button>
-      <button id="saveOverBtn" type="button" disabled>Save Over</button>
+      <button id="saveOverBtn" type="button" disabled>Save file</button>
       <label class="file-label">Load file in editor<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
     </div>
   </header>
@@ -2030,10 +2030,25 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         updateResultActionButtons();
       }
 
+      function updateSaveFileTooltip() {
+        if (!saveOverBtn) return;
+
+        const isFileBacked = sourceState.source === "file" && Boolean(sourceState.path);
+        if (isFileBacked) {
+          const target = sourceState.label || sourceState.path;
+          saveOverBtn.title = "Overwrite current file: " + target;
+          return;
+        }
+
+        saveOverBtn.title = "Save file is available after opening a file or using Save As…";
+      }
+
       function syncActionButtons() {
+        const canSaveOver = sourceState.source === "file" && Boolean(sourceState.path);
+
         fileInput.disabled = uiBusy;
         saveAsBtn.disabled = uiBusy;
-        saveOverBtn.disabled = uiBusy || !(sourceState.source === "file" && sourceState.path);
+        saveOverBtn.disabled = uiBusy || !canSaveOver;
         sendEditorBtn.disabled = uiBusy;
         sendRunBtn.disabled = uiBusy;
         copyDraftBtn.disabled = uiBusy;
@@ -2045,6 +2060,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         insertHeaderBtn.disabled = uiBusy;
         critiqueBtn.disabled = uiBusy;
         lensSelect.disabled = uiBusy;
+        updateSaveFileTooltip();
         updateResultActionButtons();
       }
 
@@ -2930,7 +2946,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
       saveOverBtn.addEventListener("click", () => {
         if (!(sourceState.source === "file" && sourceState.path)) {
-          setStatus("Save Over is only available when source is a file path.", "warning");
+          setStatus("Save file is only available when source is a file path.", "warning");
           return;
         }
 
@@ -3333,7 +3349,7 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, {
 					type: "error",
 					requestId: msg.requestId,
-					message: "Save Over is only available for file-backed documents.",
+					message: "Save file is only available for file-backed documents.",
 				});
 				return;
 			}

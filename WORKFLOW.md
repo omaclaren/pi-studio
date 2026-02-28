@@ -74,10 +74,10 @@ Rules:
 
 ## Required UI elements
 
-- Header actions: **Save As…**, **Save Over** (file-backed), **Load file in editor**
+- Header actions: **Save As…**, **Save file** (file-backed), **Load file in editor**
 - Header view toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
 - Preview mode uses server-side `pandoc` rendering (math-aware) with plain-markdown fallback when renderer is unavailable.
-- Editor actions: **Insert annotation header**, **Run editor text**, **Critique editor text** (+ critique focus), **Send to pi editor**, **Copy editor**
+- Editor actions: **Insert annotation header**, **Run editor text**, **Critique editor text** (+ critique focus), **Send to pi editor**, **Copy editor text**
 - Response actions include `Auto-update response: On|Off` + **Get latest response**
 - Source badge: `blank | last model response | file <path> | upload`
 - Response badge: `none | assistant response | assistant critique` (+ timestamp)
