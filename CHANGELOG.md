@@ -12,7 +12,7 @@ All notable changes to `pi-studio` are documented here.
   - **Load response into editor** (for non-critique responses)
   - **Load critique (notes)**
   - **Load critique (full)**
-  - **Copy response**
+  - **Copy response text**
 - Independent Markdown/Preview toggles for Editor and right pane.
 - `Auto-update response: On|Off` + `Get latest response` controls for terminal/editor-composability.
 - Source action: **Run editor text** to submit current editor text directly to the model.

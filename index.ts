@@ -1537,7 +1537,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           <button id="loadResponseBtn" type="button">Load response into editor</button>
           <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique (notes)</button>
           <button id="loadCritiqueFullBtn" type="button" hidden>Load critique (full)</button>
-          <button id="copyResponseBtn" type="button">Copy response</button>
+          <button id="copyResponseBtn" type="button">Copy response text</button>
         </div>
       </div>
     </section>
@@ -2894,7 +2894,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
         try {
           await navigator.clipboard.writeText(latestResponseMarkdown);
-          setStatus("Copied response.", "success");
+          setStatus("Copied response text.", "success");
         } catch (error) {
           setStatus("Clipboard write failed.", "warning");
         }
