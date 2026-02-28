@@ -23,6 +23,7 @@ All notable changes to `pi-studio` are documented here.
 - **Load file in editor** action in top controls (browser file picker into editor).
 - README screenshot gallery for dark/light workspace and critique/annotation views.
 - Response-side markdown highlighting toggle (`Highlight markdown: Off|On`) in `Response: Markdown` view, with local preference persistence.
+- Markdown highlighter now applies lightweight fenced-code token colors for common languages (`js/ts`, `python`, `bash/sh`, `json`).
 - Obsidian wiki-image syntax normalization (`![[path]]`, `![[path|alt]]`) before pandoc preview rendering.
 
 ### Changed
@@ -36,6 +37,7 @@ All notable changes to `pi-studio` are documented here.
 - Critique-specific load actions now focus on notes/full views and are only shown for structured critique responses.
 - Studio still live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
 - Preview pane typography/style now follows the higher-fidelity `/preview-browser` rendering style more closely.
+- Preview mode now uses pandoc code highlighting output for syntax-colored code blocks.
 - Hardened Studio preview HTTP handling and added client-side preview-request timeout to avoid stuck "Rendering preview…" states.
 
 ### Fixed

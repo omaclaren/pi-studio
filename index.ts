@@ -499,7 +499,7 @@ function normalizeObsidianImages(markdown: string): string {
 
 async function renderStudioMarkdownWithPandoc(markdown: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const args = ["-f", "gfm+tex_math_dollars-raw_html", "-t", "html5", "--mathml", "--no-highlight"];
+	const args = ["-f", "gfm+tex_math_dollars-raw_html", "-t", "html5", "--mathml"];
 	const normalizedMarkdown = normalizeObsidianImages(normalizeMathDelimiters(markdown));
 
 	return await new Promise<string>((resolve, reject) => {
@@ -1217,6 +1217,29 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       color: var(--ok);
     }
 
+    .hl-code-kw {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .hl-code-str {
+      color: var(--ok);
+    }
+
+    .hl-code-num {
+      color: var(--warn);
+    }
+
+    .hl-code-com {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .hl-code-var,
+    .hl-code-key {
+      color: var(--accent);
+    }
+
     .hl-list {
       color: var(--accent);
       font-weight: 600;
@@ -1327,6 +1350,48 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 0.12em 0.35em;
+    }
+
+    .rendered-markdown code span.kw,
+    .rendered-markdown code span.cf,
+    .rendered-markdown code span.im,
+    .rendered-markdown code span.dt {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .rendered-markdown code span.fu,
+    .rendered-markdown code span.bu,
+    .rendered-markdown code span.va,
+    .rendered-markdown code span.ot {
+      color: var(--accent);
+    }
+
+    .rendered-markdown code span.st,
+    .rendered-markdown code span.ss,
+    .rendered-markdown code span.sc {
+      color: var(--ok);
+    }
+
+    .rendered-markdown code span.dv,
+    .rendered-markdown code span.bn,
+    .rendered-markdown code span.fl {
+      color: var(--warn);
+    }
+
+    .rendered-markdown code span.co {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .rendered-markdown code span.op {
+      color: var(--text);
+    }
+
+    .rendered-markdown code span.er,
+    .rendered-markdown code span.al {
+      color: var(--error);
+      font-weight: 600;
     }
 
     .rendered-markdown table {
@@ -2173,12 +2238,119 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         return out;
       }
 
+      function normalizeFenceLanguage(info) {
+        const raw = String(info || "").trim();
+        if (!raw) return "";
+
+        const first = raw.split(/\\s+/)[0].replace(/^\\./, "").toLowerCase();
+
+        if (first === "js" || first === "javascript" || first === "jsx" || first === "node") return "javascript";
+        if (first === "ts" || first === "typescript" || first === "tsx") return "typescript";
+        if (first === "py" || first === "python") return "python";
+        if (first === "sh" || first === "bash" || first === "zsh" || first === "shell") return "bash";
+        if (first === "json" || first === "jsonc") return "json";
+
+        return "";
+      }
+
+      function highlightCodeTokens(line, pattern, classifyMatch) {
+        const source = String(line || "");
+        let out = "";
+        let lastIndex = 0;
+        pattern.lastIndex = 0;
+
+        let match;
+        while ((match = pattern.exec(source)) !== null) {
+          const token = match[0] || "";
+          const start = typeof match.index === "number" ? match.index : 0;
+
+          if (start > lastIndex) {
+            out += escapeHtml(source.slice(lastIndex, start));
+          }
+
+          const className = classifyMatch(match) || "hl-code";
+          out += wrapHighlight(className, token);
+
+          lastIndex = start + token.length;
+          if (token.length === 0) {
+            pattern.lastIndex += 1;
+          }
+        }
+
+        if (lastIndex < source.length) {
+          out += escapeHtml(source.slice(lastIndex));
+        }
+
+        return out;
+      }
+
+      function highlightCodeLine(line, language) {
+        const source = String(line || "");
+        const lang = normalizeFenceLanguage(language);
+
+        if (!lang) {
+          return wrapHighlight("hl-code", source);
+        }
+
+        if (lang === "javascript" || lang === "typescript") {
+          const jsPattern = /(\\/\\/.*$)|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')|(\\b(?:const|let|var|function|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|new|class|extends|import|from|export|default|async|await|true|false|null|undefined|typeof|instanceof)\\b)|(\\b\\d+(?:\\.\\d+)?\\b)/g;
+          const highlighted = highlightCodeTokens(source, jsPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        if (lang === "python") {
+          const pyPattern = /(#.*$)|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')|(\\b(?:def|class|return|if|elif|else|for|while|try|except|finally|import|from|as|with|lambda|yield|True|False|None|and|or|not|in|is|pass|break|continue|raise|global|nonlocal|assert)\\b)|(\\b\\d+(?:\\.\\d+)?\\b)/g;
+          const highlighted = highlightCodeTokens(source, pyPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        if (lang === "bash") {
+          const shPattern = /(#.*$)|("(?:[^"\\\\]|\\\\.)*"|'[^']*')|(\\$\\{[^}]+\\}|\\$[A-Za-z_][A-Za-z0-9_]*)|(\\b(?:if|then|else|fi|for|in|do|done|case|esac|function|local|export|readonly|return|break|continue|while|until)\\b)|(\\b\\d+\\b)/g;
+          const highlighted = highlightCodeTokens(source, shPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-var";
+            if (match[4]) return "hl-code-kw";
+            if (match[5]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        if (lang === "json") {
+          const jsonPattern = /("(?:[^"\\\\]|\\\\.)*"\\s*:)|("(?:[^"\\\\]|\\\\.)*")|(\\b(?:true|false|null)\\b)|(\\b-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b)/g;
+          const highlighted = highlightCodeTokens(source, jsonPattern, (match) => {
+            if (match[1]) return "hl-code-key";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        return wrapHighlight("hl-code", source);
+      }
+
       function highlightMarkdown(text) {
         const lines = String(text || "").replace(/\\r\\n/g, "\\n").split("\\n");
         const out = [];
         let inFence = false;
         let fenceChar = null;
         let fenceLength = 0;
+        let fenceLanguage = "";
 
         for (const line of lines) {
           const fenceMatch = line.match(/^(\\s*)([\\x60]{3,}|~{3,})(.*)$/);
@@ -2191,10 +2363,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
               inFence = true;
               fenceChar = markerChar;
               fenceLength = markerLength;
+              fenceLanguage = normalizeFenceLanguage(fenceMatch[3] || "");
             } else if (fenceChar === markerChar && markerLength >= fenceLength) {
               inFence = false;
               fenceChar = null;
               fenceLength = 0;
+              fenceLanguage = "";
             }
 
             out.push(wrapHighlight("hl-fence", line));
@@ -2202,7 +2376,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           }
 
           if (inFence) {
-            out.push(line.length > 0 ? wrapHighlight("hl-code", line) : "");
+            out.push(line.length > 0 ? highlightCodeLine(line, fenceLanguage) : "");
             continue;
           }
 
