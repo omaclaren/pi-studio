@@ -1502,7 +1502,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             </select>
             <button id="critiqueBtn" type="button">Critique editor text</button>
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
-            <button id="copyDraftBtn" type="button">Copy editor</button>
+            <button id="copyDraftBtn" type="button">Copy editor text</button>
             <select id="highlightSelect" aria-label="Editor syntax highlighting">
               <option value="off" selected>Highlight editor: Off</option>
               <option value="on">Highlight editor: On</option>
