@@ -72,6 +72,7 @@ pi -e https://github.com/omaclaren/pi-studio
 
 - Local-only server (`127.0.0.1`) with rotating session tokens.
 - One studio request at a time.
+- Pi Studio is currently optimized for markdown workflows (model responses, plans, and notes), including fenced code blocks. Pure code files are supported, but highlighting is tuned for markdown and fenced blocks rather than full-file language mode.
 - Studio URLs include a token query parameter; avoid sharing full Studio URLs.
 - Preview panes render markdown via `pandoc` (`gfm+tex_math_dollars` → HTML5 + MathML), including pandoc code syntax highlighting, sanitized in-browser with `dompurify`.
 - Preview rendering normalizes Obsidian wiki-image syntax (`![[path]]`, `![[path|alt]]`) into standard markdown images.
