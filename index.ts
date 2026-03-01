@@ -1569,8 +1569,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
             <button id="copyDraftBtn" type="button">Copy editor text</button>
             <select id="highlightSelect" aria-label="Editor syntax highlighting">
-              <option value="off" selected>Highlight markdown: Off</option>
-              <option value="on">Highlight markdown: On</option>
+              <option value="off">Highlight markdown: Off</option>
+              <option value="on" selected>Highlight markdown: On</option>
             </select>
           </div>
         </div>
@@ -1595,8 +1595,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <option value="off">Auto-update response: Off</option>
           </select>
           <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
-            <option value="off" selected>Highlight markdown: Off</option>
-            <option value="on">Highlight markdown: On</option>
+            <option value="off">Highlight markdown: Off</option>
+            <option value="on" selected>Highlight markdown: On</option>
           </select>
           <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
           <button id="loadResponseBtn" type="button">Load response into editor</button>
@@ -2454,11 +2454,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       }
 
       function readStoredToggle(storageKey) {
-        if (!window.localStorage) return false;
+        if (!window.localStorage) return null;
         try {
-          return window.localStorage.getItem(storageKey) === "on";
+          const value = window.localStorage.getItem(storageKey);
+          if (value === "on") return true;
+          if (value === "off") return false;
+          return null;
         } catch {
-          return false;
+          return null;
         }
       }
 
@@ -3232,12 +3235,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       refreshResponseUi();
       setActivePane("left");
 
-      const initialHighlightEnabled = readStoredEditorHighlightEnabled()
-        || Boolean(highlightSelect && highlightSelect.value === "on");
+      const storedEditorHighlightEnabled = readStoredEditorHighlightEnabled();
+      const initialHighlightEnabled = storedEditorHighlightEnabled ?? Boolean(highlightSelect && highlightSelect.value === "on");
       setEditorHighlightEnabled(initialHighlightEnabled);
 
-      const initialResponseHighlightEnabled = readStoredResponseHighlightEnabled()
-        || Boolean(responseHighlightSelect && responseHighlightSelect.value === "on");
+      const storedResponseHighlightEnabled = readStoredResponseHighlightEnabled();
+      const initialResponseHighlightEnabled = storedResponseHighlightEnabled ?? Boolean(responseHighlightSelect && responseHighlightSelect.value === "on");
       setResponseHighlightEnabled(initialResponseHighlightEnabled);
 
       setEditorView(editorView);
