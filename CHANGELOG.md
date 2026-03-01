@@ -25,6 +25,7 @@ All notable changes to `pi-studio` are documented here.
 - Response-side markdown highlighting toggle (`Highlight markdown: Off|On`) in `Response: Markdown` view, with local preference persistence.
 - Markdown highlighter now applies lightweight fenced-code token colors for common languages (`js/ts`, `python`, `bash/sh`, `json`).
 - Obsidian wiki-image syntax normalization (`![[path]]`, `![[path|alt]]`) before pandoc preview rendering.
+- Client-side Mermaid rendering for fenced `mermaid` code blocks in both Preview panes.
 
 ### Changed
 - Removed Annotate/Critique tabs and related mode state.
@@ -47,6 +48,7 @@ All notable changes to `pi-studio` are documented here.
 - `respondText` now includes `X-Content-Type-Options: nosniff` for consistency with JSON responses.
 - If `dompurify` is unavailable, preview now falls back to escaped plain markdown instead of injecting unsanitized HTML.
 - Preview sanitization now preserves MathML profile and strips MathML annotation tags to avoid duplicate raw TeX text beside rendered equations.
+- Preview now shows an inline warning when Mermaid is unavailable or diagram rendering fails, instead of failing silently.
 
 ### Changed
 - Added npm metadata fields (`repository`, `homepage`, `bugs`) so npm package page links to GitHub.

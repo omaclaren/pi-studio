@@ -1424,6 +1424,17 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       overflow-y: hidden;
     }
 
+    .rendered-markdown .mermaid-container {
+      text-align: center;
+      margin: 1em 0;
+      overflow-x: auto;
+    }
+
+    .rendered-markdown .mermaid-container svg {
+      max-width: 100%;
+      height: auto;
+    }
+
     .plain-markdown {
       margin: 0;
       white-space: pre-wrap;
@@ -1451,6 +1462,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       color: var(--warn);
       margin-bottom: 0.75em;
       font-size: 12px;
+    }
+
+    .preview-warning {
+      color: var(--warn);
+      margin-top: 0.75em;
+      font-size: 12px;
+      font-style: italic;
     }
 
     .marker {
@@ -1710,6 +1728,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       let editorHighlightEnabled = false;
       let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
+      const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      const MERMAID_THEME = "${style.mode === "dark" ? "dark" : "default"}";
+      const MERMAID_UNAVAILABLE_MESSAGE = "Mermaid renderer unavailable. Showing mermaid blocks as code.";
+      const MERMAID_RENDER_FAIL_MESSAGE = "Mermaid render failed. Showing diagram source text.";
+      let mermaidModulePromise = null;
+      let mermaidInitialized = false;
 
       function getIdleStatus() {
         return "Ready. Edit text, then run or critique (insert annotation header if needed).";
@@ -1906,6 +1930,96 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         return buildPreviewErrorHtml("Preview sanitizer unavailable. Showing plain markdown.", markdown);
       }
 
+      function appendMermaidNotice(targetEl, message) {
+        if (!targetEl || typeof targetEl.querySelector !== "function" || typeof targetEl.appendChild !== "function") {
+          return;
+        }
+
+        if (targetEl.querySelector(".preview-mermaid-warning")) {
+          return;
+        }
+
+        const warningEl = document.createElement("div");
+        warningEl.className = "preview-warning preview-mermaid-warning";
+        warningEl.textContent = String(message || MERMAID_RENDER_FAIL_MESSAGE);
+        targetEl.appendChild(warningEl);
+      }
+
+      async function getMermaidApi() {
+        if (mermaidModulePromise) {
+          return mermaidModulePromise;
+        }
+
+        mermaidModulePromise = import(MERMAID_CDN_URL)
+          .then((module) => {
+            const mermaidApi = module && module.default ? module.default : null;
+            if (!mermaidApi) {
+              throw new Error("Mermaid module did not expose a default export.");
+            }
+
+            if (!mermaidInitialized) {
+              mermaidApi.initialize({
+                startOnLoad: false,
+                theme: MERMAID_THEME,
+              });
+              mermaidInitialized = true;
+            }
+
+            return mermaidApi;
+          })
+          .catch((error) => {
+            mermaidModulePromise = null;
+            throw error;
+          });
+
+        return mermaidModulePromise;
+      }
+
+      async function renderMermaidInElement(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
+
+        const mermaidBlocks = targetEl.querySelectorAll("pre.mermaid");
+        if (!mermaidBlocks || mermaidBlocks.length === 0) return;
+
+        let mermaidApi;
+        try {
+          mermaidApi = await getMermaidApi();
+        } catch (error) {
+          console.error("Mermaid module load failed:", error);
+          appendMermaidNotice(targetEl, MERMAID_UNAVAILABLE_MESSAGE);
+          return;
+        }
+
+        mermaidBlocks.forEach((preEl) => {
+          const codeEl = preEl.querySelector("code");
+          const source = codeEl ? codeEl.textContent : preEl.textContent;
+
+          const wrapper = document.createElement("div");
+          wrapper.className = "mermaid-container";
+
+          const diagramEl = document.createElement("div");
+          diagramEl.className = "mermaid";
+          diagramEl.textContent = source || "";
+
+          wrapper.appendChild(diagramEl);
+          preEl.replaceWith(wrapper);
+        });
+
+        const diagramNodes = Array.from(targetEl.querySelectorAll(".mermaid"));
+        if (diagramNodes.length === 0) return;
+
+        try {
+          await mermaidApi.run({ nodes: diagramNodes });
+        } catch (error) {
+          try {
+            await mermaidApi.run();
+          } catch (fallbackError) {
+            console.error("Mermaid render failed:", fallbackError || error);
+            appendMermaidNotice(targetEl, MERMAID_RENDER_FAIL_MESSAGE);
+          }
+        }
+      }
+
       async function renderMarkdownWithPandoc(markdown) {
         const token = getToken();
         if (!token) {
@@ -1976,6 +2090,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           }
 
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
+          await renderMermaidInElement(targetEl);
         } catch (error) {
           if (pane === "source") {
             if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
