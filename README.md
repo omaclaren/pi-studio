@@ -10,10 +10,6 @@ Status: experimental alpha.
 
 ![Dark workspace](./assets/screenshots/dark-workspace.png)
 
-**Structured critique — dark** (assessment + numbered critiques with rendered math, "Edited since response" sync badge)
-
-![Dark critique](./assets/screenshots/dark-critique.png)
-
 **Markdown workspace — light**
 
 ![Light workspace](./assets/screenshots/light-workspace.png)
@@ -21,6 +17,10 @@ Status: experimental alpha.
 **Math rendering — dark** (LaTeX source → MathML: PDEs, matrices, display equations)
 
 ![Dark math](./assets/screenshots/dark-math.png)
+
+**Structured critique — dark** (assessment + numbered critiques with rendered math, "Edited since response" sync badge)
+
+![Dark critique](./assets/screenshots/dark-critique.png)
 
 **Math rendering — light**
 
