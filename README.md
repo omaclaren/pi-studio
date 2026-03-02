@@ -50,9 +50,10 @@ Status: experimental alpha.
 - **Critique editor text** requests structured critique (auto/writing/code focus)
 - Response load helpers:
   - non-critique: **Load response into editor**
-  - critique: **Load critique (notes)** / **Load critique (full)**
+  - critique: **Load critique notes into editor** / **Load full critique into editor**
 - File actions: **Save As…**, **Save file**, **Load file content**
-- View toggles: `Editor: Raw|Preview`, `Response: Raw|Preview`
+- View toggles: `Left: Editor (Raw|Preview)`, `Right: Response (Raw|Preview) | Editor (Preview)`
+- **Editor Preview in response pane**: side-by-side source/rendered view (Overleaf-style) — select `Right: Editor (Preview)` to render editor text in the right pane with live debounced updates
 - Preview mode supports MathML equations and Mermaid fenced diagrams
 - **Language-aware syntax highlighting** with selectable language mode:
   - Markdown (default): headings, links, code fences, lists, quotes, inline code

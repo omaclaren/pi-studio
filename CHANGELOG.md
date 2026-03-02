@@ -2,6 +2,20 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.3.0] — 2026-03-02
+
+### Added
+- **Editor Preview in response pane**: new `Right: Editor (Preview)` view mode renders editor text in the right pane with debounced live updates — enables Overleaf-style side-by-side source/rendered editing without a model round-trip.
+- Code-language aware: Editor Preview renders syntax-highlighted code when a non-markdown language is selected.
+- Response badge shows "Previewing: editor text" in editor-preview mode, with "· response updated HH:MM:SS" when a model response arrives in the background.
+- Right pane section header updates to "Editor Preview" when in editor-preview mode.
+
+### Changed
+- View toggle labels now use `Left: Source (Mode)` / `Right: Source (Mode)` format for unambiguous pane identification (e.g., `Left: Editor (Raw)`, `Right: Response (Preview)`, `Right: Editor (Preview)`).
+- Sync badge wording: `Edited since response` → `Out of sync with response` (direction-neutral, accurate regardless of which side changed).
+- Critique load buttons now include destination: `Load critique notes into editor` / `Load full critique into editor` (consistent with `Load response into editor`).
+- Critique loaded-state labels updated: `Critique (full) already in editor` → `Full critique already in editor`.
+
 ## [0.2.4] — 2026-03-02
 
 ### Changed

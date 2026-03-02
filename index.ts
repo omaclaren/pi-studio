@@ -1908,12 +1908,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     <h1><span class="app-logo" aria-hidden="true">π</span> Pi Studio <span class="app-subtitle">Feedback Workspace</span></h1>
     <div class="controls">
       <select id="editorViewSelect" aria-label="Editor view mode">
-        <option value="markdown" selected>Editor: Raw</option>
-        <option value="preview">Editor: Preview</option>
+        <option value="markdown" selected>Left: Editor (Raw)</option>
+        <option value="preview">Left: Editor (Preview)</option>
       </select>
       <select id="rightViewSelect" aria-label="Response view mode">
-        <option value="markdown">Response: Raw</option>
-        <option value="preview" selected>Response: Preview</option>
+        <option value="markdown">Right: Response (Raw)</option>
+        <option value="preview" selected>Right: Response (Preview)</option>
+        <option value="editor-preview">Right: Editor (Preview)</option>
       </select>
       <button id="saveAsBtn" type="button" title="Save editor text to a new file path.">Save As…</button>
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor text." disabled>Save file</button>
@@ -1988,8 +1989,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           </select>
           <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
           <button id="loadResponseBtn" type="button">Load response into editor</button>
-          <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique (notes)</button>
-          <button id="loadCritiqueFullBtn" type="button" hidden>Load critique (full)</button>
+          <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
+          <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>
           <button id="copyResponseBtn" type="button">Copy response text</button>
         </div>
       </div>
@@ -2098,6 +2099,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       let sourcePreviewRenderTimer = null;
       let sourcePreviewRenderNonce = 0;
       let responsePreviewRenderNonce = 0;
+      let responseEditorPreviewTimer = null;
       let editorHighlightEnabled = false;
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
@@ -2242,6 +2244,18 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       function updateReferenceBadge() {
         if (!referenceBadgeEl) return;
 
+        if (rightView === "editor-preview") {
+          const hasResponse = Boolean(latestResponseMarkdown && latestResponseMarkdown.trim());
+          if (hasResponse) {
+            const time = formatReferenceTime(latestResponseTimestamp);
+            const suffix = time ? " · response updated " + time : " · response available";
+            referenceBadgeEl.textContent = "Previewing: editor text" + suffix;
+          } else {
+            referenceBadgeEl.textContent = "Previewing: editor text";
+          }
+          return;
+        }
+
         const hasResponse = Boolean(latestResponseMarkdown && latestResponseMarkdown.trim());
         if (!hasResponse) {
           referenceBadgeEl.textContent = "Latest response: none";
@@ -2285,7 +2299,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           syncBadgeEl.classList.add("sync");
           syncBadgeEl.classList.remove("edited");
         } else {
-          syncBadgeEl.textContent = "Edited since response";
+          syncBadgeEl.textContent = "Out of sync with response";
           syncBadgeEl.classList.add("edited");
           syncBadgeEl.classList.remove("sync");
         }
@@ -2470,7 +2484,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           if (pane === "source") {
             if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
           } else {
-            if (nonce !== responsePreviewRenderNonce || rightView !== "preview") return;
+            if (nonce !== responsePreviewRenderNonce || (rightView !== "preview" && rightView !== "editor-preview")) return;
           }
 
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
@@ -2479,7 +2493,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           if (pane === "source") {
             if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
           } else {
-            if (nonce !== responsePreviewRenderNonce || rightView !== "preview") return;
+            if (nonce !== responsePreviewRenderNonce || (rightView !== "preview" && rightView !== "editor-preview")) return;
           }
 
           const detail = error && error.message ? error.message : String(error || "unknown error");
@@ -2521,9 +2535,43 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         if (editorHighlightEnabled && editorView === "markdown") {
           scheduleEditorHighlightRender();
         }
+        if (rightView === "editor-preview") {
+          scheduleResponseEditorPreviewRender(0);
+        }
+      }
+
+      function scheduleResponseEditorPreviewRender(delayMs) {
+        if (responseEditorPreviewTimer) {
+          window.clearTimeout(responseEditorPreviewTimer);
+          responseEditorPreviewTimer = null;
+        }
+
+        if (rightView !== "editor-preview") return;
+
+        const delay = typeof delayMs === "number" ? Math.max(0, delayMs) : 180;
+        responseEditorPreviewTimer = window.setTimeout(() => {
+          responseEditorPreviewTimer = null;
+          renderActiveResult();
+        }, delay);
       }
 
       function renderActiveResult() {
+        if (rightView === "editor-preview") {
+          const editorText = sourceTextEl.value || "";
+          if (!editorText.trim()) {
+            critiqueViewEl.innerHTML = "<pre class='plain-markdown'>Editor is empty.</pre>";
+            return;
+          }
+          if (editorLanguage && editorLanguage !== "markdown") {
+            critiqueViewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(editorText, editorLanguage) + "</div>";
+            return;
+          }
+          const nonce = ++responsePreviewRenderNonce;
+          critiqueViewEl.innerHTML = "<div class='preview-loading'>Rendering preview…</div>";
+          void applyRenderedMarkdown(critiqueViewEl, editorText, "response", nonce);
+          return;
+        }
+
         const markdown = latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
           critiqueViewEl.innerHTML = "<pre class='plain-markdown'>No response yet. Run editor text or critique editor text.</pre>";
@@ -2570,10 +2618,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
 
         loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
-        loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique (notes)";
+        loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
 
         loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded;
-        loadCritiqueFullBtn.textContent = responseLoaded ? "Critique (full) already in editor" : "Load critique (full)";
+        loadCritiqueFullBtn.textContent = responseLoaded ? "Full critique already in editor" : "Load full critique into editor";
 
         copyResponseBtn.disabled = uiBusy || !hasResponse;
 
@@ -2589,7 +2637,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         }
 
         if (rightSectionHeaderEl) {
-          rightSectionHeaderEl.textContent = "Response";
+          rightSectionHeaderEl.textContent = rightView === "editor-preview" ? "Editor Preview" : "Response";
         }
 
         updateSourceBadge();
@@ -2672,9 +2720,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       }
 
       function setRightView(nextView) {
-        rightView = nextView === "preview" ? "preview" : "markdown";
+        rightView = nextView === "preview" ? "preview" : (nextView === "editor-preview" ? "editor-preview" : "markdown");
         rightViewSelect.value = rightView;
-        renderActiveResult();
+
+        if (rightView !== "editor-preview" && responseEditorPreviewTimer) {
+          window.clearTimeout(responseEditorPreviewTimer);
+          responseEditorPreviewTimer = null;
+        }
+
+        refreshResponseUi();
         syncActionButtons();
       }
 
@@ -3748,8 +3802,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
         sourceTextEl.value = latestResponseMarkdown;
         renderSourcePreview();
-        setSourceState({ source: "blank", label: "critique (full)", path: null });
-        setStatus("Loaded critique (full) into editor.", "success");
+        setSourceState({ source: "blank", label: "full critique", path: null });
+        setStatus("Loaded full critique into editor.", "success");
       });
 
       copyResponseBtn.addEventListener("click", async () => {
