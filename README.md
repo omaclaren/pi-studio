@@ -6,7 +6,7 @@ Status: experimental alpha.
 
 ## Screenshots
 
-**Markdown workspace — dark** (syntax-highlighted editor + rendered preview with code blocks, inline math, blockquotes)
+**Markdown workspace — dark** (syntax-highlighted editor + rendered preview with Julia code block, inline math, blockquotes)
 
 ![Dark workspace](./assets/screenshots/dark-workspace.png)
 
@@ -14,7 +14,7 @@ Status: experimental alpha.
 
 ![Light workspace](./assets/screenshots/light-workspace.png)
 
-**Math rendering** (LaTeX source → MathML: PDEs, matrices, display equations)
+**Math rendering — dark** (LaTeX source → MathML: PDEs, matrices, display equations)
 
 ![Dark math](./assets/screenshots/dark-math.png)
 
@@ -22,11 +22,11 @@ Status: experimental alpha.
 
 ![Light math](./assets/screenshots/light-math.png)
 
-**Mermaid diagrams** (fenced mermaid block → rendered flowchart with theme-aware colors)
+**Mermaid diagrams — dark** (fenced mermaid block → rendered flowchart with theme-aware colors)
 
 ![Dark mermaid](./assets/screenshots/dark-mermaid.png)
 
-**Code mode — dark** (TypeScript file with language-aware syntax highlighting, auto-detected from file extension)
+**Code mode — dark** (TypeScript file loaded with language auto-detected from extension)
 
 ![Dark code mode](./assets/screenshots/dark-code-mode.png)
 
@@ -34,7 +34,7 @@ Status: experimental alpha.
 
 ![Light code mode](./assets/screenshots/light-code-mode.png)
 
-**Fenced code highlighting** (Julia code block inside markdown with token coloring)
+**Julia fenced code — dark** (token coloring for fenced code blocks inside markdown)
 
 ![Dark Julia fenced](./assets/screenshots/dark-julia-fenced.png)
 
