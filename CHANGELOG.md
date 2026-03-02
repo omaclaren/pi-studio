@@ -2,10 +2,11 @@
 
 All notable changes to `pi-studio` are documented here.
 
-## [0.2.2] — 2026-03-02
+## [0.2.3] — 2026-03-02
 
 ### Fixed
 - Corrected screenshot-to-label mapping in README (files were copied to wrong filenames).
+- Removed redundant Julia fenced-code screenshot (already shown in dark workspace).
 
 ## [0.2.1] — 2026-03-02
 

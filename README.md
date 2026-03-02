@@ -34,10 +34,6 @@ Status: experimental alpha.
 
 ![Light code mode](./assets/screenshots/light-code-mode.png)
 
-**Julia fenced code — dark** (token coloring for fenced code blocks inside markdown)
-
-![Dark Julia fenced](./assets/screenshots/dark-julia-fenced.png)
-
 ## Features
 
 - Single workspace: Editor (left) + Response (right)
