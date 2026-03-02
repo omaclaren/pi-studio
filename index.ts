@@ -112,6 +112,7 @@ interface StudioPalette {
 	panel: string;
 	panel2: string;
 	border: string;
+	borderMuted: string;
 	text: string;
 	muted: string;
 	accent: string;
@@ -124,6 +125,25 @@ interface StudioPalette {
 	accentSoftStrong: string;
 	okBorder: string;
 	warnBorder: string;
+	mdHeading: string;
+	mdLink: string;
+	mdLinkUrl: string;
+	mdCode: string;
+	mdCodeBlock: string;
+	mdCodeBlockBorder: string;
+	mdQuote: string;
+	mdQuoteBorder: string;
+	mdHr: string;
+	mdListBullet: string;
+	syntaxComment: string;
+	syntaxKeyword: string;
+	syntaxFunction: string;
+	syntaxVariable: string;
+	syntaxString: string;
+	syntaxNumber: string;
+	syntaxType: string;
+	syntaxOperator: string;
+	syntaxPunctuation: string;
 }
 
 interface StudioThemeStyle {
@@ -136,6 +156,7 @@ const DARK_STUDIO_PALETTE: StudioPalette = {
 	panel: "#171b24",
 	panel2: "#11161f",
 	border: "#2d3748",
+	borderMuted: "#242b38",
 	text: "#e6edf3",
 	muted: "#9aa5b1",
 	accent: "#5ea1ff",
@@ -148,6 +169,25 @@ const DARK_STUDIO_PALETTE: StudioPalette = {
 	accentSoftStrong: "rgba(94, 161, 255, 0.40)",
 	okBorder: "rgba(115, 209, 61, 0.70)",
 	warnBorder: "rgba(249, 199, 79, 0.70)",
+	mdHeading: "#f0c674",
+	mdLink: "#81a2be",
+	mdLinkUrl: "#666666",
+	mdCode: "#8abeb7",
+	mdCodeBlock: "#b5bd68",
+	mdCodeBlockBorder: "#808080",
+	mdQuote: "#808080",
+	mdQuoteBorder: "#808080",
+	mdHr: "#808080",
+	mdListBullet: "#8abeb7",
+	syntaxComment: "#6A9955",
+	syntaxKeyword: "#569CD6",
+	syntaxFunction: "#DCDCAA",
+	syntaxVariable: "#9CDCFE",
+	syntaxString: "#CE9178",
+	syntaxNumber: "#B5CEA8",
+	syntaxType: "#4EC9B0",
+	syntaxOperator: "#D4D4D4",
+	syntaxPunctuation: "#D4D4D4",
 };
 
 const LIGHT_STUDIO_PALETTE: StudioPalette = {
@@ -155,6 +195,7 @@ const LIGHT_STUDIO_PALETTE: StudioPalette = {
 	panel: "#ffffff",
 	panel2: "#f8fafc",
 	border: "#d0d7de",
+	borderMuted: "#e0e6ee",
 	text: "#1f2328",
 	muted: "#57606a",
 	accent: "#0969da",
@@ -167,6 +208,25 @@ const LIGHT_STUDIO_PALETTE: StudioPalette = {
 	accentSoftStrong: "rgba(9, 105, 218, 0.35)",
 	okBorder: "rgba(26, 127, 55, 0.55)",
 	warnBorder: "rgba(154, 103, 0, 0.55)",
+	mdHeading: "#9a7326",
+	mdLink: "#547da7",
+	mdLinkUrl: "#767676",
+	mdCode: "#5a8080",
+	mdCodeBlock: "#588458",
+	mdCodeBlockBorder: "#6c6c6c",
+	mdQuote: "#6c6c6c",
+	mdQuoteBorder: "#6c6c6c",
+	mdHr: "#6c6c6c",
+	mdListBullet: "#588458",
+	syntaxComment: "#008000",
+	syntaxKeyword: "#0000FF",
+	syntaxFunction: "#795E26",
+	syntaxVariable: "#001080",
+	syntaxString: "#A31515",
+	syntaxNumber: "#098658",
+	syntaxType: "#267F99",
+	syntaxOperator: "#000000",
+	syntaxPunctuation: "#000000",
 };
 
 function getStudioThemeMode(theme?: Theme): StudioThemeMode {
@@ -278,6 +338,127 @@ function withAlpha(color: string, alpha: number, fallback: string): string {
 	return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${clamped.toFixed(2)})`;
 }
 
+function adjustBrightness(color: string, factor: number): string {
+	const rgb = hexToRgb(color);
+	if (!rgb) return color;
+	return rgbToHex(
+		Math.round(rgb.r * factor),
+		Math.round(rgb.g * factor),
+		Math.round(rgb.b * factor),
+	);
+}
+
+function relativeLuminance(color: string): number {
+	const rgb = hexToRgb(color);
+	if (!rgb) return 0;
+	return (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+}
+
+function blendColors(a: string, b: string, t: number): string {
+	const rgbA = hexToRgb(a);
+	const rgbB = hexToRgb(b);
+	if (!rgbA || !rgbB) return a;
+	return rgbToHex(
+		Math.round(rgbA.r + (rgbB.r - rgbA.r) * t),
+		Math.round(rgbA.g + (rgbB.g - rgbA.g) * t),
+		Math.round(rgbA.b + (rgbB.b - rgbA.b) * t),
+	);
+}
+
+function deriveCanvasColors(
+	baseColor: string,
+	mode: StudioThemeMode,
+): { pageBg: string; cardBg: string; panel2: string } {
+	if (mode === "dark") {
+		const pageBg = adjustBrightness(baseColor, 0.50);
+		const cardBg = adjustBrightness(baseColor, 0.60);
+		return {
+			pageBg,
+			cardBg,
+			panel2: adjustBrightness(baseColor, 0.72),
+		};
+	}
+	const lum = relativeLuminance(baseColor);
+	const lighten = (c: string, amount: number): string => {
+		const rgb = hexToRgb(c);
+		if (!rgb) return c;
+		return rgbToHex(
+			Math.round(rgb.r + (255 - rgb.r) * amount),
+			Math.round(rgb.g + (255 - rgb.g) * amount),
+			Math.round(rgb.b + (255 - rgb.b) * amount),
+		);
+	};
+	if (lum > 0.92) {
+		return { pageBg: baseColor, cardBg: "#ffffff", panel2: lighten(baseColor, 0.3) };
+	}
+	return {
+		pageBg: lighten(baseColor, 0.6),
+		cardBg: lighten(baseColor, 0.93),
+		panel2: lighten(baseColor, 0.45),
+	};
+}
+
+interface ThemeExportPalette {
+	pageBg?: string;
+	cardBg?: string;
+	infoBg?: string;
+}
+
+const themeExportPaletteCache = new Map<string, ThemeExportPalette | null>();
+
+function resolveThemeExportValue(
+	value: string | number | undefined,
+	vars: Record<string, string | number>,
+	seen: Set<string> = new Set(),
+): string | undefined {
+	if (value == null) return undefined;
+	if (typeof value === "number") return xterm256ToHex(value);
+
+	const token = value.trim();
+	if (!token) return undefined;
+	if (token.startsWith("#")) return token;
+
+	const varKey = token.startsWith("$") ? token.slice(1) : token;
+	if (!varKey || seen.has(varKey)) return token;
+
+	const referenced = vars[varKey];
+	if (referenced == null) return token;
+
+	seen.add(varKey);
+	return resolveThemeExportValue(referenced, vars, seen) ?? token;
+}
+
+function readThemeExportPalette(theme?: Theme): ThemeExportPalette | undefined {
+	const sourcePath = theme?.sourcePath?.trim();
+	if (!sourcePath) return undefined;
+
+	if (themeExportPaletteCache.has(sourcePath)) {
+		const cached = themeExportPaletteCache.get(sourcePath);
+		return cached ?? undefined;
+	}
+
+	try {
+		const raw = readFileSync(sourcePath, "utf-8");
+		const parsed = JSON.parse(raw) as {
+			export?: { pageBg?: string | number; cardBg?: string | number; infoBg?: string | number };
+			vars?: Record<string, string | number>;
+		};
+		const vars = parsed.vars ?? {};
+		const exportSection = parsed.export ?? {};
+		const resolved: ThemeExportPalette = {
+			pageBg: resolveThemeExportValue(exportSection.pageBg, vars),
+			cardBg: resolveThemeExportValue(exportSection.cardBg, vars),
+			infoBg: resolveThemeExportValue(exportSection.infoBg, vars),
+		};
+
+		themeExportPaletteCache.set(sourcePath, resolved);
+		return resolved;
+	} catch {
+		themeExportPaletteCache.set(sourcePath, null);
+		return undefined;
+	}
+}
+
 function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
 	const mode = getStudioThemeMode(theme);
 	const fallback = mode === "light" ? LIGHT_STUDIO_PALETTE : DARK_STUDIO_PALETTE;
@@ -296,12 +477,30 @@ function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
 	const warn = safeThemeColor(() => theme.getFgAnsi("warning")) ?? fallback.warn;
 	const error = safeThemeColor(() => theme.getFgAnsi("error")) ?? fallback.error;
 	const ok = safeThemeColor(() => theme.getFgAnsi("success")) ?? fallback.ok;
+	const exported = readThemeExportPalette(theme);
+
+	const surfaceBase =
+		safeThemeColor(() => theme.getBgAnsi("userMessageBg"))
+		?? safeThemeColor(() => theme.getBgAnsi("customMessageBg"));
+	const derived = surfaceBase ? deriveCanvasColors(surfaceBase, mode) : undefined;
 
 	const palette: StudioPalette = {
-		bg: safeThemeColor(() => theme.getBgAnsi("customMessageBg")) ?? fallback.bg,
-		panel: safeThemeColor(() => theme.getBgAnsi("toolPendingBg")) ?? fallback.panel,
-		panel2: safeThemeColor(() => theme.getBgAnsi("selectedBg")) ?? fallback.panel2,
+		bg:
+			exported?.pageBg
+			?? derived?.pageBg
+			?? fallback.bg,
+		panel:
+			exported?.cardBg
+			?? derived?.cardBg
+			?? safeThemeColor(() => theme.getBgAnsi("toolPendingBg"))
+			?? fallback.panel,
+		panel2:
+			derived?.panel2
+			?? safeThemeColor(() => theme.getBgAnsi("selectedBg"))
+			?? exported?.infoBg
+			?? fallback.panel2,
 		border: safeThemeColor(() => theme.getFgAnsi("border")) ?? fallback.border,
+		borderMuted: safeThemeColor(() => theme.getFgAnsi("borderMuted")) ?? fallback.borderMuted,
 		text: safeThemeColor(() => theme.getFgAnsi("text")) ?? fallback.text,
 		muted: safeThemeColor(() => theme.getFgAnsi("muted")) ?? fallback.muted,
 		accent,
@@ -314,6 +513,25 @@ function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
 		accentSoftStrong: withAlpha(accent, mode === "light" ? 0.35 : 0.40, fallback.accentSoftStrong),
 		okBorder: withAlpha(ok, mode === "light" ? 0.55 : 0.70, fallback.okBorder),
 		warnBorder: withAlpha(warn, mode === "light" ? 0.55 : 0.70, fallback.warnBorder),
+		mdHeading: safeThemeColor(() => theme.getFgAnsi("mdHeading")) ?? fallback.mdHeading,
+		mdLink: safeThemeColor(() => theme.getFgAnsi("mdLink")) ?? fallback.mdLink,
+		mdLinkUrl: safeThemeColor(() => theme.getFgAnsi("mdLinkUrl")) ?? fallback.mdLinkUrl,
+		mdCode: safeThemeColor(() => theme.getFgAnsi("mdCode")) ?? fallback.mdCode,
+		mdCodeBlock: safeThemeColor(() => theme.getFgAnsi("mdCodeBlock")) ?? fallback.mdCodeBlock,
+		mdCodeBlockBorder: safeThemeColor(() => theme.getFgAnsi("mdCodeBlockBorder")) ?? fallback.mdCodeBlockBorder,
+		mdQuote: safeThemeColor(() => theme.getFgAnsi("mdQuote")) ?? fallback.mdQuote,
+		mdQuoteBorder: safeThemeColor(() => theme.getFgAnsi("mdQuoteBorder")) ?? fallback.mdQuoteBorder,
+		mdHr: safeThemeColor(() => theme.getFgAnsi("mdHr")) ?? fallback.mdHr,
+		mdListBullet: safeThemeColor(() => theme.getFgAnsi("mdListBullet")) ?? fallback.mdListBullet,
+		syntaxComment: safeThemeColor(() => theme.getFgAnsi("syntaxComment")) ?? fallback.syntaxComment,
+		syntaxKeyword: safeThemeColor(() => theme.getFgAnsi("syntaxKeyword")) ?? fallback.syntaxKeyword,
+		syntaxFunction: safeThemeColor(() => theme.getFgAnsi("syntaxFunction")) ?? fallback.syntaxFunction,
+		syntaxVariable: safeThemeColor(() => theme.getFgAnsi("syntaxVariable")) ?? fallback.syntaxVariable,
+		syntaxString: safeThemeColor(() => theme.getFgAnsi("syntaxString")) ?? fallback.syntaxString,
+		syntaxNumber: safeThemeColor(() => theme.getFgAnsi("syntaxNumber")) ?? fallback.syntaxNumber,
+		syntaxType: safeThemeColor(() => theme.getFgAnsi("syntaxType")) ?? fallback.syntaxType,
+		syntaxOperator: safeThemeColor(() => theme.getFgAnsi("syntaxOperator")) ?? fallback.syntaxOperator,
+		syntaxPunctuation: safeThemeColor(() => theme.getFgAnsi("syntaxPunctuation")) ?? fallback.syntaxPunctuation,
 	};
 
 	return { mode, palette };
@@ -912,6 +1130,51 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 	const initialLabel = escapeHtmlForInline(initialDocument?.label ?? "blank");
 	const initialPath = escapeHtmlForInline(initialDocument?.path ?? "");
 	const style = getStudioThemeStyle(theme);
+	const mermaidConfig = {
+		startOnLoad: false,
+		theme: "base",
+		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+		flowchart: {
+			curve: "basis",
+		},
+		themeVariables: {
+			background: style.palette.bg,
+			primaryColor: style.palette.panel2,
+			primaryTextColor: style.palette.text,
+			primaryBorderColor: style.palette.mdCodeBlockBorder,
+			secondaryColor: style.palette.panel,
+			secondaryTextColor: style.palette.text,
+			secondaryBorderColor: style.palette.mdCodeBlockBorder,
+			tertiaryColor: style.palette.panel,
+			tertiaryTextColor: style.palette.text,
+			tertiaryBorderColor: style.palette.mdCodeBlockBorder,
+			lineColor: style.palette.mdQuote,
+			textColor: style.palette.text,
+			edgeLabelBackground: style.palette.panel2,
+			nodeBorder: style.palette.mdCodeBlockBorder,
+			clusterBkg: style.palette.panel,
+			clusterBorder: style.palette.mdCodeBlockBorder,
+			titleColor: style.palette.mdHeading,
+		},
+	};
+	const panelShadow =
+		style.mode === "light"
+			? "0 1px 2px rgba(15, 23, 42, 0.03), 0 4px 14px rgba(15, 23, 42, 0.04)"
+			: "0 1px 2px rgba(0, 0, 0, 0.36), 0 6px 18px rgba(0, 0, 0, 0.22)";
+	const accentContrast = style.mode === "light" ? "#ffffff" : "#0e1616";
+	const blockquoteBg = withAlpha(
+		style.palette.mdQuoteBorder,
+		style.mode === "light" ? 0.10 : 0.16,
+		style.mode === "light" ? "rgba(15, 23, 42, 0.04)" : "rgba(255, 255, 255, 0.05)",
+	);
+	const tableAltBg = withAlpha(
+		style.palette.mdCodeBlockBorder,
+		style.mode === "light" ? 0.10 : 0.14,
+		style.mode === "light" ? "rgba(15, 23, 42, 0.03)" : "rgba(255, 255, 255, 0.04)",
+	);
+	const editorBg = style.mode === "light"
+		? blendColors(style.palette.panel, "#ffffff", 0.5)
+		: style.palette.panel;
 
 	return `<!doctype html>
 <html>
@@ -926,6 +1189,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       --panel: ${style.palette.panel};
       --panel-2: ${style.palette.panel2};
       --border: ${style.palette.border};
+      --border-muted: ${style.palette.borderMuted};
       --text: ${style.palette.text};
       --muted: ${style.palette.muted};
       --accent: ${style.palette.accent};
@@ -938,6 +1202,30 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       --accent-soft-strong: ${style.palette.accentSoftStrong};
       --ok-border: ${style.palette.okBorder};
       --warn-border: ${style.palette.warnBorder};
+      --md-heading: ${style.palette.mdHeading};
+      --md-link: ${style.palette.mdLink};
+      --md-link-url: ${style.palette.mdLinkUrl};
+      --md-code: ${style.palette.mdCode};
+      --md-codeblock: ${style.palette.mdCodeBlock};
+      --md-codeblock-border: ${style.palette.mdCodeBlockBorder};
+      --md-quote: ${style.palette.mdQuote};
+      --md-quote-border: ${style.palette.mdQuoteBorder};
+      --md-hr: ${style.palette.mdHr};
+      --md-list-bullet: ${style.palette.mdListBullet};
+      --syntax-comment: ${style.palette.syntaxComment};
+      --syntax-keyword: ${style.palette.syntaxKeyword};
+      --syntax-function: ${style.palette.syntaxFunction};
+      --syntax-variable: ${style.palette.syntaxVariable};
+      --syntax-string: ${style.palette.syntaxString};
+      --syntax-number: ${style.palette.syntaxNumber};
+      --syntax-type: ${style.palette.syntaxType};
+      --syntax-operator: ${style.palette.syntaxOperator};
+      --syntax-punctuation: ${style.palette.syntaxPunctuation};
+      --panel-shadow: ${panelShadow};
+      --accent-contrast: ${accentContrast};
+      --blockquote-bg: ${blockquoteBg};
+      --table-alt-bg: ${tableAltBg};
+      --editor-bg: ${editorBg};
     }
 
     * { box-sizing: border-box; }
@@ -956,7 +1244,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     header {
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-muted);
       padding: 12px 16px;
       background: var(--panel);
       display: flex;
@@ -997,21 +1285,48 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     button, select, .file-label {
-      border: 1px solid var(--border);
-      background: var(--panel-2);
+      border: 1px solid var(--border-muted);
+      background: var(--panel);
       color: var(--text);
       border-radius: 8px;
       padding: 8px 10px;
       font-size: 13px;
+      transition: background-color 120ms ease, border-color 120ms ease;
     }
 
     button {
       cursor: pointer;
     }
 
+    button:not(:disabled):hover,
+    select:hover,
+    .file-label:hover {
+      background: var(--panel-2);
+    }
+
+    button:focus-visible,
+    select:focus-visible,
+    .file-label:focus-within {
+      outline: 2px solid var(--accent-soft-strong);
+      outline-offset: 1px;
+    }
+
     button:disabled {
       opacity: 0.6;
       cursor: not-allowed;
+    }
+
+    #sendRunBtn,
+    #loadResponseBtn:not(:disabled):not([hidden]) {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
+      font-weight: 600;
+    }
+
+    #sendRunBtn:not(:disabled):hover,
+    #loadResponseBtn:not(:disabled):not([hidden]):hover {
+      filter: brightness(0.95);
     }
 
     .file-label {
@@ -1035,18 +1350,18 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     section {
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-muted);
       border-radius: 10px;
       background: var(--panel);
       min-height: 0;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      box-shadow: var(--panel-shadow);
     }
 
     section.pane-active {
-      border-color: var(--accent);
-      box-shadow: inset 0 0 0 1px var(--accent-soft);
+      border-color: var(--border);
     }
 
     body.pane-focus-left main,
@@ -1061,28 +1376,28 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
     body.pane-focus-left #leftPane,
     body.pane-focus-right #rightPane {
-      border-color: var(--accent);
-      box-shadow: inset 0 0 0 1px var(--accent-soft-strong);
+      border-color: var(--border);
     }
 
     .section-header {
       padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-muted);
+      background: var(--panel-2);
       font-weight: 600;
       font-size: 14px;
     }
 
     .reference-meta {
       padding: 8px 10px;
-      border-bottom: 1px solid var(--border);
-      background: var(--panel);
+      border-bottom: 1px solid var(--border-muted);
+      background: var(--panel-2);
     }
 
     textarea {
       width: 100%;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-muted);
       border-radius: 8px;
-      background: var(--panel-2);
+      background: var(--panel);
       color: var(--text);
       padding: 10px;
       font-size: 13px;
@@ -1093,7 +1408,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
     .source-wrap {
       padding: 10px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-muted);
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -1117,8 +1432,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     .source-badge {
-      border: 1px solid var(--border);
-      background: var(--panel-2);
+      border: 1px solid var(--border-muted);
+      background: var(--panel);
       border-radius: 999px;
       padding: 4px 10px;
       font-size: 12px;
@@ -1155,9 +1470,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       flex: 1 1 auto;
       min-height: 0;
       max-height: none;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-muted);
       border-radius: 8px;
-      background: var(--panel-2);
+      background: var(--editor-bg);
       overflow: hidden;
     }
 
@@ -1189,6 +1504,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       border-radius: 0;
       background: transparent;
       resize: none;
+      outline: none;
     }
 
     #sourceText.highlight-active {
@@ -1205,7 +1521,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     .hl-heading {
-      color: var(--accent);
+      color: var(--md-heading);
       font-weight: 700;
     }
 
@@ -1214,58 +1530,58 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     .hl-code {
-      color: var(--ok);
+      color: var(--md-code);
     }
 
     .hl-code-kw {
-      color: var(--accent);
+      color: var(--syntax-keyword);
       font-weight: 600;
     }
 
     .hl-code-str {
-      color: var(--ok);
+      color: var(--syntax-string);
     }
 
     .hl-code-num {
-      color: var(--warn);
+      color: var(--syntax-number);
     }
 
     .hl-code-com {
-      color: var(--muted);
+      color: var(--syntax-comment);
       font-style: italic;
     }
 
     .hl-code-var,
     .hl-code-key {
-      color: var(--accent);
+      color: var(--syntax-variable);
     }
 
     .hl-list {
-      color: var(--accent);
+      color: var(--md-list-bullet);
       font-weight: 600;
     }
 
     .hl-quote {
-      color: var(--muted);
+      color: var(--md-quote);
       font-style: italic;
     }
 
     .hl-link {
-      color: var(--accent);
+      color: var(--md-link);
       text-decoration: underline;
     }
 
     .hl-url {
-      color: var(--muted);
+      color: var(--md-link-url);
     }
 
     #sourcePreview {
       flex: 1 1 auto;
       min-height: 0;
       max-height: none;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-muted);
       border-radius: 8px;
-      background: var(--panel-2);
+      background: var(--panel);
     }
 
     .panel-scroll {
@@ -1291,18 +1607,20 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       margin-top: 1.2em;
       margin-bottom: 0.5em;
       line-height: 1.25;
+      letter-spacing: -0.01em;
+      color: var(--md-heading);
     }
 
     .rendered-markdown h1 {
-      font-size: 2em;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0.3em;
+      font-size: 1.6em;
+      border-bottom: 0;
+      padding-bottom: 0;
     }
 
     .rendered-markdown h2 {
-      font-size: 1.5em;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0.25em;
+      font-size: 1.25em;
+      border-bottom: 0;
+      padding-bottom: 0;
     }
 
     .rendered-markdown p,
@@ -1314,8 +1632,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       margin-bottom: 1em;
     }
 
+    .rendered-markdown li::marker {
+      color: var(--md-list-bullet);
+    }
+
     .rendered-markdown a {
-      color: var(--accent);
+      color: var(--md-link);
       text-decoration: none;
     }
 
@@ -1323,16 +1645,23 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       text-decoration: underline;
     }
 
+    .rendered-markdown a.uri,
+    .rendered-markdown .uri {
+      color: var(--md-link-url);
+    }
+
     .rendered-markdown blockquote {
       margin-left: 0;
-      padding: 0 1em;
-      border-left: 0.25em solid var(--border);
-      color: var(--muted);
+      padding: 0.2em 1em;
+      border-left: 0.25em solid var(--md-quote-border);
+      border-radius: 0 8px 8px 0;
+      background: var(--blockquote-bg);
+      color: var(--md-quote);
     }
 
     .rendered-markdown pre {
-      background: var(--panel);
-      border: 1px solid var(--border);
+      background: var(--panel-2);
+      border: 1px solid var(--md-codeblock-border);
       border-radius: 8px;
       padding: 12px 14px;
       overflow: auto;
@@ -1343,49 +1672,67 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     .rendered-markdown code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 0.9em;
+      color: var(--md-code);
+    }
+
+    .rendered-markdown pre code {
+      color: var(--md-codeblock);
     }
 
     .rendered-markdown :not(pre) > code {
-      background: rgba(127, 127, 127, 0.16);
-      border: 1px solid var(--border);
+      background: rgba(127, 127, 127, 0.13);
+      border: 1px solid var(--md-codeblock-border);
       border-radius: 6px;
       padding: 0.12em 0.35em;
     }
 
     .rendered-markdown code span.kw,
     .rendered-markdown code span.cf,
-    .rendered-markdown code span.im,
+    .rendered-markdown code span.im {
+      color: var(--syntax-keyword);
+      font-weight: 600;
+    }
+
     .rendered-markdown code span.dt {
-      color: var(--accent);
+      color: var(--syntax-type);
       font-weight: 600;
     }
 
     .rendered-markdown code span.fu,
-    .rendered-markdown code span.bu,
+    .rendered-markdown code span.bu {
+      color: var(--syntax-function);
+    }
+
     .rendered-markdown code span.va,
     .rendered-markdown code span.ot {
-      color: var(--accent);
+      color: var(--syntax-variable);
     }
 
     .rendered-markdown code span.st,
     .rendered-markdown code span.ss,
-    .rendered-markdown code span.sc {
-      color: var(--ok);
+    .rendered-markdown code span.sc,
+    .rendered-markdown code span.ch {
+      color: var(--syntax-string);
     }
 
     .rendered-markdown code span.dv,
     .rendered-markdown code span.bn,
     .rendered-markdown code span.fl {
-      color: var(--warn);
+      color: var(--syntax-number);
     }
 
     .rendered-markdown code span.co {
-      color: var(--muted);
+      color: var(--syntax-comment);
       font-style: italic;
     }
 
     .rendered-markdown code span.op {
-      color: var(--text);
+      color: var(--syntax-operator);
+    }
+
+    .rendered-markdown code span.pp,
+    .rendered-markdown code span.pu {
+      color: var(--syntax-punctuation);
     }
 
     .rendered-markdown code span.er,
@@ -1403,13 +1750,21 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
     .rendered-markdown th,
     .rendered-markdown td {
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-muted);
       padding: 6px 12px;
+    }
+
+    .rendered-markdown thead th {
+      background: var(--panel-2);
+    }
+
+    .rendered-markdown tbody tr:nth-child(even) {
+      background: var(--table-alt-bg);
     }
 
     .rendered-markdown hr {
       border: 0;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--md-hr);
       margin: 1.25em 0;
     }
 
@@ -1496,7 +1851,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     .response-wrap {
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--border-muted);
       padding: 10px;
       display: flex;
       flex-direction: column;
@@ -1512,7 +1867,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     }
 
     footer {
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--border-muted);
       padding: 8px 12px;
       color: var(--muted);
       font-size: 12px;
@@ -1553,11 +1908,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     <h1><span class="app-logo" aria-hidden="true">π</span> Pi Studio <span class="app-subtitle">Feedback Workspace</span></h1>
     <div class="controls">
       <select id="editorViewSelect" aria-label="Editor view mode">
-        <option value="markdown" selected>Editor: Markdown</option>
+        <option value="markdown" selected>Editor: Raw</option>
         <option value="preview">Editor: Preview</option>
       </select>
       <select id="rightViewSelect" aria-label="Response view mode">
-        <option value="markdown">Response: Markdown</option>
+        <option value="markdown">Response: Raw</option>
         <option value="preview" selected>Response: Preview</option>
       </select>
       <button id="saveAsBtn" type="button" title="Save editor text to a new file path.">Save As…</button>
@@ -1587,8 +1942,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
             <button id="copyDraftBtn" type="button">Copy editor text</button>
             <select id="highlightSelect" aria-label="Editor syntax highlighting">
-              <option value="off">Highlight markdown: Off</option>
-              <option value="on" selected>Highlight markdown: On</option>
+              <option value="off">Syntax highlight: Off</option>
+              <option value="on" selected>Syntax highlight: On</option>
             </select>
           </div>
         </div>
@@ -1613,8 +1968,8 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <option value="off">Auto-update response: Off</option>
           </select>
           <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
-            <option value="off">Highlight markdown: Off</option>
-            <option value="on" selected>Highlight markdown: On</option>
+            <option value="off">Syntax highlight: Off</option>
+            <option value="on" selected>Syntax highlight: On</option>
           </select>
           <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
           <button id="loadResponseBtn" type="button">Load response into editor</button>
@@ -1729,7 +2084,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-      const MERMAID_THEME = "${style.mode === "dark" ? "dark" : "default"}";
+      const MERMAID_CONFIG = ${JSON.stringify(mermaidConfig)};
       const MERMAID_UNAVAILABLE_MESSAGE = "Mermaid renderer unavailable. Showing mermaid blocks as code.";
       const MERMAID_RENDER_FAIL_MESSAGE = "Mermaid render failed. Showing diagram source text.";
       let mermaidModulePromise = null;
@@ -1836,6 +2191,19 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           if (exitPaneFocus()) {
             event.preventDefault();
           }
+        }
+
+        if (
+          key === "Enter"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
+          && !event.shiftKey
+          && activePane === "left"
+          && sendRunBtn
+          && !sendRunBtn.disabled
+        ) {
+          event.preventDefault();
+          sendRunBtn.click();
         }
       }
 
@@ -1958,10 +2326,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             }
 
             if (!mermaidInitialized) {
-              mermaidApi.initialize({
-                startOnLoad: false,
-                theme: MERMAID_THEME,
-              });
+              mermaidApi.initialize(MERMAID_CONFIG);
               mermaidInitialized = true;
             }
 

@@ -2,6 +2,19 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.2.0] — 2026-03-02
+
+### Added
+- Luminance-based canvas color derivation from theme surface colors — proper bg/panel/panel2 tiers instead of flat mid-tone mapping.
+- Dedicated `--editor-bg` CSS variable — editor text box pushed toward white (light) for a crisp paper feel.
+- `Cmd/Ctrl+Enter` keyboard shortcut to trigger "Run editor text" when editor pane is active.
+
+### Changed
+- Renamed "Highlight markdown: On/Off" → "Syntax highlight: On/Off".
+- Renamed "Editor: Markdown" / "Response: Markdown" → "Editor: Raw" / "Response: Raw" (future-proofing for non-markdown formats).
+- Active pane indicator simplified to subtle border color change (removed thick top accent bar).
+- Panel shadows, button hierarchy (filled accent for primary actions), heading scale, blockquote/table styling improvements.
+
 ## [Unreleased]
 
 ### Added
@@ -39,6 +52,10 @@ All notable changes to `pi-studio` are documented here.
 - Studio still live-updates latest response when assistant output arrives outside studio requests (e.g., manual send from pi editor).
 - Preview pane typography/style now follows the higher-fidelity `/preview-browser` rendering style more closely.
 - Preview mode now uses pandoc code highlighting output for syntax-colored code blocks.
+- Preview markdown styling now maps markdown (`md*`) and syntax (`syntax*`) theme tokens for closer parity with terminal rendering.
+- Theme surface mapping now uses theme-export backgrounds when available (`pageBg`, `cardBg`, `infoBg`) for clearer depth across `bg/panel/panel2`.
+- Mermaid preview now uses palette-driven Mermaid defaults (base theme + theme variables) for better visual fit with active pi themes.
+- Studio chrome was refined for a cleaner visual hierarchy (subtle panel shadows, primary action emphasis, lighter active-pane accent bar, softer heading scale, table striping, and tinted blockquotes).
 - Hardened Studio preview HTTP handling and added client-side preview-request timeout to avoid stuck "Rendering preview…" states.
 
 ### Fixed

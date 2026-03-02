@@ -35,7 +35,7 @@ Status: experimental alpha.
 - View toggles: `Editor: Markdown|Preview`, `Response: Markdown|Preview`
 - Preview mode supports MathML equations and Mermaid fenced diagrams
 - Optional markdown highlighting toggles for editor and response markdown views (including fenced-code token colors for common languages)
-- Theme-aware browser UI based on current pi theme
+- Theme-aware browser UI based on current pi theme, with refined surface depth and lighter visual chrome
 
 ## Commands
 
@@ -76,7 +76,8 @@ pi -e https://github.com/omaclaren/pi-studio
 - Pi Studio is currently optimized for markdown workflows (model responses, plans, and notes), including fenced code blocks. Pure code files are supported, but highlighting is tuned for markdown and fenced blocks rather than full-file language mode.
 - Studio URLs include a token query parameter; avoid sharing full Studio URLs.
 - Preview panes render markdown via `pandoc` (`gfm+tex_math_dollars` → HTML5 + MathML), including pandoc code syntax highlighting, sanitized in-browser with `dompurify`.
-- Mermaid fenced `mermaid` code blocks are rendered client-side in preview mode (Mermaid v11 loaded from jsDelivr).
+- Preview markdown/code colors are mapped from active theme markdown (`md*`) and syntax (`syntax*`) tokens for closer terminal-vs-browser parity.
+- Mermaid fenced `mermaid` code blocks are rendered client-side in preview mode (Mermaid v11 loaded from jsDelivr), with palette-driven defaults for better theme fit.
 - If Mermaid cannot load or a diagram fails to render, preview shows an inline warning and keeps source text visible.
 - Preview rendering normalizes Obsidian wiki-image syntax (`![[path]]`, `![[path|alt]]`) into standard markdown images.
 - Install pandoc for full preview rendering (`brew install pandoc` on macOS).
