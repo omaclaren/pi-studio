@@ -1917,7 +1917,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       </select>
       <button id="saveAsBtn" type="button" title="Save editor text to a new file path.">Save As…</button>
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor text." disabled>Save file</button>
-      <label class="file-label" title="Load a local file into editor text.">Load file in editor<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml" /></label>
+      <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.h,.hpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.lua" /></label>
     </div>
   </header>
 
@@ -1944,6 +1944,21 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             <select id="highlightSelect" aria-label="Editor syntax highlighting">
               <option value="off">Syntax highlight: Off</option>
               <option value="on" selected>Syntax highlight: On</option>
+            </select>
+            <select id="langSelect" aria-label="Highlight language">
+              <option value="markdown" selected>Lang: Markdown</option>
+              <option value="javascript">Lang: JavaScript</option>
+              <option value="typescript">Lang: TypeScript</option>
+              <option value="python">Lang: Python</option>
+              <option value="bash">Lang: Bash</option>
+              <option value="json">Lang: JSON</option>
+              <option value="rust">Lang: Rust</option>
+              <option value="c">Lang: C</option>
+              <option value="cpp">Lang: C++</option>
+              <option value="julia">Lang: Julia</option>
+              <option value="fortran">Lang: Fortran</option>
+              <option value="r">Lang: R</option>
+              <option value="matlab">Lang: MATLAB</option>
             </select>
           </div>
         </div>
@@ -2043,6 +2058,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const sendRunBtn = document.getElementById("sendRunBtn");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
       const highlightSelect = document.getElementById("highlightSelect");
+      const langSelect = document.getElementById("langSelect");
 
       const initialSourceState = {
         source: (document.body && document.body.dataset && document.body.dataset.initialSource) || "blank",
@@ -2075,12 +2091,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       let paneFocusTarget = "off";
       const EDITOR_HIGHLIGHT_MAX_CHARS = 80_000;
       const EDITOR_HIGHLIGHT_STORAGE_KEY = "piStudio.editorHighlightEnabled";
+      const EDITOR_LANGUAGE_STORAGE_KEY = "piStudio.editorLanguage";
+      const SUPPORTED_LANGUAGES = ["markdown", "javascript", "typescript", "python", "bash", "json", "rust", "c", "cpp", "julia", "fortran", "r", "matlab"];
       const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
       const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
       let sourcePreviewRenderTimer = null;
       let sourcePreviewRenderNonce = 0;
       let responsePreviewRenderNonce = 0;
       let editorHighlightEnabled = false;
+      let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
@@ -2470,10 +2489,14 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
       function renderSourcePreviewNow() {
         if (editorView !== "preview") return;
-        const markdown = sourceTextEl.value || "";
+        const text = sourceTextEl.value || "";
+        if (editorLanguage && editorLanguage !== "markdown") {
+          sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(text, editorLanguage) + "</div>";
+          return;
+        }
         const nonce = ++sourcePreviewRenderNonce;
         sourcePreviewEl.innerHTML = "<div class='preview-loading'>Rendering preview…</div>";
-        void applyRenderedMarkdown(sourcePreviewEl, markdown, "source", nonce);
+        void applyRenderedMarkdown(sourcePreviewEl, text, "source", nonce);
       }
 
       function scheduleSourcePreviewRender(delayMs) {
@@ -2598,6 +2621,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         sendRunBtn.disabled = uiBusy;
         copyDraftBtn.disabled = uiBusy;
         if (highlightSelect) highlightSelect.disabled = uiBusy;
+        if (langSelect) langSelect.disabled = uiBusy;
         editorViewSelect.disabled = uiBusy;
         rightViewSelect.disabled = uiBusy;
         followSelect.disabled = uiBusy;
@@ -2644,6 +2668,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         }
 
         updateEditorHighlightState();
+        updateLangSelectVisibility();
       }
 
       function setRightView(nextView) {
@@ -2729,6 +2754,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         if (first === "py" || first === "python") return "python";
         if (first === "sh" || first === "bash" || first === "zsh" || first === "shell") return "bash";
         if (first === "json" || first === "jsonc") return "json";
+        if (first === "rust" || first === "rs") return "rust";
+        if (first === "c" || first === "h") return "c";
+        if (first === "cpp" || first === "c++" || first === "cxx" || first === "hpp") return "cpp";
+        if (first === "julia" || first === "jl") return "julia";
+        if (first === "fortran" || first === "f90" || first === "f95" || first === "f03" || first === "f" || first === "for") return "fortran";
+        if (first === "r") return "r";
+        if (first === "matlab" || first === "m") return "matlab";
 
         return "";
       }
@@ -2821,6 +2853,80 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           return "<span class='hl-code'>" + highlighted + "</span>";
         }
 
+        if (lang === "rust") {
+          const rustPattern = /(\\/\\/.*$)|("(?:[^"\\\\]|\\\\.)*")|(\\b(?:fn|let|mut|const|struct|enum|impl|trait|pub|mod|use|crate|self|super|match|if|else|for|while|loop|return|break|continue|where|as|in|ref|move|async|await|unsafe|extern|type|static|true|false|Some|None|Ok|Err|Self)\\b)|(\\b\\d[\\d_]*(?:\\.\\d[\\d_]*)?(?:f32|f64|u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize)?\\b)/g;
+          const highlighted = highlightCodeTokens(source, rustPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        if (lang === "c" || lang === "cpp") {
+          const cPattern = /(\\/\\/.*$)|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)')|(#\\s*\\w+)|(\\b(?:if|else|for|while|do|switch|case|break|continue|return|goto|struct|union|enum|typedef|sizeof|void|int|char|short|long|float|double|unsigned|signed|const|static|extern|volatile|register|inline|auto|restrict|true|false|NULL|nullptr|class|public|private|protected|virtual|override|template|typename|namespace|using|new|delete|try|catch|throw|noexcept|constexpr|auto|decltype|static_cast|dynamic_cast|reinterpret_cast|const_cast|std|include|define|ifdef|ifndef|endif|pragma)\\b)|(\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?[fFlLuU]*\\b)/g;
+          const highlighted = highlightCodeTokens(source, cPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-kw";
+            if (match[5]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        if (lang === "julia") {
+          const jlPattern = /(#.*$)|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')|(\\b(?:function|end|if|elseif|else|for|while|begin|let|local|global|const|return|break|continue|do|try|catch|finally|throw|module|import|using|export|struct|mutable|abstract|primitive|where|macro|quote|true|false|nothing|missing|in|isa|typeof)\\b)|(\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b)/g;
+          const highlighted = highlightCodeTokens(source, jlPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        if (lang === "fortran") {
+          const fPattern = /(!.*$)|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')|(\\b(?:program|end|subroutine|function|module|use|implicit|none|integer|real|double|precision|complex|character|logical|dimension|allocatable|intent|in|out|inout|parameter|data|do|if|then|else|elseif|endif|enddo|call|return|write|read|print|format|stop|contains|type|class|select|case|where|forall|associate|block|procedure|interface|abstract|extends|allocate|deallocate|cycle|exit|go|to|common|equivalence|save|external|intrinsic)\\b)|(\\b\\d+(?:\\.\\d+)?(?:[dDeE][+-]?\\d+)?\\b)/gi;
+          const highlighted = highlightCodeTokens(source, fPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        if (lang === "r") {
+          const rPattern = /(#.*$)|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')|(\\b(?:function|if|else|for|while|repeat|in|next|break|return|TRUE|FALSE|NULL|NA|NA_integer_|NA_real_|NA_complex_|NA_character_|Inf|NaN|library|require|source|local|switch)\\b)|(<-|->|<<-|->>)|(\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?[Li]?\\b)/g;
+          const highlighted = highlightCodeTokens(source, rPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-kw";
+            if (match[5]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
+        if (lang === "matlab") {
+          const matPattern = /(%.*$)|('(?:[^']|'')*'|"(?:[^"\\\\]|\\\\.)*")|(\\b(?:function|end|if|elseif|else|for|while|switch|case|otherwise|try|catch|return|break|continue|global|persistent|classdef|properties|methods|events|enumeration|true|false)\\b)|(\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?[i]?\\b)/g;
+          const highlighted = highlightCodeTokens(source, matPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
         return wrapHighlight("hl-code", source);
       }
 
@@ -2889,6 +2995,43 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         return out.join("<br>");
       }
 
+      function highlightCode(text, language) {
+        const lines = String(text || "").replace(/\\r\\n/g, "\\n").split("\\n");
+        const lang = normalizeFenceLanguage(language);
+        const out = [];
+        for (const line of lines) {
+          if (line.length === 0) {
+            out.push("");
+          } else if (lang) {
+            out.push(highlightCodeLine(line, lang));
+          } else {
+            out.push(escapeHtml(line));
+          }
+        }
+        return out.join("<br>");
+      }
+
+      function detectLanguageFromName(name) {
+        if (!name) return "";
+        const dot = name.lastIndexOf(".");
+        if (dot < 0) return "";
+        const ext = name.slice(dot + 1).toLowerCase();
+        if (ext === "js" || ext === "mjs" || ext === "cjs" || ext === "jsx") return "javascript";
+        if (ext === "ts" || ext === "mts" || ext === "cts" || ext === "tsx") return "typescript";
+        if (ext === "py" || ext === "pyw") return "python";
+        if (ext === "sh" || ext === "bash" || ext === "zsh") return "bash";
+        if (ext === "json" || ext === "jsonc" || ext === "json5") return "json";
+        if (ext === "rs") return "rust";
+        if (ext === "c" || ext === "h") return "c";
+        if (ext === "cpp" || ext === "cxx" || ext === "cc" || ext === "hpp" || ext === "hxx") return "cpp";
+        if (ext === "jl") return "julia";
+        if (ext === "f90" || ext === "f95" || ext === "f03" || ext === "f" || ext === "for") return "fortran";
+        if (ext === "r" || ext === "R") return "r";
+        if (ext === "m") return "matlab";
+        if (ext === "md" || ext === "markdown" || ext === "mdx") return "markdown";
+        return "";
+      }
+
       function renderEditorHighlightNow() {
         if (!sourceHighlightEl) return;
         if (!editorHighlightEnabled || editorView !== "markdown") {
@@ -2903,7 +3046,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           return;
         }
 
-        sourceHighlightEl.innerHTML = highlightMarkdown(text);
+        if (editorLanguage === "markdown" || !editorLanguage) {
+          sourceHighlightEl.innerHTML = highlightMarkdown(text);
+        } else {
+          sourceHighlightEl.innerHTML = highlightCode(text, editorLanguage);
+        }
         syncEditorHighlightScroll();
       }
 
@@ -3008,6 +3155,46 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           highlightSelect.value = editorHighlightEnabled ? "on" : "off";
         }
         updateEditorHighlightState();
+        updateLangSelectVisibility();
+      }
+
+      function readStoredEditorLanguage() {
+        if (!window.localStorage) return null;
+        try {
+          const value = window.localStorage.getItem(EDITOR_LANGUAGE_STORAGE_KEY);
+          if (value && SUPPORTED_LANGUAGES.indexOf(value) !== -1) return value;
+          return null;
+        } catch {
+          return null;
+        }
+      }
+
+      function persistEditorLanguage(lang) {
+        if (!window.localStorage) return;
+        try {
+          window.localStorage.setItem(EDITOR_LANGUAGE_STORAGE_KEY, lang || "markdown");
+        } catch {}
+      }
+
+      function setEditorLanguage(lang) {
+        editorLanguage = (lang && SUPPORTED_LANGUAGES.indexOf(lang) !== -1) ? lang : "markdown";
+        persistEditorLanguage(editorLanguage);
+        if (langSelect) {
+          langSelect.value = editorLanguage;
+        }
+        if (editorHighlightEnabled && editorView === "markdown") {
+          scheduleEditorHighlightRender();
+        }
+        if (editorView === "preview") {
+          scheduleSourcePreviewRender(0);
+        }
+      }
+
+      function updateLangSelectVisibility() {
+        if (!langSelect) return;
+        const highlightActive = editorHighlightEnabled && editorView === "markdown";
+        const previewActive = editorView === "preview";
+        langSelect.hidden = !(highlightActive || previewActive);
       }
 
       function setResponseHighlightEnabled(enabled) {
@@ -3468,6 +3655,12 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         });
       }
 
+      if (langSelect) {
+        langSelect.addEventListener("change", () => {
+          setEditorLanguage(langSelect.value);
+        });
+      }
+
       pullLatestBtn.addEventListener("click", () => {
         if (queuedLatestResponse) {
           if (applyLatestPayload(queuedLatestResponse)) {
@@ -3703,6 +3896,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             path: null,
           });
           refreshResponseUi();
+          const detectedLang = detectLanguageFromName(file.name);
+          if (detectedLang) {
+            setEditorLanguage(detectedLang);
+          }
           setStatus("Loaded file " + file.name + ".", "success");
         };
         reader.onerror = () => {
@@ -3718,6 +3915,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const storedEditorHighlightEnabled = readStoredEditorHighlightEnabled();
       const initialHighlightEnabled = storedEditorHighlightEnabled ?? Boolean(highlightSelect && highlightSelect.value === "on");
       setEditorHighlightEnabled(initialHighlightEnabled);
+
+      const initialDetectedLang = detectLanguageFromName(initialSourceState.path || initialSourceState.label || "");
+      const storedLang = readStoredEditorLanguage();
+      setEditorLanguage(initialDetectedLang || storedLang || "markdown");
 
       const storedResponseHighlightEnabled = readStoredResponseHighlightEnabled();
       const initialResponseHighlightEnabled = storedResponseHighlightEnabled ?? Boolean(responseHighlightSelect && responseHighlightSelect.value === "on");

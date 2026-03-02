@@ -2,6 +2,22 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.2.1] — 2026-03-02
+
+### Added
+- **Language-aware syntax highlighting**: selectable `Lang:` dropdown (Markdown, JavaScript, TypeScript, Python, Bash, JSON, Rust, C, C++, Julia, Fortran, R, MATLAB).
+- Language auto-detected from file extension when loading files; manually overridable via dropdown.
+- Full-document code highlighting in editor Raw view when a non-markdown language is selected (reuses fenced-block tokenizer across entire content).
+- Code-aware Preview: when a code language is selected, Preview renders syntax-highlighted `<pre>` instead of sending to pandoc.
+- Language preference persisted to `localStorage` across sessions.
+- New tokenizer patterns for Rust, C/C++, Julia, Fortran, R, and MATLAB (keywords, strings, comments, numbers).
+- Expanded file-accept list for Load file content (`.h`, `.hpp`, `.jl`, `.f90`, `.f95`, `.f03`, `.f`, `.for`, `.r`, `.R`, `.m`, `.lua`).
+
+### Changed
+- Renamed "Load file in editor" → "Load file content" (clarifies that file content is copied, not edited in-place).
+- Lang selector visibility: shown when syntax highlight is On (Raw view) or in Preview mode; hidden otherwise.
+- Updated README with comprehensive screenshot gallery (markdown, math, mermaid, code mode, fenced code).
+
 ## [0.2.0] — 2026-03-02
 
 ### Added
