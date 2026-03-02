@@ -38,6 +38,10 @@ Status: experimental alpha.
 
 ![Light code mode](./assets/screenshots/light-code-mode.png)
 
+**Focus mode — dark** (editor pane full-screen, `Cmd/Ctrl+Esc` or `F10` to toggle, `Esc` to exit)
+
+![Dark focus mode](./assets/screenshots/dark-focus-mode.png)
+
 ## Features
 
 - Single workspace: Editor (left) + Response (right)
@@ -58,7 +62,7 @@ Status: experimental alpha.
   - Applies to both editor Raw view (highlight overlay) and fenced code blocks in markdown
   - Preview mode renders syntax-highlighted code when a non-markdown language is selected
 - Separate syntax highlight toggles for editor and response Raw views, with local preference persistence
-- Theme-aware browser UI based on current pi theme, with refined surface depth and lighter visual chrome
+- Theme-aware browser UI derived from current pi theme
 
 ## Commands
 
