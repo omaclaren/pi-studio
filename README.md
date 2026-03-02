@@ -10,6 +10,10 @@ Status: experimental alpha.
 
 ![Dark workspace](./assets/screenshots/dark-workspace.png)
 
+**Structured critique — dark** (assessment + numbered critiques with rendered math, "Edited since response" sync badge)
+
+![Dark critique](./assets/screenshots/dark-critique.png)
+
 **Markdown workspace — light**
 
 ![Light workspace](./assets/screenshots/light-workspace.png)
