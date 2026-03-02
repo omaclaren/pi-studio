@@ -2,6 +2,11 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.2.2] — 2026-03-02
+
+### Fixed
+- Corrected screenshot-to-label mapping in README (files were copied to wrong filenames).
+
 ## [0.2.1] — 2026-03-02
 
 ### Added
