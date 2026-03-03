@@ -49,9 +49,9 @@ Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens 
 - Response load helpers:
   - non-critique: **Load response into editor**
   - critique: **Load critique notes into editor** / **Load full critique into editor**
-- File actions: **Save editor as…**, **Save editor**, **Load file content**
+- File/editor actions: **Save editor as…**, **Save editor**, **Load file content**, **Send to pi editor**, **Load from pi editor**
 - View toggles: panel header dropdowns for `Editor (Raw|Preview)` and `Response (Raw|Preview) | Editor (Preview)`
-- **Editor Preview in response pane**: side-by-side source/rendered view (Overleaf-style) — select `Right: Editor (Preview)` to render editor text in the right pane with live debounced updates
+- **Editor Preview in response pane**: side-by-side source/rendered view (Overleaf-style) — select `Right: Editor (Preview)` to render editor text in the right pane with live updates
 - Preview mode supports MathML equations and Mermaid fenced diagrams
 - **Language-aware syntax highlighting** with selectable language mode:
   - Markdown (default): headings, links, code fences, lists, quotes, inline code
@@ -67,6 +67,8 @@ Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens 
 - **Working directory**: "Set working dir" button for uploaded files — resolves relative image paths and enables "Save editor" for uploaded content
 - **Live theme sync**: changing the pi theme in the terminal updates the studio browser UI automatically (polled every 2 seconds)
 - Separate syntax highlight toggles for editor and response Raw views, with local preference persistence
+- Keyboard shortcuts: `Cmd/Ctrl+Enter` runs **Run editor text** when editor pane is active; `Cmd/Ctrl+Esc` / `F10` toggles focus mode; `Esc` exits focus mode
+- Footer status reflects Studio/terminal activity phases (connecting, ready, submitting, terminal activity)
 - Theme-aware browser UI derived from current pi theme
 - View mode selectors integrated into panel headers for a cleaner layout
 

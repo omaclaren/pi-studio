@@ -2,6 +2,23 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.4.2] — 2026-03-03
+
+### Added
+- New editor action: **Load from pi editor** to pull the current terminal editor draft into Studio.
+- Optional Studio debug tracing (`?debug=1`) with client/server lifecycle events for request/state/tool diagnostics.
+
+### Changed
+- Footer busy status now reflects Studio-owned and terminal-owned activity phases more clearly (`running`, `tool`, `responding`).
+- Tool activity labels are derived from tool calls/executions with improved command classification for shell workflows (including current/parent directory listings and listing-like `find` commands).
+- Studio request ownership remains sticky during active/agent-busy phases to avoid confusing Studio → Terminal label flips mid-turn.
+- Editor and response preview panes keep previous rendered content visible while a new render is in flight, using a subtle delayed **Updating** indicator instead of replacing content with a loading screen.
+- Footer shortcut hint and run-button tooltip now explicitly document `Cmd/Ctrl+Enter` for **Run editor text**.
+
+### Fixed
+- Studio requests are no longer cleared prematurely when assistant messages end with `stopReason: "toolUse"`.
+- Embedded-script activity label normalization now preserves whitespace correctly (fixes corrupted labels caused by escaped regex mismatch).
+
 ## [0.4.1] — 2026-03-03
 
 ### Changed

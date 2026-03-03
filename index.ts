@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 
@@ -11,6 +11,7 @@ type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
 type StudioRequestKind = "critique" | "annotation" | "direct";
 type StudioSourceKind = "file" | "last-response" | "blank";
+type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 
 interface StudioServerState {
 	server: Server;
@@ -90,6 +91,11 @@ interface SendToEditorRequestMessage {
 	content: string;
 }
 
+interface GetFromEditorRequestMessage {
+	type: "get_from_editor_request";
+	requestId: string;
+}
+
 type IncomingStudioMessage =
 	| HelloMessage
 	| PingMessage
@@ -99,7 +105,8 @@ type IncomingStudioMessage =
 	| SendRunRequestMessage
 	| SaveAsRequestMessage
 	| SaveOverRequestMessage
-	| SendToEditorRequestMessage;
+	| SendToEditorRequestMessage
+	| GetFromEditorRequestMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
@@ -1133,7 +1140,144 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
+	if (msg.type === "get_from_editor_request" && typeof msg.requestId === "string") {
+		return {
+			type: "get_from_editor_request",
+			requestId: msg.requestId,
+		};
+	}
+
 	return null;
+}
+
+function normalizeActivityLabel(label: string): string | null {
+	const compact = String(label || "").replace(/\s+/g, " ").trim();
+	if (!compact) return null;
+	if (compact.length <= 96) return compact;
+	return `${compact.slice(0, 93).trimEnd()}…`;
+}
+
+function isGenericToolActivityLabel(label: string | null | undefined): boolean {
+	const normalized = String(label || "").trim().toLowerCase();
+	if (!normalized) return true;
+	return normalized.startsWith("running ")
+		|| normalized === "reading file"
+		|| normalized === "writing file"
+		|| normalized === "editing file";
+}
+
+function deriveBashActivityLabel(command: string): string | null {
+	const normalized = String(command || "").trim();
+	if (!normalized) return null;
+	const lower = normalized.toLowerCase();
+
+	const segments = lower
+		.split(/(?:&&|\|\||;|\n)+/g)
+		.map((segment) => segment.trim())
+		.filter((segment) => segment.length > 0);
+
+	let hasPwd = false;
+	let hasLsCurrent = false;
+	let hasLsParent = false;
+	let hasFind = false;
+	let hasFindCurrentListing = false;
+	let hasFindParentListing = false;
+
+	for (const segment of segments) {
+		if (/\bpwd\b/.test(segment)) hasPwd = true;
+
+		if (/\bls\b/.test(segment)) {
+			if (/\.\./.test(segment)) hasLsParent = true;
+			else hasLsCurrent = true;
+		}
+
+		if (/\bfind\b/.test(segment)) {
+			hasFind = true;
+			const pathMatch = segment.match(/\bfind\s+([^\s]+)/);
+			const pathToken = pathMatch ? pathMatch[1] : "";
+			const hasSelector = /-(?:name|iname|regex|path|ipath|newer|mtime|mmin|size|user|group)\b/.test(segment);
+			const listingLike = /-maxdepth\s+\d+\b/.test(segment) && !hasSelector;
+
+			if (listingLike) {
+				if (pathToken === ".." || pathToken === "../") {
+					hasFindParentListing = true;
+				} else if (pathToken === "." || pathToken === "./" || pathToken === "") {
+					hasFindCurrentListing = true;
+				}
+			}
+		}
+	}
+
+	const hasCurrentListing = hasLsCurrent || hasFindCurrentListing;
+	const hasParentListing = hasLsParent || hasFindParentListing;
+
+	if (hasCurrentListing && hasParentListing) {
+		return "Listing directory and parent directory files";
+	}
+	if (hasPwd && hasCurrentListing) {
+		return "Listing current directory files";
+	}
+	if (hasParentListing) {
+		return "Listing parent directory files";
+	}
+	if (hasCurrentListing || /\bls\b/.test(lower)) {
+		return "Listing directory files";
+	}
+	if (hasFind || /\bfind\b/.test(lower)) {
+		return "Searching files";
+	}
+	if (/\brg\b/.test(lower) || /\bgrep\b/.test(lower)) {
+		return "Searching text in files";
+	}
+	if (/\bcat\b/.test(lower) || /\bsed\b/.test(lower) || /\bawk\b/.test(lower)) {
+		return "Reading file content";
+	}
+	if (/\bgit\s+status\b/.test(lower)) {
+		return "Checking git status";
+	}
+	if (/\bgit\s+diff\b/.test(lower)) {
+		return "Reviewing git changes";
+	}
+	if (/\bgit\b/.test(lower)) {
+		return "Running git command";
+	}
+	if (/\bnpm\b/.test(lower)) {
+		return "Running npm command";
+	}
+	if (/\bpython3?\b/.test(lower)) {
+		return "Running Python command";
+	}
+	if (/\bnode\b/.test(lower)) {
+		return "Running Node.js command";
+	}
+	return "Running shell command";
+}
+
+function deriveToolActivityLabel(toolName: string, args: unknown): string | null {
+	const normalizedTool = String(toolName || "").trim().toLowerCase();
+	const payload = (args && typeof args === "object") ? (args as Record<string, unknown>) : {};
+
+	if (normalizedTool === "bash") {
+		const command = typeof payload.command === "string" ? payload.command : "";
+		return deriveBashActivityLabel(command);
+	}
+	if (normalizedTool === "read") {
+		const path = typeof payload.path === "string" ? payload.path : "";
+		return path ? `Reading ${basename(path)}` : "Reading file";
+	}
+	if (normalizedTool === "write") {
+		const path = typeof payload.path === "string" ? payload.path : "";
+		return path ? `Writing ${basename(path)}` : "Writing file";
+	}
+	if (normalizedTool === "edit") {
+		const path = typeof payload.path === "string" ? payload.path : "";
+		return path ? `Editing ${basename(path)}` : "Editing file";
+	}
+	if (normalizedTool === "find") return "Searching files";
+	if (normalizedTool === "grep") return "Searching text in files";
+	if (normalizedTool === "ls") return "Listing directory files";
+
+	return normalizeActivityLabel(`Running ${normalizedTool || "tool"}`);
 }
 
 function isAllowedOrigin(_origin: string | undefined, _port: number): boolean {
@@ -1696,6 +1840,7 @@ ${cssVarsBlock}
     }
 
     .panel-scroll {
+      position: relative;
       min-height: 0;
       overflow: auto;
       padding: 12px;
@@ -1968,6 +2113,19 @@ ${cssVarsBlock}
       font-style: italic;
     }
 
+    .panel-scroll.preview-pending::after {
+      content: "Updating";
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.2;
+      letter-spacing: 0.01em;
+      pointer-events: none;
+      opacity: 0.64;
+    }
+
     .preview-error {
       color: var(--warn);
       margin-bottom: 0.75em;
@@ -2089,7 +2247,7 @@ ${cssVarsBlock}
             <span id="syncBadge" class="source-badge sync-badge">No response loaded</span>
           </div>
           <div class="source-actions">
-            <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is.">Run editor text</button>
+            <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is. Shortcut: Cmd/Ctrl+Enter when editor pane is active.">Run editor text</button>
             <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
             <select id="lensSelect" aria-label="Critique focus">
               <option value="auto" selected>Critique focus: Auto</option>
@@ -2098,6 +2256,7 @@ ${cssVarsBlock}
             </select>
             <button id="critiqueBtn" type="button">Critique editor text</button>
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
+            <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
             <button id="copyDraftBtn" type="button">Copy editor text</button>
             <select id="highlightSelect" aria-label="Editor syntax highlighting">
               <option value="off">Syntax highlight: Off</option>
@@ -2175,7 +2334,7 @@ ${cssVarsBlock}
 
   <footer>
     <span id="status">Booting studio…</span>
-    <span class="shortcut-hint">Focus pane: Cmd/Ctrl+Esc (or F10), Esc to exit</span>
+    <span class="shortcut-hint">Focus pane: Cmd/Ctrl+Esc (or F10), Esc to exit · Run editor text: Cmd/Ctrl+Enter</span>
   </footer>
 
   <!-- Defer sanitizer script so studio can boot/connect even if CDN is slow or blocked. -->
@@ -2235,6 +2394,7 @@ ${cssVarsBlock}
       const saveAsBtn = document.getElementById("saveAsBtn");
       const saveOverBtn = document.getElementById("saveOverBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
+      const getEditorBtn = document.getElementById("getEditorBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
       const highlightSelect = document.getElementById("highlightSelect");
@@ -2252,6 +2412,7 @@ ${cssVarsBlock}
       let statusLevel = "";
       let pendingRequestId = null;
       let pendingKind = null;
+      let stickyStudioKind = null;
       let initialDocumentApplied = false;
       let editorView = "markdown";
       let rightView = "preview";
@@ -2265,6 +2426,11 @@ ${cssVarsBlock}
       let latestResponseNormalized = "";
       let latestCritiqueNotes = "";
       let latestCritiqueNotesNormalized = "";
+      let agentBusyFromServer = false;
+      let terminalActivityPhase = "idle";
+      let terminalActivityToolName = "";
+      let terminalActivityLabel = "";
+      let lastSpecificToolLabel = "";
       let uiBusy = false;
       let sourceState = {
         source: initialSourceState.source,
@@ -2317,6 +2483,8 @@ ${cssVarsBlock}
       const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
       const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
       const PREVIEW_INPUT_DEBOUNCE_MS = 0;
+      const PREVIEW_PENDING_BADGE_DELAY_MS = 220;
+      const previewPendingTimers = new WeakMap();
       let sourcePreviewRenderTimer = null;
       let sourcePreviewRenderNonce = 0;
       let responsePreviewRenderNonce = 0;
@@ -2333,8 +2501,153 @@ ${cssVarsBlock}
       let mermaidModulePromise = null;
       let mermaidInitialized = false;
 
+      const DEBUG_ENABLED = (() => {
+        try {
+          const query = new URLSearchParams(window.location.search || "");
+          const hash = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+          const value = String(query.get("debug") || hash.get("debug") || "").trim().toLowerCase();
+          return value === "1" || value === "true" || value === "yes" || value === "on";
+        } catch {
+          return false;
+        }
+      })();
+      const DEBUG_LOG_MAX = 400;
+      const debugLog = [];
+
+      function debugTrace(eventName, payload) {
+        if (!DEBUG_ENABLED) return;
+        const entry = {
+          ts: Date.now(),
+          event: String(eventName || ""),
+          payload: payload || null,
+        };
+        debugLog.push(entry);
+        if (debugLog.length > DEBUG_LOG_MAX) debugLog.shift();
+        window.__piStudioDebugLog = debugLog.slice();
+        try {
+          console.debug("[pi-studio]", new Date(entry.ts).toISOString(), entry.event, entry.payload);
+        } catch {
+          // ignore console errors
+        }
+      }
+
+      function summarizeServerMessage(message) {
+        if (!message || typeof message !== "object") return { type: "invalid" };
+        const summary = {
+          type: typeof message.type === "string" ? message.type : "unknown",
+        };
+        if (typeof message.requestId === "string") summary.requestId = message.requestId;
+        if (typeof message.activeRequestId === "string") summary.activeRequestId = message.activeRequestId;
+        if (typeof message.activeRequestKind === "string") summary.activeRequestKind = message.activeRequestKind;
+        if (typeof message.kind === "string") summary.kind = message.kind;
+        if (typeof message.event === "string") summary.event = message.event;
+        if (typeof message.timestamp === "number") summary.timestamp = message.timestamp;
+        if (typeof message.busy === "boolean") summary.busy = message.busy;
+        if (typeof message.agentBusy === "boolean") summary.agentBusy = message.agentBusy;
+        if (typeof message.terminalPhase === "string") summary.terminalPhase = message.terminalPhase;
+        if (typeof message.terminalToolName === "string") summary.terminalToolName = message.terminalToolName;
+        if (typeof message.terminalActivityLabel === "string") summary.terminalActivityLabel = message.terminalActivityLabel;
+        if (typeof message.stopReason === "string") summary.stopReason = message.stopReason;
+        if (typeof message.markdown === "string") summary.markdownLength = message.markdown.length;
+        if (typeof message.label === "string") summary.label = message.label;
+        if (typeof message.details === "object" && message.details !== null) summary.details = message.details;
+        return summary;
+      }
+
       function getIdleStatus() {
-        return "Ready. Edit text, then run or critique (insert annotation header if needed).";
+        return "Ready. Edit, load, or annotate text, then run, save, send to pi editor, or critique.";
+      }
+
+      function normalizeTerminalPhase(phase) {
+        if (phase === "running" || phase === "tool" || phase === "responding") return phase;
+        return "idle";
+      }
+
+      function normalizeActivityLabel(label) {
+        if (typeof label !== "string") return "";
+        return label.replace(/\\s+/g, " ").trim();
+      }
+
+      function isGenericToolLabel(label) {
+        const normalized = normalizeActivityLabel(label).toLowerCase();
+        if (!normalized) return true;
+        return normalized.startsWith("running ")
+          || normalized === "reading file"
+          || normalized === "writing file"
+          || normalized === "editing file";
+      }
+
+      function withEllipsis(text) {
+        const value = String(text || "").trim();
+        if (!value) return "";
+        if (/[….!?]$/.test(value)) return value;
+        return value + "…";
+      }
+
+      function updateTerminalActivityState(phase, toolName, label) {
+        terminalActivityPhase = normalizeTerminalPhase(phase);
+        terminalActivityToolName = typeof toolName === "string" ? toolName.trim() : "";
+        terminalActivityLabel = normalizeActivityLabel(label);
+
+        if (terminalActivityPhase === "tool" && terminalActivityLabel && !isGenericToolLabel(terminalActivityLabel)) {
+          lastSpecificToolLabel = terminalActivityLabel;
+        }
+        if (terminalActivityPhase === "idle") {
+          lastSpecificToolLabel = "";
+        }
+      }
+
+      function getTerminalBusyStatus() {
+        if (terminalActivityPhase === "tool") {
+          if (terminalActivityLabel) {
+            return "Terminal: " + withEllipsis(terminalActivityLabel);
+          }
+          return terminalActivityToolName
+            ? "Terminal: running tool: " + terminalActivityToolName + "…"
+            : "Terminal: running tool…";
+        }
+        if (terminalActivityPhase === "responding") {
+          if (lastSpecificToolLabel) {
+            return "Terminal: " + lastSpecificToolLabel + " (generating response)…";
+          }
+          return "Terminal: generating response…";
+        }
+        if (terminalActivityPhase === "running" && lastSpecificToolLabel) {
+          return "Terminal: " + withEllipsis(lastSpecificToolLabel);
+        }
+        return "Terminal: running…";
+      }
+
+      function getStudioActionLabel(kind) {
+        if (kind === "annotation") return "sending annotated reply";
+        if (kind === "critique") return "running critique";
+        if (kind === "direct") return "running editor text";
+        if (kind === "send_to_editor") return "sending to pi editor";
+        if (kind === "get_from_editor") return "loading from pi editor";
+        if (kind === "save_as" || kind === "save_over") return "saving editor text";
+        return "submitting request";
+      }
+
+      function getStudioBusyStatus(kind) {
+        const action = getStudioActionLabel(kind);
+        if (terminalActivityPhase === "tool") {
+          if (terminalActivityLabel) {
+            return "Studio: " + withEllipsis(terminalActivityLabel);
+          }
+          return terminalActivityToolName
+            ? "Studio: " + action + " (tool: " + terminalActivityToolName + ")…"
+            : "Studio: " + action + " (running tool)…";
+        }
+        if (terminalActivityPhase === "responding") {
+          if (lastSpecificToolLabel) {
+            return "Studio: " + lastSpecificToolLabel + " (generating response)…";
+          }
+          return "Studio: " + action + " (generating response)…";
+        }
+        if (terminalActivityPhase === "running" && lastSpecificToolLabel) {
+          return "Studio: " + withEllipsis(lastSpecificToolLabel);
+        }
+        return "Studio: " + action + "…";
       }
 
       function renderStatus() {
@@ -2352,6 +2665,19 @@ ${cssVarsBlock}
         statusMessage = message;
         statusLevel = level || "";
         renderStatus();
+        debugTrace("status", {
+          wsState,
+          message: statusMessage,
+          level: statusLevel,
+          pendingRequestId,
+          pendingKind,
+          uiBusy,
+          agentBusyFromServer,
+          terminalPhase: terminalActivityPhase,
+          terminalToolName: terminalActivityToolName,
+          terminalActivityLabel,
+          lastSpecificToolLabel,
+        });
       }
 
       renderStatus();
@@ -2594,6 +2920,48 @@ ${cssVarsBlock}
         targetEl.appendChild(el);
       }
 
+      function hasMeaningfulPreviewContent(targetEl) {
+        if (!targetEl || typeof targetEl.querySelector !== "function") return false;
+        if (targetEl.querySelector(".preview-loading")) return false;
+        const text = typeof targetEl.textContent === "string" ? targetEl.textContent.trim() : "";
+        return text.length > 0;
+      }
+
+      function beginPreviewRender(targetEl) {
+        if (!targetEl || !targetEl.classList) return;
+
+        const pendingTimer = previewPendingTimers.get(targetEl);
+        if (pendingTimer !== undefined) {
+          window.clearTimeout(pendingTimer);
+          previewPendingTimers.delete(targetEl);
+        }
+
+        if (hasMeaningfulPreviewContent(targetEl)) {
+          targetEl.classList.remove("preview-pending");
+          const timerId = window.setTimeout(() => {
+            previewPendingTimers.delete(targetEl);
+            if (!targetEl || !targetEl.classList) return;
+            if (!hasMeaningfulPreviewContent(targetEl)) return;
+            targetEl.classList.add("preview-pending");
+          }, PREVIEW_PENDING_BADGE_DELAY_MS);
+          previewPendingTimers.set(targetEl, timerId);
+          return;
+        }
+
+        targetEl.classList.remove("preview-pending");
+        targetEl.innerHTML = "<div class='preview-loading'>Rendering preview…</div>";
+      }
+
+      function finishPreviewRender(targetEl) {
+        if (!targetEl || !targetEl.classList) return;
+        const pendingTimer = previewPendingTimers.get(targetEl);
+        if (pendingTimer !== undefined) {
+          window.clearTimeout(pendingTimer);
+          previewPendingTimers.delete(targetEl);
+        }
+        targetEl.classList.remove("preview-pending");
+      }
+
       async function getMermaidApi() {
         if (mermaidModulePromise) {
           return mermaidModulePromise;
@@ -2739,6 +3107,7 @@ ${cssVarsBlock}
             if (nonce !== responsePreviewRenderNonce || (rightView !== "preview" && rightView !== "editor-preview")) return;
           }
 
+          finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
           await renderMermaidInElement(targetEl);
 
@@ -2758,6 +3127,7 @@ ${cssVarsBlock}
           }
 
           const detail = error && error.message ? error.message : String(error || "unknown error");
+          finishPreviewRender(targetEl);
           targetEl.innerHTML = buildPreviewErrorHtml("Preview renderer unavailable (" + detail + "). Showing plain markdown.", markdown);
         }
       }
@@ -2766,11 +3136,12 @@ ${cssVarsBlock}
         if (editorView !== "preview") return;
         const text = sourceTextEl.value || "";
         if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
+          finishPreviewRender(sourcePreviewEl);
           sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(text, editorLanguage) + "</div>";
           return;
         }
         const nonce = ++sourcePreviewRenderNonce;
-        sourcePreviewEl.innerHTML = "<div class='preview-loading'>Rendering preview…</div>";
+        beginPreviewRender(sourcePreviewEl);
         void applyRenderedMarkdown(sourcePreviewEl, text, "source", nonce);
       }
 
@@ -2825,34 +3196,38 @@ ${cssVarsBlock}
         if (rightView === "editor-preview") {
           const editorText = sourceTextEl.value || "";
           if (!editorText.trim()) {
+            finishPreviewRender(critiqueViewEl);
             critiqueViewEl.innerHTML = "<pre class='plain-markdown'>Editor is empty.</pre>";
             return;
           }
           if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
+            finishPreviewRender(critiqueViewEl);
             critiqueViewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(editorText, editorLanguage) + "</div>";
             return;
           }
           const nonce = ++responsePreviewRenderNonce;
-          critiqueViewEl.innerHTML = "<div class='preview-loading'>Rendering preview…</div>";
+          beginPreviewRender(critiqueViewEl);
           void applyRenderedMarkdown(critiqueViewEl, editorText, "response", nonce);
           return;
         }
 
         const markdown = latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
+          finishPreviewRender(critiqueViewEl);
           critiqueViewEl.innerHTML = "<pre class='plain-markdown'>No response yet. Run editor text or critique editor text.</pre>";
           return;
         }
 
         if (rightView === "preview") {
           const nonce = ++responsePreviewRenderNonce;
-          critiqueViewEl.innerHTML = "<div class='preview-loading'>Rendering preview…</div>";
+          beginPreviewRender(critiqueViewEl);
           void applyRenderedMarkdown(critiqueViewEl, markdown, "response", nonce);
           return;
         }
 
         if (responseHighlightEnabled) {
           if (markdown.length > RESPONSE_HIGHLIGHT_MAX_CHARS) {
+            finishPreviewRender(critiqueViewEl);
             critiqueViewEl.innerHTML = buildPreviewErrorHtml(
               "Response is too large for markdown highlighting. Showing plain markdown.",
               markdown,
@@ -2860,10 +3235,12 @@ ${cssVarsBlock}
             return;
           }
 
+          finishPreviewRender(critiqueViewEl);
           critiqueViewEl.innerHTML = "<div class='response-markdown-highlight'>" + highlightMarkdown(markdown) + "</div>";
           return;
         }
 
+        finishPreviewRender(critiqueViewEl);
         critiqueViewEl.innerHTML = buildPlainMarkdownHtml(markdown);
       }
 
@@ -2936,6 +3313,7 @@ ${cssVarsBlock}
         saveAsBtn.disabled = uiBusy;
         saveOverBtn.disabled = uiBusy || !canSaveOver;
         sendEditorBtn.disabled = uiBusy;
+        if (getEditorBtn) getEditorBtn.disabled = uiBusy;
         sendRunBtn.disabled = uiBusy;
         copyDraftBtn.disabled = uiBusy;
         if (highlightSelect) highlightSelect.disabled = uiBusy;
@@ -2979,6 +3357,10 @@ ${cssVarsBlock}
         if (!showPreview && sourcePreviewRenderTimer) {
           window.clearTimeout(sourcePreviewRenderTimer);
           sourcePreviewRenderTimer = null;
+        }
+
+        if (!showPreview) {
+          finishPreviewRender(sourcePreviewEl);
         }
 
         if (showPreview) {
@@ -3665,14 +4047,30 @@ ${cssVarsBlock}
       function handleServerMessage(message) {
         if (!message || typeof message !== "object") return;
 
+        debugTrace("server_message", summarizeServerMessage(message));
+
+        if (message.type === "debug_event") {
+          debugTrace("server_debug_event", summarizeServerMessage(message));
+          return;
+        }
+
         if (message.type === "hello_ack") {
           const busy = Boolean(message.busy);
+          agentBusyFromServer = Boolean(message.agentBusy);
+          updateTerminalActivityState(message.terminalPhase, message.terminalToolName, message.terminalActivityLabel);
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
-          if (message.activeRequestId) {
-            pendingRequestId = String(message.activeRequestId);
-            pendingKind = "unknown";
-            setStatus("Request in progress…", "warning");
+          if (typeof message.activeRequestId === "string" && message.activeRequestId.length > 0) {
+            pendingRequestId = message.activeRequestId;
+            if (typeof message.activeRequestKind === "string" && message.activeRequestKind.length > 0) {
+              pendingKind = message.activeRequestKind;
+            } else if (!pendingKind) {
+              pendingKind = "unknown";
+            }
+            stickyStudioKind = pendingKind;
+          } else {
+            pendingRequestId = null;
+            pendingKind = null;
           }
 
           let loadedInitialDocument = false;
@@ -3705,7 +4103,26 @@ ${cssVarsBlock}
             handleIncomingResponse(lastMarkdown, lastResponseKind, message.lastResponse.timestamp);
           }
 
-          if (!busy && !loadedInitialDocument) {
+          if (pendingRequestId) {
+            if (busy) {
+              setStatus(getStudioBusyStatus(pendingKind), "warning");
+            }
+            return;
+          }
+
+          if (busy) {
+            if (agentBusyFromServer && stickyStudioKind) {
+              setStatus(getStudioBusyStatus(stickyStudioKind), "warning");
+            } else if (agentBusyFromServer) {
+              setStatus(getTerminalBusyStatus(), "warning");
+            } else {
+              setStatus("Studio is busy.", "warning");
+            }
+            return;
+          }
+
+          stickyStudioKind = null;
+          if (!loadedInitialDocument) {
             refreshResponseUi();
             setStatus(getIdleStatus());
           }
@@ -3715,17 +4132,10 @@ ${cssVarsBlock}
         if (message.type === "request_started") {
           pendingRequestId = typeof message.requestId === "string" ? message.requestId : pendingRequestId;
           pendingKind = typeof message.kind === "string" ? message.kind : "unknown";
+          stickyStudioKind = pendingKind;
           setBusy(true);
           setWsState("Submitting");
-          if (pendingKind === "annotation") {
-            setStatus("Sending annotated reply…", "warning");
-          } else if (pendingKind === "critique") {
-            setStatus("Running critique…", "warning");
-          } else if (pendingKind === "direct") {
-            setStatus("Running editor text…", "warning");
-          } else {
-            setStatus("Submitting…", "warning");
-          }
+          setStatus(getStudioBusyStatus(pendingKind), "warning");
           return;
         }
 
@@ -3739,6 +4149,7 @@ ${cssVarsBlock}
               ? message.kind
               : (pendingKind === "critique" ? "critique" : "annotation");
 
+          stickyStudioKind = responseKind;
           pendingRequestId = null;
           pendingKind = null;
           setBusy(false);
@@ -3810,13 +4221,71 @@ ${cssVarsBlock}
           return;
         }
 
+        if (message.type === "editor_snapshot") {
+          if (typeof message.requestId === "string" && pendingRequestId && message.requestId !== pendingRequestId) {
+            return;
+          }
+          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+          }
+
+          const content = typeof message.content === "string" ? message.content : "";
+          sourceTextEl.value = content;
+          renderSourcePreview();
+          setSourceState({ source: "pi-editor", label: "pi editor draft", path: null });
+          setBusy(false);
+          setWsState("Ready");
+          setStatus(
+            content.trim()
+              ? "Loaded draft from pi editor."
+              : "pi editor is empty. Loaded blank text.",
+            content.trim() ? "success" : "warning",
+          );
+          return;
+        }
+
         if (message.type === "studio_state") {
           const busy = Boolean(message.busy);
+          agentBusyFromServer = Boolean(message.agentBusy);
+          updateTerminalActivityState(message.terminalPhase, message.terminalToolName, message.terminalActivityLabel);
+
+          if (typeof message.activeRequestId === "string" && message.activeRequestId.length > 0) {
+            pendingRequestId = message.activeRequestId;
+            if (typeof message.activeRequestKind === "string" && message.activeRequestKind.length > 0) {
+              pendingKind = message.activeRequestKind;
+            } else if (!pendingKind) {
+              pendingKind = "unknown";
+            }
+            stickyStudioKind = pendingKind;
+          } else {
+            pendingRequestId = null;
+            pendingKind = null;
+          }
+
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
-          if (!busy && !pendingRequestId) {
-            setStatus(getIdleStatus());
+
+          if (pendingRequestId) {
+            if (busy) {
+              setStatus(getStudioBusyStatus(pendingKind), "warning");
+            }
+            return;
           }
+
+          if (busy) {
+            if (agentBusyFromServer && stickyStudioKind) {
+              setStatus(getStudioBusyStatus(stickyStudioKind), "warning");
+            } else if (agentBusyFromServer) {
+              setStatus(getTerminalBusyStatus(), "warning");
+            } else {
+              setStatus("Studio is busy.", "warning");
+            }
+            return;
+          }
+
+          stickyStudioKind = null;
+          setStatus(getIdleStatus());
           return;
         }
 
@@ -3825,6 +4294,7 @@ ${cssVarsBlock}
             pendingRequestId = null;
             pendingKind = null;
           }
+          stickyStudioKind = null;
           setBusy(false);
           setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Studio is busy.", "warning");
@@ -3836,6 +4306,7 @@ ${cssVarsBlock}
             pendingRequestId = null;
             pendingKind = null;
           }
+          stickyStudioKind = null;
           setBusy(false);
           setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Request failed.", "error");
@@ -3870,7 +4341,7 @@ ${cssVarsBlock}
         }
 
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
-        const wsUrl = wsProtocol + "://" + window.location.host + "/ws?token=" + encodeURIComponent(token);
+        const wsUrl = wsProtocol + "://" + window.location.host + "/ws?token=" + encodeURIComponent(token) + (DEBUG_ENABLED ? "&debug=1" : "");
 
         setWsState("Connecting");
         setStatus("Connecting to Studio server…");
@@ -3927,8 +4398,10 @@ ${cssVarsBlock}
         const requestId = makeRequestId();
         pendingRequestId = requestId;
         pendingKind = kind;
+        stickyStudioKind = kind;
         setBusy(true);
         setWsState("Submitting");
+        setStatus(getStudioBusyStatus(kind), "warning");
         return requestId;
       }
 
@@ -4233,6 +4706,24 @@ ${cssVarsBlock}
         }
       });
 
+      if (getEditorBtn) {
+        getEditorBtn.addEventListener("click", () => {
+          const requestId = beginUiAction("get_from_editor");
+          if (!requestId) return;
+
+          const sent = sendMessage({
+            type: "get_from_editor_request",
+            requestId,
+          });
+
+          if (!sent) {
+            pendingRequestId = null;
+            pendingKind = null;
+            setBusy(false);
+          }
+        });
+      }
+
       sendRunBtn.addEventListener("click", () => {
         const content = sourceTextEl.value;
         if (!content.trim()) {
@@ -4397,6 +4888,10 @@ export default function (pi: ExtensionAPI) {
 	let lastCommandCtx: ExtensionCommandContext | null = null;
 	let lastThemeVarsJson = "";
 	let agentBusy = false;
+	let terminalActivityPhase: TerminalActivityPhase = "idle";
+	let terminalActivityToolName: string | null = null;
+	let terminalActivityLabel: string | null = null;
+	let lastSpecificToolActivityLabel: string | null = null;
 
 	const isStudioBusy = () => agentBusy || activeRequest !== null;
 
@@ -4427,18 +4922,94 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const emitDebugEvent = (event: string, details?: Record<string, unknown>) => {
+		broadcast({
+			type: "debug_event",
+			event,
+			timestamp: Date.now(),
+			details: details ?? null,
+		});
+	};
+
+	const setTerminalActivity = (phase: TerminalActivityPhase, toolName?: string | null, label?: string | null) => {
+		const nextPhase: TerminalActivityPhase =
+			phase === "running" || phase === "tool" || phase === "responding"
+				? phase
+				: "idle";
+		const nextToolName = nextPhase === "tool" ? (toolName?.trim() || null) : null;
+		const baseLabel = nextPhase === "tool" ? normalizeActivityLabel(label || "") : null;
+		let nextLabel: string | null = null;
+
+		if (nextPhase === "tool") {
+			if (baseLabel && !isGenericToolActivityLabel(baseLabel)) {
+				if (
+					lastSpecificToolActivityLabel
+					&& lastSpecificToolActivityLabel !== baseLabel
+					&& !isGenericToolActivityLabel(lastSpecificToolActivityLabel)
+				) {
+					nextLabel = normalizeActivityLabel(`${lastSpecificToolActivityLabel} → ${baseLabel}`);
+				} else {
+					nextLabel = baseLabel;
+				}
+				lastSpecificToolActivityLabel = baseLabel;
+			} else {
+				nextLabel = baseLabel;
+			}
+		} else {
+			nextLabel = null;
+			if (nextPhase === "idle") {
+				lastSpecificToolActivityLabel = null;
+			}
+		}
+
+		if (
+			terminalActivityPhase === nextPhase
+			&& terminalActivityToolName === nextToolName
+			&& terminalActivityLabel === nextLabel
+		) {
+			return;
+		}
+		terminalActivityPhase = nextPhase;
+		terminalActivityToolName = nextToolName;
+		terminalActivityLabel = nextLabel;
+		emitDebugEvent("terminal_activity", {
+			phase: terminalActivityPhase,
+			toolName: terminalActivityToolName,
+			label: terminalActivityLabel,
+			baseLabel,
+			lastSpecificToolActivityLabel,
+			activeRequestId: activeRequest?.id ?? null,
+			activeRequestKind: activeRequest?.kind ?? null,
+			agentBusy,
+		});
+		broadcastState();
+	};
+
 	const broadcastState = () => {
 		broadcast({
 			type: "studio_state",
 			busy: isStudioBusy(),
+			agentBusy,
+			terminalPhase: terminalActivityPhase,
+			terminalToolName: terminalActivityToolName,
+			terminalActivityLabel,
 			activeRequestId: activeRequest?.id ?? null,
+			activeRequestKind: activeRequest?.kind ?? null,
 		});
 	};
 
 	const clearActiveRequest = (options?: { notify?: string; level?: "info" | "warning" | "error" }) => {
 		if (!activeRequest) return;
+		const completedRequestId = activeRequest.id;
+		const completedKind = activeRequest.kind;
 		clearTimeout(activeRequest.timer);
 		activeRequest = null;
+		emitDebugEvent("clear_active_request", {
+			requestId: completedRequestId,
+			kind: completedKind,
+			notify: options?.notify ?? null,
+			agentBusy,
+		});
 		broadcastState();
 		if (options?.notify) {
 			broadcast({ type: "info", message: options.notify, level: options.level ?? "info" });
@@ -4446,6 +5017,12 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const beginRequest = (requestId: string, kind: StudioRequestKind): boolean => {
+		emitDebugEvent("begin_request_attempt", {
+			requestId,
+			kind,
+			hasActiveRequest: Boolean(activeRequest),
+			agentBusy,
+		});
 		if (activeRequest) {
 			broadcast({ type: "busy", requestId, message: "A studio request is already in progress." });
 			return false;
@@ -4457,6 +5034,7 @@ export default function (pi: ExtensionAPI) {
 
 		const timer = setTimeout(() => {
 			if (!activeRequest || activeRequest.id !== requestId) return;
+			emitDebugEvent("request_timeout", { requestId, kind });
 			broadcast({ type: "error", requestId, message: "Studio request timed out. Please try again." });
 			clearActiveRequest();
 		}, REQUEST_TIMEOUT_MS);
@@ -4468,6 +5046,7 @@ export default function (pi: ExtensionAPI) {
 			timer,
 		};
 
+		emitDebugEvent("begin_request", { requestId, kind });
 		broadcast({ type: "request_started", requestId, kind });
 		broadcastState();
 		return true;
@@ -4491,11 +5070,24 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		emitDebugEvent("studio_message", {
+			type: msg.type,
+			requestId: "requestId" in msg ? msg.requestId : null,
+			activeRequestId: activeRequest?.id ?? null,
+			activeRequestKind: activeRequest?.kind ?? null,
+			agentBusy,
+		});
+
 		if (msg.type === "hello") {
 			sendToClient(client, {
 				type: "hello_ack",
 				busy: isStudioBusy(),
+				agentBusy,
+				terminalPhase: terminalActivityPhase,
+				terminalToolName: terminalActivityToolName,
+				terminalActivityLabel,
 				activeRequestId: activeRequest?.id ?? null,
+				activeRequestKind: activeRequest?.kind ?? null,
 				lastResponse: lastStudioResponse,
 				initialDocument: initialStudioDocument,
 			});
@@ -4723,6 +5315,41 @@ export default function (pi: ExtensionAPI) {
 					type: "error",
 					requestId: msg.requestId,
 					message: `Failed to send editor text to pi editor: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			}
+			return;
+		}
+
+		if (msg.type === "get_from_editor_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			if (isStudioBusy()) {
+				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
+				return;
+			}
+			if (!lastCommandCtx || !lastCommandCtx.hasUI) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: "No interactive pi editor context is available.",
+				});
+				return;
+			}
+
+			try {
+				const content = lastCommandCtx.ui.getEditorText();
+				sendToClient(client, {
+					type: "editor_snapshot",
+					requestId: msg.requestId,
+					content,
+				});
+			} catch (error) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: `Failed to read pi editor text: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
 			return;
@@ -5004,21 +5631,81 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
+		agentBusy = false;
+		emitDebugEvent("session_start", { entryCount: ctx.sessionManager.getBranch().length });
+		setTerminalActivity("idle");
 	});
 
 	pi.on("session_switch", async (_event, ctx) => {
 		clearActiveRequest({ notify: "Session switched. Studio request state cleared.", level: "warning" });
 		lastCommandCtx = null;
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
+		agentBusy = false;
+		emitDebugEvent("session_switch", { entryCount: ctx.sessionManager.getBranch().length });
+		setTerminalActivity("idle");
 	});
 
 	pi.on("agent_start", async () => {
 		agentBusy = true;
-		broadcastState();
+		emitDebugEvent("agent_start", { activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
+		setTerminalActivity("running");
+	});
+
+	pi.on("tool_call", async (event) => {
+		if (!agentBusy) return;
+		const toolName = typeof event.toolName === "string" ? event.toolName : "";
+		const input = (event as { input?: unknown }).input;
+		const label = deriveToolActivityLabel(toolName, input);
+		emitDebugEvent("tool_call", { toolName, label, activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
+		setTerminalActivity("tool", toolName, label);
+	});
+
+	pi.on("tool_execution_start", async (event) => {
+		if (!agentBusy) return;
+		const label = deriveToolActivityLabel(event.toolName, event.args);
+		emitDebugEvent("tool_execution_start", { toolName: event.toolName, label, activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
+		setTerminalActivity("tool", event.toolName, label);
+	});
+
+	pi.on("tool_execution_end", async (event) => {
+		if (!agentBusy) return;
+		emitDebugEvent("tool_execution_end", { toolName: event.toolName, activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
+		// Keep tool phase visible until the next tool call, assistant response phase,
+		// or agent_end. This avoids tool labels flashing too quickly to read.
+	});
+
+	pi.on("message_start", async (event) => {
+		const role = (event.message as { role?: string } | undefined)?.role;
+		emitDebugEvent("message_start", { role: role ?? "", activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
+		if (agentBusy && role === "assistant") {
+			setTerminalActivity("responding");
+		}
 	});
 
 	pi.on("message_end", async (event) => {
+		const message = event.message as { stopReason?: string; role?: string };
+		const stopReason = typeof message.stopReason === "string" ? message.stopReason : "";
+		const role = typeof message.role === "string" ? message.role : "";
 		const markdown = extractAssistantText(event.message);
+		emitDebugEvent("message_end", {
+			role,
+			stopReason,
+			hasMarkdown: Boolean(markdown),
+			markdownLength: markdown ? markdown.length : 0,
+			activeRequestId: activeRequest?.id ?? null,
+			activeRequestKind: activeRequest?.kind ?? null,
+		});
+
+		// Assistant is handing off to tool calls; request is still in progress.
+		if (stopReason === "toolUse") {
+			emitDebugEvent("message_end_tool_use", {
+				role,
+				activeRequestId: activeRequest?.id ?? null,
+				activeRequestKind: activeRequest?.kind ?? null,
+			});
+			return;
+		}
+
 		if (!markdown) return;
 
 		if (activeRequest) {
@@ -5029,6 +5716,12 @@ export default function (pi: ExtensionAPI) {
 				timestamp: Date.now(),
 				kind,
 			};
+			emitDebugEvent("broadcast_response", {
+				requestId,
+				kind,
+				markdownLength: markdown.length,
+				stopReason,
+			});
 			broadcast({
 				type: "response",
 				requestId,
@@ -5046,6 +5739,11 @@ export default function (pi: ExtensionAPI) {
 			timestamp: Date.now(),
 			kind: inferredKind,
 		};
+		emitDebugEvent("broadcast_latest_response", {
+			kind: inferredKind,
+			markdownLength: markdown.length,
+			stopReason,
+		});
 		broadcast({
 			type: "latest_response",
 			kind: inferredKind,
@@ -5056,7 +5754,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", async () => {
 		agentBusy = false;
-		broadcastState();
+		emitDebugEvent("agent_end", { activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
+		setTerminalActivity("idle");
 		if (activeRequest) {
 			const requestId = activeRequest.id;
 			broadcast({
@@ -5070,6 +5769,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async () => {
 		lastCommandCtx = null;
+		agentBusy = false;
+		setTerminalActivity("idle");
 		await stopServer();
 	});
 
