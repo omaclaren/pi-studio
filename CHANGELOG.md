@@ -2,6 +2,13 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.4.1] — 2026-03-03
+
+### Changed
+- Editor input keeps preview refreshes immediate (no added typing debounce) while keeping editor syntax highlighting immediate in Raw view.
+- Response/sync state checks now reuse cached normalized response data and critique-note extracts instead of recomputing on each keystroke.
+- Editor action/sync UI updates are now coalesced with `requestAnimationFrame` during typing.
+
 ## [0.3.0] — 2026-03-02
 
 ### Added

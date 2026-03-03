@@ -2261,6 +2261,10 @@ ${cssVarsBlock}
       let latestResponseTimestamp = 0;
       let latestResponseKind = "annotation";
       let latestResponseIsStructuredCritique = false;
+      let latestResponseHasContent = false;
+      let latestResponseNormalized = "";
+      let latestCritiqueNotes = "";
+      let latestCritiqueNotesNormalized = "";
       let uiBusy = false;
       let sourceState = {
         source: initialSourceState.source,
@@ -2312,10 +2316,12 @@ ${cssVarsBlock}
       var SUPPORTED_LANGUAGES = Object.keys(LANG_EXT_MAP);
       const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
       const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
+      const PREVIEW_INPUT_DEBOUNCE_MS = 0;
       let sourcePreviewRenderTimer = null;
       let sourcePreviewRenderNonce = 0;
       let responsePreviewRenderNonce = 0;
       let responseEditorPreviewTimer = null;
+      let editorMetaUpdateRaf = null;
       let editorHighlightEnabled = false;
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
@@ -2514,23 +2520,19 @@ ${cssVarsBlock}
         return normalizeForCompare(a) === normalizeForCompare(b);
       }
 
-      function getCurrentResponseMarkdown() {
-        return latestResponseMarkdown;
-      }
-
-      function updateSyncBadge() {
+      function updateSyncBadge(normalizedEditorText) {
         if (!syncBadgeEl) return;
 
-        const response = getCurrentResponseMarkdown();
-        const hasResponse = Boolean(response && response.trim());
-
-        if (!hasResponse) {
+        if (!latestResponseHasContent) {
           syncBadgeEl.textContent = "No response loaded";
           syncBadgeEl.classList.remove("sync", "edited");
           return;
         }
 
-        const inSync = isTextEquivalent(sourceTextEl.value, response);
+        const normalizedEditor = typeof normalizedEditorText === "string"
+          ? normalizedEditorText
+          : normalizeForCompare(sourceTextEl.value);
+        const inSync = normalizedEditor === latestResponseNormalized;
         if (inSync) {
           syncBadgeEl.textContent = "In sync with response";
           syncBadgeEl.classList.add("sync");
@@ -2787,15 +2789,20 @@ ${cssVarsBlock}
         }, delay);
       }
 
-      function renderSourcePreview() {
+      function renderSourcePreview(options) {
+        const previewDelayMs =
+          options && typeof options.previewDelayMs === "number"
+            ? Math.max(0, options.previewDelayMs)
+            : 0;
+
         if (editorView === "preview") {
-          scheduleSourcePreviewRender(0);
+          scheduleSourcePreviewRender(previewDelayMs);
         }
         if (editorHighlightEnabled && editorView === "markdown") {
           scheduleEditorHighlightRender();
         }
         if (rightView === "editor-preview") {
-          scheduleResponseEditorPreviewRender(0);
+          scheduleResponseEditorPreviewRender(previewDelayMs);
         }
       }
 
@@ -2860,14 +2867,16 @@ ${cssVarsBlock}
         critiqueViewEl.innerHTML = buildPlainMarkdownHtml(markdown);
       }
 
-      function updateResultActionButtons() {
-        const responseMarkdown = getCurrentResponseMarkdown();
-        const hasResponse = Boolean(responseMarkdown && responseMarkdown.trim());
-        const responseLoaded = hasResponse && isTextEquivalent(sourceTextEl.value, responseMarkdown);
+      function updateResultActionButtons(normalizedEditorText) {
+        const hasResponse = latestResponseHasContent;
+        const normalizedEditor = typeof normalizedEditorText === "string"
+          ? normalizedEditorText
+          : normalizeForCompare(sourceTextEl.value);
+        const responseLoaded = hasResponse && normalizedEditor === latestResponseNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
 
-        const critiqueNotes = isCritiqueResponse ? buildCritiqueNotesMarkdown(responseMarkdown) : "";
-        const critiqueNotesLoaded = Boolean(critiqueNotes) && isTextEquivalent(sourceTextEl.value, critiqueNotes);
+        const critiqueNotes = isCritiqueResponse ? latestCritiqueNotes : "";
+        const critiqueNotesLoaded = Boolean(critiqueNotes) && normalizedEditor === latestCritiqueNotesNormalized;
 
         loadResponseBtn.hidden = isCritiqueResponse;
         loadCritiqueNotesBtn.hidden = !isCritiqueResponse;
@@ -2887,7 +2896,7 @@ ${cssVarsBlock}
         pullLatestBtn.disabled = uiBusy || followLatest;
         pullLatestBtn.textContent = queuedLatestResponse ? "Get latest response *" : "Get latest response";
 
-        updateSyncBadge();
+        updateSyncBadge(normalizedEditor);
       }
 
       function refreshResponseUi() {
@@ -3411,6 +3420,31 @@ ${cssVarsBlock}
         sourceHighlightEl.scrollLeft = sourceTextEl.scrollLeft;
       }
 
+      function runEditorMetaUpdateNow() {
+        const normalizedEditor = normalizeForCompare(sourceTextEl.value);
+        updateResultActionButtons(normalizedEditor);
+      }
+
+      function scheduleEditorMetaUpdate() {
+        if (editorMetaUpdateRaf !== null) {
+          if (typeof window.cancelAnimationFrame === "function") {
+            window.cancelAnimationFrame(editorMetaUpdateRaf);
+          } else {
+            window.clearTimeout(editorMetaUpdateRaf);
+          }
+          editorMetaUpdateRaf = null;
+        }
+
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+
+        editorMetaUpdateRaf = schedule(() => {
+          editorMetaUpdateRaf = null;
+          runEditorMetaUpdateNow();
+        });
+      }
+
       function readStoredToggle(storageKey) {
         if (!window.localStorage) return null;
         try {
@@ -3597,9 +3631,18 @@ ${cssVarsBlock}
         latestResponseKind = kind === "critique" ? "critique" : "annotation";
         latestResponseTimestamp = responseTimestamp;
         latestResponseIsStructuredCritique = isStructuredCritique(markdown);
+        latestResponseHasContent = Boolean(markdown && markdown.trim());
+        latestResponseNormalized = normalizeForCompare(markdown);
+
+        if (latestResponseIsStructuredCritique) {
+          latestCritiqueNotes = buildCritiqueNotesMarkdown(markdown);
+          latestCritiqueNotesNormalized = normalizeForCompare(latestCritiqueNotes);
+        } else {
+          latestCritiqueNotes = "";
+          latestCritiqueNotesNormalized = "";
+        }
 
         refreshResponseUi();
-        syncActionButtons();
       }
 
       function applyLatestPayload(payload) {
@@ -4016,8 +4059,8 @@ ${cssVarsBlock}
       });
 
       sourceTextEl.addEventListener("input", () => {
-        renderSourcePreview();
-        updateResultActionButtons();
+        renderSourcePreview({ previewDelayMs: PREVIEW_INPUT_DEBOUNCE_MS });
+        scheduleEditorMetaUpdate();
       });
 
       sourceTextEl.addEventListener("scroll", () => {
