@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 
@@ -610,10 +610,22 @@ function readStudioFile(pathArg: string, cwd: string):
 	}
 
 	try {
-		const text = readFileSync(resolved.resolved, "utf-8");
-		if (text.includes("\u0000")) {
+		// Read raw bytes first to detect binary content before UTF-8 decode
+		const buf = readFileSync(resolved.resolved);
+		// Heuristic: check the first 8KB for binary indicators
+		const sample = buf.subarray(0, 8192);
+		let nulCount = 0;
+		let controlCount = 0;
+		for (let i = 0; i < sample.length; i++) {
+			const b = sample[i];
+			if (b === 0x00) nulCount++;
+			// Control chars excluding tab (0x09), newline (0x0A), carriage return (0x0D)
+			else if (b < 0x08 || (b > 0x0D && b < 0x20 && b !== 0x1B)) controlCount++;
+		}
+		if (nulCount > 0 || (sample.length > 0 && controlCount / sample.length > 0.1)) {
 			return { ok: false, message: `File appears to be binary: ${resolved.label}` };
 		}
+		const text = buf.toString("utf-8");
 		return { ok: true, text, label: resolved.label, resolvedPath: resolved.resolved };
 	} catch (error) {
 		return {
@@ -710,15 +722,22 @@ function stripMathMlAnnotationTags(html: string): string {
 }
 
 function normalizeObsidianImages(markdown: string): string {
+	// Use angle-bracket destinations so paths with spaces/special chars are safe for Pandoc
 	return markdown
-		.replace(/!\[\[([^|\]]+)\|([^\]]+)\]\]/g, "![$2]($1)")
-		.replace(/!\[\[([^\]]+)\]\]/g, "![]($1)");
+		.replace(/!\[\[([^|\]]+)\|([^\]]+)\]\]/g, (_m, path, alt) => `![${alt}](<${path}>)`)
+		.replace(/!\[\[([^\]]+)\]\]/g, (_m, path) => `![](<${path}>)`);
 }
 
-async function renderStudioMarkdownWithPandoc(markdown: string): Promise<string> {
+async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const args = ["-f", "gfm+tex_math_dollars-raw_html", "-t", "html5", "--mathml"];
-	const normalizedMarkdown = normalizeObsidianImages(normalizeMathDelimiters(markdown));
+	const inputFormat = isLatex ? "latex" : "gfm+tex_math_dollars-raw_html";
+	const args = ["-f", inputFormat, "-t", "html5", "--mathml"];
+	if (resourcePath) {
+		args.push(`--resource-path=${resourcePath}`);
+		// Embed images as data URIs so they render in the browser preview
+		args.push("--embed-resources", "--standalone");
+	}
+	const normalizedMarkdown = isLatex ? markdown : normalizeObsidianImages(normalizeMathDelimiters(markdown));
 
 	return await new Promise<string>((resolve, reject) => {
 		const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"] });
@@ -757,7 +776,12 @@ async function renderStudioMarkdownWithPandoc(markdown: string): Promise<string>
 		child.once("close", (code) => {
 			if (settled) return;
 			if (code === 0) {
-				const renderedHtml = Buffer.concat(stdoutChunks).toString("utf-8");
+				let renderedHtml = Buffer.concat(stdoutChunks).toString("utf-8");
+				// When --standalone was used, extract only the <body> content
+				if (resourcePath) {
+					const bodyMatch = renderedHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+					if (bodyMatch) renderedHtml = bodyMatch[1];
+				}
 				succeed(stripMathMlAnnotationTags(renderedHtml));
 				return;
 			}
@@ -1124,12 +1148,79 @@ function buildStudioUrl(port: number, token: string): string {
 	return `http://127.0.0.1:${port}/?token=${encoded}`;
 }
 
+function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
+	const panelShadow =
+		style.mode === "light"
+			? "0 1px 2px rgba(15, 23, 42, 0.03), 0 4px 14px rgba(15, 23, 42, 0.04)"
+			: "0 1px 2px rgba(0, 0, 0, 0.36), 0 6px 18px rgba(0, 0, 0, 0.22)";
+	const accentContrast = style.mode === "light" ? "#ffffff" : "#0e1616";
+	const blockquoteBg = withAlpha(
+		style.palette.mdQuoteBorder,
+		style.mode === "light" ? 0.10 : 0.16,
+		style.mode === "light" ? "rgba(15, 23, 42, 0.04)" : "rgba(255, 255, 255, 0.05)",
+	);
+	const tableAltBg = withAlpha(
+		style.palette.mdCodeBlockBorder,
+		style.mode === "light" ? 0.10 : 0.14,
+		style.mode === "light" ? "rgba(15, 23, 42, 0.03)" : "rgba(255, 255, 255, 0.04)",
+	);
+	const editorBg = style.mode === "light"
+		? blendColors(style.palette.panel, "#ffffff", 0.5)
+		: style.palette.panel;
+
+	return {
+		"color-scheme": style.mode,
+		"--bg": style.palette.bg,
+		"--panel": style.palette.panel,
+		"--panel-2": style.palette.panel2,
+		"--border": style.palette.border,
+		"--border-muted": style.palette.borderMuted,
+		"--text": style.palette.text,
+		"--muted": style.palette.muted,
+		"--accent": style.palette.accent,
+		"--warn": style.palette.warn,
+		"--error": style.palette.error,
+		"--ok": style.palette.ok,
+		"--marker-bg": style.palette.markerBg,
+		"--marker-border": style.palette.markerBorder,
+		"--accent-soft": style.palette.accentSoft,
+		"--accent-soft-strong": style.palette.accentSoftStrong,
+		"--ok-border": style.palette.okBorder,
+		"--warn-border": style.palette.warnBorder,
+		"--md-heading": style.palette.mdHeading,
+		"--md-link": style.palette.mdLink,
+		"--md-link-url": style.palette.mdLinkUrl,
+		"--md-code": style.palette.mdCode,
+		"--md-codeblock": style.palette.mdCodeBlock,
+		"--md-codeblock-border": style.palette.mdCodeBlockBorder,
+		"--md-quote": style.palette.mdQuote,
+		"--md-quote-border": style.palette.mdQuoteBorder,
+		"--md-hr": style.palette.mdHr,
+		"--md-list-bullet": style.palette.mdListBullet,
+		"--syntax-comment": style.palette.syntaxComment,
+		"--syntax-keyword": style.palette.syntaxKeyword,
+		"--syntax-function": style.palette.syntaxFunction,
+		"--syntax-variable": style.palette.syntaxVariable,
+		"--syntax-string": style.palette.syntaxString,
+		"--syntax-number": style.palette.syntaxNumber,
+		"--syntax-type": style.palette.syntaxType,
+		"--syntax-operator": style.palette.syntaxOperator,
+		"--syntax-punctuation": style.palette.syntaxPunctuation,
+		"--panel-shadow": panelShadow,
+		"--accent-contrast": accentContrast,
+		"--blockquote-bg": blockquoteBg,
+		"--table-alt-bg": tableAltBg,
+		"--editor-bg": editorBg,
+	};
+}
+
 function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: Theme): string {
 	const initialText = escapeHtmlForInline(initialDocument?.text ?? "");
 	const initialSource = initialDocument?.source ?? "blank";
 	const initialLabel = escapeHtmlForInline(initialDocument?.label ?? "blank");
 	const initialPath = escapeHtmlForInline(initialDocument?.path ?? "");
 	const style = getStudioThemeStyle(theme);
+	const vars = buildThemeCssVars(style);
 	const mermaidConfig = {
 		startOnLoad: false,
 		theme: "base",
@@ -1157,24 +1248,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 			titleColor: style.palette.mdHeading,
 		},
 	};
-	const panelShadow =
-		style.mode === "light"
-			? "0 1px 2px rgba(15, 23, 42, 0.03), 0 4px 14px rgba(15, 23, 42, 0.04)"
-			: "0 1px 2px rgba(0, 0, 0, 0.36), 0 6px 18px rgba(0, 0, 0, 0.22)";
-	const accentContrast = style.mode === "light" ? "#ffffff" : "#0e1616";
-	const blockquoteBg = withAlpha(
-		style.palette.mdQuoteBorder,
-		style.mode === "light" ? 0.10 : 0.16,
-		style.mode === "light" ? "rgba(15, 23, 42, 0.04)" : "rgba(255, 255, 255, 0.05)",
-	);
-	const tableAltBg = withAlpha(
-		style.palette.mdCodeBlockBorder,
-		style.mode === "light" ? 0.10 : 0.14,
-		style.mode === "light" ? "rgba(15, 23, 42, 0.03)" : "rgba(255, 255, 255, 0.04)",
-	);
-	const editorBg = style.mode === "light"
-		? blendColors(style.palette.panel, "#ffffff", 0.5)
-		: style.palette.panel;
+	const cssVarsBlock = Object.entries(vars).map(([k, v]) => `      ${k}: ${v};`).join("\n");
 
 	return `<!doctype html>
 <html>
@@ -1184,48 +1258,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
   <title>Pi Studio: Feedback Workspace</title>
   <style>
     :root {
-      color-scheme: ${style.mode};
-      --bg: ${style.palette.bg};
-      --panel: ${style.palette.panel};
-      --panel-2: ${style.palette.panel2};
-      --border: ${style.palette.border};
-      --border-muted: ${style.palette.borderMuted};
-      --text: ${style.palette.text};
-      --muted: ${style.palette.muted};
-      --accent: ${style.palette.accent};
-      --warn: ${style.palette.warn};
-      --error: ${style.palette.error};
-      --ok: ${style.palette.ok};
-      --marker-bg: ${style.palette.markerBg};
-      --marker-border: ${style.palette.markerBorder};
-      --accent-soft: ${style.palette.accentSoft};
-      --accent-soft-strong: ${style.palette.accentSoftStrong};
-      --ok-border: ${style.palette.okBorder};
-      --warn-border: ${style.palette.warnBorder};
-      --md-heading: ${style.palette.mdHeading};
-      --md-link: ${style.palette.mdLink};
-      --md-link-url: ${style.palette.mdLinkUrl};
-      --md-code: ${style.palette.mdCode};
-      --md-codeblock: ${style.palette.mdCodeBlock};
-      --md-codeblock-border: ${style.palette.mdCodeBlockBorder};
-      --md-quote: ${style.palette.mdQuote};
-      --md-quote-border: ${style.palette.mdQuoteBorder};
-      --md-hr: ${style.palette.mdHr};
-      --md-list-bullet: ${style.palette.mdListBullet};
-      --syntax-comment: ${style.palette.syntaxComment};
-      --syntax-keyword: ${style.palette.syntaxKeyword};
-      --syntax-function: ${style.palette.syntaxFunction};
-      --syntax-variable: ${style.palette.syntaxVariable};
-      --syntax-string: ${style.palette.syntaxString};
-      --syntax-number: ${style.palette.syntaxNumber};
-      --syntax-type: ${style.palette.syntaxType};
-      --syntax-operator: ${style.palette.syntaxOperator};
-      --syntax-punctuation: ${style.palette.syntaxPunctuation};
-      --panel-shadow: ${panelShadow};
-      --accent-contrast: ${accentContrast};
-      --blockquote-bg: ${blockquoteBg};
-      --table-alt-bg: ${tableAltBg};
-      --editor-bg: ${editorBg};
+${cssVarsBlock}
     }
 
     * { box-sizing: border-box; }
@@ -1243,7 +1276,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       min-height: 100%;
     }
 
-    header {
+    body > header {
       border-bottom: 1px solid var(--border-muted);
       padding: 12px 16px;
       background: var(--panel);
@@ -1387,6 +1420,20 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       font-size: 14px;
     }
 
+    .section-header select {
+      font-weight: 600;
+      font-size: 14px;
+      border: none;
+      border-radius: 4px;
+      background: inherit;
+      color: inherit;
+      cursor: pointer;
+      padding: 2px 4px;
+      margin: 0;
+      -webkit-appearance: menulist;
+      appearance: menulist;
+    }
+
     .reference-meta {
       padding: 8px 10px;
       border-bottom: 1px solid var(--border-muted);
@@ -1462,6 +1509,56 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     .source-actions select {
       padding: 6px 9px;
       font-size: 12px;
+    }
+
+    .resource-dir-btn {
+      padding: 4px 10px;
+      font-size: 12px;
+      border: 1px solid var(--border-muted);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--fg-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      font-family: inherit;
+    }
+    .resource-dir-btn:hover {
+      color: var(--fg);
+      border-color: var(--fg-muted);
+    }
+    .resource-dir-label {
+      cursor: pointer;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .resource-dir-label:hover {
+      color: var(--fg);
+      border-color: var(--fg-muted);
+    }
+    .resource-dir-input-wrap {
+      display: none;
+      gap: 3px;
+      align-items: center;
+    }
+    .resource-dir-input-wrap.visible {
+      display: inline-flex;
+    }
+    .resource-dir-input-wrap input[type="text"] {
+      width: 260px;
+      padding: 2px 6px;
+      font-size: 11px;
+      border: 1px solid var(--border-muted);
+      border-radius: 4px;
+      background: var(--editor-bg);
+      color: var(--fg);
+      font-family: var(--font-mono);
+    }
+    .resource-dir-input-wrap button {
+      padding: 2px 6px;
+      font-size: 11px;
+      cursor: pointer;
     }
 
     .editor-highlight-wrap {
@@ -1556,6 +1653,20 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       color: var(--syntax-variable);
     }
 
+    .hl-diff-add {
+      color: var(--ok);
+      background: rgba(46, 160, 67, 0.12);
+      display: inline-block;
+      width: 100%;
+    }
+
+    .hl-diff-del {
+      color: var(--error);
+      background: rgba(248, 81, 73, 0.12);
+      display: inline-block;
+      width: 100%;
+    }
+
     .hl-list {
       color: var(--md-list-bullet);
       font-weight: 600;
@@ -1621,6 +1732,27 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       font-size: 1.25em;
       border-bottom: 0;
       padding-bottom: 0;
+    }
+
+    .rendered-markdown #title-block-header {
+      text-align: center;
+      margin-bottom: 2em;
+    }
+    .rendered-markdown #title-block-header .title {
+      margin-bottom: 0.25em;
+    }
+    .rendered-markdown #title-block-header .author,
+    .rendered-markdown #title-block-header .date {
+      margin-bottom: 0.15em;
+      color: var(--fg-muted);
+    }
+    .rendered-markdown #title-block-header .abstract {
+      text-align: left;
+      margin-top: 1em;
+    }
+    .rendered-markdown #title-block-header .abstract-title {
+      font-weight: 600;
+      margin-bottom: 0.25em;
     }
 
     .rendered-markdown p,
@@ -1739,6 +1871,29 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     .rendered-markdown code span.al {
       color: var(--error);
       font-weight: 600;
+    }
+
+    /* Diff-specific overrides for pandoc code blocks */
+    .rendered-markdown pre.sourceCode.diff code > span:has(> .va) {
+      color: var(--ok);
+      background: rgba(46, 160, 67, 0.12);
+    }
+    .rendered-markdown pre.sourceCode.diff code > span:has(> .st) {
+      color: var(--error);
+      background: rgba(248, 81, 73, 0.12);
+    }
+    .rendered-markdown pre.sourceCode.diff code > span:has(> .dt) {
+      color: var(--syntax-function);
+    }
+    .rendered-markdown pre.sourceCode.diff code > span:has(> .kw) {
+      color: var(--syntax-keyword);
+    }
+    .rendered-markdown pre.sourceCode.diff .va,
+    .rendered-markdown pre.sourceCode.diff .st,
+    .rendered-markdown pre.sourceCode.diff .dt,
+    .rendered-markdown pre.sourceCode.diff .kw {
+      color: inherit;
+      font-weight: inherit;
     }
 
     .rendered-markdown table {
@@ -1905,30 +2060,32 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 </head>
 <body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}">
   <header>
-    <h1><span class="app-logo" aria-hidden="true">π</span> Pi Studio <span class="app-subtitle">Feedback Workspace</span></h1>
+    <h1><span class="app-logo" aria-hidden="true">π</span> Pi Studio <span class="app-subtitle">Editor & Response Workspace</span></h1>
     <div class="controls">
-      <select id="editorViewSelect" aria-label="Editor view mode">
-        <option value="markdown" selected>Left: Editor (Raw)</option>
-        <option value="preview">Left: Editor (Preview)</option>
-      </select>
-      <select id="rightViewSelect" aria-label="Response view mode">
-        <option value="markdown">Right: Response (Raw)</option>
-        <option value="preview" selected>Right: Response (Preview)</option>
-        <option value="editor-preview">Right: Editor (Preview)</option>
-      </select>
-      <button id="saveAsBtn" type="button" title="Save editor text to a new file path.">Save As…</button>
-      <button id="saveOverBtn" type="button" title="Overwrite current file with editor text." disabled>Save file</button>
-      <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".txt,.md,.markdown,.rst,.adoc,.tex,.json,.js,.ts,.py,.java,.c,.cpp,.h,.hpp,.go,.rs,.rb,.swift,.sh,.html,.css,.xml,.yaml,.yml,.toml,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.lua" /></label>
+      <button id="saveAsBtn" type="button" title="Save editor content to a new file path.">Save editor as…</button>
+      <button id="saveOverBtn" type="button" title="Overwrite current file with editor content." disabled>Save editor</button>
+      <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
     </div>
   </header>
 
   <main>
     <section id="leftPane">
-      <div id="leftSectionHeader" class="section-header">Editor</div>
+      <div id="leftSectionHeader" class="section-header">
+        <select id="editorViewSelect" aria-label="Editor view mode">
+          <option value="markdown" selected>Editor (Raw)</option>
+          <option value="preview">Editor (Preview)</option>
+        </select>
+      </div>
       <div class="source-wrap">
         <div class="source-meta">
           <div class="badge-row">
             <span id="sourceBadge" class="source-badge">Editor origin: ${initialLabel}</span>
+            <button id="resourceDirBtn" type="button" class="resource-dir-btn" hidden title="Set working directory for resolving relative paths in preview">Set working dir</button>
+            <span id="resourceDirLabel" class="source-badge resource-dir-label" hidden title="Click to change working directory"></span>
+            <span id="resourceDirInputWrap" class="resource-dir-input-wrap">
+              <input id="resourceDirInput" type="text" placeholder="/path/to/working/directory" title="Absolute path to working directory" />
+              <button id="resourceDirClearBtn" type="button" title="Clear working directory">✕</button>
+            </span>
             <span id="syncBadge" class="source-badge sync-badge">No response loaded</span>
           </div>
           <div class="source-actions">
@@ -1960,6 +2117,19 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
               <option value="fortran">Lang: Fortran</option>
               <option value="r">Lang: R</option>
               <option value="matlab">Lang: MATLAB</option>
+              <option value="latex">Lang: LaTeX</option>
+              <option value="diff">Lang: Diff</option>
+              <option value="java">Lang: Java</option>
+              <option value="go">Lang: Go</option>
+              <option value="ruby">Lang: Ruby</option>
+              <option value="swift">Lang: Swift</option>
+              <option value="html">Lang: HTML</option>
+              <option value="css">Lang: CSS</option>
+              <option value="xml">Lang: XML</option>
+              <option value="yaml">Lang: YAML</option>
+              <option value="toml">Lang: TOML</option>
+              <option value="lua">Lang: Lua</option>
+              <option value="text">Lang: Plain Text</option>
             </select>
           </div>
         </div>
@@ -1972,7 +2142,13 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
     </section>
 
     <section id="rightPane">
-      <div id="rightSectionHeader" class="section-header">Response</div>
+      <div id="rightSectionHeader" class="section-header">
+        <select id="rightViewSelect" aria-label="Response view mode">
+          <option value="markdown">Response (Raw)</option>
+          <option value="preview" selected>Response (Preview)</option>
+          <option value="editor-preview">Editor (Preview)</option>
+        </select>
+      </div>
       <div class="reference-meta">
         <span id="referenceBadge" class="source-badge">Latest response: none</span>
       </div>
@@ -2034,11 +2210,9 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const sourcePreviewEl = document.getElementById("sourcePreview");
       const leftPaneEl = document.getElementById("leftPane");
       const rightPaneEl = document.getElementById("rightPane");
-      const leftSectionHeaderEl = document.getElementById("leftSectionHeader");
       const sourceBadgeEl = document.getElementById("sourceBadge");
       const syncBadgeEl = document.getElementById("syncBadge");
       const critiqueViewEl = document.getElementById("critiqueView");
-      const rightSectionHeaderEl = document.getElementById("rightSectionHeader");
       const referenceBadgeEl = document.getElementById("referenceBadge");
       const editorViewSelect = document.getElementById("editorViewSelect");
       const rightViewSelect = document.getElementById("rightViewSelect");
@@ -2049,6 +2223,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const critiqueBtn = document.getElementById("critiqueBtn");
       const lensSelect = document.getElementById("lensSelect");
       const fileInput = document.getElementById("fileInput");
+      const resourceDirBtn = document.getElementById("resourceDirBtn");
+      const resourceDirLabel = document.getElementById("resourceDirLabel");
+      const resourceDirInputWrap = document.getElementById("resourceDirInputWrap");
+      const resourceDirInput = document.getElementById("resourceDirInput");
+      const resourceDirClearBtn = document.getElementById("resourceDirClearBtn");
       const loadResponseBtn = document.getElementById("loadResponseBtn");
       const loadCritiqueNotesBtn = document.getElementById("loadCritiqueNotesBtn");
       const loadCritiqueFullBtn = document.getElementById("loadCritiqueFullBtn");
@@ -2093,7 +2272,44 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       const EDITOR_HIGHLIGHT_MAX_CHARS = 80_000;
       const EDITOR_HIGHLIGHT_STORAGE_KEY = "piStudio.editorHighlightEnabled";
       const EDITOR_LANGUAGE_STORAGE_KEY = "piStudio.editorLanguage";
-      const SUPPORTED_LANGUAGES = ["markdown", "javascript", "typescript", "python", "bash", "json", "rust", "c", "cpp", "julia", "fortran", "r", "matlab"];
+      // Single source of truth: language -> file extensions (and display label)
+      var LANG_EXT_MAP = {
+        markdown:   { label: "Markdown",   exts: ["md", "markdown", "mdx"] },
+        javascript: { label: "JavaScript", exts: ["js", "mjs", "cjs", "jsx"] },
+        typescript: { label: "TypeScript", exts: ["ts", "mts", "cts", "tsx"] },
+        python:     { label: "Python",     exts: ["py", "pyw"] },
+        bash:       { label: "Bash",       exts: ["sh", "bash", "zsh"] },
+        json:       { label: "JSON",       exts: ["json", "jsonc", "json5"] },
+        rust:       { label: "Rust",       exts: ["rs"] },
+        c:          { label: "C",          exts: ["c", "h"] },
+        cpp:        { label: "C++",        exts: ["cpp", "cxx", "cc", "hpp", "hxx"] },
+        julia:      { label: "Julia",      exts: ["jl"] },
+        fortran:    { label: "Fortran",    exts: ["f90", "f95", "f03", "f", "for"] },
+        r:          { label: "R",          exts: ["r", "R"] },
+        matlab:     { label: "MATLAB",     exts: ["m"] },
+        latex:      { label: "LaTeX",      exts: ["tex", "latex"] },
+        diff:       { label: "Diff",       exts: ["diff", "patch"] },
+        // Languages accepted for upload/detect but without syntax highlighting
+        java:       { label: "Java",       exts: ["java"] },
+        go:         { label: "Go",         exts: ["go"] },
+        ruby:       { label: "Ruby",       exts: ["rb"] },
+        swift:      { label: "Swift",      exts: ["swift"] },
+        html:       { label: "HTML",       exts: ["html", "htm"] },
+        css:        { label: "CSS",        exts: ["css"] },
+        xml:        { label: "XML",        exts: ["xml"] },
+        yaml:       { label: "YAML",       exts: ["yaml", "yml"] },
+        toml:       { label: "TOML",       exts: ["toml"] },
+        lua:        { label: "Lua",        exts: ["lua"] },
+        text:       { label: "Plain Text", exts: ["txt", "rst", "adoc"] },
+      };
+      // Build reverse map: extension -> language
+      var EXT_TO_LANG = {};
+      Object.keys(LANG_EXT_MAP).forEach(function(lang) {
+        LANG_EXT_MAP[lang].exts.forEach(function(ext) { EXT_TO_LANG[ext.toLowerCase()] = lang; });
+      });
+      // Languages that have syntax highlighting support
+      var HIGHLIGHTED_LANGUAGES = ["markdown", "javascript", "typescript", "python", "bash", "json", "rust", "c", "cpp", "julia", "fortran", "r", "matlab", "latex"];
+      var SUPPORTED_LANGUAGES = Object.keys(LANG_EXT_MAP);
       const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
       const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
       let sourcePreviewRenderTimer = null;
@@ -2137,6 +2353,27 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
         sourceBadgeEl.textContent = "Editor origin: " + label;
+        // Show "Set working dir" button when not file-backed
+        var isFileBacked = sourceState.source === "file" && Boolean(sourceState.path);
+        if (isFileBacked) {
+          if (resourceDirInput) resourceDirInput.value = "";
+          if (resourceDirLabel) resourceDirLabel.textContent = "";
+          if (resourceDirBtn) resourceDirBtn.hidden = true;
+          if (resourceDirLabel) resourceDirLabel.hidden = true;
+          if (resourceDirInputWrap) resourceDirInputWrap.classList.remove("visible");
+        } else {
+          // Restore to label if dir is set, otherwise show button
+          var dir = resourceDirInput ? resourceDirInput.value.trim() : "";
+          if (dir) {
+            if (resourceDirBtn) resourceDirBtn.hidden = true;
+            if (resourceDirLabel) { resourceDirLabel.textContent = "Working dir: " + dir; resourceDirLabel.hidden = false; }
+            if (resourceDirInputWrap) resourceDirInputWrap.classList.remove("visible");
+          } else {
+            if (resourceDirBtn) resourceDirBtn.hidden = false;
+            if (resourceDirLabel) resourceDirLabel.hidden = true;
+            if (resourceDirInputWrap) resourceDirInputWrap.classList.remove("visible");
+          }
+        }
       }
 
       function applyPaneFocusClasses() {
@@ -2346,6 +2583,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         targetEl.appendChild(warningEl);
       }
 
+      function appendPreviewNotice(targetEl, message) {
+        if (!targetEl || typeof targetEl.querySelector !== "function" || typeof targetEl.appendChild !== "function") return;
+        if (targetEl.querySelector(".preview-image-warning")) return;
+        const el = document.createElement("div");
+        el.className = "preview-warning preview-image-warning";
+        el.textContent = String(message || "");
+        targetEl.appendChild(el);
+      }
+
       async function getMermaidApi() {
         if (mermaidModulePromise) {
           return mermaidModulePromise;
@@ -2438,7 +2684,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ markdown: String(markdown || "") }),
+            body: JSON.stringify({
+              markdown: String(markdown || ""),
+              sourcePath: sourceState.path || "",
+              resourceDir: (!sourceState.path && resourceDirInput) ? resourceDirInput.value.trim() : "",
+            }),
             signal: controller ? controller.signal : undefined,
           });
         } catch (error) {
@@ -2489,6 +2739,15 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
           await renderMermaidInElement(targetEl);
+
+          // Warn if relative images are present but unlikely to resolve (non-file-backed content)
+          if (!sourceState.path && !(resourceDirInput && resourceDirInput.value.trim())) {
+            var hasRelativeImages = /!\\[.*?\\]\\((?!https?:\\/\\/|data:)[^)]+\\)/.test(markdown || "");
+            var hasLatexImages = /\\\\includegraphics/.test(markdown || "");
+            if (hasRelativeImages || hasLatexImages) {
+              appendPreviewNotice(targetEl, "Images not displaying? Set working dir in the editor pane or open via /studio <path>.");
+            }
+          }
         } catch (error) {
           if (pane === "source") {
             if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
@@ -2504,7 +2763,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       function renderSourcePreviewNow() {
         if (editorView !== "preview") return;
         const text = sourceTextEl.value || "";
-        if (editorLanguage && editorLanguage !== "markdown") {
+        if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
           sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(text, editorLanguage) + "</div>";
           return;
         }
@@ -2562,7 +2821,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             critiqueViewEl.innerHTML = "<pre class='plain-markdown'>Editor is empty.</pre>";
             return;
           }
-          if (editorLanguage && editorLanguage !== "markdown") {
+          if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
             critiqueViewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(editorText, editorLanguage) + "</div>";
             return;
           }
@@ -2632,35 +2891,37 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       }
 
       function refreshResponseUi() {
-        if (leftSectionHeaderEl) {
-          leftSectionHeaderEl.textContent = "Editor";
-        }
-
-        if (rightSectionHeaderEl) {
-          rightSectionHeaderEl.textContent = rightView === "editor-preview" ? "Editor Preview" : "Response";
-        }
-
         updateSourceBadge();
         updateReferenceBadge();
         renderActiveResult();
         updateResultActionButtons();
       }
 
+      function getEffectiveSavePath() {
+        // File-backed: use the original path
+        if (sourceState.source === "file" && sourceState.path) return sourceState.path;
+        // Upload with working dir + filename: derive path
+        if (sourceState.source === "upload" && sourceState.label && resourceDirInput && resourceDirInput.value.trim()) {
+          var name = sourceState.label.replace(/^upload:\\s*/i, "");
+          if (name) return resourceDirInput.value.trim().replace(/\\/$/, "") + "/" + name;
+        }
+        return null;
+      }
+
       function updateSaveFileTooltip() {
         if (!saveOverBtn) return;
 
-        const isFileBacked = sourceState.source === "file" && Boolean(sourceState.path);
-        if (isFileBacked) {
-          const target = sourceState.label || sourceState.path;
-          saveOverBtn.title = "Overwrite current file: " + target;
+        var effectivePath = getEffectiveSavePath();
+        if (effectivePath) {
+          saveOverBtn.title = "Overwrite file: " + effectivePath;
           return;
         }
 
-        saveOverBtn.title = "Save file is available after opening a file or using Save As…";
+        saveOverBtn.title = "Save editor is available after opening a file, setting a working dir, or using Save editor as…";
       }
 
       function syncActionButtons() {
-        const canSaveOver = sourceState.source === "file" && Boolean(sourceState.path);
+        const canSaveOver = Boolean(getEffectiveSavePath());
 
         fileInput.disabled = uiBusy;
         saveAsBtn.disabled = uiBusy;
@@ -2803,6 +3064,7 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
         const first = raw.split(/\\s+/)[0].replace(/^\\./, "").toLowerCase();
 
+        // Explicit aliases that don't match extension names
         if (first === "js" || first === "javascript" || first === "jsx" || first === "node") return "javascript";
         if (first === "ts" || first === "typescript" || first === "tsx") return "typescript";
         if (first === "py" || first === "python") return "python";
@@ -2815,8 +3077,11 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         if (first === "fortran" || first === "f90" || first === "f95" || first === "f03" || first === "f" || first === "for") return "fortran";
         if (first === "r") return "r";
         if (first === "matlab" || first === "m") return "matlab";
+        if (first === "latex" || first === "tex") return "latex";
+        if (first === "diff" || first === "patch" || first === "udiff") return "diff";
 
-        return "";
+        // Fall back to the unified extension->language map
+        return EXT_TO_LANG[first] || "";
       }
 
       function highlightCodeTokens(line, pattern, classifyMatch) {
@@ -2981,6 +3246,31 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           return "<span class='hl-code'>" + highlighted + "</span>";
         }
 
+        if (lang === "latex") {
+          const texPattern = /(%.*$)|(\\\\(?:documentclass|usepackage|newtheorem|begin|end|section|subsection|subsubsection|chapter|part|title|author|date|maketitle|tableofcontents|includegraphics|caption|label|ref|eqref|cite|textbf|textit|texttt|emph|footnote|centering|newcommand|renewcommand|providecommand|bibliography|bibliographystyle|bibitem|item|input|include)\\b)|(\\\\[A-Za-z]+)|(\\{|\\})|(\\$\\$?(?:[^$\\\\]|\\\\.)+\\$\\$?)|(\\[(?:.*?)\\])/g;
+          const highlighted = highlightCodeTokens(source, texPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-kw";
+            if (match[3]) return "hl-code-fn";
+            if (match[4]) return "hl-code-op";
+            if (match[5]) return "hl-code-str";
+            if (match[6]) return "hl-code-num";
+            return "hl-code";
+          });
+          return highlighted;
+        }
+
+        if (lang === "diff") {
+          var escaped = escapeHtml(source);
+          if (/^@@/.test(source)) return "<span class=\\"hl-code-fn\\">" + escaped + "</span>";
+          if (/^\\+\\+\\+|^---/.test(source)) return "<span class=\\"hl-code-kw\\">" + escaped + "</span>";
+          if (/^\\+/.test(source)) return "<span class=\\"hl-diff-add\\">" + escaped + "</span>";
+          if (/^-/.test(source)) return "<span class=\\"hl-diff-del\\">" + escaped + "</span>";
+          if (/^diff /.test(source)) return "<span class=\\"hl-code-kw\\">" + escaped + "</span>";
+          if (/^index /.test(source)) return "<span class=\\"hl-code-com\\">" + escaped + "</span>";
+          return escaped;
+        }
+
         return wrapHighlight("hl-code", source);
       }
 
@@ -3067,23 +3357,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
 
       function detectLanguageFromName(name) {
         if (!name) return "";
-        const dot = name.lastIndexOf(".");
+        var dot = name.lastIndexOf(".");
         if (dot < 0) return "";
-        const ext = name.slice(dot + 1).toLowerCase();
-        if (ext === "js" || ext === "mjs" || ext === "cjs" || ext === "jsx") return "javascript";
-        if (ext === "ts" || ext === "mts" || ext === "cts" || ext === "tsx") return "typescript";
-        if (ext === "py" || ext === "pyw") return "python";
-        if (ext === "sh" || ext === "bash" || ext === "zsh") return "bash";
-        if (ext === "json" || ext === "jsonc" || ext === "json5") return "json";
-        if (ext === "rs") return "rust";
-        if (ext === "c" || ext === "h") return "c";
-        if (ext === "cpp" || ext === "cxx" || ext === "cc" || ext === "hpp" || ext === "hxx") return "cpp";
-        if (ext === "jl") return "julia";
-        if (ext === "f90" || ext === "f95" || ext === "f03" || ext === "f" || ext === "for") return "fortran";
-        if (ext === "r" || ext === "R") return "r";
-        if (ext === "m") return "matlab";
-        if (ext === "md" || ext === "markdown" || ext === "mdx") return "markdown";
-        return "";
+        var ext = name.slice(dot + 1).toLowerCase();
+        return EXT_TO_LANG[ext] || "";
       }
 
       function renderEditorHighlightNow() {
@@ -3527,6 +3804,17 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
             setStatus(message.message);
           }
         }
+
+        if (message.type === "theme_update" && message.vars && typeof message.vars === "object") {
+          var root = document.documentElement;
+          Object.keys(message.vars).forEach(function(key) {
+            if (key === "color-scheme") {
+              root.style.colorScheme = message.vars[key];
+            } else {
+              root.style.setProperty(key, message.vars[key]);
+            }
+          });
+        }
       }
 
       function connect() {
@@ -3827,8 +4115,10 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
           return;
         }
 
-        const suggested = sourceState.path || "./draft.md";
-        const path = window.prompt("Save editor as path:", suggested);
+        var suggestedName = sourceState.label ? sourceState.label.replace(/^upload:\\s*/i, "") : "draft.md";
+        var suggestedDir = resourceDirInput && resourceDirInput.value.trim() ? resourceDirInput.value.trim().replace(/\\/$/, "") + "/" : "./";
+        const suggested = sourceState.path || (suggestedDir + suggestedName);
+        const path = window.prompt("Save editor content as:", suggested);
         if (!path) return;
 
         const requestId = beginUiAction("save_as");
@@ -3849,21 +4139,24 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
       });
 
       saveOverBtn.addEventListener("click", () => {
-        if (!(sourceState.source === "file" && sourceState.path)) {
-          setStatus("Save file is only available when source is a file path.", "warning");
+        var effectivePath = getEffectiveSavePath();
+        if (!effectivePath) {
+          setStatus("Save editor requires a file path. Open via /studio <path>, set a working dir, or use Save editor as…", "warning");
           return;
         }
 
-        if (!window.confirm("Overwrite " + sourceState.label + "?")) {
+        if (!window.confirm("Overwrite " + effectivePath + "?")) {
           return;
         }
 
         const requestId = beginUiAction("save_over");
         if (!requestId) return;
 
+        // Use save_as with the effective path for both file-backed and derived paths
         const sent = sendMessage({
-          type: "save_over_request",
+          type: "save_as_request",
           requestId,
+          path: effectivePath,
           content: sourceTextEl.value,
         });
 
@@ -3935,6 +4228,67 @@ function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: 
         }
       });
 
+      // Working directory controls — three states: button | input | label
+      function showResourceDirState(state) {
+        // state: "button" | "input" | "label"
+        if (resourceDirBtn) resourceDirBtn.hidden = state !== "button";
+        if (resourceDirInputWrap) {
+          if (state === "input") resourceDirInputWrap.classList.add("visible");
+          else resourceDirInputWrap.classList.remove("visible");
+        }
+        if (resourceDirLabel) resourceDirLabel.hidden = state !== "label";
+      }
+      function applyResourceDir() {
+        var dir = resourceDirInput ? resourceDirInput.value.trim() : "";
+        if (dir) {
+          if (resourceDirLabel) resourceDirLabel.textContent = "Working dir: " + dir;
+          showResourceDirState("label");
+        } else {
+          showResourceDirState("button");
+        }
+        updateSaveFileTooltip();
+        syncActionButtons();
+        renderSourcePreview();
+      }
+      if (resourceDirBtn) {
+        resourceDirBtn.addEventListener("click", () => {
+          showResourceDirState("input");
+          if (resourceDirInput) resourceDirInput.focus();
+        });
+      }
+      if (resourceDirLabel) {
+        resourceDirLabel.addEventListener("click", () => {
+          showResourceDirState("input");
+          if (resourceDirInput) resourceDirInput.focus();
+        });
+      }
+      if (resourceDirInput) {
+        resourceDirInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            applyResourceDir();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            var dir = resourceDirInput.value.trim();
+            if (dir) {
+              showResourceDirState("label");
+            } else {
+              showResourceDirState("button");
+            }
+          }
+        });
+      }
+      if (resourceDirClearBtn) {
+        resourceDirClearBtn.addEventListener("click", () => {
+          if (resourceDirInput) resourceDirInput.value = "";
+          if (resourceDirLabel) resourceDirLabel.textContent = "";
+          showResourceDirState("button");
+          updateSaveFileTooltip();
+          syncActionButtons();
+          renderSourcePreview();
+        });
+      }
+
       fileInput.addEventListener("change", () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
@@ -3998,6 +4352,7 @@ export default function (pi: ExtensionAPI) {
 	let initialStudioDocument: InitialStudioDocument | null = null;
 	let studioCwd = process.cwd();
 	let lastCommandCtx: ExtensionCommandContext | null = null;
+	let lastThemeVarsJson = "";
 	let agentBusy = false;
 
 	const isStudioBusy = () => agentBusy || activeRequest !== null;
@@ -4369,7 +4724,17 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		try {
-			const html = await renderStudioMarkdownWithPandoc(markdown);
+			const sourcePath =
+				parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { sourcePath?: unknown }).sourcePath === "string"
+					? (parsedBody as { sourcePath: string }).sourcePath
+					: "";
+			const userResourceDir =
+				parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { resourceDir?: unknown }).resourceDir === "string"
+					? (parsedBody as { resourceDir: string }).resourceDir
+					: "";
+			const resourcePath = sourcePath ? dirname(sourcePath) : (userResourceDir || studioCwd || undefined);
+			const isLatex = /\\documentclass\b|\\begin\{document\}/.test(markdown);
+			const html = await renderStudioMarkdownWithPandoc(markdown, isLatex, resourcePath);
 			respondJson(res, 200, { ok: true, html, renderer: "pandoc" });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -4536,6 +4901,27 @@ export default function (pi: ExtensionAPI) {
 		state.port = address.port;
 
 		serverState = state;
+
+		// Periodically check for theme changes and push to all clients
+		const themeCheckInterval = setInterval(() => {
+			if (!lastCommandCtx?.ui?.theme || !serverState || serverState.clients.size === 0) return;
+			try {
+				const style = getStudioThemeStyle(lastCommandCtx.ui.theme);
+				const vars = buildThemeCssVars(style);
+				const json = JSON.stringify(vars);
+				if (json !== lastThemeVarsJson) {
+					lastThemeVarsJson = json;
+					for (const client of serverState.clients) {
+						sendToClient(client, { type: "theme_update", vars });
+					}
+				}
+			} catch {
+				// Ignore theme read errors
+			}
+		}, 2000);
+		// Clean up interval if server closes
+		server.once("close", () => clearInterval(themeCheckInterval));
+
 		return state;
 	};
 
@@ -4684,6 +5070,11 @@ export default function (pi: ExtensionAPI) {
 			await ctx.waitForIdle();
 			lastCommandCtx = ctx;
 			studioCwd = ctx.cwd;
+			// Seed theme vars so first ping doesn't trigger a false update
+			try {
+				const currentStyle = getStudioThemeStyle(ctx.ui.theme);
+				lastThemeVarsJson = JSON.stringify(buildThemeCssVars(currentStyle));
+			} catch { /* ignore */ }
 
 			const latestAssistant =
 				extractLatestAssistantFromEntries(ctx.sessionManager.getBranch())

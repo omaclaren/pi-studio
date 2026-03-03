@@ -1,0 +1,16 @@
+diff --git a/src/main.ts b/src/main.ts
+index 1a2b3c4..5d6e7f8 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -10,7 +10,9 @@ function processInput(data: string): Result {
+   const parsed = parseData(data);
+   const validated = validate(parsed);
+ 
+-  return { ok: true, data: validated };
++  if (!validated) {
++    return { ok: false, error: "Validation failed" };
++  }
++  return { ok: true, data: validated };
+ }
+ 
+ export { processInput };
