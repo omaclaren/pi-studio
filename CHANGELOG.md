@@ -2,6 +2,17 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.4.3] — 2026-03-04
+
+### Added
+- **Export right preview as PDF** action in Studio response controls, using server-side pandoc + LaTeX (`xelatex`) for high-quality math/typesetting output.
+- Footer metadata now includes model **and thinking level** (e.g., `provider/model (xhigh)`) plus terminal/session label.
+- Footer braille-dot activity spinner (`⠋⠙⠹…`) driven by existing websocket lifecycle state.
+
+### Changed
+- Footer layout is now two-line and less crowded: status/meta on the left with shortcuts aligned to the right.
+- Status text is now user-facing (removed `WS:` jargon and redundant `Ready` wording).
+
 ## [0.4.2] — 2026-03-03
 
 ### Added

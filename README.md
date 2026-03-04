@@ -67,8 +67,10 @@ Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens 
 - **Working directory**: "Set working dir" button for uploaded files — resolves relative image paths and enables "Save editor" for uploaded content
 - **Live theme sync**: changing the pi theme in the terminal updates the studio browser UI automatically (polled every 2 seconds)
 - Separate syntax highlight toggles for editor and response Raw views, with local preference persistence
+- **PDF export**: export the current right-pane preview (`Response (Preview)` or `Editor (Preview)`) via pandoc + LaTeX (`xelatex`) for high-quality math/typesetting output
 - Keyboard shortcuts: `Cmd/Ctrl+Enter` runs **Run editor text** when editor pane is active; `Cmd/Ctrl+Esc` / `F10` toggles focus mode; `Esc` exits focus mode
-- Footer status reflects Studio/terminal activity phases (connecting, ready, submitting, terminal activity)
+- Footer status reflects Studio/terminal activity phases (connecting, ready, submitting, terminal activity), with a braille-dot spinner during agent activity
+- Footer metadata includes current model and terminal/session label for easier terminal tab switching
 - Theme-aware browser UI derived from current pi theme
 - View mode selectors integrated into panel headers for a cleaner layout
 
@@ -116,8 +118,9 @@ pi -e https://github.com/omaclaren/pi-studio
 - Mermaid fenced `mermaid` code blocks are rendered client-side in preview mode (Mermaid v11 loaded from jsDelivr), with palette-driven defaults for better theme fit.
 - If Mermaid cannot load or a diagram fails to render, preview shows an inline warning and keeps source text visible.
 - Preview rendering normalizes Obsidian wiki-image syntax (`![[path]]`, `![[path|alt]]`) into standard markdown images.
-- Install pandoc for full preview rendering (`brew install pandoc` on macOS).
-- If `pandoc` is unavailable, preview falls back to plain markdown text with an inline warning.
+- Install pandoc for full preview rendering and PDF export (`brew install pandoc` on macOS).
+- PDF export uses pandoc + LaTeX (`xelatex` by default; override with `PANDOC_PDF_ENGINE`). Install TeX Live/MacTeX for PDF generation.
+- If `pandoc` is unavailable, preview falls back to plain markdown text with an inline warning, and PDF export returns an error.
 
 ## License
 

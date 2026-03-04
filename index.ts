@@ -2,7 +2,9 @@ import type { ExtensionAPI, ExtensionCommandContext, SessionEntry, Theme } from 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
@@ -110,7 +112,20 @@ type IncomingStudioMessage =
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
+const PDF_EXPORT_MAX_CHARS = 400_000;
 const REQUEST_BODY_MAX_BYTES = 1_000_000;
+
+const PDF_PREAMBLE = `\\usepackage{titlesec}
+\\titleformat{\\section}{\\Large\\bfseries\\sffamily}{}{0pt}{}[\\vspace{2pt}\\titlerule]
+\\titleformat{\\subsection}{\\large\\bfseries\\sffamily}{}{0pt}{}
+\\titleformat{\\subsubsection}{\\normalsize\\bfseries\\sffamily}{}{0pt}{}
+\\titlespacing*{\\section}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{1ex plus 0.2ex}
+\\titlespacing*{\\subsection}{0pt}{1.2ex plus 0.4ex minus 0.2ex}{0.6ex plus 0.1ex}
+\\usepackage{enumitem}
+\\setlist[itemize]{nosep, leftmargin=1.5em}
+\\setlist[enumerate]{nosep, leftmargin=1.5em}
+\\usepackage{parskip}
+`;
 
 type StudioThemeMode = "dark" | "light";
 
@@ -800,6 +815,85 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	});
 }
 
+async function renderStudioPdfWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string): Promise<Buffer> {
+	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
+	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
+	const inputFormat = isLatex
+		? "latex"
+		: "gfm+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
+	const normalizedMarkdown = isLatex ? markdown : normalizeObsidianImages(normalizeMathDelimiters(markdown));
+
+	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
+	const preamblePath = join(tempDir, "_pdf_preamble.tex");
+	const outputPath = join(tempDir, "studio-export.pdf");
+
+	await mkdir(tempDir, { recursive: true });
+	await writeFile(preamblePath, PDF_PREAMBLE, "utf-8");
+
+	const args = [
+		"-f", inputFormat,
+		"-o", outputPath,
+		`--pdf-engine=${pdfEngine}`,
+		"-V", "geometry:margin=2.2cm",
+		"-V", "fontsize=11pt",
+		"-V", "linestretch=1.25",
+		"-V", "urlcolor=blue",
+		"-V", "linkcolor=blue",
+		"--include-in-header", preamblePath,
+	];
+	if (resourcePath) args.push(`--resource-path=${resourcePath}`);
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"] });
+			const stderrChunks: Buffer[] = [];
+			let settled = false;
+
+			const fail = (error: Error) => {
+				if (settled) return;
+				settled = true;
+				reject(error);
+			};
+
+			child.stderr.on("data", (chunk: Buffer | string) => {
+				stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+			});
+
+			child.once("error", (error) => {
+				const errno = error as NodeJS.ErrnoException;
+				if (errno.code === "ENOENT") {
+					const commandHint = pandocCommand === "pandoc"
+						? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
+						: `${pandocCommand} was not found. Check PANDOC_PATH.`;
+					fail(new Error(commandHint));
+					return;
+				}
+				fail(error);
+			});
+
+			child.once("close", (code) => {
+				if (settled) return;
+				if (code === 0) {
+					settled = true;
+					resolve();
+					return;
+				}
+				const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+				const hint = stderr.includes("not found") || stderr.includes("xelatex") || stderr.includes("pdflatex")
+					? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
+					: "";
+				fail(new Error(`pandoc PDF export failed with exit code ${code}${stderr ? `: ${stderr}` : ""}${hint}`));
+			});
+
+			child.stdin.end(normalizedMarkdown);
+		});
+
+		return await readFile(outputPath);
+	} finally {
+		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+	}
+}
+
 function readRequestBody(req: IncomingMessage, maxBytes: number): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const chunks: Buffer[] = [];
@@ -1292,6 +1386,50 @@ function buildStudioUrl(port: number, token: string): string {
 	return `http://127.0.0.1:${port}/?token=${encoded}`;
 }
 
+function formatModelLabel(model: { provider?: string; id?: string } | undefined): string {
+	const provider = typeof model?.provider === "string" ? model.provider.trim() : "";
+	const id = typeof model?.id === "string" ? model.id.trim() : "";
+	if (provider && id) return `${provider}/${id}`;
+	if (id) return id;
+	return "none";
+}
+
+function formatModelLabelWithThinking(modelLabel: string, thinkingLevel?: string): string {
+	const base = String(modelLabel || "").replace(/\s*\([^)]*\)\s*$/, "").trim() || "none";
+	if (base === "none") return "none";
+	const level = String(thinkingLevel ?? "").trim();
+	if (!level) return base;
+	return `${base} (${level})`;
+}
+
+function buildTerminalSessionLabel(cwd: string, sessionName?: string): string {
+	const cwdBase = basename(cwd || process.cwd() || "") || cwd || "~";
+	const termProgram = String(process.env.TERM_PROGRAM ?? "").trim();
+	const name = String(sessionName ?? "").trim();
+	const parts: string[] = [];
+	if (termProgram) parts.push(termProgram);
+	if (name) parts.push(name);
+	parts.push(cwdBase);
+	return parts.join(" · ");
+}
+
+function sanitizePdfFilename(input: string | undefined): string {
+	const fallback = "studio-preview.pdf";
+	const raw = String(input ?? "").trim();
+	if (!raw) return fallback;
+
+	const noPath = raw.split(/[\\/]/).pop() ?? raw;
+	const cleaned = noPath
+		.replace(/[\x00-\x1f\x7f]+/g, "")
+		.replace(/[<>:"|?*]+/g, "-")
+		.trim();
+	if (!cleaned) return fallback;
+
+	const ensuredExt = cleaned.toLowerCase().endsWith(".pdf") ? cleaned : `${cleaned}.pdf`;
+	if (ensuredExt.length <= 160) return ensuredExt;
+	return `${ensuredExt.slice(0, 156)}.pdf`;
+}
+
 function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 	const panelShadow =
 		style.mode === "light"
@@ -1358,11 +1496,18 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 	};
 }
 
-function buildStudioHtml(initialDocument: InitialStudioDocument | null, theme?: Theme): string {
+function buildStudioHtml(
+	initialDocument: InitialStudioDocument | null,
+	theme?: Theme,
+	initialModelLabel?: string,
+	initialTerminalLabel?: string,
+): string {
 	const initialText = escapeHtmlForInline(initialDocument?.text ?? "");
 	const initialSource = initialDocument?.source ?? "blank";
 	const initialLabel = escapeHtmlForInline(initialDocument?.label ?? "blank");
 	const initialPath = escapeHtmlForInline(initialDocument?.path ?? "");
+	const initialModel = escapeHtmlForInline(initialModelLabel ?? "none");
+	const initialTerminal = escapeHtmlForInline(initialTerminalLabel ?? "unknown");
 	const style = getStudioThemeStyle(theme);
 	const vars = buildThemeCssVars(style);
 	const mermaidConfig = {
@@ -2186,28 +2331,104 @@ ${cssVarsBlock}
       font-size: 12px;
       min-height: 32px;
       background: var(--panel);
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        "status hint"
+        "meta hint";
+      column-gap: 12px;
+      row-gap: 3px;
+      align-items: start;
+    }
+
+    #statusLine {
+      grid-area: status;
+      display: inline-flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
+      gap: 0;
+      min-width: 0;
+      justify-self: start;
+      text-align: left;
+    }
+
+    #statusLine.with-spinner {
+      gap: 6px;
+    }
+
+    #statusSpinner {
+      width: 0;
+      max-width: 0;
+      overflow: hidden;
+      opacity: 0;
+      text-align: center;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      flex: 0 0 auto;
+      transition: opacity 120ms ease;
+    }
+
+    #statusLine.with-spinner #statusSpinner {
+      width: 1.1em;
+      max-width: 1.1em;
+      opacity: 1;
     }
 
     #status {
-      flex: 1 1 auto;
-      min-width: 240px;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: left;
     }
 
-    .shortcut-hint {
+    .footer-meta {
+      grid-area: meta;
+      justify-self: start;
       color: var(--muted);
       font-size: 11px;
       white-space: nowrap;
-      font-style: normal;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: left;
+      max-width: 100%;
     }
 
-    footer.error { color: var(--error); }
-    footer.warning { color: var(--warn); }
-    footer.success { color: var(--ok); }
+    .shortcut-hint {
+      grid-area: hint;
+      justify-self: end;
+      align-self: center;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+      text-align: right;
+      font-style: normal;
+      opacity: 0.9;
+    }
+
+    #status.error { color: var(--error); }
+    #status.warning { color: var(--warn); }
+    #status.success { color: var(--ok); }
+
+    @media (max-width: 980px) {
+      footer {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "status"
+          "meta"
+          "hint";
+      }
+
+      .footer-meta {
+        justify-self: start;
+        max-width: 100%;
+      }
+
+      .shortcut-hint {
+        justify-self: start;
+        text-align: left;
+        white-space: normal;
+      }
+    }
 
     @media (max-width: 1080px) {
       main {
@@ -2216,7 +2437,7 @@ ${cssVarsBlock}
     }
   </style>
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}">
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Pi Studio <span class="app-subtitle">Editor & Response Workspace</span></h1>
     <div class="controls">
@@ -2327,13 +2548,15 @@ ${cssVarsBlock}
           <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
           <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>
           <button id="copyResponseBtn" type="button">Copy response text</button>
+          <button id="exportPdfBtn" type="button" title="Export the current right-pane preview as PDF via pandoc + xelatex.">Export right preview as PDF</button>
         </div>
       </div>
     </section>
   </main>
 
   <footer>
-    <span id="status">Booting studio…</span>
+    <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
+    <span id="footerMeta" class="footer-meta">Model: ${initialModel} · Terminal: ${initialTerminal}</span>
     <span class="shortcut-hint">Focus pane: Cmd/Ctrl+Esc (or F10), Esc to exit · Run editor text: Cmd/Ctrl+Enter</span>
   </footer>
 
@@ -2341,15 +2564,31 @@ ${cssVarsBlock}
   <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
   <script>
     (() => {
+      const statusLineEl = document.getElementById("statusLine");
       const statusEl = document.getElementById("status");
+      const statusSpinnerEl = document.getElementById("statusSpinner");
+      const footerMetaEl = document.getElementById("footerMeta");
+      const BRAILLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+      let spinnerTimer = null;
+      let spinnerFrameIndex = 0;
       if (statusEl) {
-        statusEl.textContent = "WS: Connecting · Studio script starting…";
+        statusEl.textContent = "Connecting · Studio script starting…";
       }
 
       function hardFail(prefix, error) {
         const details = error && error.message ? error.message : String(error || "unknown error");
+        if (spinnerTimer) {
+          window.clearInterval(spinnerTimer);
+          spinnerTimer = null;
+        }
+        if (statusLineEl && statusLineEl.classList) {
+          statusLineEl.classList.remove("with-spinner");
+        }
+        if (statusSpinnerEl) {
+          statusSpinnerEl.textContent = "";
+        }
         if (statusEl) {
-          statusEl.textContent = "WS: Disconnected · " + prefix + ": " + details;
+          statusEl.textContent = "Disconnected · " + prefix + ": " + details;
           statusEl.className = "error";
         }
       }
@@ -2391,6 +2630,7 @@ ${cssVarsBlock}
       const loadCritiqueNotesBtn = document.getElementById("loadCritiqueNotesBtn");
       const loadCritiqueFullBtn = document.getElementById("loadCritiqueFullBtn");
       const copyResponseBtn = document.getElementById("copyResponseBtn");
+      const exportPdfBtn = document.getElementById("exportPdfBtn");
       const saveAsBtn = document.getElementById("saveAsBtn");
       const saveOverBtn = document.getElementById("saveOverBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
@@ -2408,7 +2648,7 @@ ${cssVarsBlock}
 
       let ws = null;
       let wsState = "Connecting";
-      let statusMessage = "Studio script starting…";
+      let statusMessage = "Connecting · Studio script starting…";
       let statusLevel = "";
       let pendingRequestId = null;
       let pendingKind = null;
@@ -2432,6 +2672,9 @@ ${cssVarsBlock}
       let terminalActivityLabel = "";
       let lastSpecificToolLabel = "";
       let uiBusy = false;
+      let pdfExportInProgress = false;
+      let modelLabel = (document.body && document.body.dataset && document.body.dataset.modelLabel) || "none";
+      let terminalSessionLabel = (document.body && document.body.dataset && document.body.dataset.terminalLabel) || "unknown";
       let sourceState = {
         source: initialSourceState.source,
         label: initialSourceState.label,
@@ -2547,6 +2790,8 @@ ${cssVarsBlock}
         if (typeof message.terminalPhase === "string") summary.terminalPhase = message.terminalPhase;
         if (typeof message.terminalToolName === "string") summary.terminalToolName = message.terminalToolName;
         if (typeof message.terminalActivityLabel === "string") summary.terminalActivityLabel = message.terminalActivityLabel;
+        if (typeof message.modelLabel === "string") summary.modelLabel = message.modelLabel;
+        if (typeof message.terminalSessionLabel === "string") summary.terminalSessionLabel = message.terminalSessionLabel;
         if (typeof message.stopReason === "string") summary.stopReason = message.stopReason;
         if (typeof message.markdown === "string") summary.markdownLength = message.markdown.length;
         if (typeof message.label === "string") summary.label = message.label;
@@ -2555,7 +2800,7 @@ ${cssVarsBlock}
       }
 
       function getIdleStatus() {
-        return "Ready. Edit, load, or annotate text, then run, save, send to pi editor, or critique.";
+        return "Edit, load, or annotate text, then run, save, send to pi editor, or critique.";
       }
 
       function normalizeTerminalPhase(phase) {
@@ -2595,6 +2840,8 @@ ${cssVarsBlock}
         if (terminalActivityPhase === "idle") {
           lastSpecificToolLabel = "";
         }
+
+        syncFooterSpinnerState();
       }
 
       function getTerminalBusyStatus() {
@@ -2650,20 +2897,67 @@ ${cssVarsBlock}
         return "Studio: " + action + "…";
       }
 
+      function shouldAnimateFooterSpinner() {
+        return wsState !== "Disconnected" && (uiBusy || agentBusyFromServer || terminalActivityPhase !== "idle");
+      }
+
+      function updateFooterMeta() {
+        if (!footerMetaEl) return;
+        const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
+        const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
+        footerMetaEl.textContent = "Model: " + modelText + " · Terminal: " + terminalText;
+      }
+
+      function stopFooterSpinner() {
+        if (spinnerTimer) {
+          window.clearInterval(spinnerTimer);
+          spinnerTimer = null;
+        }
+      }
+
+      function startFooterSpinner() {
+        if (spinnerTimer) return;
+        spinnerTimer = window.setInterval(() => {
+          spinnerFrameIndex = (spinnerFrameIndex + 1) % BRAILLE_SPINNER_FRAMES.length;
+          renderStatus();
+        }, 80);
+      }
+
+      function syncFooterSpinnerState() {
+        if (shouldAnimateFooterSpinner()) {
+          startFooterSpinner();
+        } else {
+          stopFooterSpinner();
+        }
+      }
+
       function renderStatus() {
-        const prefix = "WS: " + wsState;
-        statusEl.textContent = prefix + " · " + statusMessage;
+        statusEl.textContent = statusMessage;
         statusEl.className = statusLevel || "";
+
+        const spinnerActive = shouldAnimateFooterSpinner();
+        if (statusLineEl && statusLineEl.classList) {
+          statusLineEl.classList.toggle("with-spinner", spinnerActive);
+        }
+        if (statusSpinnerEl) {
+          statusSpinnerEl.textContent = spinnerActive
+            ? (BRAILLE_SPINNER_FRAMES[spinnerFrameIndex % BRAILLE_SPINNER_FRAMES.length] || "")
+            : "";
+        }
+
+        updateFooterMeta();
       }
 
       function setWsState(nextState) {
         wsState = nextState || "Disconnected";
+        syncFooterSpinnerState();
         renderStatus();
       }
 
       function setStatus(message, level) {
         statusMessage = message;
         statusLevel = level || "";
+        syncFooterSpinnerState();
         renderStatus();
         debugTrace("status", {
           wsState,
@@ -3097,6 +3391,126 @@ ${cssVarsBlock}
         return payload.html;
       }
 
+      function parseContentDispositionFilename(headerValue) {
+        if (!headerValue || typeof headerValue !== "string") return "";
+
+        const utfMatch = headerValue.match(/filename\\*=UTF-8''([^;]+)/i);
+        if (utfMatch && utfMatch[1]) {
+          try {
+            return decodeURIComponent(utfMatch[1].trim());
+          } catch {
+            return utfMatch[1].trim();
+          }
+        }
+
+        const quotedMatch = headerValue.match(/filename="([^"]+)"/i);
+        if (quotedMatch && quotedMatch[1]) return quotedMatch[1].trim();
+
+        const plainMatch = headerValue.match(/filename=([^;]+)/i);
+        if (plainMatch && plainMatch[1]) return plainMatch[1].trim();
+
+        return "";
+      }
+
+      async function exportRightPanePdf() {
+        if (uiBusy || pdfExportInProgress) {
+          setStatus("Studio is busy.", "warning");
+          return;
+        }
+
+        const token = getToken();
+        if (!token) {
+          setStatus("Missing Studio token in URL. Re-run /studio.", "error");
+          return;
+        }
+
+        const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
+        if (!rightPaneShowsPreview) {
+          setStatus("Switch right pane to Response (Preview) or Editor (Preview) to export PDF.", "warning");
+          return;
+        }
+
+        const markdown = rightView === "editor-preview" ? sourceTextEl.value : latestResponseMarkdown;
+        if (!markdown || !markdown.trim()) {
+          setStatus("Nothing to export yet.", "warning");
+          return;
+        }
+
+        const sourcePath = sourceState.path || "";
+        const resourceDir = (!sourceState.path && resourceDirInput) ? resourceDirInput.value.trim() : "";
+        const isLatex = /\\\\documentclass\\b|\\\\begin\\{document\\}/.test(markdown);
+        let filenameHint = rightView === "editor-preview" ? "studio-editor-preview.pdf" : "studio-response-preview.pdf";
+        if (sourceState.path) {
+          const baseName = sourceState.path.split(/[\\\\/]/).pop() || "studio";
+          const stem = baseName.replace(/\\.[^.]+$/, "") || "studio";
+          filenameHint = stem + "-preview.pdf";
+        }
+
+        pdfExportInProgress = true;
+        updateResultActionButtons();
+        setStatus("Exporting PDF…", "warning");
+
+        try {
+          const response = await fetch("/export-pdf?token=" + encodeURIComponent(token), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              markdown: String(markdown || ""),
+              sourcePath: sourcePath,
+              resourceDir: resourceDir,
+              isLatex: isLatex,
+              filenameHint: filenameHint,
+            }),
+          });
+
+          if (!response.ok) {
+            const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+            let message = "PDF export failed with HTTP " + response.status + ".";
+            if (contentType.includes("application/json")) {
+              const payload = await response.json().catch(() => null);
+              if (payload && typeof payload.error === "string") {
+                message = payload.error;
+              }
+            } else {
+              const text = await response.text().catch(() => "");
+              if (text && text.trim()) {
+                message = text.trim();
+              }
+            }
+            throw new Error(message);
+          }
+
+          const blob = await response.blob();
+          const headerFilename = parseContentDispositionFilename(response.headers.get("content-disposition"));
+          let downloadName = headerFilename || filenameHint || "studio-preview.pdf";
+          if (!/\\.pdf$/i.test(downloadName)) {
+            downloadName += ".pdf";
+          }
+
+          const blobUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = blobUrl;
+          link.download = downloadName;
+          link.rel = "noopener";
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          window.setTimeout(() => {
+            URL.revokeObjectURL(blobUrl);
+          }, 1800);
+
+          setStatus("Exported PDF: " + downloadName, "success");
+        } catch (error) {
+          const detail = error && error.message ? error.message : String(error || "unknown error");
+          setStatus("PDF export failed: " + detail, "error");
+        } finally {
+          pdfExportInProgress = false;
+          updateResultActionButtons();
+        }
+      }
+
       async function applyRenderedMarkdown(targetEl, markdown, pane, nonce) {
         try {
           const renderedHtml = await renderMarkdownWithPandoc(markdown);
@@ -3270,6 +3684,20 @@ ${cssVarsBlock}
 
         copyResponseBtn.disabled = uiBusy || !hasResponse;
 
+        const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
+        const exportText = rightView === "editor-preview" ? sourceTextEl.value : latestResponseMarkdown;
+        const canExportPdf = rightPaneShowsPreview && Boolean(String(exportText || "").trim());
+        if (exportPdfBtn) {
+          exportPdfBtn.disabled = uiBusy || pdfExportInProgress || !canExportPdf;
+          if (rightView === "markdown") {
+            exportPdfBtn.title = "Switch right pane to Response (Preview) or Editor (Preview) to export PDF.";
+          } else if (!canExportPdf) {
+            exportPdfBtn.title = "Nothing to export yet.";
+          } else {
+            exportPdfBtn.title = "Export the current right-pane preview as PDF via pandoc + xelatex.";
+          }
+        }
+
         pullLatestBtn.disabled = uiBusy || followLatest;
         pullLatestBtn.textContent = queuedLatestResponse ? "Get latest response *" : "Get latest response";
 
@@ -3331,6 +3759,8 @@ ${cssVarsBlock}
 
       function setBusy(busy) {
         uiBusy = Boolean(busy);
+        syncFooterSpinnerState();
+        renderStatus();
         syncActionButtons();
       }
 
@@ -4058,6 +4488,13 @@ ${cssVarsBlock}
           const busy = Boolean(message.busy);
           agentBusyFromServer = Boolean(message.agentBusy);
           updateTerminalActivityState(message.terminalPhase, message.terminalToolName, message.terminalActivityLabel);
+          if (typeof message.modelLabel === "string") {
+            modelLabel = message.modelLabel;
+          }
+          if (typeof message.terminalSessionLabel === "string") {
+            terminalSessionLabel = message.terminalSessionLabel;
+          }
+          updateFooterMeta();
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
           if (typeof message.activeRequestId === "string" && message.activeRequestId.length > 0) {
@@ -4249,6 +4686,13 @@ ${cssVarsBlock}
           const busy = Boolean(message.busy);
           agentBusyFromServer = Boolean(message.agentBusy);
           updateTerminalActivityState(message.terminalPhase, message.terminalToolName, message.terminalActivityLabel);
+          if (typeof message.modelLabel === "string") {
+            modelLabel = message.modelLabel;
+          }
+          if (typeof message.terminalSessionLabel === "string") {
+            terminalSessionLabel = message.terminalSessionLabel;
+          }
+          updateFooterMeta();
 
           if (typeof message.activeRequestId === "string" && message.activeRequestId.length > 0) {
             pendingRequestId = message.activeRequestId;
@@ -4479,6 +4923,9 @@ ${cssVarsBlock}
       }
 
       window.addEventListener("keydown", handlePaneShortcut);
+      window.addEventListener("beforeunload", () => {
+        stopFooterSpinner();
+      });
 
       editorViewSelect.addEventListener("change", () => {
         setEditorView(editorViewSelect.value);
@@ -4623,6 +5070,12 @@ ${cssVarsBlock}
           setStatus("Clipboard write failed.", "warning");
         }
       });
+
+      if (exportPdfBtn) {
+        exportPdfBtn.addEventListener("click", () => {
+          void exportRightPanePdf();
+        });
+      }
 
       saveAsBtn.addEventListener("click", () => {
         const content = sourceTextEl.value;
@@ -4892,8 +5345,36 @@ export default function (pi: ExtensionAPI) {
 	let terminalActivityToolName: string | null = null;
 	let terminalActivityLabel: string | null = null;
 	let lastSpecificToolActivityLabel: string | null = null;
+	let currentModelLabel = "none";
+	let terminalSessionLabel = buildTerminalSessionLabel(studioCwd);
 
 	const isStudioBusy = () => agentBusy || activeRequest !== null;
+
+	const getSessionNameSafe = (): string | undefined => {
+		try {
+			return pi.getSessionName();
+		} catch {
+			return undefined;
+		}
+	};
+
+	const getThinkingLevelSafe = (): string | undefined => {
+		try {
+			return pi.getThinkingLevel();
+		} catch {
+			return undefined;
+		}
+	};
+
+	const refreshRuntimeMetadata = (ctx?: { cwd?: string; model?: { provider?: string; id?: string } | undefined }) => {
+		if (ctx?.cwd) {
+			studioCwd = ctx.cwd;
+		}
+		const model = ctx?.model ?? lastCommandCtx?.model;
+		const baseModelLabel = formatModelLabel(model);
+		currentModelLabel = formatModelLabelWithThinking(baseModelLabel, getThinkingLevelSafe());
+		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
+	};
 
 	const notifyStudio = (message: string, level: "info" | "warning" | "error" = "info") => {
 		if (!lastCommandCtx) return;
@@ -4986,6 +5467,8 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const broadcastState = () => {
+		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
+		currentModelLabel = formatModelLabelWithThinking(currentModelLabel, getThinkingLevelSafe());
 		broadcast({
 			type: "studio_state",
 			busy: isStudioBusy(),
@@ -4993,6 +5476,8 @@ export default function (pi: ExtensionAPI) {
 			terminalPhase: terminalActivityPhase,
 			terminalToolName: terminalActivityToolName,
 			terminalActivityLabel,
+			modelLabel: currentModelLabel,
+			terminalSessionLabel,
 			activeRequestId: activeRequest?.id ?? null,
 			activeRequestKind: activeRequest?.kind ?? null,
 		});
@@ -5086,6 +5571,8 @@ export default function (pi: ExtensionAPI) {
 				terminalPhase: terminalActivityPhase,
 				terminalToolName: terminalActivityToolName,
 				terminalActivityLabel,
+				modelLabel: currentModelLabel,
+				terminalSessionLabel,
 				activeRequestId: activeRequest?.id ?? null,
 				activeRequestKind: activeRequest?.kind ?? null,
 				lastResponse: lastStudioResponse,
@@ -5412,6 +5899,84 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const handleExportPdfRequest = async (req: IncomingMessage, res: ServerResponse) => {
+		let rawBody = "";
+		try {
+			rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const status = message.includes("exceeds") ? 413 : 400;
+			respondJson(res, status, { ok: false, error: message });
+			return;
+		}
+
+		let parsedBody: unknown;
+		try {
+			parsedBody = rawBody ? JSON.parse(rawBody) : {};
+		} catch {
+			respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+			return;
+		}
+
+		const markdown =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { markdown?: unknown }).markdown === "string"
+				? (parsedBody as { markdown: string }).markdown
+				: null;
+		if (markdown === null) {
+			respondJson(res, 400, { ok: false, error: "Missing markdown string in request body." });
+			return;
+		}
+
+		if (markdown.length > PDF_EXPORT_MAX_CHARS) {
+			respondJson(res, 413, {
+				ok: false,
+				error: `PDF export text exceeds ${PDF_EXPORT_MAX_CHARS} characters.`,
+			});
+			return;
+		}
+
+		const sourcePath =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { sourcePath?: unknown }).sourcePath === "string"
+				? (parsedBody as { sourcePath: string }).sourcePath
+				: "";
+		const userResourceDir =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { resourceDir?: unknown }).resourceDir === "string"
+				? (parsedBody as { resourceDir: string }).resourceDir
+				: "";
+		const resourcePath = sourcePath ? dirname(sourcePath) : (userResourceDir || studioCwd || undefined);
+		const requestedIsLatex =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { isLatex?: unknown }).isLatex === "boolean"
+				? (parsedBody as { isLatex: boolean }).isLatex
+				: null;
+		const isLatex = requestedIsLatex ?? /\\documentclass\b|\\begin\{document\}/.test(markdown);
+		const requestedFilename =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { filenameHint?: unknown }).filenameHint === "string"
+				? (parsedBody as { filenameHint: string }).filenameHint
+				: "";
+		const filename = sanitizePdfFilename(requestedFilename || (isLatex ? "studio-latex-preview.pdf" : "studio-preview.pdf"));
+
+		try {
+			const pdf = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath);
+			const safeAsciiName = filename
+				.replace(/[\x00-\x1f\x7f]/g, "")
+				.replace(/[;"\\]/g, "_")
+				.replace(/\s+/g, " ")
+				.trim() || "studio-preview.pdf";
+
+			res.writeHead(200, {
+				"Content-Type": "application/pdf",
+				"Cache-Control": "no-store",
+				"X-Content-Type-Options": "nosniff",
+				"Content-Disposition": `attachment; filename="${safeAsciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+				"Content-Length": String(pdf.length),
+			});
+			res.end(pdf);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			respondJson(res, 500, { ok: false, error: `PDF export failed: ${message}` });
+		}
+	};
+
 	const handleHttpRequest = (req: IncomingMessage, res: ServerResponse) => {
 		if (!serverState) {
 			respondText(res, 503, "Studio server not ready");
@@ -5461,6 +6026,29 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/export-pdf") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			const method = (req.method ?? "GET").toUpperCase();
+			if (method !== "POST") {
+				res.setHeader("Allow", "POST");
+				respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+				return;
+			}
+
+			void handleExportPdfRequest(req, res).catch((error) => {
+				respondJson(res, 500, {
+					ok: false,
+					error: `PDF export failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
 		if (requestUrl.pathname !== "/") {
 			respondText(res, 404, "Not found");
 			return;
@@ -5480,7 +6068,7 @@ export default function (pi: ExtensionAPI) {
 			"Cross-Origin-Opener-Policy": "same-origin",
 			"Cross-Origin-Resource-Policy": "same-origin",
 		});
-		res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme));
+		res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel));
 	};
 
 	const ensureServer = async (): Promise<StudioServerState> => {
@@ -5572,9 +6160,22 @@ export default function (pi: ExtensionAPI) {
 
 		serverState = state;
 
-		// Periodically check for theme changes and push to all clients
+		// Periodically check for theme/model metadata changes and push to all clients
 		const themeCheckInterval = setInterval(() => {
-			if (!lastCommandCtx?.ui?.theme || !serverState || serverState.clients.size === 0) return;
+			if (!serverState || serverState.clients.size === 0) return;
+
+			try {
+				const previousModelLabel = currentModelLabel;
+				const previousTerminalLabel = terminalSessionLabel;
+				refreshRuntimeMetadata();
+				if (currentModelLabel !== previousModelLabel || terminalSessionLabel !== previousTerminalLabel) {
+					broadcastState();
+				}
+			} catch {
+				// Ignore metadata read errors
+			}
+
+			if (!lastCommandCtx?.ui?.theme) return;
 			try {
 				const style = getStudioThemeStyle(lastCommandCtx.ui.theme);
 				const vars = buildThemeCssVars(style);
@@ -5632,7 +6233,12 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		agentBusy = false;
-		emitDebugEvent("session_start", { entryCount: ctx.sessionManager.getBranch().length });
+		refreshRuntimeMetadata(ctx);
+		emitDebugEvent("session_start", {
+			entryCount: ctx.sessionManager.getBranch().length,
+			modelLabel: currentModelLabel,
+			terminalSessionLabel,
+		});
 		setTerminalActivity("idle");
 	});
 
@@ -5641,8 +6247,23 @@ export default function (pi: ExtensionAPI) {
 		lastCommandCtx = null;
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		agentBusy = false;
-		emitDebugEvent("session_switch", { entryCount: ctx.sessionManager.getBranch().length });
+		refreshRuntimeMetadata(ctx);
+		emitDebugEvent("session_switch", {
+			entryCount: ctx.sessionManager.getBranch().length,
+			modelLabel: currentModelLabel,
+			terminalSessionLabel,
+		});
 		setTerminalActivity("idle");
+	});
+
+	pi.on("model_select", async (event, ctx) => {
+		refreshRuntimeMetadata({ cwd: ctx.cwd, model: event.model });
+		emitDebugEvent("model_select", {
+			modelLabel: currentModelLabel,
+			source: event.source,
+			previousModel: formatModelLabel(event.previousModel),
+		});
+		broadcastState();
 	});
 
 	pi.on("agent_start", async () => {
@@ -5813,7 +6434,8 @@ export default function (pi: ExtensionAPI) {
 
 			await ctx.waitForIdle();
 			lastCommandCtx = ctx;
-			studioCwd = ctx.cwd;
+			refreshRuntimeMetadata(ctx);
+			broadcastState();
 			// Seed theme vars so first ping doesn't trigger a false update
 			try {
 				const currentStyle = getStudioThemeStyle(ctx.ui.theme);
