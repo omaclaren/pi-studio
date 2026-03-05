@@ -88,6 +88,27 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-03-06
+
+### Changed
+- Refined left-pane action grouping into clearer workflow rows (run/copy/send/load, annotation tools, critique/highlight controls).
+- Refined right-pane action grouping with consistent rows below response output:
+  - mode toggles
+  - history navigation (`Get latest`, `Prev`, `History`, `Next`)
+  - response load/copy actions
+- Moved **Export right preview as PDF** to the right-pane section header (next to response view selector).
+- Annotation header scaffold now includes precedence guidance:
+  - `precedence: later messages supersede these annotations unless user explicitly references them`
+- Inserted annotation scaffold now includes a closing boundary marker:
+  - `--- end annotations ---`
+- Removing annotation header now strips the boundary marker as well.
+- Updated default README dark/light workspace screenshots to the latest UI.
+- Moved `sample.diff` example into `assets/` with other sample files.
+- Added escaping guidance for embedded browser script/template changes to `WORKFLOW.md`.
+
+### Fixed
+- Prevented Studio boot breakage caused by unescaped newline insertion in embedded script string updates.
+
 ## [0.5.0] — 2026-03-05
 
 ### Added

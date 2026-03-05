@@ -1952,6 +1952,31 @@ ${cssVarsBlock}
       background: var(--panel-2);
       font-weight: 600;
       font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .section-header-main {
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .section-header-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .section-header-actions button {
+      padding: 6px 9px;
+      font-size: 12px;
+      border-radius: 7px;
     }
 
     .section-header select {
@@ -2035,9 +2060,18 @@ ${cssVarsBlock}
 
     .source-actions {
       display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: stretch;
+      width: 100%;
+    }
+
+    .source-actions-row {
+      display: flex;
       gap: 6px;
       flex-wrap: wrap;
       align-items: center;
+      min-width: 0;
     }
 
     .source-actions button,
@@ -2586,10 +2620,28 @@ ${cssVarsBlock}
 
     .response-actions {
       display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+    }
+
+    .response-actions-row {
+      display: flex;
       align-items: center;
-      justify-content: flex-start;
       gap: 8px;
       flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .response-actions-row.history-row {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-bottom: 2px;
+      scrollbar-width: thin;
+    }
+
+    .response-actions-row.history-row > * {
+      flex: 0 0 auto;
     }
 
     footer {
@@ -2765,55 +2817,61 @@ ${cssVarsBlock}
             <span id="syncBadge" class="source-badge sync-badge">No response loaded</span>
           </div>
           <div class="source-actions">
-            <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is. Shortcut: Cmd/Ctrl+Enter when editor pane is active.">Run editor text</button>
-            <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (includes source metadata and [an: ...] syntax hint).">Insert annotated reply header</button>
-            <select id="annotationModeSelect" aria-label="Annotation visibility mode" title="On: keep and send [an: ...] markers. Hidden: keep markers in editor, hide in preview, and strip before Run/Critique.">
-              <option value="on" selected>Annotations: On</option>
-              <option value="off">Annotations: Hidden</option>
-            </select>
-            <select id="lensSelect" aria-label="Critique focus">
-              <option value="auto" selected>Critique focus: Auto</option>
-              <option value="writing">Critique focus: Writing</option>
-              <option value="code">Critique focus: Code</option>
-            </select>
-            <button id="critiqueBtn" type="button">Critique editor text</button>
-            <button id="sendEditorBtn" type="button">Send to pi editor</button>
-            <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
-            <button id="copyDraftBtn" type="button">Copy editor text</button>
-            <button id="saveAnnotatedBtn" type="button" title="Save full editor content (including [an: ...] markers) as a .annotated.md file.">Save .annotated.md</button>
-            <button id="stripAnnotationsBtn" type="button" title="Destructively remove all [an: ...] markers from editor text.">Strip annotations…</button>
-            <select id="highlightSelect" aria-label="Editor syntax highlighting">
-              <option value="off">Syntax highlight: Off</option>
-              <option value="on" selected>Syntax highlight: On</option>
-            </select>
-            <select id="langSelect" aria-label="Highlight language">
-              <option value="markdown" selected>Lang: Markdown</option>
-              <option value="javascript">Lang: JavaScript</option>
-              <option value="typescript">Lang: TypeScript</option>
-              <option value="python">Lang: Python</option>
-              <option value="bash">Lang: Bash</option>
-              <option value="json">Lang: JSON</option>
-              <option value="rust">Lang: Rust</option>
-              <option value="c">Lang: C</option>
-              <option value="cpp">Lang: C++</option>
-              <option value="julia">Lang: Julia</option>
-              <option value="fortran">Lang: Fortran</option>
-              <option value="r">Lang: R</option>
-              <option value="matlab">Lang: MATLAB</option>
-              <option value="latex">Lang: LaTeX</option>
-              <option value="diff">Lang: Diff</option>
-              <option value="java">Lang: Java</option>
-              <option value="go">Lang: Go</option>
-              <option value="ruby">Lang: Ruby</option>
-              <option value="swift">Lang: Swift</option>
-              <option value="html">Lang: HTML</option>
-              <option value="css">Lang: CSS</option>
-              <option value="xml">Lang: XML</option>
-              <option value="yaml">Lang: YAML</option>
-              <option value="toml">Lang: TOML</option>
-              <option value="lua">Lang: Lua</option>
-              <option value="text">Lang: Plain Text</option>
-            </select>
+            <div class="source-actions-row">
+              <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is. Shortcut: Cmd/Ctrl+Enter when editor pane is active.">Run editor text</button>
+              <button id="copyDraftBtn" type="button">Copy editor text</button>
+              <button id="sendEditorBtn" type="button">Send to pi editor</button>
+              <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
+            </div>
+            <div class="source-actions-row">
+              <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).">Insert annotated reply header</button>
+              <select id="annotationModeSelect" aria-label="Annotation visibility mode" title="On: keep and send [an: ...] markers. Hidden: keep markers in editor, hide in preview, and strip before Run/Critique.">
+                <option value="on" selected>Annotations: On</option>
+                <option value="off">Annotations: Hidden</option>
+              </select>
+              <button id="stripAnnotationsBtn" type="button" title="Destructively remove all [an: ...] markers from editor text.">Strip annotations…</button>
+              <button id="saveAnnotatedBtn" type="button" title="Save full editor content (including [an: ...] markers) as a .annotated.md file.">Save .annotated.md</button>
+            </div>
+            <div class="source-actions-row">
+              <select id="lensSelect" aria-label="Critique focus">
+                <option value="auto" selected>Critique focus: Auto</option>
+                <option value="writing">Critique focus: Writing</option>
+                <option value="code">Critique focus: Code</option>
+              </select>
+              <button id="critiqueBtn" type="button">Critique editor text</button>
+              <select id="highlightSelect" aria-label="Editor syntax highlighting">
+                <option value="off">Syntax highlight: Off</option>
+                <option value="on" selected>Syntax highlight: On</option>
+              </select>
+              <select id="langSelect" aria-label="Highlight language">
+                <option value="markdown" selected>Lang: Markdown</option>
+                <option value="javascript">Lang: JavaScript</option>
+                <option value="typescript">Lang: TypeScript</option>
+                <option value="python">Lang: Python</option>
+                <option value="bash">Lang: Bash</option>
+                <option value="json">Lang: JSON</option>
+                <option value="rust">Lang: Rust</option>
+                <option value="c">Lang: C</option>
+                <option value="cpp">Lang: C++</option>
+                <option value="julia">Lang: Julia</option>
+                <option value="fortran">Lang: Fortran</option>
+                <option value="r">Lang: R</option>
+                <option value="matlab">Lang: MATLAB</option>
+                <option value="latex">Lang: LaTeX</option>
+                <option value="diff">Lang: Diff</option>
+                <option value="java">Lang: Java</option>
+                <option value="go">Lang: Go</option>
+                <option value="ruby">Lang: Ruby</option>
+                <option value="swift">Lang: Swift</option>
+                <option value="html">Lang: HTML</option>
+                <option value="css">Lang: CSS</option>
+                <option value="xml">Lang: XML</option>
+                <option value="yaml">Lang: YAML</option>
+                <option value="toml">Lang: TOML</option>
+                <option value="lua">Lang: Lua</option>
+                <option value="text">Lang: Plain Text</option>
+              </select>
+            </div>
           </div>
         </div>
         <div id="sourceEditorWrap" class="editor-highlight-wrap">
@@ -2826,11 +2884,16 @@ ${cssVarsBlock}
 
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
-        <select id="rightViewSelect" aria-label="Response view mode">
-          <option value="markdown">Response (Raw)</option>
-          <option value="preview" selected>Response (Preview)</option>
-          <option value="editor-preview">Editor (Preview)</option>
-        </select>
+        <div class="section-header-main">
+          <select id="rightViewSelect" aria-label="Response view mode">
+            <option value="markdown">Response (Raw)</option>
+            <option value="preview" selected>Response (Preview)</option>
+            <option value="editor-preview">Editor (Preview)</option>
+          </select>
+        </div>
+        <div class="section-header-actions">
+          <button id="exportPdfBtn" type="button" title="Export the current right-pane preview as PDF via pandoc + xelatex.">Export right preview as PDF</button>
+        </div>
       </div>
       <div class="reference-meta">
         <span id="referenceBadge" class="source-badge">Latest response: none</span>
@@ -2838,24 +2901,29 @@ ${cssVarsBlock}
       <div id="critiqueView" class="panel-scroll rendered-markdown"><pre class="plain-markdown">No response yet.</pre></div>
       <div class="response-wrap">
         <div id="responseActions" class="response-actions">
-          <select id="followSelect" aria-label="Auto-update response">
-            <option value="on" selected>Auto-update response: On</option>
-            <option value="off">Auto-update response: Off</option>
-          </select>
-          <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
-            <option value="off">Syntax highlight: Off</option>
-            <option value="on" selected>Syntax highlight: On</option>
-          </select>
-          <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
-          <button id="historyPrevBtn" type="button" title="Show previous response in history.">◀ Prev response</button>
-          <span id="historyIndexBadge" class="source-badge">History: 0/0</span>
-          <button id="historyNextBtn" type="button" title="Show next response in history.">Next response ▶</button>
-          <button id="loadHistoryPromptBtn" type="button" title="Load the prompt that generated the selected response into the editor.">Load response prompt into editor</button>
-          <button id="loadResponseBtn" type="button">Load response into editor</button>
-          <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
-          <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>
-          <button id="copyResponseBtn" type="button">Copy response text</button>
-          <button id="exportPdfBtn" type="button" title="Export the current right-pane preview as PDF via pandoc + xelatex.">Export right preview as PDF</button>
+          <div class="response-actions-row">
+            <select id="followSelect" aria-label="Auto-update response">
+              <option value="on" selected>Auto-update response: On</option>
+              <option value="off">Auto-update response: Off</option>
+            </select>
+            <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
+              <option value="off">Syntax highlight: Off</option>
+              <option value="on" selected>Syntax highlight: On</option>
+            </select>
+          </div>
+          <div class="response-actions-row history-row">
+            <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
+            <button id="historyPrevBtn" type="button" title="Show previous response in history.">◀ Prev response</button>
+            <span id="historyIndexBadge" class="source-badge">History: 0/0</span>
+            <button id="historyNextBtn" type="button" title="Show next response in history.">Next response ▶</button>
+          </div>
+          <div class="response-actions-row">
+            <button id="loadHistoryPromptBtn" type="button" title="Load the prompt that generated the selected response into the editor.">Load response prompt into editor</button>
+            <button id="loadResponseBtn" type="button">Load response into editor</button>
+            <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
+            <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>
+            <button id="copyResponseBtn" type="button">Copy response text</button>
+          </div>
         </div>
       </div>
     </section>
@@ -5751,8 +5819,13 @@ ${cssVarsBlock}
         const sourceDescriptor = describeSourceForAnnotation();
         let header = "annotated reply below:\\n";
         header += "original source: " + sourceDescriptor + "\\n";
-        header += "annotation syntax: [an: your note]\\n\\n---\\n\\n";
+        header += "annotation syntax: [an: your note]\\n";
+        header += "precedence: later messages supersede these annotations unless user explicitly references them\\n\\n---\\n\\n";
         return header;
+      }
+
+      function stripAnnotationBoundaryMarker(text) {
+        return String(text || "").replace(/\\n{0,2}--- end annotations ---\\s*$/i, "");
       }
 
       function stripAnnotationHeader(text) {
@@ -5773,7 +5846,7 @@ ${cssVarsBlock}
 
         return {
           hadHeader: true,
-          body: normalized.slice(cursor),
+          body: stripAnnotationBoundaryMarker(normalized.slice(cursor)),
         };
       }
 
@@ -5786,7 +5859,7 @@ ${cssVarsBlock}
           return;
         }
         insertHeaderBtn.textContent = "Insert annotated reply header";
-        insertHeaderBtn.title = "Insert annotated-reply protocol header (includes source metadata and [an: ...] syntax hint).";
+        insertHeaderBtn.title = "Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).";
       }
 
       function toggleAnnotatedReplyHeader() {
@@ -5800,7 +5873,8 @@ ${cssVarsBlock}
           return;
         }
 
-        const updated = buildAnnotationHeader() + stripped.body;
+        const cleanedBody = stripAnnotationBoundaryMarker(stripped.body);
+        const updated = buildAnnotationHeader() + cleanedBody + "\\n\\n--- end annotations ---\\n\\n";
         if (isTextEquivalent(sourceTextEl.value, updated)) {
           setStatus("Annotated reply header already present.");
           return;

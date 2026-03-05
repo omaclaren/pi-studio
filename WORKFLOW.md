@@ -87,6 +87,16 @@ Rules:
 
 ---
 
+## Escaping pitfalls (implementation note)
+
+`index.ts` builds browser HTML as a TypeScript template string and embeds inline browser JavaScript. This creates multiple parse layers (TS string → HTML → JS), so incorrect escaping can break Studio boot (e.g. stuck at `Booting studio…`).
+
+Rules of thumb:
+- In embedded JS string literals authored from TS template context, use `\\n` (not `\n`) for runtime newlines.
+- Escape regex backslashes for the embedding layer (`\\s`, `\\n`, `\\[`), so browser JS receives the intended regex.
+- Prefer `JSON.stringify(value)` when injecting arbitrary text into inline script.
+- After touching inline `<script>` sections in `index.ts`, do a `/studio` boot smoke test immediately.
+
 ## Acceptance criteria
 
 1. `/studio --last` opens with editor loaded and no required mode selection.
