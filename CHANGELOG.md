@@ -88,6 +88,21 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-03-06
+
+### Added
+- New terminal command: `/studio-current <path>` loads a file into currently open Studio tab(s) without opening a new browser session.
+- `/studio --help` now includes `/studio-current` usage.
+
+### Changed
+- Footer compact action label is now **Compact**.
+- Footer metadata now includes in-Studio npm update hint text when an update is available (`Update: installed → latest`).
+- Update notification timing now runs after Studio open notifications, so the update message is not immediately overwritten.
+- Slash-command autocomplete order now lists `/studio` before `/studio-current`.
+
+### Fixed
+- Removed low-value terminal toasts for Studio websocket connect/disconnect that could overwrite more important notifications.
+
 ## [0.5.2] — 2026-03-06
 
 ### Changed

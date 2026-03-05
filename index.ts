@@ -2931,7 +2931,7 @@ ${cssVarsBlock}
 
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
-    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text">Model: ${initialModel} · Terminal: ${initialTerminal} · Context: unknown</span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact context</button></span>
+    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text">Model: ${initialModel} · Terminal: ${initialTerminal} · Context: unknown</span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
     <span class="shortcut-hint">Focus pane: Cmd/Ctrl+Esc (or F10), Esc to exit · Run editor text: Cmd/Ctrl+Enter</span>
   </footer>
 
@@ -3065,11 +3065,19 @@ ${cssVarsBlock}
       let contextTokens = null;
       let contextWindow = null;
       let contextPercent = null;
+      let updateInstalledVersion = null;
+      let updateLatestVersion = null;
 
       function parseFiniteNumber(value) {
         if (value == null || value === "") return null;
         const parsed = Number(value);
         return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      function parseNonEmptyString(value) {
+        if (typeof value !== "string") return null;
+        const trimmed = value.trim();
+        return trimmed ? trimmed : null;
       }
 
       contextTokens = parseFiniteNumber(document.body && document.body.dataset ? document.body.dataset.contextTokens : null);
@@ -3199,6 +3207,12 @@ ${cssVarsBlock}
         if (typeof message.contextTokens === "number") summary.contextTokens = message.contextTokens;
         if (typeof message.contextWindow === "number") summary.contextWindow = message.contextWindow;
         if (typeof message.contextPercent === "number") summary.contextPercent = message.contextPercent;
+        if (typeof message.updateInstalledVersion === "string") summary.updateInstalledVersion = message.updateInstalledVersion;
+        if (typeof message.updateLatestVersion === "string") summary.updateLatestVersion = message.updateLatestVersion;
+        if (message.document && typeof message.document === "object" && typeof message.document.text === "string") {
+          summary.documentLength = message.document.text.length;
+          if (typeof message.document.label === "string") summary.documentLabel = message.document.label;
+        }
         if (typeof message.compactInProgress === "boolean") summary.compactInProgress = message.compactInProgress;
         if (typeof message.stopReason === "string") summary.stopReason = message.stopReason;
         if (typeof message.markdown === "string") summary.markdownLength = message.markdown.length;
@@ -3388,6 +3402,30 @@ ${cssVarsBlock}
         return changed;
       }
 
+      function applyUpdateInfoFromMessage(message) {
+        if (!message || typeof message !== "object") return false;
+
+        let changed = false;
+
+        if (Object.prototype.hasOwnProperty.call(message, "updateInstalledVersion")) {
+          const nextInstalled = parseNonEmptyString(message.updateInstalledVersion);
+          if (nextInstalled !== updateInstalledVersion) {
+            updateInstalledVersion = nextInstalled;
+            changed = true;
+          }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(message, "updateLatestVersion")) {
+          const nextLatest = parseNonEmptyString(message.updateLatestVersion);
+          if (nextLatest !== updateLatestVersion) {
+            updateLatestVersion = nextLatest;
+            changed = true;
+          }
+        }
+
+        return changed;
+      }
+
       function updateDocumentTitle() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
@@ -3401,7 +3439,13 @@ ${cssVarsBlock}
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
         const contextText = formatContextUsageText();
-        const text = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextText;
+        let updateText = "";
+        if (updateLatestVersion) {
+          updateText = updateInstalledVersion
+            ? "Update: " + updateInstalledVersion + " → " + updateLatestVersion
+            : "Update: " + updateLatestVersion + " available";
+        }
+        const text = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextText + (updateText ? " · " + updateText : "");
         if (footerMetaTextEl) {
           footerMetaTextEl.textContent = text;
           footerMetaTextEl.title = text;
@@ -5332,7 +5376,9 @@ ${cssVarsBlock}
 
         debugTrace("server_message", summarizeServerMessage(message));
 
-        if (applyContextUsageFromMessage(message)) {
+        const contextChanged = applyContextUsageFromMessage(message);
+        const updateInfoChanged = applyUpdateInfoFromMessage(message);
+        if (contextChanged || updateInfoChanged) {
           updateFooterMeta();
         }
 
@@ -5617,6 +5663,35 @@ ${cssVarsBlock}
               ? "Loaded draft from pi editor."
               : "pi editor is empty. Loaded blank text.",
             content.trim() ? "success" : "warning",
+          );
+          return;
+        }
+
+        if (message.type === "studio_document") {
+          const nextDoc = message.document;
+          if (!nextDoc || typeof nextDoc !== "object" || typeof nextDoc.text !== "string") {
+            return;
+          }
+
+          const nextSource =
+            nextDoc.source === "file" || nextDoc.source === "last-response"
+              ? nextDoc.source
+              : "blank";
+          const nextLabel = typeof nextDoc.label === "string" && nextDoc.label.trim()
+            ? nextDoc.label.trim()
+            : (nextSource === "file" ? "file" : "studio document");
+          const nextPath = typeof nextDoc.path === "string" && nextDoc.path.trim()
+            ? nextDoc.path
+            : null;
+
+          setEditorText(nextDoc.text, { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: nextSource, label: nextLabel, path: nextPath });
+          refreshResponseUi();
+          setStatus(
+            typeof message.message === "string" && message.message.trim()
+              ? message.message
+              : "Loaded document from terminal.",
+            "success",
           );
           return;
         }
@@ -6487,6 +6562,8 @@ export default function (pi: ExtensionAPI) {
 	let updateCheckStarted = false;
 	let updateCheckCompleted = false;
 	const packageMetadata = readLocalPackageMetadata();
+	const installedPackageVersion = packageMetadata?.version ?? null;
+	let updateAvailableLatestVersion: string | null = null;
 
 	const isStudioBusy = () => agentBusy || activeRequest !== null || compactInProgress;
 
@@ -6579,10 +6656,14 @@ export default function (pi: ExtensionAPI) {
 			const latest = await fetchLatestNpmVersion(metadata.name, UPDATE_CHECK_TIMEOUT_MS);
 			if (!latest) return;
 			if (!isVersionBehind(metadata.version, latest)) return;
-			ctx.ui.notify(
-				`Update available for ${metadata.name}: ${metadata.version} → ${latest}. Run: pi install npm:${metadata.name}`,
-				"info",
-			);
+
+			updateAvailableLatestVersion = latest;
+			broadcastState();
+
+			const notification =
+				`Update available for ${metadata.name}: ${metadata.version} → ${latest}. Run: pi install npm:${metadata.name}`;
+			ctx.ui.notify(notification, "info");
+			broadcast({ type: "info", message: notification, level: "info" });
 		} finally {
 			updateCheckCompleted = true;
 		}
@@ -6689,6 +6770,8 @@ export default function (pi: ExtensionAPI) {
 			contextTokens: contextUsageSnapshot.tokens,
 			contextWindow: contextUsageSnapshot.contextWindow,
 			contextPercent: contextUsageSnapshot.percent,
+			updateInstalledVersion: installedPackageVersion,
+			updateLatestVersion: updateAvailableLatestVersion,
 			compactInProgress,
 			activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
 			activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
@@ -6793,6 +6876,8 @@ export default function (pi: ExtensionAPI) {
 				contextTokens: contextUsageSnapshot.tokens,
 				contextWindow: contextUsageSnapshot.contextWindow,
 				contextPercent: contextUsageSnapshot.percent,
+				updateInstalledVersion: installedPackageVersion,
+				updateLatestVersion: updateAvailableLatestVersion,
 				compactInProgress,
 				activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
 				activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
@@ -7424,7 +7509,7 @@ export default function (pi: ExtensionAPI) {
 
 		wsServer.on("connection", (ws) => {
 			clients.add(ws);
-			notifyStudio("Studio browser websocket connected.", "info");
+			emitDebugEvent("studio_ws_connected", { clients: clients.size });
 			broadcastState();
 
 			ws.on("message", (data) => {
@@ -7438,7 +7523,7 @@ export default function (pi: ExtensionAPI) {
 
 			ws.on("close", () => {
 				clients.delete(ws);
-				notifyStudio("Studio browser websocket disconnected.", "warning");
+				emitDebugEvent("studio_ws_disconnected", { clients: clients.size });
 			});
 
 			ws.on("error", () => {
@@ -7771,7 +7856,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio --blank   Open with blank editor\n"
 						+ "  /studio --last    Open with last model response\n"
 						+ "  /studio --status  Show studio status\n"
-						+ "  /studio --stop    Stop studio server",
+						+ "  /studio --stop    Stop studio server\n"
+						+ "  /studio-current <path>  Load a file into currently open Studio tab(s)",
 					"info",
 				);
 				return;
@@ -7784,7 +7870,6 @@ export default function (pi: ExtensionAPI) {
 			syncStudioResponseHistory(ctx.sessionManager.getBranch());
 			broadcastState();
 			broadcastResponseHistory();
-			void maybeNotifyUpdateAvailable(ctx);
 			// Seed theme vars so first ping doesn't trigger a false update
 			try {
 				const currentStyle = getStudioThemeStyle(ctx.ui.theme);
@@ -7884,7 +7969,71 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`Studio URL: ${url}`, "info");
 			} catch (error) {
 				ctx.ui.notify(`Failed to open browser: ${error instanceof Error ? error.message : String(error)}`, "error");
+			} finally {
+				void maybeNotifyUpdateAvailable(ctx);
 			}
+		},
+	});
+
+	pi.registerCommand("studio-current", {
+		description: "Load a file into current open Studio tab(s) without opening a new browser session",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const trimmed = args.trim();
+			if (!trimmed || trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
+				ctx.ui.notify(
+					"Usage: /studio-current <path>\n"
+						+ "  Load a file into currently open Studio tab(s) without opening a new browser window.",
+					"info",
+				);
+				return;
+			}
+
+			const pathArg = parsePathArgument(trimmed);
+			if (!pathArg) {
+				ctx.ui.notify("Invalid file path argument.", "error");
+				return;
+			}
+
+			const file = readStudioFile(pathArg, ctx.cwd);
+			if (!file.ok) {
+				ctx.ui.notify(file.message, "error");
+				return;
+			}
+
+			if (!serverState || serverState.clients.size === 0) {
+				ctx.ui.notify("No open Studio tab is connected. Run /studio first.", "warning");
+				return;
+			}
+
+			await ctx.waitForIdle();
+			lastCommandCtx = ctx;
+			refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
+			refreshContextUsage(ctx);
+			syncStudioResponseHistory(ctx.sessionManager.getBranch());
+
+			const nextDoc: InitialStudioDocument = {
+				text: file.text,
+				label: file.label,
+				source: "file",
+				path: file.resolvedPath,
+			};
+			initialStudioDocument = nextDoc;
+
+			broadcastState();
+			broadcastResponseHistory();
+			broadcast({
+				type: "studio_document",
+				document: nextDoc,
+				message: `Loaded ${file.label} from terminal command.`,
+			});
+
+			if (file.text.length > 200_000) {
+				ctx.ui.notify(
+					"Loaded a large file into Studio. Critique requests currently reject documents over 200k characters.",
+					"warning",
+				);
+			}
+			ctx.ui.notify(`Loaded file into open Studio tab(s): ${file.label}`, "info");
 		},
 	});
 }
