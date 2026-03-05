@@ -88,7 +88,7 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
-## [0.5.1] — 2026-03-06
+## [0.5.2] — 2026-03-06
 
 ### Changed
 - Refined left-pane action grouping into clearer workflow rows (run/copy/send/load, annotation tools, critique/highlight controls).
