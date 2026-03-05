@@ -15,13 +15,14 @@ Studio uses a **single workspace** (no tab/mode switching):
 
 ## Core actions
 
-## 1) Insert annotation header (optional prep)
+## 1) Insert annotated reply header (optional prep)
 
 Adds/updates an `annotated-reply` compatible scaffold in the editor:
 
 ```md
 annotated reply below:
 original source: <last model response | file <path> | studio editor>
+annotation syntax: [an: your note]
 
 ---
 
@@ -32,7 +33,7 @@ Studio does **not** auto-send this scaffold; it is an explicit editor transform.
 
 ## 2) Run editor text (plain send)
 
-Sends current editor text to the model unchanged.
+Sends current editor text to the model. If `Annotations: Hidden`, `[an: ...]` markers are stripped before send.
 
 ## 3) Critique editor text (structured review request)
 
@@ -77,8 +78,8 @@ Rules:
 - Header actions: **Save As…**, **Save file** (file-backed), **Load file in editor**
 - Header view toggles: `Left: Editor (Raw|Preview)`, `Right: Response (Raw|Preview) | Editor (Preview)`
 - Preview mode uses server-side `pandoc` rendering (math-aware) with plain-markdown fallback when renderer is unavailable.
-- Editor actions: **Insert annotation header**, **Run editor text**, **Critique editor text** (+ critique focus), **Send to pi editor**, **Copy editor text**
-- Response actions include `Auto-update response: On|Off` + **Get latest response**
+- Editor actions: **Insert/Remove annotated reply header**, **Annotations: On|Hidden**, **Strip annotations…**, **Run editor text**, **Critique editor text** (+ critique focus), **Send to pi editor**, **Copy editor text**, **Save .annotated.md**
+- Response actions include `Auto-update response: On|Off`, **Get latest response**, response-history browse (`Prev/Next`), and **Load response prompt into editor**
 - Source badge: `blank | last model response | file <path> | upload`
 - Response badge: `none | assistant response | assistant critique` (+ timestamp)
 - Sync badge: `No response loaded | In sync with response | Edited since response`
@@ -89,7 +90,7 @@ Rules:
 ## Acceptance criteria
 
 1. `/studio --last` opens with editor loaded and no required mode selection.
-2. **Run editor text** sends the current editor content as-is and returns response to right pane.
+2. **Run editor text** respects annotation mode (`On` send as-is, `Off` strip `[an: ...]`) and returns response to right pane.
 3. **Insert annotation header** updates the scaffold source metadata without duplicating headers.
 4. **Critique editor text** runs on current editor text and returns structured package when model complies.
 5. Structured critique helpers (`Load critique (notes)` / `Load critique (full)`) enable only when critique structure is present.

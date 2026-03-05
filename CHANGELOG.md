@@ -88,7 +88,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-03-05
+
 ### Added
+- Response history browser controls in Studio response actions (`Prev response` / `Next response` + `History: i/n`) with read-only browsing of prior assistant responses.
+- New response action: **Load response prompt into editor** (loads the user prompt that generated the currently selected history response, when available).
+- Annotation mode toggle (`Annotations: On|Off`) with explicit send behavior:
+  - **On**: keep/send `[an: ...]` markers
+  - **Off**: strip `[an: ...]` markers before Run/Critique
+- New editor action: **Save .annotated.md** (saves full editor text, including annotation markers).
+- Startup npm update check with terminal notification when installed version is behind npm latest.
+- Footer now shows live context usage (`used / window` and `%`) when available.
+- Footer action: **Compact context** button to trigger pi compaction directly from Studio.
 - Single-workspace flow (no mode switching): always-on **Editor** pane + **Response** pane.
 - Explicit annotation scaffold action: **Insert annotation header** (upserts header and source metadata in-editor).
 - Clear top-level critique controls: **Critique editor text** + **Critique focus**.
@@ -112,6 +123,9 @@ All notable changes to `pi-studio` are documented here.
 - Client-side Mermaid rendering for fenced `mermaid` code blocks in both Preview panes.
 
 ### Changed
+- Browser tab title now mirrors runtime metadata: `pi Studio · <terminal/session> · <model>`.
+- Inserted annotation scaffold now includes explicit syntax line: `annotation syntax: [an: your note]`.
+- Editor preview rendering now follows annotation mode (`On` highlights `[an: ...]` markers; `Off` hides them by stripping before preview render).
 - Removed Annotate/Critique tabs and related mode state.
 - Right pane now always shows the latest assistant output (reply or critique).
 - Response badge now reports response type + timestamp (`assistant response` / `assistant critique`).
@@ -130,6 +144,8 @@ All notable changes to `pi-studio` are documented here.
 - Hardened Studio preview HTTP handling and added client-side preview-request timeout to avoid stuck "Rendering preview…" states.
 
 ### Fixed
+- Fixed runtime model label staleness in Studio footer/state broadcasts by tracking canonical model metadata separately from command context.
+- Tightened editor/raw-highlight scroll synchronization for long documents and viewport changes (extra sync on keyup/mouseup/resize + post-update resync).
 - Studio boot blocker caused by unescaped preview HTML class-string quotes in inline script output.
 - `hydrateLatestAssistant` now infers response kind from hydrated markdown instead of reusing stale prior kind.
 - Added explicit `return` at end of `send_to_editor_request` handler for safer future handler additions.
@@ -137,9 +153,6 @@ All notable changes to `pi-studio` are documented here.
 - If `dompurify` is unavailable, preview now falls back to escaped plain markdown instead of injecting unsanitized HTML.
 - Preview sanitization now preserves MathML profile and strips MathML annotation tags to avoid duplicate raw TeX text beside rendered equations.
 - Preview now shows an inline warning when Mermaid is unavailable or diagram rendering fails, instead of failing silently.
-
-### Changed
-- Added npm metadata fields (`repository`, `homepage`, `bugs`) so npm package page links to GitHub.
 
 ## [0.1.0-alpha.1] - 2026-02-26
 

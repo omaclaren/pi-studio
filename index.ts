@@ -11,7 +11,7 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
-type StudioRequestKind = "critique" | "annotation" | "direct";
+type StudioRequestKind = "critique" | "annotation" | "direct" | "compact";
 type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 
@@ -34,6 +34,20 @@ interface LastStudioResponse {
 	markdown: string;
 	timestamp: number;
 	kind: StudioRequestKind;
+}
+
+interface StudioResponseHistoryItem {
+	id: string;
+	markdown: string;
+	timestamp: number;
+	kind: StudioRequestKind;
+	prompt: string | null;
+}
+
+interface StudioContextUsageSnapshot {
+	tokens: number | null;
+	contextWindow: number | null;
+	percent: number | null;
 }
 
 interface InitialStudioDocument {
@@ -74,6 +88,12 @@ interface SendRunRequestMessage {
 	text: string;
 }
 
+interface CompactRequestMessage {
+	type: "compact_request";
+	requestId: string;
+	customInstructions?: string;
+}
+
 interface SaveAsRequestMessage {
 	type: "save_as_request";
 	requestId: string;
@@ -105,6 +125,7 @@ type IncomingStudioMessage =
 	| CritiqueRequestMessage
 	| AnnotationRequestMessage
 	| SendRunRequestMessage
+	| CompactRequestMessage
 	| SaveAsRequestMessage
 	| SaveOverRequestMessage
 	| SendToEditorRequestMessage
@@ -114,6 +135,8 @@ const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
 const PDF_EXPORT_MAX_CHARS = 400_000;
 const REQUEST_BODY_MAX_BYTES = 1_000_000;
+const RESPONSE_HISTORY_LIMIT = 30;
+const UPDATE_CHECK_TIMEOUT_MS = 1800;
 
 const PDF_PREAMBLE = `\\usepackage{titlesec}
 \\titleformat{\\section}{\\Large\\bfseries\\sffamily}{}{0pt}{}[\\vspace{2pt}\\titlerule]
@@ -674,6 +697,93 @@ function writeStudioFile(pathArg: string, cwd: string, content: string):
 	}
 }
 
+function readLocalPackageMetadata(): { name: string; version: string } | null {
+	try {
+		const raw = readFileSync(new URL("./package.json", import.meta.url), "utf-8");
+		const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown };
+		const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
+		const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
+		if (!name || !version) return null;
+		return { name, version };
+	} catch {
+		return null;
+	}
+}
+
+interface ParsedSemver {
+	major: number;
+	minor: number;
+	patch: number;
+	prerelease: string | null;
+}
+
+function parseSemverLoose(version: string): ParsedSemver | null {
+	const normalized = String(version || "").trim().replace(/^v/i, "");
+	const match = normalized.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/);
+	if (!match) return null;
+	const major = Number.parseInt(match[1] ?? "", 10);
+	const minor = Number.parseInt(match[2] ?? "0", 10);
+	const patch = Number.parseInt(match[3] ?? "0", 10);
+	if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) return null;
+	const prerelease = typeof match[4] === "string" && match[4].trim() ? match[4].trim() : null;
+	return { major, minor, patch, prerelease };
+}
+
+function compareSemverLoose(a: string, b: string): number {
+	const pa = parseSemverLoose(a);
+	const pb = parseSemverLoose(b);
+	if (!pa || !pb) {
+		return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+	}
+	if (pa.major !== pb.major) return pa.major - pb.major;
+	if (pa.minor !== pb.minor) return pa.minor - pb.minor;
+	if (pa.patch !== pb.patch) return pa.patch - pb.patch;
+	if (pa.prerelease && !pb.prerelease) return -1;
+	if (!pa.prerelease && pb.prerelease) return 1;
+	if (!pa.prerelease && !pb.prerelease) return 0;
+	return (pa.prerelease ?? "").localeCompare(pb.prerelease ?? "", undefined, {
+		numeric: true,
+		sensitivity: "base",
+	});
+}
+
+function isVersionBehind(installedVersion: string, latestVersion: string): boolean {
+	return compareSemverLoose(installedVersion, latestVersion) < 0;
+}
+
+async function fetchLatestNpmVersion(packageName: string, timeoutMs = UPDATE_CHECK_TIMEOUT_MS): Promise<string | null> {
+	const pkg = String(packageName || "").trim();
+	if (!pkg) return null;
+	const encodedPackage = encodeURIComponent(pkg).replace(/^%40/, "@");
+	const endpoint = `https://registry.npmjs.org/${encodedPackage}/latest`;
+	const controller = typeof AbortController === "function" ? new AbortController() : null;
+	const timer = controller
+		? setTimeout(() => {
+			try {
+				controller.abort();
+			} catch {
+				// ignore abort race
+			}
+		}, timeoutMs)
+		: null;
+
+	try {
+		const response = await fetch(endpoint, {
+			method: "GET",
+			headers: { Accept: "application/json" },
+			signal: controller?.signal,
+		});
+		if (!response.ok) return null;
+		const payload = await response.json() as { version?: unknown };
+		const version = typeof payload.version === "string" ? payload.version.trim() : "";
+		return version || null;
+	} catch {
+		return null;
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 function normalizeMathDelimitersInSegment(markdown: string): string {
 	let normalized = markdown.replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_match, expr: string) => {
 		const content = expr.trim();
@@ -1159,6 +1269,116 @@ function extractLatestAssistantFromEntries(entries: SessionEntry[]): string | nu
 	return null;
 }
 
+function extractUserText(message: unknown): string | null {
+	const msg = message as {
+		role?: string;
+		content?: Array<{ type?: string; text?: string | { value?: string } }> | string;
+	};
+	if (!msg || msg.role !== "user") return null;
+
+	if (typeof msg.content === "string") {
+		const text = msg.content.trim();
+		return text.length > 0 ? text : null;
+	}
+
+	if (!Array.isArray(msg.content)) return null;
+
+	const blocks: string[] = [];
+	for (const part of msg.content) {
+		if (!part || typeof part !== "object") continue;
+		const partType = typeof part.type === "string" ? part.type : "";
+		if (typeof part.text === "string") {
+			if (!partType || partType === "text" || partType === "input_text") {
+				blocks.push(part.text);
+			}
+			continue;
+		}
+		if (part.text && typeof part.text === "object" && typeof part.text.value === "string") {
+			if (!partType || partType === "text" || partType === "input_text") {
+				blocks.push(part.text.value);
+			}
+		}
+	}
+
+	const text = blocks.join("\n\n").trim();
+	return text.length > 0 ? text : null;
+}
+
+function parseEntryTimestamp(timestamp: unknown): number {
+	if (typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0) {
+		return timestamp;
+	}
+	if (typeof timestamp === "string" && timestamp.trim()) {
+		const parsed = Date.parse(timestamp);
+		if (Number.isFinite(parsed) && parsed > 0) return parsed;
+	}
+	return Date.now();
+}
+
+function buildResponseHistoryFromEntries(entries: SessionEntry[], limit = RESPONSE_HISTORY_LIMIT): StudioResponseHistoryItem[] {
+	const history: StudioResponseHistoryItem[] = [];
+	let lastUserPrompt: string | null = null;
+
+	for (const entry of entries) {
+		if (!entry || entry.type !== "message") continue;
+		const message = (entry as { message?: unknown }).message;
+		const role = (message as { role?: string } | undefined)?.role;
+		if (role === "user") {
+			lastUserPrompt = extractUserText(message);
+			continue;
+		}
+		if (role !== "assistant") continue;
+		const markdown = extractAssistantText(message);
+		if (!markdown) continue;
+		history.push({
+			id: typeof (entry as { id?: unknown }).id === "string" ? (entry as { id: string }).id : randomUUID(),
+			markdown,
+			timestamp: parseEntryTimestamp((entry as { timestamp?: unknown }).timestamp),
+			kind: inferStudioResponseKind(markdown),
+			prompt: lastUserPrompt,
+		});
+	}
+
+	if (history.length <= limit) return history;
+	return history.slice(-limit);
+}
+
+function normalizeContextUsageSnapshot(usage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined): StudioContextUsageSnapshot {
+	if (!usage) {
+		return {
+			tokens: null,
+			contextWindow: null,
+			percent: null,
+		};
+	}
+
+	const contextWindow =
+		typeof usage.contextWindow === "number" && Number.isFinite(usage.contextWindow) && usage.contextWindow > 0
+			? usage.contextWindow
+			: null;
+	const tokens = typeof usage.tokens === "number" && Number.isFinite(usage.tokens) && usage.tokens >= 0
+		? usage.tokens
+		: null;
+
+	let percent = typeof usage.percent === "number" && Number.isFinite(usage.percent)
+		? usage.percent
+		: null;
+	if (percent === null && tokens !== null && contextWindow) {
+		percent = (tokens / contextWindow) * 100;
+	}
+	if (typeof percent === "number" && Number.isFinite(percent)) {
+		percent = Math.max(0, Math.min(100, percent));
+	} else {
+		percent = null;
+	}
+
+	return {
+		tokens,
+		contextWindow,
+		percent,
+	};
+}
+
 function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 	let parsed: unknown;
 	try {
@@ -1201,6 +1421,18 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 			type: "send_run_request",
 			requestId: msg.requestId,
 			text: msg.text,
+		};
+	}
+
+	if (
+		msg.type === "compact_request" &&
+		typeof msg.requestId === "string" &&
+		(msg.customInstructions === undefined || typeof msg.customInstructions === "string")
+	) {
+		return {
+			type: "compact_request",
+			requestId: msg.requestId,
+			customInstructions: typeof msg.customInstructions === "string" ? msg.customInstructions : undefined,
 		};
 	}
 
@@ -1501,6 +1733,7 @@ function buildStudioHtml(
 	theme?: Theme,
 	initialModelLabel?: string,
 	initialTerminalLabel?: string,
+	initialContextUsage?: StudioContextUsageSnapshot,
 ): string {
 	const initialText = escapeHtmlForInline(initialDocument?.text ?? "");
 	const initialSource = initialDocument?.source ?? "blank";
@@ -1508,6 +1741,18 @@ function buildStudioHtml(
 	const initialPath = escapeHtmlForInline(initialDocument?.path ?? "");
 	const initialModel = escapeHtmlForInline(initialModelLabel ?? "none");
 	const initialTerminal = escapeHtmlForInline(initialTerminalLabel ?? "unknown");
+	const initialContextTokens =
+		typeof initialContextUsage?.tokens === "number" && Number.isFinite(initialContextUsage.tokens)
+			? String(initialContextUsage.tokens)
+			: "";
+	const initialContextWindow =
+		typeof initialContextUsage?.contextWindow === "number" && Number.isFinite(initialContextUsage.contextWindow)
+			? String(initialContextUsage.contextWindow)
+			: "";
+	const initialContextPercent =
+		typeof initialContextUsage?.percent === "number" && Number.isFinite(initialContextUsage.percent)
+			? String(initialContextUsage.percent)
+			: "";
 	const style = getStudioThemeStyle(theme);
 	const vars = buildThemeCssVars(style);
 	const mermaidConfig = {
@@ -1544,7 +1789,7 @@ function buildStudioHtml(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Pi Studio: Feedback Workspace</title>
+  <title>pi Studio</title>
   <style>
     :root {
 ${cssVarsBlock}
@@ -1738,6 +1983,7 @@ ${cssVarsBlock}
       padding: 10px;
       font-size: 13px;
       line-height: 1.45;
+      tab-size: 2;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       resize: vertical;
     }
@@ -1876,6 +2122,7 @@ ${cssVarsBlock}
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 13px;
       line-height: 1.45;
+      tab-size: 2;
       color: var(--text);
       background: transparent;
     }
@@ -1973,6 +2220,27 @@ ${cssVarsBlock}
 
     .hl-url {
       color: var(--md-link-url);
+    }
+
+    .hl-annotation {
+      color: var(--accent);
+      background: var(--accent-soft);
+      border: 1px solid var(--marker-border);
+      border-radius: 4px;
+      padding: 0 3px;
+    }
+
+    .hl-annotation-muted {
+      color: var(--muted);
+      opacity: 0.65;
+    }
+
+    .annotation-preview-marker {
+      color: var(--accent);
+      background: var(--accent-soft);
+      border: 1px solid var(--marker-border);
+      border-radius: 4px;
+      padding: 0 4px;
     }
 
     #sourcePreview {
@@ -2334,7 +2602,7 @@ ${cssVarsBlock}
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       grid-template-areas:
-        "status hint"
+        "status status"
         "meta hint";
       column-gap: 12px;
       row-gap: 3px;
@@ -2386,11 +2654,19 @@ ${cssVarsBlock}
       justify-self: start;
       color: var(--muted);
       font-size: 11px;
+      text-align: left;
+      max-width: 100%;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .footer-meta-text {
+      min-width: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      text-align: left;
-      max-width: 100%;
     }
 
     .shortcut-hint {
@@ -2403,6 +2679,25 @@ ${cssVarsBlock}
       text-align: right;
       font-style: normal;
       opacity: 0.9;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .footer-compact-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+      line-height: 1.2;
+      border-radius: 999px;
+      border: 1px solid var(--border-muted);
+      background: var(--panel-2);
+      color: var(--text);
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    .footer-compact-btn:not(:disabled):hover {
+      background: var(--panel);
     }
 
     #status.error { color: var(--error); }
@@ -2427,6 +2722,8 @@ ${cssVarsBlock}
         justify-self: start;
         text-align: left;
         white-space: normal;
+        flex-wrap: wrap;
+        gap: 6px;
       }
     }
 
@@ -2437,9 +2734,9 @@ ${cssVarsBlock}
     }
   </style>
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}">
   <header>
-    <h1><span class="app-logo" aria-hidden="true">π</span> Pi Studio <span class="app-subtitle">Editor & Response Workspace</span></h1>
+    <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">Editor & Response Workspace</span></h1>
     <div class="controls">
       <button id="saveAsBtn" type="button" title="Save editor content to a new file path.">Save editor as…</button>
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content." disabled>Save editor</button>
@@ -2469,7 +2766,11 @@ ${cssVarsBlock}
           </div>
           <div class="source-actions">
             <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is. Shortcut: Cmd/Ctrl+Enter when editor pane is active.">Run editor text</button>
-            <button id="insertHeaderBtn" type="button" title="Prepends/updates the annotated-reply header in the editor.">Insert annotation header</button>
+            <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (includes source metadata and [an: ...] syntax hint).">Insert annotated reply header</button>
+            <select id="annotationModeSelect" aria-label="Annotation visibility mode" title="On: keep and send [an: ...] markers. Hidden: keep markers in editor, hide in preview, and strip before Run/Critique.">
+              <option value="on" selected>Annotations: On</option>
+              <option value="off">Annotations: Hidden</option>
+            </select>
             <select id="lensSelect" aria-label="Critique focus">
               <option value="auto" selected>Critique focus: Auto</option>
               <option value="writing">Critique focus: Writing</option>
@@ -2479,6 +2780,8 @@ ${cssVarsBlock}
             <button id="sendEditorBtn" type="button">Send to pi editor</button>
             <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
             <button id="copyDraftBtn" type="button">Copy editor text</button>
+            <button id="saveAnnotatedBtn" type="button" title="Save full editor content (including [an: ...] markers) as a .annotated.md file.">Save .annotated.md</button>
+            <button id="stripAnnotationsBtn" type="button" title="Destructively remove all [an: ...] markers from editor text.">Strip annotations…</button>
             <select id="highlightSelect" aria-label="Editor syntax highlighting">
               <option value="off">Syntax highlight: Off</option>
               <option value="on" selected>Syntax highlight: On</option>
@@ -2544,6 +2847,10 @@ ${cssVarsBlock}
             <option value="on" selected>Syntax highlight: On</option>
           </select>
           <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
+          <button id="historyPrevBtn" type="button" title="Show previous response in history.">◀ Prev response</button>
+          <span id="historyIndexBadge" class="source-badge">History: 0/0</span>
+          <button id="historyNextBtn" type="button" title="Show next response in history.">Next response ▶</button>
+          <button id="loadHistoryPromptBtn" type="button" title="Load the prompt that generated the selected response into the editor.">Load response prompt into editor</button>
           <button id="loadResponseBtn" type="button">Load response into editor</button>
           <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
           <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>
@@ -2556,7 +2863,7 @@ ${cssVarsBlock}
 
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
-    <span id="footerMeta" class="footer-meta">Model: ${initialModel} · Terminal: ${initialTerminal}</span>
+    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text">Model: ${initialModel} · Terminal: ${initialTerminal} · Context: unknown</span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact context</button></span>
     <span class="shortcut-hint">Focus pane: Cmd/Ctrl+Esc (or F10), Esc to exit · Run editor text: Cmd/Ctrl+Enter</span>
   </footer>
 
@@ -2568,6 +2875,7 @@ ${cssVarsBlock}
       const statusEl = document.getElementById("status");
       const statusSpinnerEl = document.getElementById("statusSpinner");
       const footerMetaEl = document.getElementById("footerMeta");
+      const footerMetaTextEl = document.getElementById("footerMetaText");
       const BRAILLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
       let spinnerTimer = null;
       let spinnerFrameIndex = 0;
@@ -2631,14 +2939,22 @@ ${cssVarsBlock}
       const loadCritiqueFullBtn = document.getElementById("loadCritiqueFullBtn");
       const copyResponseBtn = document.getElementById("copyResponseBtn");
       const exportPdfBtn = document.getElementById("exportPdfBtn");
+      const historyPrevBtn = document.getElementById("historyPrevBtn");
+      const historyNextBtn = document.getElementById("historyNextBtn");
+      const historyIndexBadgeEl = document.getElementById("historyIndexBadge");
+      const loadHistoryPromptBtn = document.getElementById("loadHistoryPromptBtn");
       const saveAsBtn = document.getElementById("saveAsBtn");
       const saveOverBtn = document.getElementById("saveOverBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
       const getEditorBtn = document.getElementById("getEditorBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
+      const saveAnnotatedBtn = document.getElementById("saveAnnotatedBtn");
+      const stripAnnotationsBtn = document.getElementById("stripAnnotationsBtn");
       const highlightSelect = document.getElementById("highlightSelect");
       const langSelect = document.getElementById("langSelect");
+      const annotationModeSelect = document.getElementById("annotationModeSelect");
+      const compactBtn = document.getElementById("compactBtn");
 
       const initialSourceState = {
         source: (document.body && document.body.dataset && document.body.dataset.initialSource) || "blank",
@@ -2666,6 +2982,8 @@ ${cssVarsBlock}
       let latestResponseNormalized = "";
       let latestCritiqueNotes = "";
       let latestCritiqueNotesNormalized = "";
+      let responseHistory = [];
+      let responseHistoryIndex = -1;
       let agentBusyFromServer = false;
       let terminalActivityPhase = "idle";
       let terminalActivityToolName = "";
@@ -2673,8 +2991,23 @@ ${cssVarsBlock}
       let lastSpecificToolLabel = "";
       let uiBusy = false;
       let pdfExportInProgress = false;
+      let compactInProgress = false;
       let modelLabel = (document.body && document.body.dataset && document.body.dataset.modelLabel) || "none";
       let terminalSessionLabel = (document.body && document.body.dataset && document.body.dataset.terminalLabel) || "unknown";
+      let contextTokens = null;
+      let contextWindow = null;
+      let contextPercent = null;
+
+      function parseFiniteNumber(value) {
+        if (value == null || value === "") return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      contextTokens = parseFiniteNumber(document.body && document.body.dataset ? document.body.dataset.contextTokens : null);
+      contextWindow = parseFiniteNumber(document.body && document.body.dataset ? document.body.dataset.contextWindow : null);
+      contextPercent = parseFiniteNumber(document.body && document.body.dataset ? document.body.dataset.contextPercent : null);
+
       let sourceState = {
         source: initialSourceState.source,
         label: initialSourceState.label,
@@ -2725,6 +3058,7 @@ ${cssVarsBlock}
       var SUPPORTED_LANGUAGES = Object.keys(LANG_EXT_MAP);
       const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
       const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
+      const ANNOTATION_MODE_STORAGE_KEY = "piStudio.annotationsEnabled";
       const PREVIEW_INPUT_DEBOUNCE_MS = 0;
       const PREVIEW_PENDING_BADGE_DELAY_MS = 220;
       const previewPendingTimers = new WeakMap();
@@ -2737,6 +3071,8 @@ ${cssVarsBlock}
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
+      let annotationsEnabled = true;
+      const ANNOTATION_MARKER_REGEX = /\\[an:\\s*([^\\]\\n]+?)\\]/gi;
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
       const MERMAID_CONFIG = ${JSON.stringify(mermaidConfig)};
       const MERMAID_UNAVAILABLE_MESSAGE = "Mermaid renderer unavailable. Showing mermaid blocks as code.";
@@ -2792,9 +3128,15 @@ ${cssVarsBlock}
         if (typeof message.terminalActivityLabel === "string") summary.terminalActivityLabel = message.terminalActivityLabel;
         if (typeof message.modelLabel === "string") summary.modelLabel = message.modelLabel;
         if (typeof message.terminalSessionLabel === "string") summary.terminalSessionLabel = message.terminalSessionLabel;
+        if (typeof message.contextTokens === "number") summary.contextTokens = message.contextTokens;
+        if (typeof message.contextWindow === "number") summary.contextWindow = message.contextWindow;
+        if (typeof message.contextPercent === "number") summary.contextPercent = message.contextPercent;
+        if (typeof message.compactInProgress === "boolean") summary.compactInProgress = message.compactInProgress;
         if (typeof message.stopReason === "string") summary.stopReason = message.stopReason;
         if (typeof message.markdown === "string") summary.markdownLength = message.markdown.length;
         if (typeof message.label === "string") summary.label = message.label;
+        if (Array.isArray(message.responseHistory)) summary.responseHistoryCount = message.responseHistory.length;
+        if (Array.isArray(message.items)) summary.itemsCount = message.items.length;
         if (typeof message.details === "object" && message.details !== null) summary.details = message.details;
         return summary;
       }
@@ -2869,6 +3211,7 @@ ${cssVarsBlock}
         if (kind === "annotation") return "sending annotated reply";
         if (kind === "critique") return "running critique";
         if (kind === "direct") return "running editor text";
+        if (kind === "compact") return "compacting context";
         if (kind === "send_to_editor") return "sending to pi editor";
         if (kind === "get_from_editor") return "loading from pi editor";
         if (kind === "save_as" || kind === "save_over") return "saving editor text";
@@ -2901,11 +3244,104 @@ ${cssVarsBlock}
         return wsState !== "Disconnected" && (uiBusy || agentBusyFromServer || terminalActivityPhase !== "idle");
       }
 
-      function updateFooterMeta() {
-        if (!footerMetaEl) return;
+      function formatNumber(value) {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "?";
+        try {
+          return new Intl.NumberFormat().format(Math.round(value));
+        } catch {
+          return String(Math.round(value));
+        }
+      }
+
+      function formatContextUsageText() {
+        const hasWindow = typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0;
+        const hasTokens = typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens >= 0;
+        let percentValue = typeof contextPercent === "number" && Number.isFinite(contextPercent)
+          ? contextPercent
+          : null;
+
+        if (percentValue == null && hasTokens && hasWindow) {
+          percentValue = (contextTokens / contextWindow) * 100;
+        }
+
+        if (!hasTokens && !hasWindow) {
+          return "Context: unknown";
+        }
+        if (!hasTokens && hasWindow) {
+          return "Context: ? / " + formatNumber(contextWindow);
+        }
+
+        let text = "Context: " + formatNumber(contextTokens);
+        if (hasWindow) {
+          text += " / " + formatNumber(contextWindow);
+        }
+        if (percentValue != null && Number.isFinite(percentValue)) {
+          const bounded = Math.max(0, Math.min(100, percentValue));
+          text += " (" + bounded.toFixed(1) + "%)";
+        }
+        return text;
+      }
+
+      function applyContextUsageFromMessage(message) {
+        if (!message || typeof message !== "object") return false;
+
+        let changed = false;
+
+        if (Object.prototype.hasOwnProperty.call(message, "contextTokens")) {
+          const next = typeof message.contextTokens === "number" && Number.isFinite(message.contextTokens) && message.contextTokens >= 0
+            ? message.contextTokens
+            : null;
+          if (next !== contextTokens) {
+            contextTokens = next;
+            changed = true;
+          }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(message, "contextWindow")) {
+          const next = typeof message.contextWindow === "number" && Number.isFinite(message.contextWindow) && message.contextWindow > 0
+            ? message.contextWindow
+            : null;
+          if (next !== contextWindow) {
+            contextWindow = next;
+            changed = true;
+          }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(message, "contextPercent")) {
+          const next = typeof message.contextPercent === "number" && Number.isFinite(message.contextPercent)
+            ? Math.max(0, Math.min(100, message.contextPercent))
+            : null;
+          if (next !== contextPercent) {
+            contextPercent = next;
+            changed = true;
+          }
+        }
+
+        return changed;
+      }
+
+      function updateDocumentTitle() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
-        footerMetaEl.textContent = "Model: " + modelText + " · Terminal: " + terminalText;
+        const titleParts = ["pi Studio"];
+        if (terminalText && terminalText !== "unknown") titleParts.push(terminalText);
+        if (modelText && modelText !== "none") titleParts.push(modelText);
+        document.title = titleParts.join(" · ");
+      }
+
+      function updateFooterMeta() {
+        const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
+        const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
+        const contextText = formatContextUsageText();
+        const text = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextText;
+        if (footerMetaTextEl) {
+          footerMetaTextEl.textContent = text;
+          footerMetaTextEl.title = text;
+        } else if (footerMetaEl) {
+          footerMetaEl.textContent = text;
+          footerMetaEl.title = text;
+        }
+        updateDocumentTitle();
       }
 
       function stopFooterSpinner() {
@@ -2952,6 +3388,7 @@ ${cssVarsBlock}
         wsState = nextState || "Disconnected";
         syncFooterSpinnerState();
         renderStatus();
+        syncActionButtons();
       }
 
       function setStatus(message, level) {
@@ -3104,6 +3541,151 @@ ${cssVarsBlock}
         }
       }
 
+      function normalizeHistoryKind(kind) {
+        return kind === "critique" ? "critique" : "annotation";
+      }
+
+      function normalizeHistoryItem(item, fallbackIndex) {
+        if (!item || typeof item !== "object") return null;
+        if (typeof item.markdown !== "string") return null;
+        const markdown = item.markdown;
+        if (!markdown.trim()) return null;
+
+        const id = typeof item.id === "string" && item.id.trim()
+          ? item.id.trim()
+          : ("history-" + fallbackIndex + "-" + Date.now());
+        const timestamp = typeof item.timestamp === "number" && Number.isFinite(item.timestamp) && item.timestamp > 0
+          ? item.timestamp
+          : Date.now();
+        const prompt = typeof item.prompt === "string"
+          ? item.prompt
+          : (item.prompt == null ? null : String(item.prompt));
+
+        return {
+          id,
+          markdown,
+          timestamp,
+          kind: normalizeHistoryKind(item.kind),
+          prompt,
+        };
+      }
+
+      function getSelectedHistoryItem() {
+        if (!Array.isArray(responseHistory) || responseHistory.length === 0) return null;
+        if (responseHistoryIndex < 0 || responseHistoryIndex >= responseHistory.length) return null;
+        return responseHistory[responseHistoryIndex] || null;
+      }
+
+      function clearActiveResponseView() {
+        latestResponseMarkdown = "";
+        latestResponseKind = "annotation";
+        latestResponseTimestamp = 0;
+        latestResponseIsStructuredCritique = false;
+        latestResponseHasContent = false;
+        latestResponseNormalized = "";
+        latestCritiqueNotes = "";
+        latestCritiqueNotesNormalized = "";
+        refreshResponseUi();
+      }
+
+      function updateHistoryControls() {
+        const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
+        const selected = total > 0 && responseHistoryIndex >= 0 && responseHistoryIndex < total
+          ? responseHistoryIndex + 1
+          : 0;
+        if (historyIndexBadgeEl) {
+          historyIndexBadgeEl.textContent = "History: " + selected + "/" + total;
+        }
+        if (historyPrevBtn) {
+          historyPrevBtn.disabled = uiBusy || total <= 1 || responseHistoryIndex <= 0;
+        }
+        if (historyNextBtn) {
+          historyNextBtn.disabled = uiBusy || total <= 1 || responseHistoryIndex < 0 || responseHistoryIndex >= total - 1;
+        }
+
+        const selectedItem = getSelectedHistoryItem();
+        const hasPrompt = Boolean(selectedItem && typeof selectedItem.prompt === "string" && selectedItem.prompt.trim());
+        if (loadHistoryPromptBtn) {
+          loadHistoryPromptBtn.disabled = uiBusy || !hasPrompt;
+          loadHistoryPromptBtn.textContent = hasPrompt
+            ? "Load response prompt into editor"
+            : "Response prompt unavailable";
+        }
+      }
+
+      function applySelectedHistoryItem() {
+        const item = getSelectedHistoryItem();
+        if (!item) {
+          clearActiveResponseView();
+          return false;
+        }
+        handleIncomingResponse(item.markdown, item.kind, item.timestamp);
+        return true;
+      }
+
+      function selectHistoryIndex(index, options) {
+        const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
+        if (total === 0) {
+          responseHistoryIndex = -1;
+          clearActiveResponseView();
+          updateHistoryControls();
+          return false;
+        }
+
+        const nextIndex = Math.max(0, Math.min(total - 1, Number(index) || 0));
+        responseHistoryIndex = nextIndex;
+        const applied = applySelectedHistoryItem();
+        updateHistoryControls();
+
+        if (applied && !(options && options.silent)) {
+          const item = getSelectedHistoryItem();
+          if (item) {
+            const responseLabel = item.kind === "critique" ? "critique" : "response";
+            setStatus("Viewing " + responseLabel + " history " + (nextIndex + 1) + "/" + total + ".");
+          }
+        }
+        return applied;
+      }
+
+      function setResponseHistory(items, options) {
+        const normalized = Array.isArray(items)
+          ? items
+              .map((item, index) => normalizeHistoryItem(item, index))
+              .filter((item) => item && typeof item === "object")
+          : [];
+
+        const previousItem = getSelectedHistoryItem();
+        const previousId = previousItem && typeof previousItem.id === "string" ? previousItem.id : null;
+
+        responseHistory = normalized;
+
+        if (!responseHistory.length) {
+          responseHistoryIndex = -1;
+          clearActiveResponseView();
+          updateHistoryControls();
+          return false;
+        }
+
+        let targetIndex = responseHistory.length - 1;
+        const preserveSelection = Boolean(options && options.preserveSelection);
+        const autoSelectLatest = options && Object.prototype.hasOwnProperty.call(options, "autoSelectLatest")
+          ? Boolean(options.autoSelectLatest)
+          : true;
+
+        if (preserveSelection && previousId) {
+          const preservedIndex = responseHistory.findIndex((item) => item.id === previousId);
+          if (preservedIndex >= 0) {
+            targetIndex = preservedIndex;
+          } else if (!autoSelectLatest && responseHistoryIndex >= 0 && responseHistoryIndex < responseHistory.length) {
+            targetIndex = responseHistoryIndex;
+          }
+        } else if (!autoSelectLatest && responseHistoryIndex >= 0 && responseHistoryIndex < responseHistory.length) {
+          targetIndex = responseHistoryIndex;
+        }
+
+        return selectHistoryIndex(targetIndex, { silent: Boolean(options && options.silent) });
+      }
+
       function updateReferenceBadge() {
         if (!referenceBadgeEl) return;
 
@@ -3127,9 +3709,14 @@ ${cssVarsBlock}
 
         const time = formatReferenceTime(latestResponseTimestamp);
         const responseLabel = latestResponseKind === "critique" ? "assistant critique" : "assistant response";
+        const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
+        const selected = total > 0 && responseHistoryIndex >= 0 && responseHistoryIndex < total
+          ? responseHistoryIndex + 1
+          : 0;
+        const historyPrefix = total > 0 ? "Response history " + selected + "/" + total + " · " : "";
         referenceBadgeEl.textContent = time
-          ? "Latest response: " + responseLabel + " · " + time
-          : "Latest response: " + responseLabel;
+          ? historyPrefix + responseLabel + " · " + time
+          : historyPrefix + responseLabel;
       }
 
       function normalizeForCompare(text) {
@@ -3138,6 +3725,28 @@ ${cssVarsBlock}
 
       function isTextEquivalent(a, b) {
         return normalizeForCompare(a) === normalizeForCompare(b);
+      }
+
+      function hasAnnotationMarkers(text) {
+        const source = String(text || "");
+        ANNOTATION_MARKER_REGEX.lastIndex = 0;
+        const hasMarker = ANNOTATION_MARKER_REGEX.test(source);
+        ANNOTATION_MARKER_REGEX.lastIndex = 0;
+        return hasMarker;
+      }
+
+      function stripAnnotationMarkers(text) {
+        return String(text || "").replace(ANNOTATION_MARKER_REGEX, "");
+      }
+
+      function prepareEditorTextForSend(text) {
+        const raw = String(text || "");
+        return annotationsEnabled ? raw : stripAnnotationMarkers(raw);
+      }
+
+      function prepareEditorTextForPreview(text) {
+        const raw = String(text || "");
+        return annotationsEnabled ? raw : stripAnnotationMarkers(raw);
       }
 
       function updateSyncBadge(normalizedEditorText) {
@@ -3188,6 +3797,67 @@ ${cssVarsBlock}
           });
         }
         return buildPreviewErrorHtml("Preview sanitizer unavailable. Showing plain markdown.", markdown);
+      }
+
+      function applyAnnotationMarkersToElement(targetEl, mode) {
+        if (!targetEl || mode === "none") return;
+        if (typeof document.createTreeWalker !== "function") return;
+
+        const walker = document.createTreeWalker(targetEl, NodeFilter.SHOW_TEXT);
+        const textNodes = [];
+        let node = walker.nextNode();
+        while (node) {
+          const textNode = node;
+          const value = typeof textNode.nodeValue === "string" ? textNode.nodeValue : "";
+          if (value && value.toLowerCase().indexOf("[an:") !== -1) {
+            const parent = textNode.parentElement;
+            const tag = parent && parent.tagName ? parent.tagName.toUpperCase() : "";
+            if (tag !== "CODE" && tag !== "PRE" && tag !== "SCRIPT" && tag !== "STYLE" && tag !== "TEXTAREA") {
+              textNodes.push(textNode);
+            }
+          }
+          node = walker.nextNode();
+        }
+
+        for (const textNode of textNodes) {
+          const text = typeof textNode.nodeValue === "string" ? textNode.nodeValue : "";
+          if (!text) continue;
+          ANNOTATION_MARKER_REGEX.lastIndex = 0;
+          if (!ANNOTATION_MARKER_REGEX.test(text)) continue;
+          ANNOTATION_MARKER_REGEX.lastIndex = 0;
+
+          const fragment = document.createDocumentFragment();
+          let lastIndex = 0;
+          let match;
+          while ((match = ANNOTATION_MARKER_REGEX.exec(text)) !== null) {
+            const token = match[0] || "";
+            const start = typeof match.index === "number" ? match.index : 0;
+            if (start > lastIndex) {
+              fragment.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+            }
+
+            if (mode === "highlight") {
+              const markerEl = document.createElement("span");
+              markerEl.className = "annotation-preview-marker";
+              markerEl.textContent = typeof match[1] === "string" ? match[1].trim() : token;
+              markerEl.title = token;
+              fragment.appendChild(markerEl);
+            }
+
+            lastIndex = start + token.length;
+            if (token.length === 0) {
+              ANNOTATION_MARKER_REGEX.lastIndex += 1;
+            }
+          }
+
+          if (lastIndex < text.length) {
+            fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+          }
+
+          if (textNode.parentNode) {
+            textNode.parentNode.replaceChild(fragment, textNode);
+          }
+        }
       }
 
       function appendMermaidNotice(targetEl, message) {
@@ -3430,7 +4100,7 @@ ${cssVarsBlock}
           return;
         }
 
-        const markdown = rightView === "editor-preview" ? sourceTextEl.value : latestResponseMarkdown;
+        const markdown = rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
           setStatus("Nothing to export yet.", "warning");
           return;
@@ -3523,6 +4193,10 @@ ${cssVarsBlock}
 
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
+          const annotationMode = (pane === "source" || pane === "response")
+            ? (annotationsEnabled ? "highlight" : "hide")
+            : "none";
+          applyAnnotationMarkersToElement(targetEl, annotationMode);
           await renderMermaidInElement(targetEl);
 
           // Warn if relative images are present but unlikely to resolve (non-file-backed content)
@@ -3548,7 +4222,7 @@ ${cssVarsBlock}
 
       function renderSourcePreviewNow() {
         if (editorView !== "preview") return;
-        const text = sourceTextEl.value || "";
+        const text = prepareEditorTextForPreview(sourceTextEl.value || "");
         if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
           finishPreviewRender(sourcePreviewEl);
           sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(text, editorLanguage) + "</div>";
@@ -3608,7 +4282,7 @@ ${cssVarsBlock}
 
       function renderActiveResult() {
         if (rightView === "editor-preview") {
-          const editorText = sourceTextEl.value || "";
+          const editorText = prepareEditorTextForPreview(sourceTextEl.value || "");
           if (!editorText.trim()) {
             finishPreviewRender(critiqueViewEl);
             critiqueViewEl.innerHTML = "<pre class='plain-markdown'>Editor is empty.</pre>";
@@ -3685,7 +4359,7 @@ ${cssVarsBlock}
         copyResponseBtn.disabled = uiBusy || !hasResponse;
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
-        const exportText = rightView === "editor-preview" ? sourceTextEl.value : latestResponseMarkdown;
+        const exportText = rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown;
         const canExportPdf = rightPaneShowsPreview && Boolean(String(exportText || "").trim());
         if (exportPdfBtn) {
           exportPdfBtn.disabled = uiBusy || pdfExportInProgress || !canExportPdf;
@@ -3708,6 +4382,7 @@ ${cssVarsBlock}
         updateSourceBadge();
         updateReferenceBadge();
         renderActiveResult();
+        updateHistoryControls();
         updateResultActionButtons();
       }
 
@@ -3720,6 +4395,24 @@ ${cssVarsBlock}
           if (name) return resourceDirInput.value.trim().replace(/\\/$/, "") + "/" + name;
         }
         return null;
+      }
+
+      function buildAnnotatedSaveSuggestion() {
+        const effectivePath = getEffectiveSavePath() || sourceState.path || "";
+        if (effectivePath) {
+          const parts = String(effectivePath).split(/[/\\\\]/);
+          const fileName = parts.pop() || "draft.md";
+          const dir = parts.length > 0 ? parts.join("/") + "/" : "";
+          const stem = fileName.replace(/\\.[^.]+$/, "") || "draft";
+          return dir + stem + ".annotated.md";
+        }
+
+        const rawLabel = sourceState.label ? sourceState.label.replace(/^upload:\\s*/i, "") : "draft.md";
+        const stem = rawLabel.replace(/\\.[^.]+$/, "") || "draft";
+        const suggestedDir = resourceDirInput && resourceDirInput.value.trim()
+          ? resourceDirInput.value.trim().replace(/\\/$/, "") + "/"
+          : "./";
+        return suggestedDir + stem + ".annotated.md";
       }
 
       function updateSaveFileTooltip() {
@@ -3746,6 +4439,10 @@ ${cssVarsBlock}
         copyDraftBtn.disabled = uiBusy;
         if (highlightSelect) highlightSelect.disabled = uiBusy;
         if (langSelect) langSelect.disabled = uiBusy;
+        if (annotationModeSelect) annotationModeSelect.disabled = uiBusy;
+        if (saveAnnotatedBtn) saveAnnotatedBtn.disabled = uiBusy;
+        if (stripAnnotationsBtn) stripAnnotationsBtn.disabled = uiBusy || !hasAnnotationMarkers(sourceTextEl.value);
+        if (compactBtn) compactBtn.disabled = uiBusy || compactInProgress || wsState === "Disconnected";
         editorViewSelect.disabled = uiBusy;
         rightViewSelect.disabled = uiBusy;
         followSelect.disabled = uiBusy;
@@ -3754,6 +4451,7 @@ ${cssVarsBlock}
         critiqueBtn.disabled = uiBusy;
         lensSelect.disabled = uiBusy;
         updateSaveFileTooltip();
+        updateHistoryControls();
         updateResultActionButtons();
       }
 
@@ -3772,6 +4470,47 @@ ${cssVarsBlock}
         };
         updateSourceBadge();
         syncActionButtons();
+      }
+
+      function setEditorText(nextText, options) {
+        const value = String(nextText || "");
+        const preserveScroll = Boolean(options && options.preserveScroll);
+        const preserveSelection = Boolean(options && options.preserveSelection);
+        const previousScrollTop = sourceTextEl.scrollTop;
+        const previousScrollLeft = sourceTextEl.scrollLeft;
+        const previousSelectionStart = sourceTextEl.selectionStart;
+        const previousSelectionEnd = sourceTextEl.selectionEnd;
+
+        sourceTextEl.value = value;
+
+        if (preserveSelection) {
+          const maxIndex = value.length;
+          const start = Math.max(0, Math.min(previousSelectionStart || 0, maxIndex));
+          const end = Math.max(start, Math.min(previousSelectionEnd || start, maxIndex));
+          sourceTextEl.setSelectionRange(start, end);
+        }
+
+        if (preserveScroll) {
+          sourceTextEl.scrollTop = previousScrollTop;
+          sourceTextEl.scrollLeft = previousScrollLeft;
+        }
+
+        syncEditorHighlightScroll();
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+        schedule(() => {
+          syncEditorHighlightScroll();
+        });
+
+        updateAnnotatedReplyHeaderButton();
+
+        if (!options || options.updatePreview !== false) {
+          renderSourcePreview();
+        }
+        if (!options || options.updateMeta !== false) {
+          scheduleEditorMetaUpdate();
+        }
       }
 
       function setEditorView(nextView) {
@@ -3842,7 +4581,7 @@ ${cssVarsBlock}
 
       function highlightInlineMarkdown(text) {
         const source = String(text || "");
-        const pattern = /(\\x60[^\\x60]*\\x60)|(\\[[^\\]]+\\]\\([^)]+\\))/g;
+        const pattern = /(\\x60[^\\x60]*\\x60)|(\\[[^\\]]+\\]\\([^)]+\\))|(\\[an:\\s*[^\\]\\n]+\\])/gi;
         let lastIndex = 0;
         let out = "";
 
@@ -3865,6 +4604,8 @@ ${cssVarsBlock}
             } else {
               out += escapeHtml(token);
             }
+          } else if (match[3]) {
+            out += wrapHighlight(annotationsEnabled ? "hl-annotation" : "hl-annotation-muted", token);
           } else {
             out += escapeHtml(token);
           }
@@ -4235,6 +4976,10 @@ ${cssVarsBlock}
       function runEditorMetaUpdateNow() {
         const normalizedEditor = normalizeForCompare(sourceTextEl.value);
         updateResultActionButtons(normalizedEditor);
+        updateAnnotatedReplyHeaderButton();
+        if (stripAnnotationsBtn) {
+          stripAnnotationsBtn.disabled = uiBusy || !hasAnnotationMarkers(sourceTextEl.value);
+        }
       }
 
       function scheduleEditorMetaUpdate() {
@@ -4286,12 +5031,20 @@ ${cssVarsBlock}
         return readStoredToggle(RESPONSE_HIGHLIGHT_STORAGE_KEY);
       }
 
+      function readStoredAnnotationsEnabled() {
+        return readStoredToggle(ANNOTATION_MODE_STORAGE_KEY);
+      }
+
       function persistEditorHighlightEnabled(enabled) {
         persistStoredToggle(EDITOR_HIGHLIGHT_STORAGE_KEY, enabled);
       }
 
       function persistResponseHighlightEnabled(enabled) {
         persistStoredToggle(RESPONSE_HIGHLIGHT_STORAGE_KEY, enabled);
+      }
+
+      function persistAnnotationsEnabled(enabled) {
+        persistStoredToggle(ANNOTATION_MODE_STORAGE_KEY, enabled);
       }
 
       function updateEditorHighlightState() {
@@ -4381,6 +5134,38 @@ ${cssVarsBlock}
           responseHighlightSelect.value = responseHighlightEnabled ? "on" : "off";
         }
         renderActiveResult();
+      }
+
+      function updateAnnotationModeUi() {
+        if (annotationModeSelect) {
+          annotationModeSelect.value = annotationsEnabled ? "on" : "off";
+          annotationModeSelect.title = annotationsEnabled
+            ? "Annotations On: keep and send [an: ...] markers."
+            : "Annotations Hidden: keep markers in editor, hide in preview, and strip before Run/Critique.";
+        }
+
+        if (sendRunBtn) {
+          sendRunBtn.title = annotationsEnabled
+            ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter."
+            : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter.";
+        }
+
+        if (critiqueBtn) {
+          critiqueBtn.title = annotationsEnabled
+            ? "Critique editor text as-is (includes [an: ...] markers)."
+            : "Critique editor text with [an: ...] markers stripped.";
+        }
+      }
+
+      function setAnnotationsEnabled(enabled, _options) {
+        annotationsEnabled = Boolean(enabled);
+        persistAnnotationsEnabled(annotationsEnabled);
+        updateAnnotationModeUi();
+
+        if (editorHighlightEnabled && editorView === "markdown") {
+          scheduleEditorHighlightRender();
+        }
+        renderSourcePreview();
       }
 
       function extractSection(markdown, title) {
@@ -4479,6 +5264,10 @@ ${cssVarsBlock}
 
         debugTrace("server_message", summarizeServerMessage(message));
 
+        if (applyContextUsageFromMessage(message)) {
+          updateFooterMeta();
+        }
+
         if (message.type === "debug_event") {
           debugTrace("server_debug_event", summarizeServerMessage(message));
           return;
@@ -4510,13 +5299,21 @@ ${cssVarsBlock}
             pendingKind = null;
           }
 
+          if (typeof message.compactInProgress === "boolean") {
+            compactInProgress = message.compactInProgress;
+          } else if (pendingKind === "compact") {
+            compactInProgress = true;
+          } else if (!busy) {
+            compactInProgress = false;
+          }
+
           let loadedInitialDocument = false;
           if (
             !initialDocumentApplied &&
             message.initialDocument &&
             typeof message.initialDocument.text === "string"
           ) {
-            sourceTextEl.value = message.initialDocument.text;
+            setEditorText(message.initialDocument.text, { preserveScroll: false, preserveSelection: false });
             initialDocumentApplied = true;
             loadedInitialDocument = true;
             setSourceState({
@@ -4525,13 +5322,21 @@ ${cssVarsBlock}
               path: message.initialDocument.path || null,
             });
             refreshResponseUi();
-            renderSourcePreview();
             if (typeof message.initialDocument.label === "string" && message.initialDocument.label.length > 0) {
               setStatus("Loaded " + message.initialDocument.label + ".", "success");
             }
           }
 
-          if (message.lastResponse && typeof message.lastResponse.markdown === "string") {
+          let appliedHistory = false;
+          if (Array.isArray(message.responseHistory)) {
+            appliedHistory = setResponseHistory(message.responseHistory, {
+              autoSelectLatest: true,
+              preserveSelection: false,
+              silent: true,
+            });
+          }
+
+          if (!appliedHistory && message.lastResponse && typeof message.lastResponse.markdown === "string") {
             const lastMarkdown = message.lastResponse.markdown;
             const lastResponseKind =
               message.lastResponse.kind === "critique"
@@ -4570,9 +5375,40 @@ ${cssVarsBlock}
           pendingRequestId = typeof message.requestId === "string" ? message.requestId : pendingRequestId;
           pendingKind = typeof message.kind === "string" ? message.kind : "unknown";
           stickyStudioKind = pendingKind;
+          if (pendingKind === "compact") {
+            compactInProgress = true;
+          }
           setBusy(true);
           setWsState("Submitting");
           setStatus(getStudioBusyStatus(pendingKind), "warning");
+          return;
+        }
+
+        if (message.type === "compaction_completed") {
+          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+          }
+          compactInProgress = false;
+          stickyStudioKind = null;
+          const busy = Boolean(message.busy);
+          setBusy(busy);
+          setWsState(busy ? "Submitting" : "Ready");
+          setStatus(typeof message.message === "string" ? message.message : "Compaction completed.", "success");
+          return;
+        }
+
+        if (message.type === "compaction_error") {
+          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+          }
+          compactInProgress = false;
+          stickyStudioKind = null;
+          const busy = Boolean(message.busy);
+          setBusy(busy);
+          setWsState(busy ? "Submitting" : "Ready");
+          setStatus(typeof message.message === "string" ? message.message : "Compaction failed.", "error");
           return;
         }
 
@@ -4589,23 +5425,45 @@ ${cssVarsBlock}
           stickyStudioKind = responseKind;
           pendingRequestId = null;
           pendingKind = null;
+          queuedLatestResponse = null;
           setBusy(false);
           setWsState("Ready");
-          if (typeof message.markdown === "string") {
+
+          let appliedFromHistory = false;
+          if (Array.isArray(message.responseHistory)) {
+            appliedFromHistory = setResponseHistory(message.responseHistory, {
+              autoSelectLatest: true,
+              preserveSelection: false,
+              silent: true,
+            });
+          }
+
+          if (!appliedFromHistory && typeof message.markdown === "string") {
             handleIncomingResponse(message.markdown, responseKind, message.timestamp);
-            if (responseKind === "critique") {
-              setStatus("Critique ready.", "success");
-            } else if (responseKind === "direct") {
-              setStatus("Model response ready.", "success");
-            } else {
-              setStatus("Response ready.", "success");
-            }
+          }
+
+          if (responseKind === "critique") {
+            setStatus("Critique ready.", "success");
+          } else if (responseKind === "direct") {
+            setStatus("Model response ready.", "success");
+          } else {
+            setStatus("Response ready.", "success");
           }
           return;
         }
 
         if (message.type === "latest_response") {
           if (pendingRequestId) return;
+
+          const hasHistory = Array.isArray(message.responseHistory);
+          if (hasHistory) {
+            setResponseHistory(message.responseHistory, {
+              autoSelectLatest: followLatest,
+              preserveSelection: !followLatest,
+              silent: true,
+            });
+          }
+
           if (typeof message.markdown === "string") {
             const payload = {
               kind: message.kind === "critique" ? "critique" : "annotation",
@@ -4620,12 +5478,26 @@ ${cssVarsBlock}
               return;
             }
 
-            if (applyLatestPayload(payload)) {
+            if (!hasHistory && applyLatestPayload(payload)) {
               queuedLatestResponse = null;
               updateResultActionButtons();
               setStatus("Updated from latest response.", "success");
+              return;
             }
+
+            queuedLatestResponse = null;
+            updateResultActionButtons();
+            setStatus("Updated from latest response.", "success");
           }
+          return;
+        }
+
+        if (message.type === "response_history") {
+          setResponseHistory(message.items, {
+            autoSelectLatest: followLatest,
+            preserveSelection: !followLatest,
+            silent: true,
+          });
           return;
         }
 
@@ -4668,8 +5540,7 @@ ${cssVarsBlock}
           }
 
           const content = typeof message.content === "string" ? message.content : "";
-          sourceTextEl.value = content;
-          renderSourcePreview();
+          setEditorText(content, { preserveScroll: false, preserveSelection: false });
           setSourceState({ source: "pi-editor", label: "pi editor draft", path: null });
           setBusy(false);
           setWsState("Ready");
@@ -4707,6 +5578,14 @@ ${cssVarsBlock}
             pendingKind = null;
           }
 
+          if (typeof message.compactInProgress === "boolean") {
+            compactInProgress = message.compactInProgress;
+          } else if (pendingKind === "compact") {
+            compactInProgress = true;
+          } else if (!busy) {
+            compactInProgress = false;
+          }
+
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
 
@@ -4735,6 +5614,9 @@ ${cssVarsBlock}
 
         if (message.type === "busy") {
           if (message.requestId && pendingRequestId === message.requestId) {
+            if (pendingKind === "compact") {
+              compactInProgress = false;
+            }
             pendingRequestId = null;
             pendingKind = null;
           }
@@ -4747,6 +5629,9 @@ ${cssVarsBlock}
 
         if (message.type === "error") {
           if (message.requestId && pendingRequestId === message.requestId) {
+            if (pendingKind === "compact") {
+              compactInProgress = false;
+            }
             pendingRequestId = null;
             pendingKind = null;
           }
@@ -4865,7 +5750,8 @@ ${cssVarsBlock}
       function buildAnnotationHeader() {
         const sourceDescriptor = describeSourceForAnnotation();
         let header = "annotated reply below:\\n";
-        header += "original source: " + sourceDescriptor + "\\n\\n---\\n\\n";
+        header += "original source: " + sourceDescriptor + "\\n";
+        header += "annotation syntax: [an: your note]\\n\\n---\\n\\n";
         return header;
       }
 
@@ -4891,19 +5777,38 @@ ${cssVarsBlock}
         };
       }
 
-      function insertOrUpdateAnnotationHeader() {
-        const stripped = stripAnnotationHeader(sourceTextEl.value);
-        const updated = buildAnnotationHeader() + stripped.body;
+      function updateAnnotatedReplyHeaderButton() {
+        if (!insertHeaderBtn) return;
+        const hasHeader = stripAnnotationHeader(sourceTextEl.value).hadHeader;
+        if (hasHeader) {
+          insertHeaderBtn.textContent = "Remove annotated reply header";
+          insertHeaderBtn.title = "Remove annotated-reply protocol header while keeping body text.";
+          return;
+        }
+        insertHeaderBtn.textContent = "Insert annotated reply header";
+        insertHeaderBtn.title = "Insert annotated-reply protocol header (includes source metadata and [an: ...] syntax hint).";
+      }
 
-        if (isTextEquivalent(sourceTextEl.value, updated)) {
-          setStatus("Annotation header already up to date.");
+      function toggleAnnotatedReplyHeader() {
+        const stripped = stripAnnotationHeader(sourceTextEl.value);
+
+        if (stripped.hadHeader) {
+          const updated = stripped.body;
+          setEditorText(updated, { preserveScroll: true, preserveSelection: true });
+          updateResultActionButtons();
+          setStatus("Removed annotated reply header.", "success");
           return;
         }
 
-        sourceTextEl.value = updated;
-        renderSourcePreview();
+        const updated = buildAnnotationHeader() + stripped.body;
+        if (isTextEquivalent(sourceTextEl.value, updated)) {
+          setStatus("Annotated reply header already present.");
+          return;
+        }
+
+        setEditorText(updated, { preserveScroll: true, preserveSelection: true });
         updateResultActionButtons();
-        setStatus(stripped.hadHeader ? "Updated annotation header source." : "Inserted annotation header.", "success");
+        setStatus("Inserted annotated reply header.", "success");
       }
 
       function requestLatestResponse() {
@@ -4938,7 +5843,11 @@ ${cssVarsBlock}
       followSelect.addEventListener("change", () => {
         followLatest = followSelect.value !== "off";
         if (followLatest && queuedLatestResponse) {
-          if (applyLatestPayload(queuedLatestResponse)) {
+          if (responseHistory.length > 0) {
+            selectHistoryIndex(responseHistory.length - 1, { silent: true });
+            queuedLatestResponse = null;
+            setStatus("Applied queued response.", "success");
+          } else if (applyLatestPayload(queuedLatestResponse)) {
             queuedLatestResponse = null;
             setStatus("Applied queued response.", "success");
           }
@@ -4966,9 +5875,90 @@ ${cssVarsBlock}
         });
       }
 
+      if (annotationModeSelect) {
+        annotationModeSelect.addEventListener("change", () => {
+          setAnnotationsEnabled(annotationModeSelect.value !== "off");
+        });
+      }
+
+      if (compactBtn) {
+        compactBtn.addEventListener("click", () => {
+          if (compactInProgress) {
+            setStatus("Compaction is already running.", "warning");
+            return;
+          }
+          if (uiBusy) {
+            setStatus("Studio is busy.", "warning");
+            return;
+          }
+
+          const requestId = makeRequestId();
+          pendingRequestId = requestId;
+          pendingKind = "compact";
+          stickyStudioKind = "compact";
+          compactInProgress = true;
+          setBusy(true);
+          setWsState("Submitting");
+
+          const sent = sendMessage({ type: "compact_request", requestId });
+          if (!sent) {
+            compactInProgress = false;
+            if (pendingRequestId === requestId) {
+              pendingRequestId = null;
+              pendingKind = null;
+            }
+            stickyStudioKind = null;
+            setBusy(false);
+            return;
+          }
+
+          setStatus("Studio: compacting context…", "warning");
+        });
+      }
+
+      if (historyPrevBtn) {
+        historyPrevBtn.addEventListener("click", () => {
+          if (!responseHistory.length) {
+            setStatus("No response history available yet.", "warning");
+            return;
+          }
+          selectHistoryIndex(responseHistoryIndex - 1);
+        });
+      }
+
+      if (historyNextBtn) {
+        historyNextBtn.addEventListener("click", () => {
+          if (!responseHistory.length) {
+            setStatus("No response history available yet.", "warning");
+            return;
+          }
+          selectHistoryIndex(responseHistoryIndex + 1);
+        });
+      }
+
+      if (loadHistoryPromptBtn) {
+        loadHistoryPromptBtn.addEventListener("click", () => {
+          const item = getSelectedHistoryItem();
+          const prompt = item && typeof item.prompt === "string" ? item.prompt : "";
+          if (!prompt.trim()) {
+            setStatus("Prompt unavailable for the selected response.", "warning");
+            return;
+          }
+
+          setEditorText(prompt, { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label: "response prompt", path: null });
+          setStatus("Loaded response prompt into editor.", "success");
+        });
+      }
+
       pullLatestBtn.addEventListener("click", () => {
         if (queuedLatestResponse) {
-          if (applyLatestPayload(queuedLatestResponse)) {
+          if (responseHistory.length > 0) {
+            selectHistoryIndex(responseHistory.length - 1, { silent: true });
+            queuedLatestResponse = null;
+            setStatus("Pulled latest response from history.", "success");
+            updateResultActionButtons();
+          } else if (applyLatestPayload(queuedLatestResponse)) {
             queuedLatestResponse = null;
             setStatus("Pulled queued response.", "success");
             updateResultActionButtons();
@@ -4988,12 +5978,28 @@ ${cssVarsBlock}
         syncEditorHighlightScroll();
       });
 
+      sourceTextEl.addEventListener("keyup", () => {
+        if (!editorHighlightEnabled || editorView !== "markdown") return;
+        syncEditorHighlightScroll();
+      });
+
+      sourceTextEl.addEventListener("mouseup", () => {
+        if (!editorHighlightEnabled || editorView !== "markdown") return;
+        syncEditorHighlightScroll();
+      });
+
+      window.addEventListener("resize", () => {
+        if (!editorHighlightEnabled || editorView !== "markdown") return;
+        syncEditorHighlightScroll();
+      });
+
       insertHeaderBtn.addEventListener("click", () => {
-        insertOrUpdateAnnotationHeader();
+        toggleAnnotatedReplyHeader();
       });
 
       critiqueBtn.addEventListener("click", () => {
-        const documentText = sourceTextEl.value.trim();
+        const preparedDocumentText = prepareEditorTextForSend(sourceTextEl.value);
+        const documentText = preparedDocumentText.trim();
         if (!documentText) {
           setStatus("Add editor text before critique.", "warning");
           return;
@@ -5021,8 +6027,7 @@ ${cssVarsBlock}
           setStatus("No response available yet.", "warning");
           return;
         }
-        sourceTextEl.value = latestResponseMarkdown;
-        renderSourcePreview();
+        setEditorText(latestResponseMarkdown, { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "last-response", label: "last model response", path: null });
         setStatus("Loaded response into editor.", "success");
       });
@@ -5039,8 +6044,7 @@ ${cssVarsBlock}
           return;
         }
 
-        sourceTextEl.value = notes;
-        renderSourcePreview();
+        setEditorText(notes, { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "blank", label: "critique notes", path: null });
         setStatus("Loaded critique notes into editor.", "success");
       });
@@ -5051,8 +6055,7 @@ ${cssVarsBlock}
           return;
         }
 
-        sourceTextEl.value = latestResponseMarkdown;
-        renderSourcePreview();
+        setEditorText(latestResponseMarkdown, { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "blank", label: "full critique", path: null });
         setStatus("Loaded full critique into editor.", "success");
       });
@@ -5178,8 +6181,8 @@ ${cssVarsBlock}
       }
 
       sendRunBtn.addEventListener("click", () => {
-        const content = sourceTextEl.value;
-        if (!content.trim()) {
+        const prepared = prepareEditorTextForSend(sourceTextEl.value);
+        if (!prepared.trim()) {
           setStatus("Editor is empty. Nothing to run.", "warning");
           return;
         }
@@ -5190,7 +6193,7 @@ ${cssVarsBlock}
         const sent = sendMessage({
           type: "send_run_request",
           requestId,
-          text: content,
+          text: prepared,
         });
 
         if (!sent) {
@@ -5214,6 +6217,53 @@ ${cssVarsBlock}
           setStatus("Clipboard write failed.", "warning");
         }
       });
+
+      if (saveAnnotatedBtn) {
+        saveAnnotatedBtn.addEventListener("click", () => {
+          const content = sourceTextEl.value;
+          if (!content.trim()) {
+            setStatus("Editor is empty. Nothing to save.", "warning");
+            return;
+          }
+
+          const suggested = buildAnnotatedSaveSuggestion();
+          const path = window.prompt("Save annotated editor content as:", suggested);
+          if (!path) return;
+
+          const requestId = beginUiAction("save_as");
+          if (!requestId) return;
+
+          const sent = sendMessage({
+            type: "save_as_request",
+            requestId,
+            path,
+            content,
+          });
+
+          if (!sent) {
+            pendingRequestId = null;
+            pendingKind = null;
+            setBusy(false);
+          }
+        });
+      }
+
+      if (stripAnnotationsBtn) {
+        stripAnnotationsBtn.addEventListener("click", () => {
+          const content = sourceTextEl.value;
+          if (!hasAnnotationMarkers(content)) {
+            setStatus("No [an: ...] markers found in editor.", "warning");
+            return;
+          }
+
+          const confirmed = window.confirm("Remove all [an: ...] markers from editor text? This cannot be undone.");
+          if (!confirmed) return;
+
+          const strippedContent = stripAnnotationMarkers(content);
+          setEditorText(strippedContent, { preserveScroll: true, preserveSelection: false });
+          setStatus("Removed annotation markers from editor text.", "success");
+        });
+      }
 
       // Working directory controls — three states: button | input | label
       function showResourceDirState(state) {
@@ -5283,8 +6333,7 @@ ${cssVarsBlock}
         const reader = new FileReader();
         reader.onload = () => {
           const text = typeof reader.result === "string" ? reader.result : "";
-          sourceTextEl.value = text;
-          renderSourcePreview();
+          setEditorText(text, { preserveScroll: false, preserveSelection: false });
           setSourceState({
             source: "blank",
             label: "upload: " + file.name,
@@ -5305,6 +6354,7 @@ ${cssVarsBlock}
 
       setSourceState(initialSourceState);
       refreshResponseUi();
+      updateAnnotatedReplyHeaderButton();
       setActivePane("left");
 
       const storedEditorHighlightEnabled = readStoredEditorHighlightEnabled();
@@ -5318,6 +6368,10 @@ ${cssVarsBlock}
       const storedResponseHighlightEnabled = readStoredResponseHighlightEnabled();
       const initialResponseHighlightEnabled = storedResponseHighlightEnabled ?? Boolean(responseHighlightSelect && responseHighlightSelect.value === "on");
       setResponseHighlightEnabled(initialResponseHighlightEnabled);
+
+      const storedAnnotationsEnabled = readStoredAnnotationsEnabled();
+      const initialAnnotationsEnabled = storedAnnotationsEnabled ?? Boolean(annotationModeSelect ? annotationModeSelect.value !== "off" : true);
+      setAnnotationsEnabled(initialAnnotationsEnabled, { silent: true });
 
       setEditorView(editorView);
       setRightView(rightView);
@@ -5345,10 +6399,22 @@ export default function (pi: ExtensionAPI) {
 	let terminalActivityToolName: string | null = null;
 	let terminalActivityLabel: string | null = null;
 	let lastSpecificToolActivityLabel: string | null = null;
+	let currentModel: { provider?: string; id?: string } | undefined;
 	let currentModelLabel = "none";
 	let terminalSessionLabel = buildTerminalSessionLabel(studioCwd);
+	let studioResponseHistory: StudioResponseHistoryItem[] = [];
+	let contextUsageSnapshot: StudioContextUsageSnapshot = {
+		tokens: null,
+		contextWindow: null,
+		percent: null,
+	};
+	let compactInProgress = false;
+	let compactRequestId: string | null = null;
+	let updateCheckStarted = false;
+	let updateCheckCompleted = false;
+	const packageMetadata = readLocalPackageMetadata();
 
-	const isStudioBusy = () => agentBusy || activeRequest !== null;
+	const isStudioBusy = () => agentBusy || activeRequest !== null || compactInProgress;
 
 	const getSessionNameSafe = (): string | undefined => {
 		try {
@@ -5370,8 +6436,22 @@ export default function (pi: ExtensionAPI) {
 		if (ctx?.cwd) {
 			studioCwd = ctx.cwd;
 		}
-		const model = ctx?.model ?? lastCommandCtx?.model;
-		const baseModelLabel = formatModelLabel(model);
+		if (ctx && Object.prototype.hasOwnProperty.call(ctx, "model")) {
+			if (ctx.model) {
+				currentModel = {
+					provider: ctx.model.provider,
+					id: ctx.model.id,
+				};
+			} else {
+				currentModel = undefined;
+			}
+		} else if (!currentModel && lastCommandCtx?.model) {
+			currentModel = {
+				provider: lastCommandCtx.model.provider,
+				id: lastCommandCtx.model.id,
+			};
+		}
+		const baseModelLabel = formatModelLabel(currentModel);
 		currentModelLabel = formatModelLabelWithThinking(baseModelLabel, getThinkingLevelSafe());
 		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
 	};
@@ -5379,6 +6459,59 @@ export default function (pi: ExtensionAPI) {
 	const notifyStudio = (message: string, level: "info" | "warning" | "error" = "info") => {
 		if (!lastCommandCtx) return;
 		lastCommandCtx.ui.notify(message, level);
+	};
+
+	const refreshContextUsage = (
+		ctx?: { getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
+	): StudioContextUsageSnapshot => {
+		const usage = ctx?.getContextUsage?.() ?? lastCommandCtx?.getContextUsage?.();
+		if (usage === undefined) return contextUsageSnapshot;
+		contextUsageSnapshot = normalizeContextUsageSnapshot(usage);
+		return contextUsageSnapshot;
+	};
+
+	const clearCompactionState = () => {
+		compactInProgress = false;
+		compactRequestId = null;
+	};
+
+	const syncStudioResponseHistory = (entries: SessionEntry[]) => {
+		studioResponseHistory = buildResponseHistoryFromEntries(entries, RESPONSE_HISTORY_LIMIT);
+		const latest = studioResponseHistory[studioResponseHistory.length - 1];
+		if (!latest) {
+			lastStudioResponse = null;
+			return;
+		}
+		lastStudioResponse = {
+			markdown: latest.markdown,
+			timestamp: latest.timestamp,
+			kind: latest.kind,
+		};
+	};
+
+	const broadcastResponseHistory = () => {
+		broadcast({
+			type: "response_history",
+			items: studioResponseHistory,
+		});
+	};
+
+	const maybeNotifyUpdateAvailable = async (ctx: ExtensionCommandContext) => {
+		if (updateCheckStarted || updateCheckCompleted) return;
+		updateCheckStarted = true;
+		try {
+			const metadata = packageMetadata;
+			if (!metadata) return;
+			const latest = await fetchLatestNpmVersion(metadata.name, UPDATE_CHECK_TIMEOUT_MS);
+			if (!latest) return;
+			if (!isVersionBehind(metadata.version, latest)) return;
+			ctx.ui.notify(
+				`Update available for ${metadata.name}: ${metadata.version} → ${latest}. Run: pi install npm:${metadata.name}`,
+				"info",
+			);
+		} finally {
+			updateCheckCompleted = true;
+		}
 	};
 
 	const sendToClient = (client: WebSocket, payload: unknown) => {
@@ -5459,8 +6592,8 @@ export default function (pi: ExtensionAPI) {
 			label: terminalActivityLabel,
 			baseLabel,
 			lastSpecificToolActivityLabel,
-			activeRequestId: activeRequest?.id ?? null,
-			activeRequestKind: activeRequest?.kind ?? null,
+			activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
+			activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
 			agentBusy,
 		});
 		broadcastState();
@@ -5468,7 +6601,8 @@ export default function (pi: ExtensionAPI) {
 
 	const broadcastState = () => {
 		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
-		currentModelLabel = formatModelLabelWithThinking(currentModelLabel, getThinkingLevelSafe());
+		currentModelLabel = formatModelLabelWithThinking(formatModelLabel(currentModel), getThinkingLevelSafe());
+		refreshContextUsage();
 		broadcast({
 			type: "studio_state",
 			busy: isStudioBusy(),
@@ -5478,8 +6612,12 @@ export default function (pi: ExtensionAPI) {
 			terminalActivityLabel,
 			modelLabel: currentModelLabel,
 			terminalSessionLabel,
-			activeRequestId: activeRequest?.id ?? null,
-			activeRequestKind: activeRequest?.kind ?? null,
+			contextTokens: contextUsageSnapshot.tokens,
+			contextWindow: contextUsageSnapshot.contextWindow,
+			contextPercent: contextUsageSnapshot.percent,
+			compactInProgress,
+			activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
+			activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
 		});
 	};
 
@@ -5510,6 +6648,10 @@ export default function (pi: ExtensionAPI) {
 		});
 		if (activeRequest) {
 			broadcast({ type: "busy", requestId, message: "A studio request is already in progress." });
+			return false;
+		}
+		if (compactInProgress) {
+			broadcast({ type: "busy", requestId, message: "Context compaction is currently running." });
 			return false;
 		}
 		if (agentBusy) {
@@ -5564,6 +6706,7 @@ export default function (pi: ExtensionAPI) {
 		});
 
 		if (msg.type === "hello") {
+			refreshContextUsage();
 			sendToClient(client, {
 				type: "hello_ack",
 				busy: isStudioBusy(),
@@ -5573,9 +6716,14 @@ export default function (pi: ExtensionAPI) {
 				terminalActivityLabel,
 				modelLabel: currentModelLabel,
 				terminalSessionLabel,
-				activeRequestId: activeRequest?.id ?? null,
-				activeRequestKind: activeRequest?.kind ?? null,
+				contextTokens: contextUsageSnapshot.tokens,
+				contextWindow: contextUsageSnapshot.contextWindow,
+				contextPercent: contextUsageSnapshot.percent,
+				compactInProgress,
+				activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
+				activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
 				lastResponse: lastStudioResponse,
+				responseHistory: studioResponseHistory,
 				initialDocument: initialStudioDocument,
 			});
 			return;
@@ -5591,6 +6739,7 @@ export default function (pi: ExtensionAPI) {
 				kind: lastStudioResponse.kind,
 				markdown: lastStudioResponse.markdown,
 				timestamp: lastStudioResponse.timestamp,
+				responseHistory: studioResponseHistory,
 			});
 			return;
 		}
@@ -5683,6 +6832,90 @@ export default function (pi: ExtensionAPI) {
 					type: "error",
 					requestId: msg.requestId,
 					message: `Failed to send editor text to model: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			}
+			return;
+		}
+
+		if (msg.type === "compact_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			if (isStudioBusy()) {
+				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
+				return;
+			}
+
+			const compactCtx = lastCommandCtx;
+			if (!compactCtx) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: "No interactive pi context is available to run compaction.",
+				});
+				return;
+			}
+
+			const customInstructions = typeof msg.customInstructions === "string" && msg.customInstructions.trim()
+				? msg.customInstructions.trim()
+				: undefined;
+			if (customInstructions && customInstructions.length > 2000) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: "Compaction instructions are too long (max 2000 characters).",
+				});
+				return;
+			}
+
+			compactInProgress = true;
+			compactRequestId = msg.requestId;
+			refreshContextUsage(compactCtx);
+			emitDebugEvent("compact_start", {
+				requestId: msg.requestId,
+				hasCustomInstructions: Boolean(customInstructions),
+			});
+			broadcast({ type: "request_started", requestId: msg.requestId, kind: "compact" });
+			broadcastState();
+
+			const finishCompaction = (result: { type: "compaction_completed" | "compaction_error"; message: string }) => {
+				if (!compactInProgress || compactRequestId !== msg.requestId) return;
+				clearCompactionState();
+				refreshContextUsage(compactCtx);
+				emitDebugEvent(result.type, { requestId: msg.requestId, message: result.message });
+				broadcast({
+					type: result.type,
+					requestId: msg.requestId,
+					message: result.message,
+					busy: isStudioBusy(),
+					contextTokens: contextUsageSnapshot.tokens,
+					contextWindow: contextUsageSnapshot.contextWindow,
+					contextPercent: contextUsageSnapshot.percent,
+				});
+				broadcastState();
+			};
+
+			try {
+				compactCtx.compact({
+					customInstructions,
+					onComplete: () => {
+						finishCompaction({
+							type: "compaction_completed",
+							message: "Compaction completed.",
+						});
+					},
+					onError: (error) => {
+						finishCompaction({
+							type: "compaction_error",
+							message: `Compaction failed: ${error instanceof Error ? error.message : String(error)}`,
+						});
+					},
+				});
+			} catch (error) {
+				finishCompaction({
+					type: "compaction_error",
+					message: `Failed to start compaction: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
 			return;
@@ -6068,7 +7301,8 @@ export default function (pi: ExtensionAPI) {
 			"Cross-Origin-Opener-Policy": "same-origin",
 			"Cross-Origin-Resource-Policy": "same-origin",
 		});
-		res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel));
+		refreshContextUsage();
+		res.end(buildStudioHtml(initialStudioDocument, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, contextUsageSnapshot));
 	};
 
 	const ensureServer = async (): Promise<StudioServerState> => {
@@ -6199,6 +7433,7 @@ export default function (pi: ExtensionAPI) {
 	const stopServer = async () => {
 		if (!serverState) return;
 		clearActiveRequest();
+		clearCompactionState();
 		closeAllClients(1001, "Server shutting down");
 
 		const state = serverState;
@@ -6221,43 +7456,52 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const hydrateLatestAssistant = (entries: SessionEntry[]) => {
-		const latest = extractLatestAssistantFromEntries(entries);
-		if (!latest) return;
-		lastStudioResponse = {
-			markdown: latest,
-			timestamp: Date.now(),
-			kind: inferStudioResponseKind(latest),
-		};
+		syncStudioResponseHistory(entries);
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
+		clearCompactionState();
 		agentBusy = false;
-		refreshRuntimeMetadata(ctx);
+		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
+		refreshContextUsage(ctx);
 		emitDebugEvent("session_start", {
 			entryCount: ctx.sessionManager.getBranch().length,
 			modelLabel: currentModelLabel,
 			terminalSessionLabel,
 		});
 		setTerminalActivity("idle");
+		broadcastResponseHistory();
 	});
 
 	pi.on("session_switch", async (_event, ctx) => {
 		clearActiveRequest({ notify: "Session switched. Studio request state cleared.", level: "warning" });
+		clearCompactionState();
 		lastCommandCtx = null;
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		agentBusy = false;
-		refreshRuntimeMetadata(ctx);
+		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
+		refreshContextUsage(ctx);
 		emitDebugEvent("session_switch", {
 			entryCount: ctx.sessionManager.getBranch().length,
 			modelLabel: currentModelLabel,
 			terminalSessionLabel,
 		});
 		setTerminalActivity("idle");
+		broadcastResponseHistory();
+	});
+
+	pi.on("session_tree", async (_event, ctx) => {
+		hydrateLatestAssistant(ctx.sessionManager.getBranch());
+		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
+		refreshContextUsage(ctx);
+		broadcastResponseHistory();
+		broadcastState();
 	});
 
 	pi.on("model_select", async (event, ctx) => {
 		refreshRuntimeMetadata({ cwd: ctx.cwd, model: event.model });
+		refreshContextUsage(ctx);
 		emitDebugEvent("model_select", {
 			modelLabel: currentModelLabel,
 			source: event.source,
@@ -6303,7 +7547,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("message_end", async (event) => {
+	pi.on("message_end", async (event, ctx) => {
 		const message = event.message as { stopReason?: string; role?: string };
 		const stopReason = typeof message.stopReason === "string" ? message.stopReason : "";
 		const role = typeof message.role === "string" ? message.role : "";
@@ -6329,12 +7573,33 @@ export default function (pi: ExtensionAPI) {
 
 		if (!markdown) return;
 
+		syncStudioResponseHistory(ctx.sessionManager.getBranch());
+		refreshContextUsage(ctx);
+		const latestHistoryItem = studioResponseHistory[studioResponseHistory.length - 1];
+		if (!latestHistoryItem || latestHistoryItem.markdown !== markdown) {
+			const fallbackPrompt = studioResponseHistory.length > 0
+				? studioResponseHistory[studioResponseHistory.length - 1]?.prompt ?? null
+				: null;
+			const fallbackHistoryItem: StudioResponseHistoryItem = {
+				id: randomUUID(),
+				markdown,
+				timestamp: Date.now(),
+				kind: inferStudioResponseKind(markdown),
+				prompt: fallbackPrompt,
+			};
+			const nextHistory = [...studioResponseHistory, fallbackHistoryItem];
+			studioResponseHistory = nextHistory.slice(-RESPONSE_HISTORY_LIMIT);
+		}
+
+		const latestItem = studioResponseHistory[studioResponseHistory.length - 1];
+		const responseTimestamp = latestItem?.timestamp ?? Date.now();
+
 		if (activeRequest) {
 			const requestId = activeRequest.id;
 			const kind = activeRequest.kind;
 			lastStudioResponse = {
 				markdown,
-				timestamp: Date.now(),
+				timestamp: responseTimestamp,
 				kind,
 			};
 			emitDebugEvent("broadcast_response", {
@@ -6349,7 +7614,9 @@ export default function (pi: ExtensionAPI) {
 				kind,
 				markdown,
 				timestamp: lastStudioResponse.timestamp,
+				responseHistory: studioResponseHistory,
 			});
+			broadcastResponseHistory();
 			clearActiveRequest();
 			return;
 		}
@@ -6357,7 +7624,7 @@ export default function (pi: ExtensionAPI) {
 		const inferredKind = inferStudioResponseKind(markdown);
 		lastStudioResponse = {
 			markdown,
-			timestamp: Date.now(),
+			timestamp: responseTimestamp,
 			kind: inferredKind,
 		};
 		emitDebugEvent("broadcast_latest_response", {
@@ -6370,11 +7637,14 @@ export default function (pi: ExtensionAPI) {
 			kind: inferredKind,
 			markdown,
 			timestamp: lastStudioResponse.timestamp,
+			responseHistory: studioResponseHistory,
 		});
+		broadcastResponseHistory();
 	});
 
 	pi.on("agent_end", async () => {
 		agentBusy = false;
+		refreshContextUsage();
 		emitDebugEvent("agent_end", { activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
 		setTerminalActivity("idle");
 		if (activeRequest) {
@@ -6391,12 +7661,13 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async () => {
 		lastCommandCtx = null;
 		agentBusy = false;
+		clearCompactionState();
 		setTerminalActivity("idle");
 		await stopServer();
 	});
 
 	pi.registerCommand("studio", {
-		description: "Open Pi Studio browser UI (/studio, /studio <file>, /studio --blank, /studio --last)",
+		description: "Open pi Studio browser UI (/studio, /studio <file>, /studio --blank, /studio --last)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 
@@ -6434,8 +7705,12 @@ export default function (pi: ExtensionAPI) {
 
 			await ctx.waitForIdle();
 			lastCommandCtx = ctx;
-			refreshRuntimeMetadata(ctx);
+			refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
+			refreshContextUsage(ctx);
+			syncStudioResponseHistory(ctx.sessionManager.getBranch());
 			broadcastState();
+			broadcastResponseHistory();
+			void maybeNotifyUpdateAvailable(ctx);
 			// Seed theme vars so first ping doesn't trigger a false update
 			try {
 				const currentStyle = getStudioThemeStyle(ctx.ui.theme);
@@ -6523,14 +7798,14 @@ export default function (pi: ExtensionAPI) {
 			try {
 				await openUrlInDefaultBrowser(url);
 				if (initialStudioDocument?.source === "file") {
-					ctx.ui.notify(`Opened Pi Studio with file loaded: ${initialStudioDocument.label}`, "info");
+					ctx.ui.notify(`Opened pi Studio with file loaded: ${initialStudioDocument.label}`, "info");
 				} else if (initialStudioDocument?.source === "last-response") {
 					ctx.ui.notify(
-						`Opened Pi Studio with last model response (${initialStudioDocument.text.length} chars).`,
+						`Opened pi Studio with last model response (${initialStudioDocument.text.length} chars).`,
 						"info",
 					);
 				} else {
-					ctx.ui.notify("Opened Pi Studio with blank editor.", "info");
+					ctx.ui.notify("Opened pi Studio with blank editor.", "info");
 				}
 				ctx.ui.notify(`Studio URL: ${url}`, "info");
 			} catch (error) {

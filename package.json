@@ -1,6 +1,6 @@
 {
   "name": "pi-studio",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "Browser GUI for structured critique workflows in pi",
   "type": "module",
   "license": "MIT",
