@@ -32,6 +32,7 @@ interface ActiveStudioRequest {
 
 interface LastStudioResponse {
 	markdown: string;
+	thinking: string | null;
 	timestamp: number;
 	kind: StudioRequestKind;
 }
@@ -39,6 +40,7 @@ interface LastStudioResponse {
 interface StudioResponseHistoryItem {
 	id: string;
 	markdown: string;
+	thinking: string | null;
 	timestamp: number;
 	kind: StudioRequestKind;
 	prompt: string | null;
@@ -1259,6 +1261,27 @@ function extractAssistantText(message: unknown): string | null {
 	return text.length > 0 ? text : null;
 }
 
+function extractAssistantThinking(message: unknown): string | null {
+	const msg = message as {
+		role?: string;
+		content?: Array<{ type?: string; thinking?: string }> | string;
+	};
+
+	if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) return null;
+
+	const blocks: string[] = [];
+	for (const part of msg.content) {
+		if (!part || typeof part !== "object") continue;
+		if (part.type !== "thinking") continue;
+		if (typeof part.thinking === "string" && part.thinking.trim()) {
+			blocks.push(part.thinking);
+		}
+	}
+
+	const thinking = blocks.join("\n\n").trim();
+	return thinking.length > 0 ? thinking : null;
+}
+
 function extractLatestAssistantFromEntries(entries: SessionEntry[]): string | null {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
@@ -1330,9 +1353,11 @@ function buildResponseHistoryFromEntries(entries: SessionEntry[], limit = RESPON
 		if (role !== "assistant") continue;
 		const markdown = extractAssistantText(message);
 		if (!markdown) continue;
+		const thinking = extractAssistantThinking(message);
 		history.push({
 			id: typeof (entry as { id?: unknown }).id === "string" ? (entry as { id: string }).id : randomUUID(),
 			markdown,
+			thinking,
 			timestamp: parseEntryTimestamp((entry as { timestamp?: unknown }).timestamp),
 			kind: inferStudioResponseKind(markdown),
 			prompt: lastUserPrompt,
@@ -2889,6 +2914,7 @@ ${cssVarsBlock}
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
+            <option value="thinking">Thinking (Raw)</option>
           </select>
         </div>
         <div class="section-header-actions">
@@ -3043,11 +3069,13 @@ ${cssVarsBlock}
       let followLatest = true;
       let queuedLatestResponse = null;
       let latestResponseMarkdown = "";
+      let latestResponseThinking = "";
       let latestResponseTimestamp = 0;
       let latestResponseKind = "annotation";
       let latestResponseIsStructuredCritique = false;
       let latestResponseHasContent = false;
       let latestResponseNormalized = "";
+      let latestResponseThinkingNormalized = "";
       let latestCritiqueNotes = "";
       let latestCritiqueNotesNormalized = "";
       let responseHistory = [];
@@ -3672,10 +3700,14 @@ ${cssVarsBlock}
         const prompt = typeof item.prompt === "string"
           ? item.prompt
           : (item.prompt == null ? null : String(item.prompt));
+        const thinking = typeof item.thinking === "string"
+          ? item.thinking
+          : (item.thinking == null ? null : String(item.thinking));
 
         return {
           id,
           markdown,
+          thinking,
           timestamp,
           kind: normalizeHistoryKind(item.kind),
           prompt,
@@ -3690,11 +3722,13 @@ ${cssVarsBlock}
 
       function clearActiveResponseView() {
         latestResponseMarkdown = "";
+        latestResponseThinking = "";
         latestResponseKind = "annotation";
         latestResponseTimestamp = 0;
         latestResponseIsStructuredCritique = false;
         latestResponseHasContent = false;
         latestResponseNormalized = "";
+        latestResponseThinkingNormalized = "";
         latestCritiqueNotes = "";
         latestCritiqueNotesNormalized = "";
         refreshResponseUi();
@@ -3731,7 +3765,7 @@ ${cssVarsBlock}
           clearActiveResponseView();
           return false;
         }
-        handleIncomingResponse(item.markdown, item.kind, item.timestamp);
+        handleIncomingResponse(item.markdown, item.kind, item.timestamp, item.thinking);
         return true;
       }
 
@@ -3814,6 +3848,26 @@ ${cssVarsBlock}
         }
 
         const hasResponse = Boolean(latestResponseMarkdown && latestResponseMarkdown.trim());
+        const hasThinking = Boolean(latestResponseThinking && latestResponseThinking.trim());
+        if (rightView === "thinking") {
+          if (!hasResponse && !hasThinking) {
+            referenceBadgeEl.textContent = "Thinking: none";
+            return;
+          }
+
+          const time = formatReferenceTime(latestResponseTimestamp);
+          const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
+          const selected = total > 0 && responseHistoryIndex >= 0 && responseHistoryIndex < total
+            ? responseHistoryIndex + 1
+            : 0;
+          const historyPrefix = total > 0 ? "Response history " + selected + "/" + total + " · " : "";
+          const thinkingLabel = hasThinking ? "assistant thinking" : "assistant thinking unavailable";
+          referenceBadgeEl.textContent = time
+            ? historyPrefix + thinkingLabel + " · " + time
+            : historyPrefix + thinkingLabel;
+          return;
+        }
+
         if (!hasResponse) {
           referenceBadgeEl.textContent = "Latest response: none";
           return;
@@ -3864,8 +3918,13 @@ ${cssVarsBlock}
       function updateSyncBadge(normalizedEditorText) {
         if (!syncBadgeEl) return;
 
-        if (!latestResponseHasContent) {
-          syncBadgeEl.textContent = "No response loaded";
+        const showingThinking = rightView === "thinking";
+        const hasComparableContent = showingThinking
+          ? Boolean(latestResponseThinking && latestResponseThinking.trim())
+          : latestResponseHasContent;
+
+        if (!hasComparableContent) {
+          syncBadgeEl.textContent = showingThinking ? "No thinking loaded" : "No response loaded";
           syncBadgeEl.classList.remove("sync", "edited");
           return;
         }
@@ -3873,13 +3932,14 @@ ${cssVarsBlock}
         const normalizedEditor = typeof normalizedEditorText === "string"
           ? normalizedEditorText
           : normalizeForCompare(sourceTextEl.value);
-        const inSync = normalizedEditor === latestResponseNormalized;
+        const targetNormalized = showingThinking ? latestResponseThinkingNormalized : latestResponseNormalized;
+        const inSync = normalizedEditor === targetNormalized;
         if (inSync) {
-          syncBadgeEl.textContent = "In sync with response";
+          syncBadgeEl.textContent = showingThinking ? "In sync with thinking" : "In sync with response";
           syncBadgeEl.classList.add("sync");
           syncBadgeEl.classList.remove("edited");
         } else {
-          syncBadgeEl.textContent = "Out of sync with response";
+          syncBadgeEl.textContent = showingThinking ? "Out of sync with thinking" : "Out of sync with response";
           syncBadgeEl.classList.add("edited");
           syncBadgeEl.classList.remove("sync");
         }
@@ -4411,6 +4471,15 @@ ${cssVarsBlock}
           return;
         }
 
+        if (rightView === "thinking") {
+          const thinking = latestResponseThinking;
+          finishPreviewRender(critiqueViewEl);
+          critiqueViewEl.innerHTML = thinking && thinking.trim()
+            ? buildPlainMarkdownHtml(thinking)
+            : "<pre class='plain-markdown'>No thinking available for this response.</pre>";
+          return;
+        }
+
         const markdown = latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
           finishPreviewRender(critiqueViewEl);
@@ -4446,36 +4515,56 @@ ${cssVarsBlock}
 
       function updateResultActionButtons(normalizedEditorText) {
         const hasResponse = latestResponseHasContent;
+        const hasThinking = Boolean(latestResponseThinking && latestResponseThinking.trim());
         const normalizedEditor = typeof normalizedEditorText === "string"
           ? normalizedEditorText
           : normalizeForCompare(sourceTextEl.value);
         const responseLoaded = hasResponse && normalizedEditor === latestResponseNormalized;
+        const thinkingLoaded = hasThinking && normalizedEditor === latestResponseThinkingNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
+        const showingThinking = rightView === "thinking";
 
         const critiqueNotes = isCritiqueResponse ? latestCritiqueNotes : "";
         const critiqueNotesLoaded = Boolean(critiqueNotes) && normalizedEditor === latestCritiqueNotesNormalized;
 
-        loadResponseBtn.hidden = isCritiqueResponse;
-        loadCritiqueNotesBtn.hidden = !isCritiqueResponse;
-        loadCritiqueFullBtn.hidden = !isCritiqueResponse;
+        if (showingThinking) {
+          loadResponseBtn.hidden = false;
+          loadCritiqueNotesBtn.hidden = true;
+          loadCritiqueFullBtn.hidden = true;
 
-        loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse;
-        loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
+          loadResponseBtn.disabled = uiBusy || !hasThinking || thinkingLoaded;
+          loadResponseBtn.textContent = !hasThinking
+            ? "Thinking unavailable"
+            : (thinkingLoaded ? "Thinking already in editor" : "Load thinking into editor");
 
-        loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
-        loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
+          copyResponseBtn.disabled = uiBusy || !hasThinking;
+          copyResponseBtn.textContent = "Copy thinking text";
+        } else {
+          loadResponseBtn.hidden = isCritiqueResponse;
+          loadCritiqueNotesBtn.hidden = !isCritiqueResponse;
+          loadCritiqueFullBtn.hidden = !isCritiqueResponse;
 
-        loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded;
-        loadCritiqueFullBtn.textContent = responseLoaded ? "Full critique already in editor" : "Load full critique into editor";
+          loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse;
+          loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
 
-        copyResponseBtn.disabled = uiBusy || !hasResponse;
+          loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
+          loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
+
+          loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded;
+          loadCritiqueFullBtn.textContent = responseLoaded ? "Full critique already in editor" : "Load full critique into editor";
+
+          copyResponseBtn.disabled = uiBusy || !hasResponse;
+          copyResponseBtn.textContent = "Copy response text";
+        }
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         const exportText = rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown;
         const canExportPdf = rightPaneShowsPreview && Boolean(String(exportText || "").trim());
         if (exportPdfBtn) {
           exportPdfBtn.disabled = uiBusy || pdfExportInProgress || !canExportPdf;
-          if (rightView === "markdown") {
+          if (rightView === "thinking") {
+            exportPdfBtn.title = "Thinking view does not support PDF export yet.";
+          } else if (rightView === "markdown") {
             exportPdfBtn.title = "Switch right pane to Response (Preview) or Editor (Preview) to export PDF.";
           } else if (!canExportPdf) {
             exportPdfBtn.title = "Nothing to export yet.";
@@ -4653,7 +4742,11 @@ ${cssVarsBlock}
       }
 
       function setRightView(nextView) {
-        rightView = nextView === "preview" ? "preview" : (nextView === "editor-preview" ? "editor-preview" : "markdown");
+        rightView = nextView === "preview"
+          ? "preview"
+          : (nextView === "editor-preview"
+            ? "editor-preview"
+            : (nextView === "thinking" ? "thinking" : "markdown"));
         rightViewSelect.value = rightView;
 
         if (rightView !== "editor-preview" && responseEditorPreviewTimer) {
@@ -5330,18 +5423,20 @@ ${cssVarsBlock}
         return lower.indexOf("## critiques") !== -1 && lower.indexOf("## document") !== -1;
       }
 
-      function handleIncomingResponse(markdown, kind, timestamp) {
+      function handleIncomingResponse(markdown, kind, timestamp, thinking) {
         const responseTimestamp =
           typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0
             ? timestamp
             : Date.now();
 
         latestResponseMarkdown = markdown;
+        latestResponseThinking = typeof thinking === "string" ? thinking : "";
         latestResponseKind = kind === "critique" ? "critique" : "annotation";
         latestResponseTimestamp = responseTimestamp;
         latestResponseIsStructuredCritique = isStructuredCritique(markdown);
         latestResponseHasContent = Boolean(markdown && markdown.trim());
         latestResponseNormalized = normalizeForCompare(markdown);
+        latestResponseThinkingNormalized = normalizeForCompare(latestResponseThinking);
 
         if (latestResponseIsStructuredCritique) {
           latestCritiqueNotes = buildCritiqueNotesMarkdown(markdown);
@@ -5357,7 +5452,7 @@ ${cssVarsBlock}
       function applyLatestPayload(payload) {
         if (!payload || typeof payload.markdown !== "string") return false;
         const responseKind = payload.kind === "critique" ? "critique" : "annotation";
-        handleIncomingResponse(payload.markdown, responseKind, payload.timestamp);
+        handleIncomingResponse(payload.markdown, responseKind, payload.timestamp, payload.thinking);
         return true;
       }
 
@@ -5456,7 +5551,7 @@ ${cssVarsBlock}
               message.lastResponse.kind === "critique"
                 ? "critique"
                 : (isStructuredCritique(lastMarkdown) ? "critique" : "annotation");
-            handleIncomingResponse(lastMarkdown, lastResponseKind, message.lastResponse.timestamp);
+            handleIncomingResponse(lastMarkdown, lastResponseKind, message.lastResponse.timestamp, message.lastResponse.thinking);
           }
 
           if (pendingRequestId) {
@@ -5553,7 +5648,7 @@ ${cssVarsBlock}
           }
 
           if (!appliedFromHistory && typeof message.markdown === "string") {
-            handleIncomingResponse(message.markdown, responseKind, message.timestamp);
+            handleIncomingResponse(message.markdown, responseKind, message.timestamp, message.thinking);
           }
 
           if (responseKind === "critique") {
@@ -5582,6 +5677,7 @@ ${cssVarsBlock}
             const payload = {
               kind: message.kind === "critique" ? "critique" : "annotation",
               markdown: message.markdown,
+              thinking: typeof message.thinking === "string" ? message.thinking : null,
               timestamp: message.timestamp,
             };
 
@@ -6172,6 +6268,17 @@ ${cssVarsBlock}
       });
 
       loadResponseBtn.addEventListener("click", () => {
+        if (rightView === "thinking") {
+          if (!latestResponseThinking.trim()) {
+            setStatus("No thinking available for the selected response.", "warning");
+            return;
+          }
+          setEditorText(latestResponseThinking, { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label: "assistant thinking", path: null });
+          setStatus("Loaded thinking into editor.", "success");
+          return;
+        }
+
         if (!latestResponseMarkdown.trim()) {
           setStatus("No response available yet.", "warning");
           return;
@@ -6210,14 +6317,15 @@ ${cssVarsBlock}
       });
 
       copyResponseBtn.addEventListener("click", async () => {
-        if (!latestResponseMarkdown.trim()) {
-          setStatus("No response available yet.", "warning");
+        const content = rightView === "thinking" ? latestResponseThinking : latestResponseMarkdown;
+        if (!content.trim()) {
+          setStatus(rightView === "thinking" ? "No thinking available yet." : "No response available yet.", "warning");
           return;
         }
 
         try {
-          await navigator.clipboard.writeText(latestResponseMarkdown);
-          setStatus("Copied response text.", "success");
+          await navigator.clipboard.writeText(content);
+          setStatus(rightView === "thinking" ? "Copied thinking text." : "Copied response text.", "success");
         } catch (error) {
           setStatus("Clipboard write failed.", "warning");
         }
@@ -6635,6 +6743,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		lastStudioResponse = {
 			markdown: latest.markdown,
+			thinking: latest.thinking,
 			timestamp: latest.timestamp,
 			kind: latest.kind,
 		};
@@ -6897,6 +7006,7 @@ export default function (pi: ExtensionAPI) {
 				type: "latest_response",
 				kind: lastStudioResponse.kind,
 				markdown: lastStudioResponse.markdown,
+				thinking: lastStudioResponse.thinking,
 				timestamp: lastStudioResponse.timestamp,
 				responseHistory: studioResponseHistory,
 			});
@@ -7711,11 +7821,14 @@ export default function (pi: ExtensionAPI) {
 		const stopReason = typeof message.stopReason === "string" ? message.stopReason : "";
 		const role = typeof message.role === "string" ? message.role : "";
 		const markdown = extractAssistantText(event.message);
+		const thinking = extractAssistantThinking(event.message);
 		emitDebugEvent("message_end", {
 			role,
 			stopReason,
 			hasMarkdown: Boolean(markdown),
 			markdownLength: markdown ? markdown.length : 0,
+			hasThinking: Boolean(thinking),
+			thinkingLength: thinking ? thinking.length : 0,
 			activeRequestId: activeRequest?.id ?? null,
 			activeRequestKind: activeRequest?.kind ?? null,
 		});
@@ -7742,6 +7855,7 @@ export default function (pi: ExtensionAPI) {
 			const fallbackHistoryItem: StudioResponseHistoryItem = {
 				id: randomUUID(),
 				markdown,
+				thinking,
 				timestamp: Date.now(),
 				kind: inferStudioResponseKind(markdown),
 				prompt: fallbackPrompt,
@@ -7752,12 +7866,14 @@ export default function (pi: ExtensionAPI) {
 
 		const latestItem = studioResponseHistory[studioResponseHistory.length - 1];
 		const responseTimestamp = latestItem?.timestamp ?? Date.now();
+		const responseThinking = latestItem?.thinking ?? thinking ?? null;
 
 		if (activeRequest) {
 			const requestId = activeRequest.id;
 			const kind = activeRequest.kind;
 			lastStudioResponse = {
 				markdown,
+				thinking: responseThinking,
 				timestamp: responseTimestamp,
 				kind,
 			};
@@ -7765,6 +7881,7 @@ export default function (pi: ExtensionAPI) {
 				requestId,
 				kind,
 				markdownLength: markdown.length,
+				thinkingLength: responseThinking ? responseThinking.length : 0,
 				stopReason,
 			});
 			broadcast({
@@ -7772,6 +7889,7 @@ export default function (pi: ExtensionAPI) {
 				requestId,
 				kind,
 				markdown,
+				thinking: lastStudioResponse.thinking,
 				timestamp: lastStudioResponse.timestamp,
 				responseHistory: studioResponseHistory,
 			});
@@ -7783,18 +7901,21 @@ export default function (pi: ExtensionAPI) {
 		const inferredKind = inferStudioResponseKind(markdown);
 		lastStudioResponse = {
 			markdown,
+			thinking: responseThinking,
 			timestamp: responseTimestamp,
 			kind: inferredKind,
 		};
 		emitDebugEvent("broadcast_latest_response", {
 			kind: inferredKind,
 			markdownLength: markdown.length,
+			thinkingLength: responseThinking ? responseThinking.length : 0,
 			stopReason,
 		});
 		broadcast({
 			type: "latest_response",
 			kind: inferredKind,
 			markdown,
+			thinking: lastStudioResponse.thinking,
 			timestamp: lastStudioResponse.timestamp,
 			responseHistory: studioResponseHistory,
 		});

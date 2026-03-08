@@ -14,11 +14,12 @@ Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens 
 
 ## What it does
 
-- Opens a two-pane browser workspace: **Editor** (left) + **Response/Editor Preview** (right)
+- Opens a two-pane browser workspace: **Editor** (left) + **Response/Thinking/Editor Preview** (right)
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
 - Browses response history (`Prev/Next`) and loads either:
   - response text
   - critique notes/full critique
+  - assistant thinking (when available)
   - the prompt that generated a selected response
 - Supports an annotation workflow for `[an: ...]` markers:
   - inserts/removes the annotated-reply header

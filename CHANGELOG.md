@@ -88,6 +88,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-03-09
+
+### Added
+- New right-pane **Thinking (Raw)** view for assistant/model thinking when available.
+
+### Changed
+- Response history and latest-response syncing now preserve associated thinking content.
+- In Thinking view, right-pane actions adapt to the selected reasoning trace:
+  - **Load thinking into editor**
+  - **Copy thinking text**
+  - thinking-aware reference/sync badges
+
 ## [0.5.3] — 2026-03-06
 
 ### Added
