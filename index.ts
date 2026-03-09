@@ -2165,6 +2165,7 @@ ${cssVarsBlock}
       border-radius: 8px;
       background: var(--editor-bg);
       overflow: hidden;
+      overscroll-behavior: none;
     }
 
     .editor-highlight {
@@ -2177,7 +2178,9 @@ ${cssVarsBlock}
       overflow: auto;
       pointer-events: none;
       white-space: pre-wrap;
-      word-break: break-word;
+      word-break: normal;
+      overflow-wrap: break-word;
+      overscroll-behavior: none;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 13px;
       line-height: 1.45;
@@ -2197,6 +2200,7 @@ ${cssVarsBlock}
       background: transparent;
       resize: none;
       outline: none;
+      overscroll-behavior: none;
     }
 
     #sourceText.highlight-active {
@@ -2240,7 +2244,7 @@ ${cssVarsBlock}
 
     .hl-code-com {
       color: var(--syntax-comment);
-      font-style: italic;
+      font-style: normal;
     }
 
     .hl-code-var,
@@ -2269,7 +2273,7 @@ ${cssVarsBlock}
 
     .hl-quote {
       color: var(--md-quote);
-      font-style: italic;
+      font-style: normal;
     }
 
     .hl-link {
@@ -2284,9 +2288,10 @@ ${cssVarsBlock}
     .hl-annotation {
       color: var(--accent);
       background: var(--accent-soft);
-      border: 1px solid var(--marker-border);
+      border: 0;
       border-radius: 4px;
-      padding: 0 3px;
+      padding: 0;
+      box-shadow: inset 0 0 0 1px var(--marker-border);
     }
 
     .hl-annotation-muted {
@@ -3177,6 +3182,7 @@ ${cssVarsBlock}
       let editorHighlightRenderRaf = null;
       let annotationsEnabled = true;
       const ANNOTATION_MARKER_REGEX = /\\[an:\\s*([^\\]\\n]+?)\\]/gi;
+      const EMPTY_OVERLAY_LINE = "\\u200b";
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
       const MERMAID_CONFIG = ${JSON.stringify(mermaidConfig)};
       const MERMAID_UNAVAILABLE_MESSAGE = "Mermaid renderer unavailable. Showing mermaid blocks as code.";
@@ -5073,7 +5079,12 @@ ${cssVarsBlock}
           }
 
           if (inFence) {
-            out.push(line.length > 0 ? highlightCodeLine(line, fenceLanguage) : "");
+            out.push(line.length > 0 ? highlightCodeLine(line, fenceLanguage) : EMPTY_OVERLAY_LINE);
+            continue;
+          }
+
+          if (line.length === 0) {
+            out.push(EMPTY_OVERLAY_LINE);
             continue;
           }
 
@@ -5112,7 +5123,7 @@ ${cssVarsBlock}
         const out = [];
         for (const line of lines) {
           if (line.length === 0) {
-            out.push("");
+            out.push(EMPTY_OVERLAY_LINE);
           } else if (lang) {
             out.push(highlightCodeLine(line, lang));
           } else {

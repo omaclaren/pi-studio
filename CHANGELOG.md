@@ -88,6 +88,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-03-09
+
+### Fixed
+- Improved raw-editor caret/overlay alignment in Syntax highlight mode:
+  - width-neutral annotation highlight styling
+  - more textarea-like wrap behavior in the highlight overlay
+  - preserved empty trailing lines in highlighted output so end-of-file blank lines stay aligned
+  - reduced raw overlay metric drift for comment/quote styling
+
 ## [0.5.4] — 2026-03-09
 
 ### Added
