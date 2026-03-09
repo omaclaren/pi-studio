@@ -88,6 +88,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-03-10
+
 ### Changed
 - Studio monospace surfaces now use a shared `--font-mono` stack, with best-effort terminal-font detection (Ghostty/WezTerm/Kitty/Alacritty config when available) and `PI_STUDIO_FONT_MONO` as a manual override.
 - In-flight **Run editor text** / **Critique editor text** requests now swap the triggering button into an in-place theme-aware **Stop** state while disabling the other action.
