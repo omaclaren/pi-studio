@@ -120,6 +120,11 @@ interface GetFromEditorRequestMessage {
 	requestId: string;
 }
 
+interface CancelRequestMessage {
+	type: "cancel_request";
+	requestId: string;
+}
+
 type IncomingStudioMessage =
 	| HelloMessage
 	| PingMessage
@@ -131,7 +136,8 @@ type IncomingStudioMessage =
 	| SaveAsRequestMessage
 	| SaveOverRequestMessage
 	| SendToEditorRequestMessage
-	| GetFromEditorRequestMessage;
+	| GetFromEditorRequestMessage
+	| CancelRequestMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
@@ -1697,6 +1703,13 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
+	if (msg.type === "cancel_request" && typeof msg.requestId === "string") {
+		return {
+			type: "cancel_request",
+			requestId: msg.requestId,
+		};
+	}
+
 	return null;
 }
 
@@ -1892,6 +1905,7 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 			? "0 1px 2px rgba(15, 23, 42, 0.03), 0 4px 14px rgba(15, 23, 42, 0.04)"
 			: "0 1px 2px rgba(0, 0, 0, 0.36), 0 6px 18px rgba(0, 0, 0, 0.22)";
 	const accentContrast = style.mode === "light" ? "#ffffff" : "#0e1616";
+	const errorContrast = style.mode === "light" ? "#ffffff" : "#0e1616";
 	const blockquoteBg = withAlpha(
 		style.palette.mdQuoteBorder,
 		style.mode === "light" ? 0.10 : 0.16,
@@ -1947,6 +1961,7 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--syntax-punctuation": style.palette.syntaxPunctuation,
 		"--panel-shadow": panelShadow,
 		"--accent-contrast": accentContrast,
+		"--error-contrast": errorContrast,
 		"--blockquote-bg": blockquoteBg,
 		"--table-alt-bg": tableAltBg,
 		"--editor-bg": editorBg,
@@ -2111,6 +2126,14 @@ ${cssVarsBlock}
     }
 
     #sendRunBtn,
+    #critiqueBtn {
+      min-width: 10rem;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #sendRunBtn:not(:disabled):not(.request-stop-active),
     #loadResponseBtn:not(:disabled):not([hidden]) {
       background: var(--accent);
       border-color: var(--accent);
@@ -2118,8 +2141,21 @@ ${cssVarsBlock}
       font-weight: 600;
     }
 
-    #sendRunBtn:not(:disabled):hover,
+    #sendRunBtn:not(:disabled):not(.request-stop-active):hover,
     #loadResponseBtn:not(:disabled):not([hidden]):hover {
+      filter: brightness(0.95);
+    }
+
+    #sendRunBtn.request-stop-active,
+    #critiqueBtn.request-stop-active {
+      background: var(--error);
+      border-color: var(--error);
+      color: var(--error-contrast);
+      font-weight: 600;
+    }
+
+    #sendRunBtn.request-stop-active:not(:disabled):hover,
+    #critiqueBtn.request-stop-active:not(:disabled):hover {
       filter: brightness(0.95);
     }
 
@@ -4844,7 +4880,7 @@ ${cssVarsBlock}
         saveOverBtn.disabled = uiBusy || !canSaveOver;
         sendEditorBtn.disabled = uiBusy;
         if (getEditorBtn) getEditorBtn.disabled = uiBusy;
-        sendRunBtn.disabled = uiBusy;
+        syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
         if (highlightSelect) highlightSelect.disabled = uiBusy;
         if (langSelect) langSelect.disabled = uiBusy;
@@ -4857,7 +4893,6 @@ ${cssVarsBlock}
         followSelect.disabled = uiBusy;
         if (responseHighlightSelect) responseHighlightSelect.disabled = uiBusy || rightView !== "markdown";
         insertHeaderBtn.disabled = uiBusy;
-        critiqueBtn.disabled = uiBusy;
         lensSelect.disabled = uiBusy;
         updateSaveFileTooltip();
         updateHistoryControls();
@@ -5554,6 +5589,51 @@ ${cssVarsBlock}
         renderActiveResult();
       }
 
+      function getAbortablePendingKind() {
+        if (!pendingRequestId) return null;
+        return pendingKind === "direct" || pendingKind === "critique" ? pendingKind : null;
+      }
+
+      function requestCancelForPendingRequest(expectedKind) {
+        const activeKind = getAbortablePendingKind();
+        if (!activeKind || activeKind !== expectedKind || !pendingRequestId) {
+          setStatus("No matching Studio request is running.", "warning");
+          return false;
+        }
+        const sent = sendMessage({ type: "cancel_request", requestId: pendingRequestId });
+        if (!sent) return false;
+        setStatus("Stopping request…", "warning");
+        return true;
+      }
+
+      function syncRunAndCritiqueButtons() {
+        const activeKind = getAbortablePendingKind();
+        const sendRunIsStop = activeKind === "direct";
+        const critiqueIsStop = activeKind === "critique";
+
+        if (sendRunBtn) {
+          sendRunBtn.textContent = sendRunIsStop ? "Stop" : "Run editor text";
+          sendRunBtn.classList.toggle("request-stop-active", sendRunIsStop);
+          sendRunBtn.disabled = sendRunIsStop ? wsState === "Disconnected" : (uiBusy || critiqueIsStop);
+          sendRunBtn.title = sendRunIsStop
+            ? "Stop the running editor-text request."
+            : (annotationsEnabled
+              ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter."
+              : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter.");
+        }
+
+        if (critiqueBtn) {
+          critiqueBtn.textContent = critiqueIsStop ? "Stop" : "Critique editor text";
+          critiqueBtn.classList.toggle("request-stop-active", critiqueIsStop);
+          critiqueBtn.disabled = critiqueIsStop ? wsState === "Disconnected" : (uiBusy || sendRunIsStop);
+          critiqueBtn.title = critiqueIsStop
+            ? "Stop the running critique request."
+            : (annotationsEnabled
+              ? "Critique editor text as-is (includes [an: ...] markers)."
+              : "Critique editor text with [an: ...] markers stripped.");
+        }
+      }
+
       function updateAnnotationModeUi() {
         if (annotationModeSelect) {
           annotationModeSelect.value = annotationsEnabled ? "on" : "off";
@@ -5562,17 +5642,7 @@ ${cssVarsBlock}
             : "Annotations Hidden: keep markers in editor, hide in preview, and strip before Run/Critique.";
         }
 
-        if (sendRunBtn) {
-          sendRunBtn.title = annotationsEnabled
-            ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter."
-            : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter.";
-        }
-
-        if (critiqueBtn) {
-          critiqueBtn.title = annotationsEnabled
-            ? "Critique editor text as-is (includes [an: ...] markers)."
-            : "Critique editor text with [an: ...] markers stripped.";
-        }
+        syncRunAndCritiqueButtons();
       }
 
       function setAnnotationsEnabled(enabled, _options) {
@@ -6456,6 +6526,11 @@ ${cssVarsBlock}
       });
 
       critiqueBtn.addEventListener("click", () => {
+        if (getAbortablePendingKind() === "critique") {
+          requestCancelForPendingRequest("critique");
+          return;
+        }
+
         const preparedDocumentText = prepareEditorTextForSend(sourceTextEl.value);
         const documentText = preparedDocumentText.trim();
         if (!documentText) {
@@ -6651,6 +6726,11 @@ ${cssVarsBlock}
       }
 
       sendRunBtn.addEventListener("click", () => {
+        if (getAbortablePendingKind() === "direct") {
+          requestCancelForPendingRequest("direct");
+          return;
+        }
+
         const prepared = prepareEditorTextForSend(sourceTextEl.value);
         if (!prepared.trim()) {
           setStatus("Editor is empty. Nothing to run.", "warning");
@@ -6864,6 +6944,7 @@ export default function (pi: ExtensionAPI) {
 	let studioCwd = process.cwd();
 	let lastCommandCtx: ExtensionCommandContext | null = null;
 	let lastThemeVarsJson = "";
+	let suppressedStudioResponse: { requestId: string; kind: StudioRequestKind } | null = null;
 	let agentBusy = false;
 	let terminalActivityPhase: TerminalActivityPhase = "idle";
 	let terminalActivityToolName: string | null = null;
@@ -7118,7 +7199,35 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const cancelActiveRequest = (requestId: string): { ok: true; kind: StudioRequestKind } | { ok: false; message: string } => {
+		if (!activeRequest) {
+			return { ok: false, message: "No studio request is currently running." };
+		}
+		if (activeRequest.id !== requestId) {
+			return { ok: false, message: "That studio request is no longer active." };
+		}
+		if (!lastCommandCtx) {
+			return { ok: false, message: "No interactive pi context is available to stop the request." };
+		}
+
+		const kind = activeRequest.kind;
+		try {
+			lastCommandCtx.abort();
+		} catch (error) {
+			return {
+				ok: false,
+				message: `Failed to stop request: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+
+		suppressedStudioResponse = { requestId, kind };
+		emitDebugEvent("cancel_active_request", { requestId, kind });
+		clearActiveRequest({ notify: "Cancelled request.", level: "warning" });
+		return { ok: true, kind };
+	};
+
 	const beginRequest = (requestId: string, kind: StudioRequestKind): boolean => {
+		suppressedStudioResponse = null;
 		emitDebugEvent("begin_request_attempt", {
 			requestId,
 			kind,
@@ -7223,6 +7332,19 @@ export default function (pi: ExtensionAPI) {
 				timestamp: lastStudioResponse.timestamp,
 				responseHistory: studioResponseHistory,
 			});
+			return;
+		}
+
+		if (msg.type === "cancel_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+
+			const result = cancelActiveRequest(msg.requestId);
+			if (!result.ok) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: result.message });
+			}
 			return;
 		}
 
@@ -8058,6 +8180,16 @@ export default function (pi: ExtensionAPI) {
 
 		if (!markdown) return;
 
+		if (suppressedStudioResponse) {
+			emitDebugEvent("suppressed_cancelled_response", {
+				requestId: suppressedStudioResponse.requestId,
+				kind: suppressedStudioResponse.kind,
+				markdownLength: markdown.length,
+				thinkingLength: thinking ? thinking.length : 0,
+			});
+			return;
+		}
+
 		syncStudioResponseHistory(ctx.sessionManager.getBranch());
 		refreshContextUsage(ctx);
 		const latestHistoryItem = studioResponseHistory[studioResponseHistory.length - 1];
@@ -8138,7 +8270,12 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_end", async () => {
 		agentBusy = false;
 		refreshContextUsage();
-		emitDebugEvent("agent_end", { activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
+		emitDebugEvent("agent_end", {
+			activeRequestId: activeRequest?.id ?? null,
+			activeRequestKind: activeRequest?.kind ?? null,
+			suppressedRequestId: suppressedStudioResponse?.requestId ?? null,
+			suppressedRequestKind: suppressedStudioResponse?.kind ?? null,
+		});
 		setTerminalActivity("idle");
 		if (activeRequest) {
 			const requestId = activeRequest.id;
@@ -8149,6 +8286,7 @@ export default function (pi: ExtensionAPI) {
 			});
 			clearActiveRequest();
 		}
+		suppressedStudioResponse = null;
 	});
 
 	pi.on("session_shutdown", async () => {
