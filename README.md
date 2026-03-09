@@ -62,6 +62,7 @@ pi -e https://github.com/omaclaren/pi-studio
 
 - Local-only server (`127.0.0.1`) with rotating tokenized URLs.
 - Studio is designed as a complement to terminal pi, not a replacement.
+- Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack.
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
   - `brew install pandoc`
   - install TeX Live/MacTeX for PDF export

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
@@ -452,6 +452,205 @@ interface ThemeExportPalette {
 }
 
 const themeExportPaletteCache = new Map<string, ThemeExportPalette | null>();
+
+const DEFAULT_MONO_FONT_FAMILIES = [
+	"ui-monospace",
+	"SFMono-Regular",
+	"Menlo",
+	"Monaco",
+	"Consolas",
+	"Liberation Mono",
+	"Courier New",
+	"monospace",
+] as const;
+
+const CSS_GENERIC_FONT_FAMILIES = new Set([
+	"serif",
+	"sans-serif",
+	"monospace",
+	"cursive",
+	"fantasy",
+	"system-ui",
+	"emoji",
+	"math",
+	"fangsong",
+	"ui-serif",
+	"ui-sans-serif",
+	"ui-monospace",
+	"ui-rounded",
+]);
+
+let cachedStudioMonoFontStack: string | null = null;
+
+function getHomeDirectory(): string {
+	return process.env.HOME ?? homedir();
+}
+
+function getXdgConfigDirectory(): string {
+	const configured = process.env.XDG_CONFIG_HOME?.trim();
+	if (configured) return configured;
+	return join(getHomeDirectory(), ".config");
+}
+
+function sanitizeCssValue(value: string): string {
+	return value.replace(/[\r\n;]+/g, " ").trim();
+}
+
+function stripSimpleInlineComment(value: string): string {
+	let quote: '"' | "'" | null = null;
+	for (let i = 0; i < value.length; i += 1) {
+		const char = value[i];
+		if (quote) {
+			if (char === quote && value[i - 1] !== "\\") quote = null;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (char === "#") {
+			return value.slice(0, i).trim();
+		}
+	}
+	return value.trim();
+}
+
+function normalizeConfiguredFontFamily(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const sanitized = sanitizeCssValue(stripSimpleInlineComment(value));
+	if (!sanitized) return undefined;
+	const unquoted =
+		(sanitized.startsWith('"') && sanitized.endsWith('"'))
+			|| (sanitized.startsWith("'") && sanitized.endsWith("'"))
+			? sanitized.slice(1, -1).trim()
+			: sanitized;
+	return unquoted || undefined;
+}
+
+function formatCssFontFamilyToken(value: string): string {
+	const trimmed = sanitizeCssValue(value);
+	if (!trimmed) return "";
+	if (CSS_GENERIC_FONT_FAMILIES.has(trimmed.toLowerCase())) return trimmed;
+	if (
+		(trimmed.startsWith('"') && trimmed.endsWith('"'))
+		|| (trimmed.startsWith("'") && trimmed.endsWith("'"))
+	) {
+		return trimmed;
+	}
+	return `"${trimmed.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function readFirstExistingTextFile(paths: string[]): string | undefined {
+	for (const path of paths) {
+		try {
+			const text = readFileSync(path, "utf-8");
+			if (text.trim()) return text;
+		} catch {
+			// Ignore missing/unreadable files
+		}
+	}
+	return undefined;
+}
+
+function detectGhosttyFontFamily(): string | undefined {
+	const home = getHomeDirectory();
+	const content = readFirstExistingTextFile([
+		join(getXdgConfigDirectory(), "ghostty", "config"),
+		join(home, "Library", "Application Support", "com.mitchellh.ghostty", "config"),
+	]);
+	if (!content) return undefined;
+	const match = content.match(/^\s*font-family\s*=\s*(.+?)\s*$/m);
+	return normalizeConfiguredFontFamily(match?.[1]);
+}
+
+function detectKittyFontFamily(): string | undefined {
+	const content = readFirstExistingTextFile([
+		join(getXdgConfigDirectory(), "kitty", "kitty.conf"),
+	]);
+	if (!content) return undefined;
+	const match = content.match(/^\s*font_family\s+(.+?)\s*$/m);
+	return normalizeConfiguredFontFamily(match?.[1]);
+}
+
+function detectWezTermFontFamily(): string | undefined {
+	const home = getHomeDirectory();
+	const content = readFirstExistingTextFile([
+		join(getXdgConfigDirectory(), "wezterm", "wezterm.lua"),
+		join(home, ".wezterm.lua"),
+	]);
+	if (!content) return undefined;
+	const patterns = [
+		/font_with_fallback\s*\(\s*\{[\s\S]*?["']([^"']+)["']/m,
+		/font\s*\(\s*["']([^"']+)["']/m,
+		/font\s*=\s*["']([^"']+)["']/m,
+		/family\s*=\s*["']([^"']+)["']/m,
+	];
+	for (const pattern of patterns) {
+		const family = normalizeConfiguredFontFamily(content.match(pattern)?.[1]);
+		if (family) return family;
+	}
+	return undefined;
+}
+
+function detectAlacrittyFontFamily(): string | undefined {
+	const content = readFirstExistingTextFile([
+		join(getXdgConfigDirectory(), "alacritty", "alacritty.toml"),
+		join(getXdgConfigDirectory(), "alacritty.toml"),
+		join(getXdgConfigDirectory(), "alacritty", "alacritty.yml"),
+		join(getXdgConfigDirectory(), "alacritty", "alacritty.yaml"),
+	]);
+	if (!content) return undefined;
+	const patterns = [
+		/^\s*family\s*=\s*["']([^"']+)["']\s*$/m,
+		/^\s*family\s*:\s*["']?([^"'#\n]+)["']?\s*$/m,
+	];
+	for (const pattern of patterns) {
+		const family = normalizeConfiguredFontFamily(content.match(pattern)?.[1]);
+		if (family) return family;
+	}
+	return undefined;
+}
+
+function detectTerminalMonospaceFontFamily(): string | undefined {
+	const termProgram = (process.env.TERM_PROGRAM ?? "").trim().toLowerCase();
+	const term = (process.env.TERM ?? "").trim().toLowerCase();
+
+	if (termProgram === "ghostty" || term.includes("ghostty")) return detectGhosttyFontFamily();
+	if (termProgram === "wezterm") return detectWezTermFontFamily();
+	if (termProgram === "kitty" || term.includes("kitty")) return detectKittyFontFamily();
+	if (termProgram === "alacritty") return detectAlacrittyFontFamily();
+	return undefined;
+}
+
+function buildMonoFontStack(primaryFamily?: string): string {
+	const entries: string[] = [];
+	const seen = new Set<string>();
+	const push = (family: string) => {
+		const trimmed = family.trim();
+		if (!trimmed) return;
+		const key = trimmed.replace(/^['"]|['"]$/g, "").toLowerCase();
+		if (seen.has(key)) return;
+		seen.add(key);
+		entries.push(formatCssFontFamilyToken(trimmed));
+	};
+
+	if (primaryFamily) push(primaryFamily);
+	for (const family of DEFAULT_MONO_FONT_FAMILIES) push(family);
+	return entries.join(", ");
+}
+
+function getStudioMonoFontStack(): string {
+	if (cachedStudioMonoFontStack) return cachedStudioMonoFontStack;
+
+	const override = sanitizeCssValue(process.env.PI_STUDIO_FONT_MONO ?? "");
+	if (override) {
+		cachedStudioMonoFontStack = override;
+		return cachedStudioMonoFontStack;
+	}
+
+	cachedStudioMonoFontStack = buildMonoFontStack(detectTerminalMonospaceFontFamily());
+	return cachedStudioMonoFontStack;
+}
 
 function resolveThemeExportValue(
 	value: string | number | undefined,
@@ -1706,6 +1905,7 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 	const editorBg = style.mode === "light"
 		? blendColors(style.palette.panel, "#ffffff", 0.5)
 		: style.palette.panel;
+	const monoFontStack = getStudioMonoFontStack();
 
 	return {
 		"color-scheme": style.mode,
@@ -1750,6 +1950,7 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--blockquote-bg": blockquoteBg,
 		"--table-alt-bg": tableAltBg,
 		"--editor-bg": editorBg,
+		"--font-mono": monoFontStack,
 	};
 }
 
@@ -1780,10 +1981,11 @@ function buildStudioHtml(
 			: "";
 	const style = getStudioThemeStyle(theme);
 	const vars = buildThemeCssVars(style);
+	const monoFontStack = vars["--font-mono"] ?? buildMonoFontStack();
 	const mermaidConfig = {
 		startOnLoad: false,
 		theme: "base",
-		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+		fontFamily: monoFontStack,
 		flowchart: {
 			curve: "basis",
 		},
@@ -2034,7 +2236,7 @@ ${cssVarsBlock}
       font-size: 13px;
       line-height: 1.45;
       tab-size: 2;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-family: var(--font-mono);
       resize: vertical;
     }
 
@@ -2181,7 +2383,7 @@ ${cssVarsBlock}
       word-break: normal;
       overflow-wrap: break-word;
       overscroll-behavior: none;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-family: var(--font-mono);
       font-size: 13px;
       line-height: 1.45;
       tab-size: 2;
@@ -2424,7 +2626,7 @@ ${cssVarsBlock}
     }
 
     .rendered-markdown code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-family: var(--font-mono);
       font-size: 0.9em;
       color: var(--md-code);
     }
@@ -2571,7 +2773,7 @@ ${cssVarsBlock}
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-family: var(--font-mono);
       font-size: 13px;
       line-height: 1.5;
     }
@@ -2580,7 +2782,7 @@ ${cssVarsBlock}
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-family: var(--font-mono);
       font-size: 13px;
       line-height: 1.5;
     }

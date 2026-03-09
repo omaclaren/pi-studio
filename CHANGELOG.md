@@ -88,6 +88,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- Studio monospace surfaces now use a shared `--font-mono` stack, with best-effort terminal-font detection (Ghostty/WezTerm/Kitty/Alacritty config when available) and `PI_STUDIO_FONT_MONO` as a manual override.
+
 ## [0.5.5] — 2026-03-09
 
 ### Fixed
