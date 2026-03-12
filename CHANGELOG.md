@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.8] — 2026-03-12
+
+### Changed
+- Studio browser tabs now auto-reconnect after unexpected websocket disconnects (for example transient local connection loss or sleep/wake), while intentional invalidation/shutdown still requires a fresh `/studio`.
+- Same-tab reconnect now preserves the currently selected response-history item instead of jumping back to the latest response on every `hello_ack` resync.
+
 ## [0.5.7] — 2026-03-12
 
 ### Changed

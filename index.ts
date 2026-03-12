@@ -3301,6 +3301,8 @@ ${cssVarsBlock}
       let wsState = "Connecting";
       let statusMessage = "Connecting · Studio script starting…";
       let statusLevel = "";
+      let reconnectTimer = null;
+      let reconnectAttempt = 0;
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
@@ -5824,8 +5826,8 @@ ${cssVarsBlock}
           let appliedHistory = false;
           if (Array.isArray(message.responseHistory)) {
             appliedHistory = setResponseHistory(message.responseHistory, {
-              autoSelectLatest: true,
-              preserveSelection: false,
+              autoSelectLatest: !initialDocumentApplied,
+              preserveSelection: initialDocumentApplied,
               silent: true,
             });
           }
@@ -6184,7 +6186,42 @@ ${cssVarsBlock}
         }
       }
 
+      function clearScheduledReconnect() {
+        if (reconnectTimer !== null) {
+          window.clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+      }
+
+      function formatReconnectDelay(delayMs) {
+        const delay = Math.max(0, Number(delayMs) || 0);
+        if (delay < 1000) return delay + "ms";
+        const seconds = delay / 1000;
+        return (Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1)) + "s";
+      }
+
+      function scheduleReconnect(reasonMessage) {
+        if (reconnectTimer !== null) return;
+
+        reconnectAttempt += 1;
+        const delayMs = Math.min(8000, 600 * Math.pow(2, Math.max(0, reconnectAttempt - 1)));
+        setBusy(true);
+        setWsState("Connecting");
+        setStatus((reasonMessage || "Connection lost.") + " Reconnecting in " + formatReconnectDelay(delayMs) + "…", "warning");
+
+        reconnectTimer = window.setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, delayMs);
+      }
+
       function connect() {
+        clearScheduledReconnect();
+
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+
         const token = getToken();
         if (!token) {
           setWsState("Disconnected");
@@ -6195,26 +6232,61 @@ ${cssVarsBlock}
 
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
         const wsUrl = wsProtocol + "://" + window.location.host + "/ws?token=" + encodeURIComponent(token) + (DEBUG_ENABLED ? "&debug=1" : "");
+        const wasReconnect = reconnectAttempt > 0;
+        let disconnectHandled = false;
 
         setWsState("Connecting");
-        setStatus("Connecting to Studio server…");
-        ws = new WebSocket(wsUrl);
+        setStatus(wasReconnect ? "Reconnecting to Studio server…" : "Connecting to Studio server…");
+        const socket = new WebSocket(wsUrl);
+        ws = socket;
 
         const connectWatchdog = window.setTimeout(() => {
-          if (ws && ws.readyState === WebSocket.CONNECTING) {
+          if (ws === socket && socket.readyState === WebSocket.CONNECTING) {
             setWsState("Connecting");
-            setStatus("Still connecting…", "warning");
+            setStatus(wasReconnect ? "Still reconnecting…" : "Still connecting…", "warning");
           }
         }, 3000);
 
-        ws.addEventListener("open", () => {
+        const handleDisconnect = (kind, code) => {
+          if (disconnectHandled) return;
+          disconnectHandled = true;
+          window.clearTimeout(connectWatchdog);
+          if (ws === socket) {
+            ws = null;
+          }
+          setBusy(true);
+
+          if (kind === "invalidated") {
+            clearScheduledReconnect();
+            reconnectAttempt = 0;
+            setWsState("Disconnected");
+            setStatus("This tab was invalidated by a newer /studio session.", "warning");
+            return;
+          }
+
+          if (kind === "shutdown") {
+            clearScheduledReconnect();
+            reconnectAttempt = 0;
+            setWsState("Disconnected");
+            setStatus("Studio server shut down. Re-run /studio.", "warning");
+            return;
+          }
+
+          const detail = typeof code === "number" && code > 0
+            ? "Disconnected (code " + code + ")."
+            : (kind === "error" ? "WebSocket error." : "Connection lost.");
+          scheduleReconnect(detail);
+        };
+
+        socket.addEventListener("open", () => {
           window.clearTimeout(connectWatchdog);
           setWsState("Ready");
-          setStatus("Connected. Syncing…");
+          setStatus(wasReconnect ? "Reconnected. Syncing…" : "Connected. Syncing…");
           sendMessage({ type: "hello" });
+          reconnectAttempt = 0;
         });
 
-        ws.addEventListener("message", (event) => {
+        socket.addEventListener("message", (event) => {
           try {
             const message = JSON.parse(event.data);
             handleServerMessage(message);
@@ -6224,22 +6296,21 @@ ${cssVarsBlock}
           }
         });
 
-        ws.addEventListener("close", (event) => {
-          window.clearTimeout(connectWatchdog);
-          setBusy(true);
-          setWsState("Disconnected");
+        socket.addEventListener("close", (event) => {
           if (event && event.code === 4001) {
-            setStatus("This tab was invalidated by a newer /studio session.", "warning");
-          } else {
-            const code = event && typeof event.code === "number" ? event.code : 0;
-            setStatus("Disconnected (code " + code + "). Re-run /studio.", "error");
+            handleDisconnect("invalidated", 4001);
+            return;
           }
+          if (event && event.code === 1001) {
+            handleDisconnect("shutdown", 1001);
+            return;
+          }
+          const code = event && typeof event.code === "number" ? event.code : 0;
+          handleDisconnect("close", code);
         });
 
-        ws.addEventListener("error", () => {
-          window.clearTimeout(connectWatchdog);
-          setWsState("Disconnected");
-          setStatus("WebSocket error. Check /studio --status and reopen.", "error");
+        socket.addEventListener("error", () => {
+          handleDisconnect("error");
         });
       }
 
