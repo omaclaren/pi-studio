@@ -1070,7 +1070,7 @@ function normalizeObsidianImages(markdown: string): string {
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const inputFormat = isLatex ? "latex" : "gfm+tex_math_dollars-raw_html";
-	const args = ["-f", inputFormat, "-t", "html5", "--mathml"];
+	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none"];
 	if (resourcePath) {
 		args.push(`--resource-path=${resourcePath}`);
 		// Embed images as data URIs so they render in the browser preview
@@ -2312,13 +2312,9 @@ ${cssVarsBlock}
     }
 
     .sync-badge.sync {
-      border-color: var(--ok-border);
-      color: var(--ok);
-    }
-
-    .sync-badge.edited {
-      border-color: var(--warn-border);
-      color: var(--warn);
+      border-color: var(--border-muted);
+      color: var(--muted);
+      opacity: 0.88;
     }
 
     .source-actions {
@@ -3082,7 +3078,7 @@ ${cssVarsBlock}
               <input id="resourceDirInput" type="text" placeholder="/path/to/working/directory" title="Absolute path to working directory" />
               <button id="resourceDirClearBtn" type="button" title="Clear working directory">✕</button>
             </span>
-            <span id="syncBadge" class="source-badge sync-badge">No response loaded</span>
+            <span id="syncBadge" class="source-badge sync-badge" hidden>In sync with response</span>
           </div>
           <div class="source-actions">
             <div class="source-actions-row">
@@ -3181,16 +3177,17 @@ ${cssVarsBlock}
             </select>
           </div>
           <div class="response-actions-row history-row">
-            <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Get latest response</button>
+            <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Fetch latest response</button>
             <button id="historyPrevBtn" type="button" title="Show previous response in history.">◀ Prev response</button>
             <span id="historyIndexBadge" class="source-badge">History: 0/0</span>
             <button id="historyNextBtn" type="button" title="Show next response in history.">Next response ▶</button>
+            <button id="historyLastBtn" type="button" title="Jump to the latest loaded response in history.">Last response ▶|</button>
           </div>
           <div class="response-actions-row">
-            <button id="loadHistoryPromptBtn" type="button" title="Load the prompt that generated the selected response into the editor.">Load response prompt into editor</button>
             <button id="loadResponseBtn" type="button">Load response into editor</button>
             <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
             <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>
+            <button id="loadHistoryPromptBtn" type="button" title="Load the prompt that generated the selected response into the editor.">Load response prompt into editor</button>
             <button id="copyResponseBtn" type="button">Copy response text</button>
           </div>
         </div>
@@ -3278,6 +3275,7 @@ ${cssVarsBlock}
       const exportPdfBtn = document.getElementById("exportPdfBtn");
       const historyPrevBtn = document.getElementById("historyPrevBtn");
       const historyNextBtn = document.getElementById("historyNextBtn");
+      const historyLastBtn = document.getElementById("historyLastBtn");
       const historyIndexBadgeEl = document.getElementById("historyIndexBadge");
       const loadHistoryPromptBtn = document.getElementById("loadHistoryPromptBtn");
       const saveAsBtn = document.getElementById("saveAsBtn");
@@ -3419,7 +3417,7 @@ ${cssVarsBlock}
       let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
       let annotationsEnabled = true;
-      const ANNOTATION_MARKER_REGEX = /\\[an:\\s*([^\\]\\n]+?)\\]/gi;
+      const ANNOTATION_MARKER_REGEX = /\\[an:\\s*([^\\]]+?)\\]/gi;
       const EMPTY_OVERLAY_LINE = "\\u200b";
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
       const MERMAID_CONFIG = ${JSON.stringify(mermaidConfig)};
@@ -3992,6 +3990,9 @@ ${cssVarsBlock}
         if (historyNextBtn) {
           historyNextBtn.disabled = uiBusy || total <= 1 || responseHistoryIndex < 0 || responseHistoryIndex >= total - 1;
         }
+        if (historyLastBtn) {
+          historyLastBtn.disabled = uiBusy || total <= 1 || responseHistoryIndex < 0 || responseHistoryIndex >= total - 1;
+        }
 
         const selectedItem = getSelectedHistoryItem();
         const hasPrompt = Boolean(selectedItem && typeof selectedItem.prompt === "string" && selectedItem.prompt.trim());
@@ -4168,8 +4169,9 @@ ${cssVarsBlock}
           : latestResponseHasContent;
 
         if (!hasComparableContent) {
-          syncBadgeEl.textContent = showingThinking ? "No thinking loaded" : "No response loaded";
-          syncBadgeEl.classList.remove("sync", "edited");
+          syncBadgeEl.hidden = true;
+          syncBadgeEl.textContent = showingThinking ? "In sync with thinking" : "In sync with response";
+          syncBadgeEl.classList.remove("sync");
           return;
         }
 
@@ -4178,15 +4180,15 @@ ${cssVarsBlock}
           : normalizeForCompare(sourceTextEl.value);
         const targetNormalized = showingThinking ? latestResponseThinkingNormalized : latestResponseNormalized;
         const inSync = normalizedEditor === targetNormalized;
+        syncBadgeEl.hidden = !inSync;
+        syncBadgeEl.textContent = showingThinking ? "In sync with thinking" : "In sync with response";
+
         if (inSync) {
-          syncBadgeEl.textContent = showingThinking ? "In sync with thinking" : "In sync with response";
           syncBadgeEl.classList.add("sync");
-          syncBadgeEl.classList.remove("edited");
-        } else {
-          syncBadgeEl.textContent = showingThinking ? "Out of sync with thinking" : "Out of sync with response";
-          syncBadgeEl.classList.add("edited");
-          syncBadgeEl.classList.remove("sync");
+          return;
         }
+
+        syncBadgeEl.classList.remove("sync");
       }
 
       function buildPlainMarkdownHtml(markdown) {
@@ -4818,7 +4820,7 @@ ${cssVarsBlock}
         }
 
         pullLatestBtn.disabled = uiBusy || followLatest;
-        pullLatestBtn.textContent = queuedLatestResponse ? "Get latest response *" : "Get latest response";
+        pullLatestBtn.textContent = queuedLatestResponse ? "Fetch latest response *" : "Fetch latest response";
 
         updateSyncBadge(normalizedEditor);
       }
@@ -5029,7 +5031,7 @@ ${cssVarsBlock}
 
       function highlightInlineMarkdown(text) {
         const source = String(text || "");
-        const pattern = /(\\x60[^\\x60]*\\x60)|(\\[[^\\]]+\\]\\([^)]+\\))|(\\[an:\\s*[^\\]\\n]+\\])/gi;
+        const pattern = /(\\x60[^\\x60]*\\x60)|(\\[[^\\]]+\\]\\([^)]+\\))|(\\[an:\\s*[^\\]]+\\])/gi;
         let lastIndex = 0;
         let out = "";
 
@@ -5967,7 +5969,7 @@ ${cssVarsBlock}
             if (!followLatest) {
               queuedLatestResponse = payload;
               updateResultActionButtons();
-              setStatus("New response available — click Get latest response.", "warning");
+              setStatus("New response available — click Fetch latest response.", "warning");
               return;
             }
 
@@ -6342,7 +6344,7 @@ ${cssVarsBlock}
       function requestLatestResponse() {
         const sent = sendMessage({ type: "get_latest_response" });
         if (!sent) return;
-        setStatus("Requested latest response.");
+        setStatus("Fetching latest response…");
       }
 
       if (leftPaneEl) {
@@ -6380,7 +6382,7 @@ ${cssVarsBlock}
             setStatus("Applied queued response.", "success");
           }
         } else if (!followLatest) {
-          setStatus("Auto-update is off. Use Get latest response.");
+          setStatus("Auto-update is off. Use Fetch latest response.");
         }
         updateResultActionButtons();
       });
@@ -6461,6 +6463,16 @@ ${cssVarsBlock}
             return;
           }
           selectHistoryIndex(responseHistoryIndex + 1);
+        });
+      }
+
+      if (historyLastBtn) {
+        historyLastBtn.addEventListener("click", () => {
+          if (!responseHistory.length) {
+            setStatus("No response history available yet.", "warning");
+            return;
+          }
+          selectHistoryIndex(responseHistory.length - 1);
         });
       }
 

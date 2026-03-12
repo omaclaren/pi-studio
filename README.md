@@ -16,7 +16,7 @@ Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens 
 
 - Opens a two-pane browser workspace: **Editor** (left) + **Response/Thinking/Editor Preview** (right)
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
-- Browses response history (`Prev/Next`) and loads either:
+- Browses response history (`Prev/Next/Last`) and loads either:
   - response text
   - critique notes/full critique
   - assistant thinking (when available)

@@ -79,10 +79,10 @@ Rules:
 - Header view toggles: `Left: Editor (Raw|Preview)`, `Right: Response (Raw|Preview) | Editor (Preview)`
 - Preview mode uses server-side `pandoc` rendering (math-aware) with plain-markdown fallback when renderer is unavailable.
 - Editor actions: **Insert/Remove annotated reply header**, **Annotations: On|Hidden**, **Strip annotations…**, **Run editor text**, **Critique editor text** (+ critique focus), **Send to pi editor**, **Copy editor text**, **Save .annotated.md**
-- Response actions include `Auto-update response: On|Off`, **Get latest response**, response-history browse (`Prev/Next`), and **Load response prompt into editor**
+- Response actions include `Auto-update response: On|Off`, **Fetch latest response**, response-history browse (`Prev/Next/Last`), **Load response into editor**, and **Load response prompt into editor**
 - Source badge: `blank | last model response | file <path> | upload`
 - Response badge: `none | assistant response | assistant critique` (+ timestamp)
-- Sync badge: `No response loaded | In sync with response | Edited since response`
+- Sync badge: shown only when the editor exactly matches the currently viewed response/thinking (`In sync with response | In sync with thinking`)
 - Footer WS/status phases: `Connecting`, `Ready`, `Submitting`, `Disconnected`
 
 ---

@@ -2,6 +2,16 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [Unreleased]
+
+## [0.5.7] — 2026-03-12
+
+### Changed
+- Preview rendering now passes `--wrap=none` to pandoc and preview-side annotation matching now tolerates embedded newlines, fixing missed `[an: ...]` highlights in preview for longer annotations.
+- Editor sync indicator is now intentionally quiet: Studio only shows the badge when the editor exactly matches the current response/thinking, and hides it while drafting/out-of-sync.
+- Response history navigation now includes **Last response ▶|** for jumping straight back to the newest loaded history item.
+- Renamed **Get latest response** to **Fetch latest response** for clearer distinction from history navigation, and moved **Load response into editor** ahead of **Load response prompt into editor** in the action row.
+
 ## [0.4.3] — 2026-03-04
 
 ### Added
@@ -85,8 +95,6 @@ All notable changes to `pi-studio` are documented here.
 - Renamed "Editor: Markdown" / "Response: Markdown" → "Editor: Raw" / "Response: Raw" (future-proofing for non-markdown formats).
 - Active pane indicator simplified to subtle border color change (removed thick top accent bar).
 - Panel shadows, button hierarchy (filled accent for primary actions), heading scale, blockquote/table styling improvements.
-
-## [Unreleased]
 
 ## [0.5.6] — 2026-03-10
 
