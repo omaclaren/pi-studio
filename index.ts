@@ -6,7 +6,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { URL } from "node:url";
+import { URL, pathToFileURL } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 
 type Lens = "writing" | "code";
@@ -1067,9 +1067,156 @@ function normalizeObsidianImages(markdown: string): string {
 		.replace(/!\[\[([^\]]+)\]\]/g, (_m, path) => `![](<${path}>)`);
 }
 
+class MermaidCliMissingError extends Error {}
+
+interface StudioMermaidPdfPreprocessResult {
+	markdown: string;
+	found: number;
+	replaced: number;
+	failed: number;
+	missingCli: boolean;
+	warning?: string;
+}
+
+function getStudioMermaidPdfTheme(): "default" | "forest" | "dark" | "neutral" {
+	const requested = process.env.MERMAID_PDF_THEME?.trim().toLowerCase();
+	if (requested === "default" || requested === "forest" || requested === "dark" || requested === "neutral") {
+		return requested;
+	}
+	return "default";
+}
+
+async function renderStudioMermaidDiagramForPdf(source: string, workDir: string, blockNumber: number): Promise<string> {
+	const mermaidCommand = process.env.MERMAID_CLI_PATH?.trim() || "mmdc";
+	const mermaidTheme = getStudioMermaidPdfTheme();
+	const inputPath = join(workDir, `mermaid-diagram-${blockNumber}.mmd`);
+	const outputPath = join(workDir, `mermaid-diagram-${blockNumber}.pdf`);
+
+	await writeFile(inputPath, source, "utf-8");
+	await new Promise<void>((resolve, reject) => {
+		const args = ["-i", inputPath, "-o", outputPath, "-t", mermaidTheme, "-f"];
+		const child = spawn(mermaidCommand, args, { stdio: ["ignore", "ignore", "pipe"] });
+		const stderrChunks: Buffer[] = [];
+		let settled = false;
+
+		const fail = (error: Error) => {
+			if (settled) return;
+			settled = true;
+			reject(error);
+		};
+
+		child.stderr.on("data", (chunk: Buffer | string) => {
+			stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+		});
+
+		child.once("error", (error) => {
+			const errno = error as NodeJS.ErrnoException;
+			if (errno.code === "ENOENT") {
+				fail(
+					new MermaidCliMissingError(
+						"Mermaid CLI (mmdc) not found. Install with `npm install -g @mermaid-js/mermaid-cli` or set MERMAID_CLI_PATH.",
+					),
+				);
+				return;
+			}
+			fail(error);
+		});
+
+		child.once("close", (code) => {
+			if (settled) return;
+			settled = true;
+			if (code === 0) {
+				resolve();
+				return;
+			}
+			const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+			reject(new Error(`Mermaid CLI failed with exit code ${code}${stderr ? `: ${stderr}` : ""}`));
+		});
+	});
+
+	return outputPath;
+}
+
+async function preprocessStudioMermaidForPdf(markdown: string, workDir: string): Promise<StudioMermaidPdfPreprocessResult> {
+	const mermaidRegex = /```mermaid[^\n]*\n([\s\S]*?)```/gi;
+	const matches: Array<{ start: number; end: number; raw: string; source: string; number: number }> = [];
+	let match: RegExpExecArray | null;
+	let blockNumber = 1;
+
+	while ((match = mermaidRegex.exec(markdown)) !== null) {
+		const raw = match[0]!;
+		const source = (match[1] ?? "").trimEnd();
+		matches.push({
+			start: match.index,
+			end: match.index + raw.length,
+			raw,
+			source,
+			number: blockNumber++,
+		});
+	}
+
+	if (matches.length === 0) {
+		return {
+			markdown,
+			found: 0,
+			replaced: 0,
+			failed: 0,
+			missingCli: false,
+		};
+	}
+
+	let transformed = "";
+	let cursor = 0;
+	let replaced = 0;
+	let failed = 0;
+	let missingCli = false;
+
+	for (const block of matches) {
+		transformed += markdown.slice(cursor, block.start);
+		if (missingCli) {
+			failed++;
+			transformed += block.raw;
+			cursor = block.end;
+			continue;
+		}
+
+		try {
+			const renderedPath = await renderStudioMermaidDiagramForPdf(block.source, workDir, block.number);
+			const imageRef = pathToFileURL(renderedPath).href;
+			transformed += `\n![Mermaid diagram ${block.number}](<${imageRef}>)\n`;
+			replaced++;
+		} catch (error) {
+			if (error instanceof MermaidCliMissingError) {
+				missingCli = true;
+			}
+			failed++;
+			transformed += block.raw;
+		}
+		cursor = block.end;
+	}
+
+	transformed += markdown.slice(cursor);
+
+	let warning: string | undefined;
+	if (missingCli) {
+		warning = "Mermaid CLI (mmdc) not found; Mermaid blocks are kept as code in PDF. Install @mermaid-js/mermaid-cli or set MERMAID_CLI_PATH.";
+	} else if (failed > 0) {
+		warning = `Failed to render ${failed} Mermaid block${failed === 1 ? "" : "s"} for PDF. Unrendered blocks are kept as code.`;
+	}
+
+	return {
+		markdown: transformed,
+		found: matches.length,
+		replaced,
+		failed,
+		missingCli,
+		warning,
+	};
+}
+
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const inputFormat = isLatex ? "latex" : "gfm+tex_math_dollars-raw_html";
+	const inputFormat = isLatex ? "latex" : "markdown+tex_math_dollars+autolink_bare_uris-raw_html";
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none"];
 	if (resourcePath) {
 		args.push(`--resource-path=${resourcePath}`);
@@ -1132,12 +1279,16 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	});
 }
 
-async function renderStudioPdfWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string): Promise<Buffer> {
+async function renderStudioPdfWithPandoc(
+	markdown: string,
+	isLatex?: boolean,
+	resourcePath?: string,
+): Promise<{ pdf: Buffer; warning?: string }> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
 	const inputFormat = isLatex
 		? "latex"
-		: "gfm+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
+		: "markdown+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
 	const normalizedMarkdown = isLatex ? markdown : normalizeObsidianImages(normalizeMathDelimiters(markdown));
 
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
@@ -1146,6 +1297,11 @@ async function renderStudioPdfWithPandoc(markdown: string, isLatex?: boolean, re
 
 	await mkdir(tempDir, { recursive: true });
 	await writeFile(preamblePath, PDF_PREAMBLE, "utf-8");
+
+	const mermaidPrepared: StudioMermaidPdfPreprocessResult = isLatex
+		? { markdown: normalizedMarkdown, found: 0, replaced: 0, failed: 0, missingCli: false }
+		: await preprocessStudioMermaidForPdf(normalizedMarkdown, tempDir);
+	const markdownForPdf = mermaidPrepared.markdown;
 
 	const args = [
 		"-f", inputFormat,
@@ -1202,10 +1358,10 @@ async function renderStudioPdfWithPandoc(markdown: string, isLatex?: boolean, re
 				fail(new Error(`pandoc PDF export failed with exit code ${code}${stderr ? `: ${stderr}` : ""}${hint}`));
 			});
 
-			child.stdin.end(normalizedMarkdown);
+			child.stdin.end(markdownForPdf);
 		});
 
-		return await readFile(outputPath);
+		return { pdf: await readFile(outputPath), warning: mermaidPrepared.warning };
 	} finally {
 		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
 	}
@@ -4572,6 +4728,7 @@ ${cssVarsBlock}
             throw new Error(message);
           }
 
+          const exportWarning = String(response.headers.get("x-pi-studio-export-warning") || "").trim();
           const blob = await response.blob();
           const headerFilename = parseContentDispositionFilename(response.headers.get("content-disposition"));
           let downloadName = headerFilename || filenameHint || "studio-preview.pdf";
@@ -4591,7 +4748,11 @@ ${cssVarsBlock}
             URL.revokeObjectURL(blobUrl);
           }, 1800);
 
-          setStatus("Exported PDF: " + downloadName, "success");
+          if (exportWarning) {
+            setStatus("Exported PDF with warning: " + exportWarning, "warning");
+          } else {
+            setStatus("Exported PDF: " + downloadName, "success");
+          }
         } catch (error) {
           const detail = error && error.message ? error.message : String(error || "unknown error");
           setStatus("PDF export failed: " + detail, "error");
@@ -7876,20 +8037,23 @@ export default function (pi: ExtensionAPI) {
 		const filename = sanitizePdfFilename(requestedFilename || (isLatex ? "studio-latex-preview.pdf" : "studio-preview.pdf"));
 
 		try {
-			const pdf = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath);
+			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath);
 			const safeAsciiName = filename
 				.replace(/[\x00-\x1f\x7f]/g, "")
 				.replace(/[;"\\]/g, "_")
 				.replace(/\s+/g, " ")
 				.trim() || "studio-preview.pdf";
 
-			res.writeHead(200, {
+			const headers: Record<string, string> = {
 				"Content-Type": "application/pdf",
 				"Cache-Control": "no-store",
 				"X-Content-Type-Options": "nosniff",
 				"Content-Disposition": `attachment; filename="${safeAsciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
 				"Content-Length": String(pdf.length),
-			});
+			};
+			if (warning) headers["X-Pi-Studio-Export-Warning"] = warning;
+
+			res.writeHead(200, headers);
 			res.end(pdf);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

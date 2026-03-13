@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.9] — 2026-03-13
+
+### Fixed
+- Studio preview now uses Pandoc's `markdown` reader (matching `pi-markdown-preview`) instead of `gfm` for math-aware rendering, preventing currency amounts like `$135.00` from being misparsed as inline math in preview/PDF.
+- Studio PDF export now preprocesses fenced Mermaid blocks via Mermaid CLI (`mmdc`) before Pandoc export, so Mermaid diagrams render as diagrams in exported PDFs instead of falling back to raw code fences.
+
 ## [0.5.8] — 2026-03-12
 
 ### Changed
