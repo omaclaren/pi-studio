@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, SessionEntry, Theme } from "@mariozechner/pi-coding-agent";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -120,6 +120,13 @@ interface GetFromEditorRequestMessage {
 	requestId: string;
 }
 
+interface LoadGitDiffRequestMessage {
+	type: "load_git_diff_request";
+	requestId: string;
+	sourcePath?: string;
+	resourceDir?: string;
+}
+
 interface CancelRequestMessage {
 	type: "cancel_request";
 	requestId: string;
@@ -137,6 +144,7 @@ type IncomingStudioMessage =
 	| SaveOverRequestMessage
 	| SendToEditorRequestMessage
 	| GetFromEditorRequestMessage
+	| LoadGitDiffRequestMessage
 	| CancelRequestMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
@@ -902,6 +910,207 @@ function writeStudioFile(pathArg: string, cwd: string, content: string):
 			message: `Failed to write file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
 		};
 	}
+}
+
+function splitStudioGitPathOutput(output: string): string[] {
+	return output
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+}
+
+function formatStudioGitSpawnFailure(
+	result: { stdout?: string | Buffer | null; stderr?: string | Buffer | null },
+	args: string[],
+): string {
+	const stderr = typeof result.stderr === "string"
+		? result.stderr.trim()
+		: (result.stderr ? result.stderr.toString("utf-8").trim() : "");
+	const stdout = typeof result.stdout === "string"
+		? result.stdout.trim()
+		: (result.stdout ? result.stdout.toString("utf-8").trim() : "");
+	return stderr || stdout || `git ${args.join(" ")} failed`;
+}
+
+function readStudioTextFileIfPossible(path: string): string | null {
+	try {
+		const buf = readFileSync(path);
+		const sample = buf.subarray(0, 8192);
+		let nulCount = 0;
+		let controlCount = 0;
+		for (let i = 0; i < sample.length; i++) {
+			const b = sample[i];
+			if (b === 0x00) nulCount += 1;
+			else if (b < 0x08 || (b > 0x0D && b < 0x20 && b !== 0x1B)) controlCount += 1;
+		}
+		if (nulCount > 0 || (sample.length > 0 && controlCount / sample.length > 0.1)) {
+			return null;
+		}
+		return buf.toString("utf-8").replace(/\r\n/g, "\n");
+	} catch {
+		return null;
+	}
+}
+
+function buildStudioSyntheticNewFileDiff(filePath: string, content: string): string {
+	const lines = content.split("\n");
+	if (lines.length > 0 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+
+	const diffLines = [
+		`diff --git a/${filePath} b/${filePath}`,
+		"new file mode 100644",
+		"--- /dev/null",
+		`+++ b/${filePath}`,
+		`@@ -0,0 +1,${lines.length} @@`,
+	];
+
+	if (lines.length > 0) {
+		diffLines.push(lines.map((line) => `+${line}`).join("\n"));
+	}
+
+	return diffLines.join("\n");
+}
+
+function resolveStudioGitDiffBaseDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
+	const source = typeof sourcePath === "string" ? sourcePath.trim() : "";
+	if (source) {
+		return dirname(source);
+	}
+
+	const resource = typeof resourceDir === "string" ? resourceDir.trim() : "";
+	if (resource) {
+		return isAbsolute(resource) ? resource : resolve(fallbackCwd, resource);
+	}
+
+	return fallbackCwd;
+}
+
+function readStudioGitDiff(baseDir: string):
+	| { ok: true; text: string; label: string }
+	| { ok: false; level: "info" | "warning" | "error"; message: string } {
+	const repoRootArgs = ["rev-parse", "--show-toplevel"];
+	const repoRootResult = spawnSync("git", repoRootArgs, {
+		cwd: baseDir,
+		encoding: "utf-8",
+	});
+	if (repoRootResult.status !== 0) {
+		return {
+			ok: false,
+			level: "warning",
+			message: "No git repository found for the current Studio context.",
+		};
+	}
+	const repoRoot = repoRootResult.stdout.trim();
+
+	const hasHead = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
+		cwd: repoRoot,
+		encoding: "utf-8",
+	}).status === 0;
+
+	const untrackedArgs = ["ls-files", "--others", "--exclude-standard"];
+	const untrackedResult = spawnSync("git", untrackedArgs, {
+		cwd: repoRoot,
+		encoding: "utf-8",
+	});
+	if (untrackedResult.status !== 0) {
+		return {
+			ok: false,
+			level: "error",
+			message: `Failed to list untracked files: ${formatStudioGitSpawnFailure(untrackedResult, untrackedArgs)}`,
+		};
+	}
+	const untrackedPaths = splitStudioGitPathOutput(untrackedResult.stdout ?? "").sort();
+
+	let diffOutput = "";
+	let statSummary = "";
+	let currentTreeFileCount = 0;
+
+	if (hasHead) {
+		const diffArgs = ["diff", "HEAD", "--unified=3", "--find-renames", "--no-color", "--"];
+		const diffResult = spawnSync("git", diffArgs, {
+			cwd: repoRoot,
+			encoding: "utf-8",
+		});
+		if (diffResult.status !== 0) {
+			return {
+				ok: false,
+				level: "error",
+				message: `Failed to collect git diff: ${formatStudioGitSpawnFailure(diffResult, diffArgs)}`,
+			};
+		}
+		diffOutput = diffResult.stdout ?? "";
+
+		const statArgs = ["diff", "HEAD", "--stat", "--find-renames", "--no-color", "--"];
+		const statResult = spawnSync("git", statArgs, {
+			cwd: repoRoot,
+			encoding: "utf-8",
+		});
+		if (statResult.status === 0) {
+			const statLines = splitStudioGitPathOutput(statResult.stdout ?? "");
+			statSummary = statLines.length > 0 ? (statLines[statLines.length - 1] ?? "") : "";
+		}
+	} else {
+		const trackedArgs = ["ls-files", "--cached"];
+		const trackedResult = spawnSync("git", trackedArgs, {
+			cwd: repoRoot,
+			encoding: "utf-8",
+		});
+		if (trackedResult.status !== 0) {
+			return {
+				ok: false,
+				level: "error",
+				message: `Failed to inspect tracked files: ${formatStudioGitSpawnFailure(trackedResult, trackedArgs)}`,
+			};
+		}
+
+		const trackedPaths = splitStudioGitPathOutput(trackedResult.stdout ?? "");
+		const currentTreePaths = Array.from(new Set([...trackedPaths, ...untrackedPaths])).sort();
+		currentTreeFileCount = currentTreePaths.length;
+		diffOutput = currentTreePaths
+			.map((filePath) => {
+				const content = readStudioTextFileIfPossible(join(repoRoot, filePath));
+				if (content == null) return "";
+				return buildStudioSyntheticNewFileDiff(filePath, content);
+			})
+			.filter((section) => section.length > 0)
+			.join("\n\n");
+	}
+
+	const untrackedSections = hasHead
+		? untrackedPaths
+			.map((filePath) => {
+				const content = readStudioTextFileIfPossible(join(repoRoot, filePath));
+				if (content == null) return "";
+				return buildStudioSyntheticNewFileDiff(filePath, content);
+			})
+			.filter((section) => section.length > 0)
+		: [];
+
+	const fullDiff = [diffOutput.trimEnd(), ...untrackedSections].filter(Boolean).join("\n\n");
+	if (!fullDiff.trim()) {
+		return {
+			ok: false,
+			level: "info",
+			message: "No uncommitted git changes to load.",
+		};
+	}
+
+	const summaryParts: string[] = [];
+	if (hasHead && statSummary) {
+		summaryParts.push(statSummary);
+	}
+	if (!hasHead && currentTreeFileCount > 0) {
+		summaryParts.push(`${currentTreeFileCount} file${currentTreeFileCount === 1 ? "" : "s"} in current tree`);
+	}
+	if (untrackedPaths.length > 0) {
+		summaryParts.push(`${untrackedPaths.length} untracked file${untrackedPaths.length === 1 ? "" : "s"}`);
+	}
+
+	const labelBase = hasHead ? "git diff HEAD" : "git diff (no commits yet)";
+	const label = summaryParts.length > 0 ? `${labelBase} (${summaryParts.join(", ")})` : labelBase;
+	return { ok: true, text: fullDiff, label };
 }
 
 function readLocalPackageMetadata(): { name: string; version: string } | null {
@@ -1901,6 +2110,20 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		return {
 			type: "get_from_editor_request",
 			requestId: msg.requestId,
+		};
+	}
+
+	if (
+		msg.type === "load_git_diff_request"
+		&& typeof msg.requestId === "string"
+		&& (msg.sourcePath === undefined || typeof msg.sourcePath === "string")
+		&& (msg.resourceDir === undefined || typeof msg.resourceDir === "string")
+	) {
+		return {
+			type: "load_git_diff_request",
+			requestId: msg.requestId,
+			sourcePath: typeof msg.sourcePath === "string" ? msg.sourcePath : undefined,
+			resourceDir: typeof msg.resourceDir === "string" ? msg.resourceDir : undefined,
 		};
 	}
 
@@ -3258,6 +3481,8 @@ ${cssVarsBlock}
       <button id="saveAsBtn" type="button" title="Save editor content to a new file path.">Save editor as…</button>
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content." disabled>Save editor</button>
       <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
+      <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
+      <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
     </div>
   </header>
 
@@ -3286,7 +3511,6 @@ ${cssVarsBlock}
               <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is. Shortcut: Cmd/Ctrl+Enter when editor pane is active.">Run editor text</button>
               <button id="copyDraftBtn" type="button">Copy editor text</button>
               <button id="sendEditorBtn" type="button">Send to pi editor</button>
-              <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
             </div>
             <div class="source-actions-row">
               <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).">Insert annotated reply header</button>
@@ -3483,6 +3707,7 @@ ${cssVarsBlock}
       const saveOverBtn = document.getElementById("saveOverBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
       const getEditorBtn = document.getElementById("getEditorBtn");
+      const loadGitDiffBtn = document.getElementById("loadGitDiffBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
       const saveAnnotatedBtn = document.getElementById("saveAnnotatedBtn");
@@ -3773,6 +3998,7 @@ ${cssVarsBlock}
         if (kind === "compact") return "compacting context";
         if (kind === "send_to_editor") return "sending to pi editor";
         if (kind === "get_from_editor") return "loading from pi editor";
+        if (kind === "load_git_diff") return "loading git diff";
         if (kind === "save_as" || kind === "save_over") return "saving editor text";
         return "submitting request";
       }
@@ -5163,6 +5389,7 @@ ${cssVarsBlock}
         saveOverBtn.disabled = uiBusy || !canSaveOver;
         sendEditorBtn.disabled = uiBusy;
         if (getEditorBtn) getEditorBtn.disabled = uiBusy;
+        if (loadGitDiffBtn) loadGitDiffBtn.disabled = uiBusy;
         syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
         if (highlightSelect) highlightSelect.disabled = uiBusy;
@@ -6362,6 +6589,31 @@ ${cssVarsBlock}
           return;
         }
 
+        if (message.type === "git_diff_snapshot") {
+          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+          }
+
+          const content = typeof message.content === "string" ? message.content : "";
+          const label = typeof message.label === "string" && message.label.trim()
+            ? message.label.trim()
+            : "git diff";
+          setEditorText(content, { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label, path: null });
+          setEditorLanguage("diff");
+          setBusy(false);
+          setWsState("Ready");
+          refreshResponseUi();
+          setStatus(
+            typeof message.message === "string" && message.message.trim()
+              ? message.message
+              : "Loaded current git diff.",
+            "success",
+          );
+          return;
+        }
+
         if (message.type === "studio_state") {
           const busy = Boolean(message.busy);
           agentBusyFromServer = Boolean(message.agentBusy);
@@ -6458,8 +6710,17 @@ ${cssVarsBlock}
         }
 
         if (message.type === "info") {
+          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+            setBusy(false);
+            setWsState("Ready");
+          }
           if (typeof message.message === "string") {
-            setStatus(message.message);
+            setStatus(
+              message.message,
+              typeof message.level === "string" ? message.level : undefined,
+            );
           }
         }
 
@@ -7099,6 +7360,29 @@ ${cssVarsBlock}
         });
       }
 
+      if (loadGitDiffBtn) {
+        loadGitDiffBtn.addEventListener("click", () => {
+          const requestId = beginUiAction("load_git_diff");
+          if (!requestId) return;
+
+          const effectivePath = getEffectiveSavePath();
+          const sent = sendMessage({
+            type: "load_git_diff_request",
+            requestId,
+            sourcePath: effectivePath || sourceState.path || undefined,
+            resourceDir: resourceDirInput && resourceDirInput.value.trim()
+              ? resourceDirInput.value.trim()
+              : undefined,
+          });
+
+          if (!sent) {
+            pendingRequestId = null;
+            pendingKind = null;
+            setBusy(false);
+          }
+        });
+      }
+
       sendRunBtn.addEventListener("click", () => {
         if (getAbortablePendingKind() === "direct") {
           requestCancelForPendingRequest("direct");
@@ -7705,6 +7989,43 @@ export default function (pi: ExtensionAPI) {
 				thinking: lastStudioResponse.thinking,
 				timestamp: lastStudioResponse.timestamp,
 				responseHistory: studioResponseHistory,
+			});
+			return;
+		}
+
+		if (msg.type === "load_git_diff_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			if (isStudioBusy()) {
+				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
+				return;
+			}
+
+			const baseDir = resolveStudioGitDiffBaseDir(msg.sourcePath, msg.resourceDir, studioCwd);
+			const diffResult = readStudioGitDiff(baseDir);
+			if (!diffResult.ok) {
+				sendToClient(client, {
+					type: "info",
+					requestId: msg.requestId,
+					message: diffResult.message,
+					level: diffResult.level,
+				});
+				return;
+			}
+
+			initialStudioDocument = {
+				text: diffResult.text,
+				label: diffResult.label,
+				source: "blank",
+			};
+			sendToClient(client, {
+				type: "git_diff_snapshot",
+				requestId: msg.requestId,
+				content: diffResult.text,
+				label: diffResult.label,
+				message: "Loaded current git diff into Studio.",
 			});
 			return;
 		}

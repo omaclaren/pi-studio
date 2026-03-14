@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.12] — 2026-03-15
+
+### Added
+- Studio now has a `Load git diff` button that loads the current git changes (staged + unstaged tracked changes plus untracked text files) into the editor from the current Studio context and sets the editor language to `diff`.
+
 ## [0.5.11] — 2026-03-15
 
 ### Added
