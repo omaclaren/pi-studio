@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.10] — 2026-03-14
+
+### Fixed
+- Studio preview/PDF math normalization is now more robust for model-emitted `\(...\)` / `\[...\]` math, including malformed mixed delimiters like `$\(...\)$`, optional spacing around those mixed delimiters, and multiline display-math line-break formatting that previously leaked raw/broken `$$` output into preview.
+
 ## [0.5.9] — 2026-03-13
 
 ### Fixed

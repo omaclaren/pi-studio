@@ -991,13 +991,58 @@ async function fetchLatestNpmVersion(packageName: string, timeoutMs = UPDATE_CHE
 	}
 }
 
+function isLikelyMathExpression(expr: string): boolean {
+	const content = expr.trim();
+	if (content.length === 0) return false;
+
+	if (/\\[a-zA-Z]+/.test(content)) return true; // LaTeX commands like \frac, \alpha
+	if (/[0-9]/.test(content)) return true;
+	if (/[=+\-*/^_<>≤≥±×÷]/u.test(content)) return true;
+	if (/[{}]/.test(content)) return true;
+	if (/[α-ωΑ-Ω]/u.test(content)) return true;
+	if (/^[A-Za-z]$/.test(content)) return true; // single-variable forms like \(x\)
+
+	// Plain words (e.g. escaped markdown like \[not a link\]) are not math.
+	if (/^[A-Za-z][A-Za-z\s'".,:;!?-]*[A-Za-z]$/.test(content)) return false;
+
+	return false;
+}
+
+function collapseDisplayMathContent(expr: string): string {
+	let content = expr.trim();
+	if (content.includes("\\\\") || content.includes("\n")) {
+		content = content.replace(/\\\\\s*/g, " ");
+		content = content.replace(/\s*\n\s*/g, " ");
+		content = content.replace(/\s{2,}/g, " ").trim();
+	}
+	return content;
+}
+
 function normalizeMathDelimitersInSegment(markdown: string): string {
-	let normalized = markdown.replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_match, expr: string) => {
+	let normalized = markdown.replace(/\$\s*\\\(([\s\S]*?)\\\)\s*\$/g, (match, expr: string) => {
+		if (!isLikelyMathExpression(expr)) return match;
 		const content = expr.trim();
-		return content.length > 0 ? `$$\n${content}\n$$` : "$$\n$$";
+		return content.length > 0 ? `\\(${content}\\)` : "\\(\\)";
 	});
 
-	normalized = normalized.replace(/\\\(([\s\S]*?)\\\)/g, (_match, expr: string) => `$${expr}$`);
+	normalized = normalized.replace(/\$\s*\\\[\s*([\s\S]*?)\s*\\\]\s*\$/g, (match, expr: string) => {
+		if (!isLikelyMathExpression(expr)) return match;
+		const content = collapseDisplayMathContent(expr);
+		return content.length > 0 ? `\\[${content}\\]` : "\\[\\]";
+	});
+
+	normalized = normalized.replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (match, expr: string) => {
+		if (!isLikelyMathExpression(expr)) return `[${expr.trim()}]`;
+		const content = collapseDisplayMathContent(expr);
+		return content.length > 0 ? `\\[${content}\\]` : "\\[\\]";
+	});
+
+	normalized = normalized.replace(/\\\(([\s\S]*?)\\\)/g, (match, expr: string) => {
+		if (!isLikelyMathExpression(expr)) return `(${expr})`;
+		const content = expr.trim();
+		return content.length > 0 ? `\\(${content}\\)` : "\\(\\)";
+	});
+
 	return normalized;
 }
 
@@ -1216,7 +1261,7 @@ async function preprocessStudioMermaidForPdf(markdown: string, workDir: string):
 
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const inputFormat = isLatex ? "latex" : "markdown+tex_math_dollars+autolink_bare_uris-raw_html";
+	const inputFormat = isLatex ? "latex" : "markdown+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none"];
 	if (resourcePath) {
 		args.push(`--resource-path=${resourcePath}`);
@@ -1288,7 +1333,7 @@ async function renderStudioPdfWithPandoc(
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
 	const inputFormat = isLatex
 		? "latex"
-		: "markdown+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
+		: "markdown+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris+superscript+subscript-raw_html";
 	const normalizedMarkdown = isLatex ? markdown : normalizeObsidianImages(normalizeMathDelimiters(markdown));
 
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
