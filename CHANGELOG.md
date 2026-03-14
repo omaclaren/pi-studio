@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.11] — 2026-03-15
+
+### Added
+- Studio tabs now show a title attention marker like `● Response ready` or `● Critique ready` when a Studio-started model request finishes while the tab is unfocused, and clear that marker when the tab regains focus or the next Studio request starts.
+
 ## [0.5.10] — 2026-03-14
 
 ### Fixed

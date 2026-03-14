@@ -3539,6 +3539,10 @@ ${cssVarsBlock}
       let contextPercent = null;
       let updateInstalledVersion = null;
       let updateLatestVersion = null;
+      let windowHasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : true;
+      let titleAttentionMessage = "";
+      let titleAttentionRequestId = null;
+      let titleAttentionRequestKind = null;
 
       function parseFiniteNumber(value) {
         if (value == null || value === "") return null;
@@ -3899,12 +3903,63 @@ ${cssVarsBlock}
         return changed;
       }
 
+      function isTitleAttentionRequestKind(kind) {
+        return kind === "annotation" || kind === "critique" || kind === "direct";
+      }
+
+      function armTitleAttentionForRequest(requestId, kind) {
+        if (typeof requestId !== "string" || !isTitleAttentionRequestKind(kind)) {
+          titleAttentionRequestId = null;
+          titleAttentionRequestKind = null;
+          return;
+        }
+        titleAttentionRequestId = requestId;
+        titleAttentionRequestKind = kind;
+      }
+
+      function clearArmedTitleAttention(requestId) {
+        if (typeof requestId === "string" && titleAttentionRequestId && requestId !== titleAttentionRequestId) {
+          return;
+        }
+        titleAttentionRequestId = null;
+        titleAttentionRequestKind = null;
+      }
+
+      function clearTitleAttention() {
+        if (!titleAttentionMessage) return;
+        titleAttentionMessage = "";
+        updateDocumentTitle();
+      }
+
+      function shouldShowTitleAttention() {
+        const focused = typeof document.hasFocus === "function" ? document.hasFocus() : windowHasFocus;
+        return Boolean(document.hidden) || !focused;
+      }
+
+      function getTitleAttentionMessage(kind) {
+        if (kind === "critique") return "● Critique ready";
+        if (kind === "direct") return "● Response ready";
+        return "● Reply ready";
+      }
+
+      function maybeShowTitleAttentionForCompletedRequest(requestId, kind) {
+        const matchedRequest = typeof requestId === "string" && titleAttentionRequestId && requestId === titleAttentionRequestId;
+        const completedKind = isTitleAttentionRequestKind(kind) ? kind : titleAttentionRequestKind;
+        clearArmedTitleAttention(requestId);
+        if (!matchedRequest || !completedKind || !shouldShowTitleAttention()) {
+          return;
+        }
+        titleAttentionMessage = getTitleAttentionMessage(completedKind);
+        updateDocumentTitle();
+      }
+
       function updateDocumentTitle() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
         const titleParts = ["pi Studio"];
         if (terminalText && terminalText !== "unknown") titleParts.push(terminalText);
         if (modelText && modelText !== "none") titleParts.push(modelText);
+        if (titleAttentionMessage) titleParts.unshift(titleAttentionMessage);
         document.title = titleParts.join(" · ");
       }
 
@@ -3997,6 +4052,24 @@ ${cssVarsBlock}
       }
 
       renderStatus();
+
+      window.addEventListener("focus", () => {
+        windowHasFocus = true;
+        clearTitleAttention();
+      });
+
+      window.addEventListener("blur", () => {
+        windowHasFocus = false;
+      });
+
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          windowHasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : windowHasFocus;
+          if (windowHasFocus) {
+            clearTitleAttention();
+          }
+        }
+      });
 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
@@ -5810,8 +5883,10 @@ ${cssVarsBlock}
           setStatus("No matching Studio request is running.", "warning");
           return false;
         }
-        const sent = sendMessage({ type: "cancel_request", requestId: pendingRequestId });
+        const requestId = pendingRequestId;
+        const sent = sendMessage({ type: "cancel_request", requestId });
         if (!sent) return false;
+        clearArmedTitleAttention(requestId);
         setStatus("Stopping request…", "warning");
         return true;
       }
@@ -6119,6 +6194,7 @@ ${cssVarsBlock}
             return;
           }
 
+          const completedRequestId = typeof message.requestId === "string" ? message.requestId : pendingRequestId;
           const responseKind =
             typeof message.kind === "string"
               ? message.kind
@@ -6151,6 +6227,7 @@ ${cssVarsBlock}
           } else {
             setStatus("Response ready.", "success");
           }
+          maybeShowTitleAttentionForCompletedRequest(completedRequestId, responseKind);
           return;
         }
 
@@ -6352,6 +6429,9 @@ ${cssVarsBlock}
             pendingRequestId = null;
             pendingKind = null;
           }
+          if (typeof message.requestId === "string") {
+            clearArmedTitleAttention(message.requestId);
+          }
           stickyStudioKind = null;
           setBusy(false);
           setWsState("Ready");
@@ -6366,6 +6446,9 @@ ${cssVarsBlock}
             }
             pendingRequestId = null;
             pendingKind = null;
+          }
+          if (typeof message.requestId === "string") {
+            clearArmedTitleAttention(message.requestId);
           }
           stickyStudioKind = null;
           setBusy(false);
@@ -6525,10 +6608,12 @@ ${cssVarsBlock}
           setStatus("Studio is busy.", "warning");
           return null;
         }
+        clearTitleAttention();
         const requestId = makeRequestId();
         pendingRequestId = requestId;
         pendingKind = kind;
         stickyStudioKind = kind;
+        armTitleAttentionForRequest(requestId, kind);
         setBusy(true);
         setWsState("Submitting");
         setStatus(getStudioBusyStatus(kind), "warning");
