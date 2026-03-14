@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.13] — 2026-03-15
+
+### Fixed
+- Studio `Editor (Preview)` PDF export now fences non-markdown editor content such as diff/code before Pandoc export, preventing LaTeX failures on raw diff/code text.
+- Non-markdown editor preview modes such as `diff` now support inline `[an: ...]` markers and render them as compact note pills.
+- The editor highlight overlay keeps exact annotation source text/width, preserving cursor and text alignment while preview-only panes use the compact annotation-pill rendering.
+
 ## [0.5.12] — 2026-03-15
 
 ### Added

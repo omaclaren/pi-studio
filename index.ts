@@ -855,7 +855,9 @@ function readStudioFile(pathArg: string, cwd: string):
 	| { ok: true; text: string; label: string; resolvedPath: string }
 	| { ok: false; message: string } {
 	const resolved = resolveStudioPath(pathArg, cwd);
-	if (!resolved.ok) return resolved;
+	if (resolved.ok === false) {
+		return { ok: false, message: resolved.message };
+	}
 
 	try {
 		const stats = statSync(resolved.resolved);
@@ -899,7 +901,9 @@ function writeStudioFile(pathArg: string, cwd: string, content: string):
 	| { ok: true; label: string; resolvedPath: string }
 	| { ok: false; message: string } {
 	const resolved = resolveStudioPath(pathArg, cwd);
-	if (!resolved.ok) return resolved;
+	if (resolved.ok === false) {
+		return { ok: false, message: resolved.message };
+	}
 
 	try {
 		writeFileSync(resolved.resolved, content, "utf-8");
@@ -4662,6 +4666,24 @@ ${cssVarsBlock}
         return annotationsEnabled ? raw : stripAnnotationMarkers(raw);
       }
 
+      function wrapAsFencedCodeBlock(text, language) {
+        const source = String(text || "").trimEnd();
+        const lang = String(language || "").trim();
+        const backtickFence = "\x60\x60\x60";
+        const newline = "\\n";
+        const marker = source.includes(backtickFence) ? "~~~" : backtickFence;
+        return marker + (lang ? lang : "") + newline + source + newline + marker;
+      }
+
+      function prepareEditorTextForPdfExport(text) {
+        const prepared = prepareEditorTextForPreview(text);
+        const lang = normalizeFenceLanguage(editorLanguage || "");
+        if (lang && lang !== "markdown" && lang !== "latex") {
+          return wrapAsFencedCodeBlock(prepared, lang);
+        }
+        return prepared;
+      }
+
       function updateSyncBadge(normalizedEditorText) {
         if (!syncBadgeEl) return;
 
@@ -5020,7 +5042,7 @@ ${cssVarsBlock}
           return;
         }
 
-        const markdown = rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown;
+        const markdown = rightView === "editor-preview" ? prepareEditorTextForPdfExport(sourceTextEl.value) : latestResponseMarkdown;
         if (!markdown || !markdown.trim()) {
           setStatus("Nothing to export yet.", "warning");
           return;
@@ -5028,7 +5050,8 @@ ${cssVarsBlock}
 
         const sourcePath = sourceState.path || "";
         const resourceDir = (!sourceState.path && resourceDirInput) ? resourceDirInput.value.trim() : "";
-        const isLatex = /\\\\documentclass\\b|\\\\begin\\{document\\}/.test(markdown);
+        const editorPdfLanguage = rightView === "editor-preview" ? normalizeFenceLanguage(editorLanguage || "") : "";
+        const isLatex = editorPdfLanguage === "latex" || /\\\\documentclass\\b|\\\\begin\\{document\\}/.test(markdown);
         let filenameHint = rightView === "editor-preview" ? "studio-editor-preview.pdf" : "studio-response-preview.pdf";
         if (sourceState.path) {
           const baseName = sourceState.path.split(/[\\\\/]/).pop() || "studio";
@@ -5150,7 +5173,7 @@ ${cssVarsBlock}
         const text = prepareEditorTextForPreview(sourceTextEl.value || "");
         if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
           finishPreviewRender(sourcePreviewEl);
-          sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(text, editorLanguage) + "</div>";
+          sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(text, editorLanguage, "preview") + "</div>";
           return;
         }
         const nonce = ++sourcePreviewRenderNonce;
@@ -5215,7 +5238,7 @@ ${cssVarsBlock}
           }
           if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
             finishPreviewRender(critiqueViewEl);
-            critiqueViewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(editorText, editorLanguage) + "</div>";
+            critiqueViewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(editorText, editorLanguage, "preview") + "</div>";
             return;
           }
           const nonce = ++responsePreviewRenderNonce;
@@ -5537,6 +5560,47 @@ ${cssVarsBlock}
         return "<span class='" + className + "'>" + escapeHtml(String(text || "")) + "</span>";
       }
 
+      function wrapHighlightWithTitle(className, text, title) {
+        const titleAttr = title ? " title='" + escapeHtml(String(title)) + "'" : "";
+        return "<span class='" + className + "'" + titleAttr + ">" + escapeHtml(String(text || "")) + "</span>";
+      }
+
+      function highlightInlineAnnotations(text, mode) {
+        const source = String(text || "");
+        const renderMode = mode === "preview" ? "preview" : "overlay";
+        ANNOTATION_MARKER_REGEX.lastIndex = 0;
+        let lastIndex = 0;
+        let out = "";
+
+        let match;
+        while ((match = ANNOTATION_MARKER_REGEX.exec(source)) !== null) {
+          const token = match[0] || "";
+          const start = typeof match.index === "number" ? match.index : 0;
+          const markerText = typeof match[1] === "string" ? match[1].trim() : token;
+
+          if (start > lastIndex) {
+            out += escapeHtml(source.slice(lastIndex, start));
+          }
+
+          if (renderMode === "preview") {
+            out += wrapHighlightWithTitle("annotation-preview-marker", markerText || token, token);
+          } else {
+            out += wrapHighlight(annotationsEnabled ? "hl-annotation" : "hl-annotation-muted", token);
+          }
+          lastIndex = start + token.length;
+          if (token.length === 0) {
+            ANNOTATION_MARKER_REGEX.lastIndex += 1;
+          }
+        }
+
+        ANNOTATION_MARKER_REGEX.lastIndex = 0;
+        if (lastIndex < source.length) {
+          out += escapeHtml(source.slice(lastIndex));
+        }
+
+        return out;
+      }
+
       function highlightInlineMarkdown(text) {
         const source = String(text || "");
         const pattern = /(\\x60[^\\x60]*\\x60)|(\\[[^\\]]+\\]\\([^)]+\\))|(\\[an:\\s*[^\\]]+\\])/gi;
@@ -5563,7 +5627,7 @@ ${cssVarsBlock}
               out += escapeHtml(token);
             }
           } else if (match[3]) {
-            out += wrapHighlight(annotationsEnabled ? "hl-annotation" : "hl-annotation-muted", token);
+            out += highlightInlineAnnotations(token);
           } else {
             out += escapeHtml(token);
           }
@@ -5635,9 +5699,10 @@ ${cssVarsBlock}
         return out;
       }
 
-      function highlightCodeLine(line, language) {
+      function highlightCodeLine(line, language, annotationRenderMode) {
         const source = String(line || "");
         const lang = normalizeFenceLanguage(language);
+        const renderMode = annotationRenderMode === "preview" ? "preview" : "overlay";
 
         if (!lang) {
           return wrapHighlight("hl-code", source);
@@ -5781,14 +5846,14 @@ ${cssVarsBlock}
         }
 
         if (lang === "diff") {
-          var escaped = escapeHtml(source);
-          if (/^@@/.test(source)) return "<span class=\\"hl-code-fn\\">" + escaped + "</span>";
-          if (/^\\+\\+\\+|^---/.test(source)) return "<span class=\\"hl-code-kw\\">" + escaped + "</span>";
-          if (/^\\+/.test(source)) return "<span class=\\"hl-diff-add\\">" + escaped + "</span>";
-          if (/^-/.test(source)) return "<span class=\\"hl-diff-del\\">" + escaped + "</span>";
-          if (/^diff /.test(source)) return "<span class=\\"hl-code-kw\\">" + escaped + "</span>";
-          if (/^index /.test(source)) return "<span class=\\"hl-code-com\\">" + escaped + "</span>";
-          return escaped;
+          var highlightedDiff = highlightInlineAnnotations(source, renderMode);
+          if (/^@@/.test(source)) return "<span class=\\"hl-code-fn\\">" + highlightedDiff + "</span>";
+          if (/^\\+\\+\\+|^---/.test(source)) return "<span class=\\"hl-code-kw\\">" + highlightedDiff + "</span>";
+          if (/^\\+/.test(source)) return "<span class=\\"hl-diff-add\\">" + highlightedDiff + "</span>";
+          if (/^-/.test(source)) return "<span class=\\"hl-diff-del\\">" + highlightedDiff + "</span>";
+          if (/^diff /.test(source)) return "<span class=\\"hl-code-kw\\">" + highlightedDiff + "</span>";
+          if (/^index /.test(source)) return "<span class=\\"hl-code-com\\">" + highlightedDiff + "</span>";
+          return highlightedDiff;
         }
 
         return wrapHighlight("hl-code", source);
@@ -5864,15 +5929,16 @@ ${cssVarsBlock}
         return out.join("<br>");
       }
 
-      function highlightCode(text, language) {
+      function highlightCode(text, language, annotationRenderMode) {
         const lines = String(text || "").replace(/\\r\\n/g, "\\n").split("\\n");
         const lang = normalizeFenceLanguage(language);
+        const renderMode = annotationRenderMode === "preview" ? "preview" : "overlay";
         const out = [];
         for (const line of lines) {
           if (line.length === 0) {
             out.push(EMPTY_OVERLAY_LINE);
           } else if (lang) {
-            out.push(highlightCodeLine(line, lang));
+            out.push(highlightCodeLine(line, lang, renderMode));
           } else {
             out.push(escapeHtml(line));
           }
@@ -8005,7 +8071,7 @@ export default function (pi: ExtensionAPI) {
 
 			const baseDir = resolveStudioGitDiffBaseDir(msg.sourcePath, msg.resourceDir, studioCwd);
 			const diffResult = readStudioGitDiff(baseDir);
-			if (!diffResult.ok) {
+			if (diffResult.ok === false) {
 				sendToClient(client, {
 					type: "info",
 					requestId: msg.requestId,
@@ -8037,7 +8103,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const result = cancelActiveRequest(msg.requestId);
-			if (!result.ok) {
+			if (result.ok === false) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: result.message });
 			}
 			return;
@@ -8235,7 +8301,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const result = writeStudioFile(msg.path, studioCwd, msg.content);
-			if (!result.ok) {
+			if (result.ok === false) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: result.message });
 				return;
 			}
@@ -9099,7 +9165,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				const file = readStudioFile(pathArg, ctx.cwd);
-				if (!file.ok) {
+				if (file.ok === false) {
 					ctx.ui.notify(file.message, "error");
 					return;
 				}
@@ -9165,7 +9231,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const file = readStudioFile(pathArg, ctx.cwd);
-			if (!file.ok) {
+			if (file.ok === false) {
 				ctx.ui.notify(file.message, "error");
 				return;
 			}
