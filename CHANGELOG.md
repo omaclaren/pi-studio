@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Studio PDF export now carries the editor language to the server and defensively re-wraps non-markdown editor content there before Pandoc export, reducing brittle diff/code export failures when the editor contains raw git diffs or code-like text.
+- Studio PDF export now also auto-detects both raw **and already-fenced** git-diff content server-side even if the client-side editor language was lost or stale.
+- Editor-preview PDF export no longer classifies diff/code text as LaTeX just because the content happens to mention strings like `\documentclass` or `\begin{document}` inside a diff/code block.
+- Diff-language editor PDF exports now first try the normal highlighted Pandoc path, but fall back to a literal-text LaTeX export when highlighted diff export fails on large or markdown-like git diffs.
+- Highlighted PDF code/diff blocks now enable LaTeX-side line wrapping, reducing long diff/code lines running off the page.
+
 ## [0.5.13] — 2026-03-15
 
 ### Fixed

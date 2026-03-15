@@ -1420,9 +1420,12 @@
 
         const sourcePath = sourceState.path || "";
         const resourceDir = (!sourceState.path && resourceDirInput) ? resourceDirInput.value.trim() : "";
-        const editorPdfLanguage = rightView === "editor-preview" ? normalizeFenceLanguage(editorLanguage || "") : "";
-        const isLatex = editorPdfLanguage === "latex" || /\\documentclass\b|\\begin\{document\}/.test(markdown);
-        let filenameHint = rightView === "editor-preview" ? "studio-editor-preview.pdf" : "studio-response-preview.pdf";
+        const isEditorPreview = rightView === "editor-preview";
+        const editorPdfLanguage = isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "";
+        const isLatex = isEditorPreview
+          ? editorPdfLanguage === "latex"
+          : /\\documentclass\b|\\begin\{document\}/.test(markdown);
+        let filenameHint = isEditorPreview ? "studio-editor-preview.pdf" : "studio-response-preview.pdf";
         if (sourceState.path) {
           const baseName = sourceState.path.split(/[\\/]/).pop() || "studio";
           const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
@@ -1444,6 +1447,7 @@
               sourcePath: sourcePath,
               resourceDir: resourceDir,
               isLatex: isLatex,
+              editorPdfLanguage: editorPdfLanguage,
               filenameHint: filenameHint,
             }),
           });

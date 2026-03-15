@@ -167,6 +167,8 @@ const PDF_PREAMBLE = `\\usepackage{titlesec}
 \\setlist[itemize]{nosep, leftmargin=1.5em}
 \\setlist[enumerate]{nosep, leftmargin=1.5em}
 \\usepackage{parskip}
+\\usepackage{fvextra}
+\\RecustomVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere}
 `;
 
 type StudioThemeMode = "dark" | "light";
@@ -1315,6 +1317,107 @@ function normalizeMathDelimiters(markdown: string): string {
 	return out.join("\n");
 }
 
+function normalizeStudioEditorLanguage(language: string | undefined): string | undefined {
+	const trimmed = typeof language === "string" ? language.trim().toLowerCase() : "";
+	if (!trimmed) return undefined;
+	if (trimmed === "patch" || trimmed === "udiff") return "diff";
+	return trimmed;
+}
+
+function parseStudioSingleFencedCodeBlock(markdown: string): { info: string; content: string } | null {
+	const trimmed = markdown.trim();
+	if (!trimmed) return null;
+	const lines = trimmed.split("\n");
+	if (lines.length < 2) return null;
+
+	const openingLine = (lines[0] ?? "").trim();
+	const openingMatch = openingLine.match(/^(`{3,}|~{3,})([^\n]*)$/);
+	if (!openingMatch) return null;
+	const openingFence = openingMatch[1]!;
+	const info = (openingMatch[2] ?? "").trim();
+
+	const closingLine = (lines[lines.length - 1] ?? "").trim();
+	const closingMatch = closingLine.match(/^(`{3,}|~{3,})\s*$/);
+	if (!closingMatch) return null;
+	const closingFence = closingMatch[1]!;
+	if (closingFence[0] !== openingFence[0] || closingFence.length < openingFence.length) {
+		return null;
+	}
+
+	return {
+		info,
+		content: lines.slice(1, -1).join("\n"),
+	};
+}
+
+function isStudioSingleFencedCodeBlock(markdown: string): boolean {
+	return parseStudioSingleFencedCodeBlock(markdown) !== null;
+}
+
+function getLongestStudioFenceRun(text: string, fenceChar: "`" | "~"): number {
+	const regex = fenceChar === "`" ? /`+/g : /~+/g;
+	let max = 0;
+	let match: RegExpExecArray | null;
+	while ((match = regex.exec(text)) !== null) {
+		max = Math.max(max, match[0].length);
+	}
+	return max;
+}
+
+function wrapStudioCodeAsMarkdown(code: string, language?: string): string {
+	const source = String(code ?? "").replace(/\r\n/g, "\n").trimEnd();
+	const lang = normalizeStudioEditorLanguage(language) ?? "";
+	const maxBackticks = getLongestStudioFenceRun(source, "`");
+	const maxTildes = getLongestStudioFenceRun(source, "~");
+
+	let markerChar: "`" | "~" = "`";
+	if (maxBackticks === 0 && maxTildes === 0) {
+		markerChar = "`";
+	} else if (maxTildes < maxBackticks) {
+		markerChar = "~";
+	} else if (maxBackticks < maxTildes) {
+		markerChar = "`";
+	} else {
+		markerChar = maxBackticks > 0 ? "~" : "`";
+	}
+
+	const markerLength = Math.max(3, (markerChar === "`" ? maxBackticks : maxTildes) + 1);
+	const marker = markerChar.repeat(markerLength);
+	return `${marker}${lang}\n${source}\n${marker}`;
+}
+
+function isLikelyRawStudioGitDiff(markdown: string): boolean {
+	const text = String(markdown ?? "");
+	if (!text.trim() || isStudioSingleFencedCodeBlock(text)) return false;
+	if (/^diff --git\s/m.test(text)) return true;
+	if (/^@@\s.+\s@@/m.test(text) && /^---\s/m.test(text) && /^\+\+\+\s/m.test(text)) return true;
+	return false;
+}
+
+function inferStudioPdfLanguage(markdown: string, editorLanguage?: string): string | undefined {
+	const normalizedEditorLanguage = normalizeStudioEditorLanguage(editorLanguage);
+	if (normalizedEditorLanguage) return normalizedEditorLanguage;
+
+	const fenced = parseStudioSingleFencedCodeBlock(markdown);
+	if (fenced) {
+		const fencedLanguage = normalizeStudioEditorLanguage(fenced.info.split(/\s+/)[0] ?? "");
+		if (fencedLanguage) return fencedLanguage;
+	}
+
+	if (isLikelyRawStudioGitDiff(markdown)) return "diff";
+	return undefined;
+}
+
+function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLanguage?: string): string {
+	if (isLatex) return markdown;
+	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorLanguage);
+	const source = effectiveEditorLanguage && effectiveEditorLanguage !== "markdown" && effectiveEditorLanguage !== "latex"
+		&& !isStudioSingleFencedCodeBlock(markdown)
+		? wrapStudioCodeAsMarkdown(markdown, effectiveEditorLanguage)
+		: markdown;
+	return normalizeObsidianImages(normalizeMathDelimiters(source));
+}
+
 function stripMathMlAnnotationTags(html: string): string {
 	return html
 		.replace(/<annotation-xml\b[\s\S]*?<\/annotation-xml>/gi, "")
@@ -1540,17 +1643,190 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	});
 }
 
+async function renderStudioLiteralTextPdf(text: string, title = "Studio export"): Promise<Buffer> {
+	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
+	const tempDir = join(tmpdir(), `pi-studio-text-pdf-${Date.now()}-${randomUUID()}`);
+	const textPath = join(tempDir, "input.txt");
+	const texPath = join(tempDir, "input.tex");
+	const outputPath = join(tempDir, "input.pdf");
+
+	const normalizedText = String(text ?? "").replace(/\r\n/g, "\n");
+	const texDocument = `\\documentclass[11pt]{article}
+\\usepackage[margin=2.2cm]{geometry}
+\\usepackage{fvextra}
+\\usepackage{xcolor}
+\\usepackage{upquote}
+\\begin{document}
+\\section*{${title.replace(/[{}\\]/g, "").trim() || "Studio export"}}
+\\VerbatimInput[breaklines,breakanywhere,fontsize=\\small,frame=single,rulecolor=\\color{black!15},framesep=2mm]{input.txt}
+\\end{document}
+`;
+
+	await mkdir(tempDir, { recursive: true });
+	await writeFile(textPath, normalizedText, "utf-8");
+	await writeFile(texPath, texDocument, "utf-8");
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const child = spawn(pdfEngine, [
+				"-interaction=nonstopmode",
+				"-halt-on-error",
+				"input.tex",
+			], { stdio: ["ignore", "pipe", "pipe"], cwd: tempDir });
+			const stdoutChunks: Buffer[] = [];
+			const stderrChunks: Buffer[] = [];
+			let settled = false;
+
+			const fail = (error: Error) => {
+				if (settled) return;
+				settled = true;
+				reject(error);
+			};
+
+			child.stdout.on("data", (chunk: Buffer | string) => {
+				stdoutChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+			});
+			child.stderr.on("data", (chunk: Buffer | string) => {
+				stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+			});
+
+			child.once("error", (error) => {
+				const errno = error as NodeJS.ErrnoException;
+				if (errno.code === "ENOENT") {
+					fail(new Error(
+						`${pdfEngine} was not found. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE.`,
+					));
+					return;
+				}
+				fail(error);
+			});
+
+			child.once("close", (code) => {
+				if (settled) return;
+				if (code === 0) {
+					settled = true;
+					resolve();
+					return;
+				}
+				const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+				const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+				const errorMatch = stdout.match(/^! .+$/m);
+				const hint = errorMatch ? `: ${errorMatch[0]}` : (stderr ? `: ${stderr}` : "");
+				fail(new Error(`${pdfEngine} literal-text PDF export failed with exit code ${code}${hint}`));
+			});
+		});
+
+		return await readFile(outputPath);
+	} finally {
+		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+	}
+}
+
 async function renderStudioPdfWithPandoc(
 	markdown: string,
 	isLatex?: boolean,
 	resourcePath?: string,
+	editorPdfLanguage?: string,
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
+	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorPdfLanguage);
+
+	const runPandocPdfExport = async (
+		inputFormat: string,
+		markdownForPdf: string,
+		warning?: string,
+	): Promise<{ pdf: Buffer; warning?: string }> => {
+		const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
+		const preamblePath = join(tempDir, "_pdf_preamble.tex");
+		const outputPath = join(tempDir, "studio-export.pdf");
+
+		await mkdir(tempDir, { recursive: true });
+		await writeFile(preamblePath, PDF_PREAMBLE, "utf-8");
+
+		const args = [
+			"-f", inputFormat,
+			"-o", outputPath,
+			`--pdf-engine=${pdfEngine}`,
+			"-V", "geometry:margin=2.2cm",
+			"-V", "fontsize=11pt",
+			"-V", "linestretch=1.25",
+			"-V", "urlcolor=blue",
+			"-V", "linkcolor=blue",
+			"--include-in-header", preamblePath,
+		];
+		if (resourcePath) args.push(`--resource-path=${resourcePath}`);
+
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"] });
+				const stderrChunks: Buffer[] = [];
+				let settled = false;
+
+				const fail = (error: Error) => {
+					if (settled) return;
+					settled = true;
+					reject(error);
+				};
+
+				child.stderr.on("data", (chunk: Buffer | string) => {
+					stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+				});
+
+				child.once("error", (error) => {
+					const errno = error as NodeJS.ErrnoException;
+					if (errno.code === "ENOENT") {
+						const commandHint = pandocCommand === "pandoc"
+							? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
+							: `${pandocCommand} was not found. Check PANDOC_PATH.`;
+						fail(new Error(commandHint));
+						return;
+					}
+					fail(error);
+				});
+
+				child.once("close", (code) => {
+					if (settled) return;
+					if (code === 0) {
+						settled = true;
+						resolve();
+						return;
+					}
+					const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+					const hint = stderr.includes("not found") || stderr.includes("xelatex") || stderr.includes("pdflatex")
+						? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
+						: "";
+					fail(new Error(`pandoc PDF export failed with exit code ${code}${stderr ? `: ${stderr}` : ""}${hint}`));
+				});
+
+				child.stdin.end(markdownForPdf);
+			});
+
+			return { pdf: await readFile(outputPath), warning };
+		} finally {
+			await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+		}
+	};
+
+	if (!isLatex && effectiveEditorLanguage === "diff") {
+		const inputFormat = "markdown+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
+		const diffMarkdown = prepareStudioPdfMarkdown(markdown, false, effectiveEditorLanguage);
+		try {
+			return await runPandocPdfExport(inputFormat, diffMarkdown);
+		} catch {
+			const fenced = parseStudioSingleFencedCodeBlock(diffMarkdown);
+			const diffText = fenced ? fenced.content : markdown;
+			return {
+				pdf: await renderStudioLiteralTextPdf(diffText, "Git diff"),
+				warning: "Highlighted diff export failed, so Studio used a plain-text fallback without syntax colours.",
+			};
+		}
+	}
+
 	const inputFormat = isLatex
 		? "latex"
 		: "markdown+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris+superscript+subscript-raw_html";
-	const normalizedMarkdown = isLatex ? markdown : normalizeObsidianImages(normalizeMathDelimiters(markdown));
+	const normalizedMarkdown = prepareStudioPdfMarkdown(markdown, isLatex, effectiveEditorLanguage);
 
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
 	const preamblePath = join(tempDir, "_pdf_preamble.tex");
@@ -3522,15 +3798,24 @@ export default function (pi: ExtensionAPI) {
 			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { isLatex?: unknown }).isLatex === "boolean"
 				? (parsedBody as { isLatex: boolean }).isLatex
 				: null;
-		const isLatex = requestedIsLatex ?? /\\documentclass\b|\\begin\{document\}/.test(markdown);
 		const requestedFilename =
 			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { filenameHint?: unknown }).filenameHint === "string"
 				? (parsedBody as { filenameHint: string }).filenameHint
 				: "";
+		const requestedEditorPdfLanguage =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { editorPdfLanguage?: unknown }).editorPdfLanguage === "string"
+				? (parsedBody as { editorPdfLanguage: string }).editorPdfLanguage
+				: "";
+		const editorPdfLanguage = inferStudioPdfLanguage(markdown, requestedEditorPdfLanguage);
+		const isLatex = editorPdfLanguage === "latex"
+			|| (
+				(editorPdfLanguage === undefined || editorPdfLanguage === "markdown")
+				&& (requestedIsLatex ?? /\\documentclass\b|\\begin\{document\}/.test(markdown))
+			);
 		const filename = sanitizePdfFilename(requestedFilename || (isLatex ? "studio-latex-preview.pdf" : "studio-preview.pdf"));
 
 		try {
-			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath);
+			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath, editorPdfLanguage);
 			const safeAsciiName = filename
 				.replace(/[\x00-\x1f\x7f]/g, "")
 				.replace(/[;"\\]/g, "_")
