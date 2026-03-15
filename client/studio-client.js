@@ -861,13 +861,13 @@
           historyIndexBadgeEl.textContent = "History: " + selected + "/" + total;
         }
         if (historyPrevBtn) {
-          historyPrevBtn.disabled = uiBusy || total <= 1 || responseHistoryIndex <= 0;
+          historyPrevBtn.disabled = total <= 1 || responseHistoryIndex <= 0;
         }
         if (historyNextBtn) {
-          historyNextBtn.disabled = uiBusy || total <= 1 || responseHistoryIndex < 0 || responseHistoryIndex >= total - 1;
+          historyNextBtn.disabled = total <= 1 || responseHistoryIndex < 0 || responseHistoryIndex >= total - 1;
         }
         if (historyLastBtn) {
-          historyLastBtn.disabled = uiBusy || total <= 1 || responseHistoryIndex < 0 || responseHistoryIndex >= total - 1;
+          historyLastBtn.disabled = total <= 1 || responseHistoryIndex < 0 || responseHistoryIndex >= total - 1;
         }
 
         const selectedItem = getSelectedHistoryItem();
@@ -1547,7 +1547,7 @@
         const text = prepareEditorTextForPreview(sourceTextEl.value || "");
         if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
           finishPreviewRender(sourcePreviewEl);
-          sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(text, editorLanguage, "preview") + "</div>";
+          sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight'>" + highlightCode(text, editorLanguage, "preview") + "</div>";
           return;
         }
         const nonce = ++sourcePreviewRenderNonce;
@@ -1612,7 +1612,7 @@
           }
           if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
             finishPreviewRender(critiqueViewEl);
-            critiqueViewEl.innerHTML = "<div class='response-markdown-highlight' style='white-space:pre;font-family:var(--font-mono);font-size:13px;line-height:1.5;padding:16px;overflow:auto;'>" + highlightCode(editorText, editorLanguage, "preview") + "</div>";
+            critiqueViewEl.innerHTML = "<div class='response-markdown-highlight'>" + highlightCode(editorText, editorLanguage, "preview") + "</div>";
             return;
           }
           const nonce = ++responsePreviewRenderNonce;
@@ -1795,10 +1795,10 @@
         if (saveAnnotatedBtn) saveAnnotatedBtn.disabled = uiBusy;
         if (stripAnnotationsBtn) stripAnnotationsBtn.disabled = uiBusy || !hasAnnotationMarkers(sourceTextEl.value);
         if (compactBtn) compactBtn.disabled = uiBusy || compactInProgress || wsState === "Disconnected";
-        editorViewSelect.disabled = uiBusy;
-        rightViewSelect.disabled = uiBusy;
+        editorViewSelect.disabled = false;
+        rightViewSelect.disabled = false;
         followSelect.disabled = uiBusy;
-        if (responseHighlightSelect) responseHighlightSelect.disabled = uiBusy || rightView !== "markdown";
+        if (responseHighlightSelect) responseHighlightSelect.disabled = rightView !== "markdown";
         insertHeaderBtn.disabled = uiBusy;
         lensSelect.disabled = uiBusy;
         updateSaveFileTooltip();

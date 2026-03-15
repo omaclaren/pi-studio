@@ -10,6 +10,8 @@ All notable changes to `pi-studio` are documented here.
 - Editor-preview PDF export no longer classifies diff/code text as LaTeX just because the content happens to mention strings like `\documentclass` or `\begin{document}` inside a diff/code block.
 - Diff-language editor PDF exports now first try the normal highlighted Pandoc path, but fall back to a literal-text LaTeX export when highlighted diff export fails on large or markdown-like git diffs.
 - Highlighted PDF code/diff blocks now enable LaTeX-side line wrapping, reducing long diff/code lines running off the page.
+- Non-markdown editor preview panes such as diff/code now wrap long lines instead of forcing horizontal overflow.
+- Passive Studio browsing controls such as response-history navigation and left/right view switching remain available while a model request is running.
 
 ## [0.5.13] — 2026-03-15
 
