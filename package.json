@@ -17,6 +17,7 @@
   ],
   "files": [
     "index.ts",
+    "client",
     "README.md",
     "CHANGELOG.md",
     "WORKFLOW.md",
