@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.14] — 2026-03-15
+
 ### Fixed
 - Studio PDF export now carries the editor language to the server and defensively re-wraps non-markdown editor content there before Pandoc export, reducing brittle diff/code export failures when the editor contains raw git diffs or code-like text.
 - Studio PDF export now also auto-detects both raw **and already-fenced** git-diff content server-side even if the client-side editor language was lost or stale.
