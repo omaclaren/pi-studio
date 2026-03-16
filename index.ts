@@ -29,6 +29,7 @@ interface StudioServerState {
 interface ActiveStudioRequest {
 	id: string;
 	kind: StudioRequestKind;
+	prompt: string | null;
 	timer: NodeJS.Timeout;
 	startedAt: number;
 }
@@ -2199,6 +2200,12 @@ function extractLatestAssistantFromEntries(entries: SessionEntry[]): string | nu
 	return null;
 }
 
+function normalizePromptText(text: string | null | undefined): string | null {
+	if (typeof text !== "string") return null;
+	const trimmed = text.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
 function extractUserText(message: unknown): string | null {
 	const msg = message as {
 		role?: string;
@@ -2207,8 +2214,7 @@ function extractUserText(message: unknown): string | null {
 	if (!msg || msg.role !== "user") return null;
 
 	if (typeof msg.content === "string") {
-		const text = msg.content.trim();
-		return text.length > 0 ? text : null;
+		return normalizePromptText(msg.content);
 	}
 
 	if (!Array.isArray(msg.content)) return null;
@@ -2230,8 +2236,16 @@ function extractUserText(message: unknown): string | null {
 		}
 	}
 
-	const text = blocks.join("\n\n").trim();
-	return text.length > 0 ? text : null;
+	return normalizePromptText(blocks.join("\n\n"));
+}
+
+function findLatestUserPrompt(entries: SessionEntry[]): string | null {
+	let latestPrompt: string | null = null;
+	for (const entry of entries) {
+		if (!entry || entry.type !== "message") continue;
+		latestPrompt = extractUserText((entry as { message?: unknown }).message) ?? latestPrompt;
+	}
+	return latestPrompt;
 }
 
 function parseEntryTimestamp(timestamp: unknown): number {
@@ -2945,6 +2959,8 @@ export default function (pi: ExtensionAPI) {
 	let currentModelLabel = "none";
 	let terminalSessionLabel = buildTerminalSessionLabel(studioCwd);
 	let studioResponseHistory: StudioResponseHistoryItem[] = [];
+	let latestSessionUserPrompt: string | null = null;
+	let pendingTurnPrompt: string | null = null;
 	let contextUsageSnapshot: StudioContextUsageSnapshot = {
 		tokens: null,
 		contextWindow: null,
@@ -3261,6 +3277,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const syncStudioResponseHistory = (entries: SessionEntry[]) => {
+		latestSessionUserPrompt = findLatestUserPrompt(entries);
 		studioResponseHistory = buildResponseHistoryFromEntries(entries, RESPONSE_HISTORY_LIMIT);
 		const latest = studioResponseHistory[studioResponseHistory.length - 1];
 		if (!latest) {
@@ -3470,7 +3487,7 @@ export default function (pi: ExtensionAPI) {
 		return { ok: true, kind };
 	};
 
-	const beginRequest = (requestId: string, kind: StudioRequestKind): boolean => {
+	const beginRequest = (requestId: string, kind: StudioRequestKind, prompt?: string | null): boolean => {
 		suppressedStudioResponse = null;
 		emitDebugEvent("begin_request_attempt", {
 			requestId,
@@ -3501,6 +3518,7 @@ export default function (pi: ExtensionAPI) {
 		activeRequest = {
 			id: requestId,
 			kind,
+			prompt: normalizePromptText(prompt),
 			startedAt: Date.now(),
 			timer,
 		};
@@ -3652,10 +3670,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (!beginRequest(msg.requestId, "critique")) return;
-
 			const lens = resolveLens(msg.lens, document);
 			const prompt = buildCritiquePrompt(document, lens);
+			if (!beginRequest(msg.requestId, "critique", prompt)) return;
 
 			try {
 				pi.sendUserMessage(prompt);
@@ -3682,7 +3699,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (!beginRequest(msg.requestId, "annotation")) return;
+			if (!beginRequest(msg.requestId, "annotation", text)) return;
 
 			try {
 				pi.sendUserMessage(text);
@@ -3709,7 +3726,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (!beginRequest(msg.requestId, "direct")) return;
+			if (!beginRequest(msg.requestId, "direct", msg.text)) return;
 
 			try {
 				pi.sendUserMessage(msg.text);
@@ -4419,6 +4436,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		pendingTurnPrompt = null;
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		clearCompactionState();
 		agentBusy = false;
@@ -4436,6 +4454,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_switch", async (_event, ctx) => {
 		clearActiveRequest({ notify: "Session switched. Studio request state cleared.", level: "warning" });
 		clearCompactionState();
+		pendingTurnPrompt = null;
 		lastCommandCtx = null;
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		agentBusy = false;
@@ -4523,6 +4542,11 @@ export default function (pi: ExtensionAPI) {
 			activeRequestKind: activeRequest?.kind ?? null,
 		});
 
+		if (role === "user") {
+			pendingTurnPrompt = extractUserText(event.message);
+			return;
+		}
+
 		// Assistant is handing off to tool calls; request is still in progress.
 		if (stopReason === "toolUse") {
 			emitDebugEvent("message_end_tool_use", {
@@ -4536,6 +4560,7 @@ export default function (pi: ExtensionAPI) {
 		if (!markdown) return;
 
 		if (suppressedStudioResponse) {
+			pendingTurnPrompt = null;
 			emitDebugEvent("suppressed_cancelled_response", {
 				requestId: suppressedStudioResponse.requestId,
 				kind: suppressedStudioResponse.kind,
@@ -4549,9 +4574,7 @@ export default function (pi: ExtensionAPI) {
 		refreshContextUsage(ctx);
 		const latestHistoryItem = studioResponseHistory[studioResponseHistory.length - 1];
 		if (!latestHistoryItem || latestHistoryItem.markdown !== markdown) {
-			const fallbackPrompt = studioResponseHistory.length > 0
-				? studioResponseHistory[studioResponseHistory.length - 1]?.prompt ?? null
-				: null;
+			const fallbackPrompt = activeRequest?.prompt ?? pendingTurnPrompt ?? latestSessionUserPrompt ?? null;
 			const fallbackHistoryItem: StudioResponseHistoryItem = {
 				id: randomUUID(),
 				markdown,
@@ -4567,6 +4590,7 @@ export default function (pi: ExtensionAPI) {
 		const latestItem = studioResponseHistory[studioResponseHistory.length - 1];
 		const responseTimestamp = latestItem?.timestamp ?? Date.now();
 		const responseThinking = latestItem?.thinking ?? thinking ?? null;
+		pendingTurnPrompt = null;
 
 		if (activeRequest) {
 			const requestId = activeRequest.id;
@@ -4627,6 +4651,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", async () => {
 		agentBusy = false;
+		pendingTurnPrompt = null;
 		refreshContextUsage();
 		emitDebugEvent("agent_end", {
 			activeRequestId: activeRequest?.id ?? null,
