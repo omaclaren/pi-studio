@@ -85,6 +85,8 @@
       const langSelect = document.getElementById("langSelect");
       const annotationModeSelect = document.getElementById("annotationModeSelect");
       const compactBtn = document.getElementById("compactBtn");
+      const leftFocusBtn = document.getElementById("leftFocusBtn");
+      const rightFocusBtn = document.getElementById("rightFocusBtn");
 
       const initialSourceState = {
         source: (document.body && document.body.dataset && document.body.dataset.initialSource) || "blank",
@@ -697,6 +699,23 @@
         }
       }
 
+      function updatePaneFocusButtons() {
+        [
+          [leftFocusBtn, "left"],
+          [rightFocusBtn, "right"],
+        ].forEach(([btn, pane]) => {
+          if (!btn) return;
+          const isFocusedPane = paneFocusTarget === pane;
+          const paneName = pane === "right" ? "response" : "editor";
+          btn.classList.toggle("is-active", isFocusedPane);
+          btn.setAttribute("aria-pressed", isFocusedPane ? "true" : "false");
+          btn.textContent = isFocusedPane ? "Exit focus" : "Focus pane";
+          btn.title = isFocusedPane
+            ? "Exit focus mode for the " + paneName + " pane."
+            : "Show only the " + paneName + " pane. Shortcut: Cmd/Ctrl+Esc or F10.";
+        });
+      }
+
       function applyPaneFocusClasses() {
         document.body.classList.remove("pane-focus-left", "pane-focus-right");
         if (paneFocusTarget === "left") {
@@ -704,6 +723,7 @@
         } else if (paneFocusTarget === "right") {
           document.body.classList.add("pane-focus-right");
         }
+        updatePaneFocusButtons();
       }
 
       function setActivePane(nextPane) {
@@ -725,6 +745,14 @@
         return "Editor";
       }
 
+      function enterPaneFocus(nextPane) {
+        const pane = nextPane === "right" ? "right" : "left";
+        setActivePane(pane);
+        paneFocusTarget = pane;
+        applyPaneFocusClasses();
+        setStatus("Focus mode: " + paneLabel(pane) + " pane (Esc to exit).");
+      }
+
       function togglePaneFocus() {
         if (paneFocusTarget === activePane) {
           paneFocusTarget = "off";
@@ -733,9 +761,7 @@
           return;
         }
 
-        paneFocusTarget = activePane;
-        applyPaneFocusClasses();
-        setStatus("Focus mode: " + paneLabel(activePane) + " pane (Esc to exit).");
+        enterPaneFocus(activePane);
       }
 
       function exitPaneFocus() {
@@ -3420,6 +3446,27 @@
         rightPaneEl.addEventListener("focusin", () => setActivePane("right"));
       }
 
+      if (leftFocusBtn) {
+        leftFocusBtn.addEventListener("click", () => {
+          if (paneFocusTarget === "left") {
+            exitPaneFocus();
+            return;
+          }
+          enterPaneFocus("left");
+        });
+      }
+
+      if (rightFocusBtn) {
+        rightFocusBtn.addEventListener("click", () => {
+          if (paneFocusTarget === "right") {
+            exitPaneFocus();
+            return;
+          }
+          enterPaneFocus("right");
+        });
+      }
+
+      updatePaneFocusButtons();
       window.addEventListener("keydown", handlePaneShortcut);
       window.addEventListener("beforeunload", () => {
         stopFooterSpinner();

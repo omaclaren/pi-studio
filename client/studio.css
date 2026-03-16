@@ -203,6 +203,20 @@
       border-radius: 7px;
     }
 
+    .pane-focus-btn.is-active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
+      font-weight: 600;
+    }
+
+    button.pane-focus-btn.is-active:not(:disabled):hover {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
+      filter: brightness(0.95);
+    }
+
     .section-header select {
       font-weight: 600;
       font-size: 14px;

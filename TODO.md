@@ -12,9 +12,7 @@
 - [ ] Improve fallback behavior when response sections are partial/malformed.
 
 ## Next-session candidates
-- [x] Add a response history browser in Studio (recent assistant responses + corresponding prompt load) with quick load into right pane/editor.
 - [ ] Run a CodeMirror 6 vs Monaco spike and document migration tradeoffs (performance, bundle/build changes, theme/keybinding integration).
-- [x] Add **Export preview as PDF** for right-pane preview modes (response/editor) via pandoc + xelatex.
 
 ## Quality
 - [ ] Add small, focused tests for:
@@ -25,5 +23,4 @@
 - [ ] Add lightweight logging toggles for local debugging.
 
 ## Packaging
-- [ ] Decide publish path (private package first vs direct public npm).
 - [ ] Add release workflow (version bump, changelog update, tag, publish checklist).

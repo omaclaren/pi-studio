@@ -1,4 +1,4 @@
-# pi-studio workflow spec (v0.2 draft)
+# pi-studio workflow/spec note
 
 ## Goal
 
@@ -7,9 +7,9 @@ Keep Studio simple while supporting both loops:
 1. **User → model feedback** (annotated reply)
 2. **Model → user critique** (structured critique package)
 
-Studio uses a **single workspace** (no tab/mode switching):
+Studio uses a **single workspace**:
 - left pane: **Editor**
-- right pane: **Response**
+- right pane: **Response / Thinking / Editor Preview**
 
 ---
 
@@ -46,17 +46,23 @@ Critiques current editor text and expects/handles structured output:
 
 ## Response handling
 
-Right pane always shows the **latest assistant response** (reply or critique).
+By default, the right pane follows the latest assistant response, but Studio can also:
+- browse older assistant responses via response history
+- show **Thinking (Raw)** for the currently selected response when available
+- show **Editor (Preview)** for the current editor text
 
-When response is structured critique, Studio enables additional helpers:
+When the selected response is structured critique, Studio enables additional helpers:
 - **Load critique (notes)** (`## Assessment` + `## Critiques`)
 - **Load critique (full)** (`## Assessment` + `## Critiques` + `## Document`)
 
 For non-critique responses:
 - **Load response into editor**
 
-Always available:
-- **Copy response**
+In Thinking view (when available):
+- **Load thinking into editor**
+- **Copy thinking text**
+
+Otherwise, Studio supports copying the currently viewed response text.
 
 ---
 
@@ -75,11 +81,11 @@ Rules:
 
 ## Required UI elements
 
-- Header actions: **Save As…**, **Save file** (file-backed), **Load file in editor**
-- Header view toggles: `Left: Editor (Raw|Preview)`, `Right: Response (Raw|Preview) | Editor (Preview)`
+- Header actions: **Save As…**, **Save file** (file-backed), **Load file content**
+- Header view toggles: `Left: Editor (Raw|Preview)`, `Right: Response (Raw|Preview) | Thinking (Raw) | Editor (Preview)`
 - Preview mode uses server-side `pandoc` rendering (math-aware) with plain-markdown fallback when renderer is unavailable.
 - Editor actions: **Insert/Remove annotated reply header**, **Annotations: On|Hidden**, **Strip annotations…**, **Run editor text**, **Critique editor text** (+ critique focus), **Send to pi editor**, **Copy editor text**, **Save .annotated.md**
-- Response actions include `Auto-update response: On|Off`, **Fetch latest response**, response-history browse (`Prev/Next/Last`), **Load response into editor**, and **Load response prompt into editor**
+- Response actions include `Auto-update response: On|Off`, **Fetch latest response**, response-history browse (`Prev/Next/Last`), **Load response into editor**, **Load response prompt into editor**, and thinking-aware load/copy actions when Thinking view is active
 - Source badge: `blank | last model response | file <path> | upload`
 - Response badge: `none | assistant response | assistant critique` (+ timestamp)
 - Sync badge: shown only when the editor exactly matches the currently viewed response/thinking (`In sync with response | In sync with thinking`)
@@ -89,13 +95,13 @@ Rules:
 
 ## Escaping pitfalls (implementation note)
 
-`index.ts` builds browser HTML as a TypeScript template string and embeds inline browser JavaScript. This creates multiple parse layers (TS string → HTML → JS), so incorrect escaping can break Studio boot (e.g. stuck at `Booting studio…`).
+Studio is less fragile than before because browser JS/CSS now live in extracted client files, but `index.ts` still builds the HTML shell and injects boot/theme/source values. Incorrect escaping can still break Studio boot.
 
 Rules of thumb:
-- In embedded JS string literals authored from TS template context, use `\\n` (not `\n`) for runtime newlines.
-- Escape regex backslashes for the embedding layer (`\\s`, `\\n`, `\\[`), so browser JS receives the intended regex.
-- Prefer `JSON.stringify(value)` when injecting arbitrary text into inline script.
-- After touching inline `<script>` sections in `index.ts`, do a `/studio` boot smoke test immediately.
+- Prefer `JSON.stringify(value)` when injecting arbitrary text into boot data or script-adjacent HTML.
+- Be careful with HTML attribute escaping for injected values.
+- After touching the HTML shell / boot-data wiring in `index.ts`, do a `/studio` boot smoke test immediately.
+- After touching `client/studio-client.js` or `client/studio.css`, smoke test the main workflows: boot, websocket connect/reconnect, file load, run/critique, preview, and response history.
 
 ## Acceptance criteria
 

@@ -156,6 +156,9 @@ const PDF_EXPORT_MAX_CHARS = 400_000;
 const REQUEST_BODY_MAX_BYTES = 1_000_000;
 const RESPONSE_HISTORY_LIMIT = 30;
 const UPDATE_CHECK_TIMEOUT_MS = 1800;
+const CMUX_NOTIFY_TIMEOUT_MS = 1200;
+const STUDIO_TERMINAL_NOTIFY_TITLE = "pi Studio";
+const CMUX_STUDIO_STATUS_KEY = "pi_studio";
 
 const PDF_PREAMBLE = `\\usepackage{titlesec}
 \\titleformat{\\section}{\\Large\\bfseries\\sffamily}{}{0pt}{}[\\vspace{2pt}\\titlerule]
@@ -2765,10 +2768,15 @@ ${cssVarsBlock}
   <main>
     <section id="leftPane">
       <div id="leftSectionHeader" class="section-header">
-        <select id="editorViewSelect" aria-label="Editor view mode">
-          <option value="markdown" selected>Editor (Raw)</option>
-          <option value="preview">Editor (Preview)</option>
-        </select>
+        <div class="section-header-main">
+          <select id="editorViewSelect" aria-label="Editor view mode">
+            <option value="markdown" selected>Editor (Raw)</option>
+            <option value="preview">Editor (Preview)</option>
+          </select>
+        </div>
+        <div class="section-header-actions">
+          <button id="leftFocusBtn" class="pane-focus-btn" type="button" title="Show only the editor pane. Shortcut: Cmd/Ctrl+Esc or F10.">Focus pane</button>
+        </div>
       </div>
       <div class="source-wrap">
         <div class="source-meta">
@@ -2858,6 +2866,7 @@ ${cssVarsBlock}
           </select>
         </div>
         <div class="section-header-actions">
+          <button id="rightFocusBtn" class="pane-focus-btn" type="button" title="Show only the response pane. Shortcut: Cmd/Ctrl+Esc or F10.">Focus pane</button>
           <button id="exportPdfBtn" type="button" title="Export the current right-pane preview as PDF via pandoc + xelatex.">Export right preview as PDF</button>
         </div>
       </div>
@@ -2990,6 +2999,246 @@ export default function (pi: ExtensionAPI) {
 		lastCommandCtx.ui.notify(message, level);
 	};
 
+	const getStudioTerminalNotifyMode = (): "auto" | "off" | "bell" | "cmux" | "text" => {
+		const raw = String(process.env.PI_STUDIO_TERMINAL_NOTIFY ?? "").trim().toLowerCase();
+		if (raw === "off" || raw === "none") return "off";
+		if (raw === "bell") return "bell";
+		if (raw === "cmux") return "cmux";
+		if (raw === "text" || raw === "line") return "text";
+		return "auto";
+	};
+
+	const getInteractiveTerminalStream = (): NodeJS.WriteStream | null => {
+		if (process.stderr?.isTTY) return process.stderr;
+		if (process.stdout?.isTTY) return process.stdout;
+		return null;
+	};
+
+	const isProbablyCmuxSession = (): boolean => {
+		const workspaceId = String(process.env.CMUX_WORKSPACE_ID ?? "").trim();
+		if (workspaceId) return true;
+		const termProgram = String(process.env.TERM_PROGRAM ?? "").trim().toLowerCase();
+		if (termProgram === "cmux") return true;
+		const term = String(process.env.TERM ?? "").trim().toLowerCase();
+		return term.includes("cmux");
+	};
+
+	const sanitizeTerminalNotificationText = (value: string, maxLength = 240): string => {
+		const sanitized = String(value)
+			.replace(/[\u0000-\u0008\u000b-\u001a\u001c-\u001f\u007f]+/g, " ")
+			.replace(/\u001b/g, "")
+			.replace(/[;|\r\n]+/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+		return sanitized.slice(0, maxLength);
+	};
+
+	const shouldUseCmuxTerminalIntegration = (): boolean => {
+		const mode = getStudioTerminalNotifyMode();
+		return isProbablyCmuxSession() && (mode === "auto" || mode === "cmux");
+	};
+
+	const getCmuxWorkspaceArgs = (): string[] => {
+		const workspaceId = String(process.env.CMUX_WORKSPACE_ID ?? "").trim();
+		return workspaceId ? ["--workspace", workspaceId] : [];
+	};
+
+	const runCmuxCommand = (args: string[], options?: { captureOutput?: boolean }): { ok: boolean; stdout: string } => {
+		try {
+			const env = { ...process.env };
+			delete env.CMUX_SURFACE_ID;
+			const result = spawnSync("cmux", args, {
+				stdio: options?.captureOutput ? ["ignore", "pipe", "ignore"] : "ignore",
+				encoding: options?.captureOutput ? "utf8" : undefined,
+				timeout: CMUX_NOTIFY_TIMEOUT_MS,
+				env,
+			});
+			const stdout = typeof result.stdout === "string" ? result.stdout : "";
+			return {
+				ok: !result.error && result.status === 0,
+				stdout,
+			};
+		} catch {
+			return { ok: false, stdout: "" };
+		}
+	};
+
+	const isCmuxBrowserFocusedInCallerWorkspace = (): boolean => {
+		if (!shouldUseCmuxTerminalIntegration()) return false;
+		const result = runCmuxCommand(["identify"], { captureOutput: true });
+		if (!result.ok) return false;
+		try {
+			const parsed = JSON.parse(result.stdout) as {
+				caller?: { workspace_ref?: string | null };
+				focused?: { workspace_ref?: string | null; surface_type?: string | null; is_browser_surface?: boolean | null };
+			};
+			const callerWorkspaceRef = typeof parsed.caller?.workspace_ref === "string"
+				? parsed.caller.workspace_ref.trim()
+				: "";
+			const focusedWorkspaceRef = typeof parsed.focused?.workspace_ref === "string"
+				? parsed.focused.workspace_ref.trim()
+				: "";
+			const focusedSurfaceType = typeof parsed.focused?.surface_type === "string"
+				? parsed.focused.surface_type.trim().toLowerCase()
+				: "";
+			const focusedIsBrowser = parsed.focused?.is_browser_surface === true || focusedSurfaceType === "browser";
+			return Boolean(callerWorkspaceRef && focusedWorkspaceRef && callerWorkspaceRef === focusedWorkspaceRef && focusedIsBrowser);
+		} catch {
+			return false;
+		}
+	};
+
+	const maybeClearStaleCmuxStudioNotifications = () => {
+		if (!shouldUseCmuxTerminalIntegration()) return;
+		const result = runCmuxCommand(["list-notifications"], { captureOutput: true });
+		if (!result.ok) return;
+		const output = result.stdout.trim();
+		if (!output) return;
+		const notifications = output
+			.split(/\r?\n/)
+			.map((line) => {
+				const trimmed = line.trim();
+				if (!trimmed) return null;
+				const colonIndex = trimmed.indexOf(":");
+				if (colonIndex === -1) return null;
+				const fields = trimmed.slice(colonIndex + 1).split("|");
+				if (fields.length !== 7) return null;
+				const [, , , state, title] = fields;
+				return {
+					state,
+					title,
+				};
+			});
+		if (notifications.some((item) => item === null)) return;
+		const clearable = notifications.every(
+			(item) => item && item.state === "read" && item.title === STUDIO_TERMINAL_NOTIFY_TITLE,
+		);
+		if (!clearable) return;
+		runCmuxCommand(["clear-notifications"]);
+	};
+
+	const syncCmuxStudioStatus = () => {
+		if (!shouldUseCmuxTerminalIntegration()) return;
+		const workspaceArgs = getCmuxWorkspaceArgs();
+		if (activeRequest) {
+			runCmuxCommand([
+				"set-status",
+				CMUX_STUDIO_STATUS_KEY,
+				"running…",
+				"--color",
+				"#5ea1ff",
+				...workspaceArgs,
+			]);
+			return;
+		}
+		if (compactInProgress) {
+			runCmuxCommand([
+				"set-status",
+				CMUX_STUDIO_STATUS_KEY,
+				"compacting…",
+				"--color",
+				"#5ea1ff",
+				...workspaceArgs,
+			]);
+			return;
+		}
+		runCmuxCommand(["clear-status", CMUX_STUDIO_STATUS_KEY, ...workspaceArgs]);
+	};
+
+	const emitTerminalBell = (): boolean => {
+		const stream = getInteractiveTerminalStream();
+		if (!stream) return false;
+		try {
+			stream.write("\u0007");
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	const emitTerminalTextNotification = (message: string): boolean => {
+		const stream = getInteractiveTerminalStream();
+		if (!stream) return false;
+		const line = sanitizeTerminalNotificationText(message, 400);
+		if (!line) return false;
+		try {
+			stream.write(`\n[pi Studio] ${line}\n`);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	const emitCmuxOscNotification = (message: string): boolean => {
+		const stream = getInteractiveTerminalStream();
+		if (!stream) return false;
+		const title = sanitizeTerminalNotificationText(STUDIO_TERMINAL_NOTIFY_TITLE, 80);
+		const body = sanitizeTerminalNotificationText(message, 240);
+		if (!body) return false;
+		try {
+			stream.write(`\u001b]777;notify;${title};${body}\u0007`);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	const emitCmuxCliNotification = (message: string): boolean => {
+		const body = sanitizeTerminalNotificationText(message, 240);
+		if (!body) return false;
+		return runCmuxCommand([
+			"notify",
+			"--title",
+			STUDIO_TERMINAL_NOTIFY_TITLE,
+			"--body",
+			body,
+			...getCmuxWorkspaceArgs(),
+		]).ok;
+	};
+
+	const notifyStudioTerminal = (message: string, level: "info" | "warning" | "error" = "info") => {
+		const mode = getStudioTerminalNotifyMode();
+		const hasInteractiveTerminal = Boolean(getInteractiveTerminalStream());
+		const inCmux = isProbablyCmuxSession();
+		const useCmuxIntegration = shouldUseCmuxTerminalIntegration();
+		const suppressCmuxCompletionNotification = useCmuxIntegration && isCmuxBrowserFocusedInCallerWorkspace();
+		let deliveredBy: "cmux-cli" | "cmux-osc777" | "bell" | "text" | null = null;
+
+		if (useCmuxIntegration && !suppressCmuxCompletionNotification) {
+			if (emitCmuxCliNotification(message)) {
+				deliveredBy = "cmux-cli";
+			} else if (emitCmuxOscNotification(message)) {
+				deliveredBy = "cmux-osc777";
+			}
+		}
+
+		if (!deliveredBy && !suppressCmuxCompletionNotification) {
+			if (mode === "text") {
+				if (emitTerminalTextNotification(message)) deliveredBy = "text";
+			} else if (mode === "bell") {
+				if (emitTerminalBell()) deliveredBy = "bell";
+			} else if (mode === "auto") {
+				if (emitTerminalBell()) deliveredBy = "bell";
+			}
+		}
+
+		emitDebugEvent("terminal_notification", {
+			message,
+			level,
+			mode,
+			inCmux,
+			hasInteractiveTerminal,
+			suppressCmuxCompletionNotification,
+			delivered: Boolean(deliveredBy),
+			deliveredBy,
+		});
+	};
+
+	const getStudioRequestCompletionNotification = (kind: StudioRequestKind): string => {
+		if (kind === "critique") return "Studio: critique ready.";
+		return "Studio: response ready.";
+	};
+
 	const refreshContextUsage = (
 		ctx?: { getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
 	): StudioContextUsageSnapshot => {
@@ -3002,6 +3251,7 @@ export default function (pi: ExtensionAPI) {
 	const clearCompactionState = () => {
 		compactInProgress = false;
 		compactRequestId = null;
+		syncCmuxStudioStatus();
 	};
 
 	const syncStudioResponseHistory = (entries: SessionEntry[]) => {
@@ -3157,21 +3407,33 @@ export default function (pi: ExtensionAPI) {
 		});
 	};
 
-	const clearActiveRequest = (options?: { notify?: string; level?: "info" | "warning" | "error" }) => {
+	const clearActiveRequest = (options?: {
+		notify?: string;
+		level?: "info" | "warning" | "error";
+		terminalNotify?: string;
+		terminalNotifyLevel?: "info" | "warning" | "error";
+	}) => {
 		if (!activeRequest) return;
 		const completedRequestId = activeRequest.id;
 		const completedKind = activeRequest.kind;
 		clearTimeout(activeRequest.timer);
 		activeRequest = null;
+		syncCmuxStudioStatus();
 		emitDebugEvent("clear_active_request", {
 			requestId: completedRequestId,
 			kind: completedKind,
 			notify: options?.notify ?? null,
+			terminalNotify: options?.terminalNotify ?? null,
 			agentBusy,
 		});
 		broadcastState();
 		if (options?.notify) {
 			broadcast({ type: "info", message: options.notify, level: options.level ?? "info" });
+		}
+		if (options?.terminalNotify) {
+			const terminalLevel = options.terminalNotifyLevel ?? options.level ?? "info";
+			notifyStudio(options.terminalNotify, terminalLevel);
+			notifyStudioTerminal(options.terminalNotify, terminalLevel);
 		}
 	};
 
@@ -3236,6 +3498,8 @@ export default function (pi: ExtensionAPI) {
 			startedAt: Date.now(),
 			timer,
 		};
+		maybeClearStaleCmuxStudioNotifications();
+		syncCmuxStudioStatus();
 
 		emitDebugEvent("begin_request", { requestId, kind });
 		broadcast({ type: "request_started", requestId, kind });
@@ -3488,6 +3752,8 @@ export default function (pi: ExtensionAPI) {
 
 			compactInProgress = true;
 			compactRequestId = msg.requestId;
+			maybeClearStaleCmuxStudioNotifications();
+			syncCmuxStudioStatus();
 			refreshContextUsage(compactCtx);
 			emitDebugEvent("compact_start", {
 				requestId: msg.requestId,
@@ -4322,7 +4588,10 @@ export default function (pi: ExtensionAPI) {
 				responseHistory: studioResponseHistory,
 			});
 			broadcastResponseHistory();
-			clearActiveRequest();
+			clearActiveRequest({
+				terminalNotify: getStudioRequestCompletionNotification(kind),
+				terminalNotifyLevel: "info",
+			});
 			return;
 		}
 
