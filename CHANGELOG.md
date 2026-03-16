@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.15] — 2026-03-16
+
+### Added
+- Per-pane **Focus pane** controls for both the editor and response panes, matching the current Ghostty/cmux split-browser workflow more directly.
+- cmux-aware Studio completion notifications with safer workspace-level targeting, a running/compacting sidebar status pill, stale-notification clearing when a new Studio request starts, and suppression when the Studio browser surface is already focused.
+
+### Fixed
+- Active **Focus pane** buttons now keep their accent-coloured hover state instead of switching to a dark hover style.
+- PDF export now defines the LaTeX `Highlighting` environment when Pandoc has not already created it, fixing exports that previously failed with `Environment Highlighting undefined`.
+
 ## [0.5.14] — 2026-03-15
 
 ### Fixed
