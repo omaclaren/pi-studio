@@ -171,7 +171,13 @@ const PDF_PREAMBLE = `\\usepackage{titlesec}
 \\setlist[enumerate]{nosep, leftmargin=1.5em}
 \\usepackage{parskip}
 \\usepackage{fvextra}
-\\RecustomVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere}
+\\makeatletter
+\\@ifundefined{Highlighting}{%
+  \\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere}%
+}{%
+  \\RecustomVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere}%
+}
+\\makeatother
 `;
 
 type StudioThemeMode = "dark" | "light";
