@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.18] — 2026-03-17
+
+### Fixed
+- cmux sidebar Studio status pills now use a darker blue in light mode, making `running…` / `compacting…` much easier to read.
+- The annotated-reply header wording in Studio now says `user annotation syntax: [an: note]`, matching the intended user-guidance semantics more clearly.
+
 ## [0.5.17] — 2026-03-17
 
 ### Fixed
