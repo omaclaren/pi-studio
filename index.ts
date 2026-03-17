@@ -160,6 +160,8 @@ const UPDATE_CHECK_TIMEOUT_MS = 1800;
 const CMUX_NOTIFY_TIMEOUT_MS = 1200;
 const STUDIO_TERMINAL_NOTIFY_TITLE = "pi Studio";
 const CMUX_STUDIO_STATUS_KEY = "pi_studio";
+const CMUX_STUDIO_STATUS_COLOR_DARK = "#5ea1ff";
+const CMUX_STUDIO_STATUS_COLOR_LIGHT = "#0047ab";
 
 const PDF_PREAMBLE = `\\usepackage{titlesec}
 \\titleformat{\\section}{\\Large\\bfseries\\sffamily}{}{0pt}{}[\\vspace{2pt}\\titlerule]
@@ -3139,16 +3141,22 @@ export default function (pi: ExtensionAPI) {
 		runCmuxCommand(["clear-notifications"]);
 	};
 
+	const getCmuxStudioStatusColor = (): string => {
+		const mode = getStudioThemeMode(lastCommandCtx?.ui?.theme);
+		return mode === "light" ? CMUX_STUDIO_STATUS_COLOR_LIGHT : CMUX_STUDIO_STATUS_COLOR_DARK;
+	};
+
 	const syncCmuxStudioStatus = () => {
 		if (!shouldUseCmuxTerminalIntegration()) return;
 		const workspaceArgs = getCmuxWorkspaceArgs();
+		const statusColor = getCmuxStudioStatusColor();
 		if (activeRequest) {
 			runCmuxCommand([
 				"set-status",
 				CMUX_STUDIO_STATUS_KEY,
 				"running…",
 				"--color",
-				"#5ea1ff",
+				statusColor,
 				...workspaceArgs,
 			]);
 			return;
@@ -3159,7 +3167,7 @@ export default function (pi: ExtensionAPI) {
 				CMUX_STUDIO_STATUS_KEY,
 				"compacting…",
 				"--color",
-				"#5ea1ff",
+				statusColor,
 				...workspaceArgs,
 			]);
 			return;
@@ -4392,6 +4400,7 @@ export default function (pi: ExtensionAPI) {
 				const json = JSON.stringify(vars);
 				if (json !== lastThemeVarsJson) {
 					lastThemeVarsJson = json;
+					syncCmuxStudioStatus();
 					for (const client of serverState.clients) {
 						sendToClient(client, { type: "theme_update", vars });
 					}
