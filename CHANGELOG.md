@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.16] — 2026-03-17
+
+### Fixed
+- Response-history prompt loading now keeps the correct generating prompt for both Studio editor-sent requests and prompts entered directly in the terminal, instead of sometimes reusing stale editor text.
+
 ## [0.5.15] — 2026-03-16
 
 ### Added
