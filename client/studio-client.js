@@ -3364,7 +3364,7 @@
         const sourceDescriptor = describeSourceForAnnotation();
         let header = "annotated reply below:\n";
         header += "original source: " + sourceDescriptor + "\n";
-        header += "annotation syntax: [an: your note]\n";
+        header += "user annotation syntax: [an: note]\n";
         header += "precedence: later messages supersede these annotations unless user explicitly references them\n\n---\n\n";
         return header;
       }
