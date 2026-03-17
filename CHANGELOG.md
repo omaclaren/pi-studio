@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.17] — 2026-03-17
+
+### Fixed
+- Studio preview and PDF rendering now accept Markdown lists without a preceding blank line, so common model output like `What I read:\n- item` renders as a real list instead of collapsing into a paragraph.
+
 ## [0.5.16] — 2026-03-17
 
 ### Fixed
