@@ -2952,6 +2952,7 @@ export default function (pi: ExtensionAPI) {
 	let lastCommandCtx: ExtensionCommandContext | null = null;
 	let lastThemeVarsJson = "";
 	let suppressedStudioResponse: { requestId: string; kind: StudioRequestKind } | null = null;
+	let pendingStudioCompletionKind: StudioRequestKind | null = null;
 	let agentBusy = false;
 	let terminalActivityPhase: TerminalActivityPhase = "idle";
 	let terminalActivityToolName: string | null = null;
@@ -3150,7 +3151,7 @@ export default function (pi: ExtensionAPI) {
 		if (!shouldUseCmuxTerminalIntegration()) return;
 		const workspaceArgs = getCmuxWorkspaceArgs();
 		const statusColor = getCmuxStudioStatusColor();
-		if (activeRequest) {
+		if (activeRequest || (pendingStudioCompletionKind && agentBusy)) {
 			runCmuxCommand([
 				"set-status",
 				CMUX_STUDIO_STATUS_KEY,
@@ -3267,6 +3268,23 @@ export default function (pi: ExtensionAPI) {
 	const getStudioRequestCompletionNotification = (kind: StudioRequestKind): string => {
 		if (kind === "critique") return "Studio: critique ready.";
 		return "Studio: response ready.";
+	};
+
+	const clearPendingStudioCompletion = () => {
+		if (!pendingStudioCompletionKind) return;
+		pendingStudioCompletionKind = null;
+		syncCmuxStudioStatus();
+	};
+
+	const flushPendingStudioCompletionNotification = () => {
+		if (!pendingStudioCompletionKind) return;
+		const kind = pendingStudioCompletionKind;
+		pendingStudioCompletionKind = null;
+		syncCmuxStudioStatus();
+		const message = getStudioRequestCompletionNotification(kind);
+		emitDebugEvent("studio_completion_notification", { kind });
+		notifyStudio(message, "info");
+		notifyStudioTerminal(message, "info");
 	};
 
 	const refreshContextUsage = (
@@ -4418,6 +4436,7 @@ export default function (pi: ExtensionAPI) {
 	const stopServer = async () => {
 		if (!serverState) return;
 		clearActiveRequest();
+		clearPendingStudioCompletion();
 		clearCompactionState();
 		closeAllClients(1001, "Server shutting down");
 
@@ -4449,6 +4468,7 @@ export default function (pi: ExtensionAPI) {
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		clearCompactionState();
 		agentBusy = false;
+		clearPendingStudioCompletion();
 		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
 		refreshContextUsage(ctx);
 		emitDebugEvent("session_start", {
@@ -4467,6 +4487,7 @@ export default function (pi: ExtensionAPI) {
 		lastCommandCtx = null;
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		agentBusy = false;
+		clearPendingStudioCompletion();
 		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
 		refreshContextUsage(ctx);
 		emitDebugEvent("session_switch", {
@@ -4627,10 +4648,8 @@ export default function (pi: ExtensionAPI) {
 				responseHistory: studioResponseHistory,
 			});
 			broadcastResponseHistory();
-			clearActiveRequest({
-				terminalNotify: getStudioRequestCompletionNotification(kind),
-				terminalNotifyLevel: "info",
-			});
+			pendingStudioCompletionKind = kind;
+			clearActiveRequest();
 			return;
 		}
 
@@ -4667,6 +4686,7 @@ export default function (pi: ExtensionAPI) {
 			activeRequestKind: activeRequest?.kind ?? null,
 			suppressedRequestId: suppressedStudioResponse?.requestId ?? null,
 			suppressedRequestKind: suppressedStudioResponse?.kind ?? null,
+			pendingCompletionKind: pendingStudioCompletionKind,
 		});
 		setTerminalActivity("idle");
 		if (activeRequest) {
@@ -4677,6 +4697,9 @@ export default function (pi: ExtensionAPI) {
 				message: "Request ended without a complete assistant response.",
 			});
 			clearActiveRequest();
+			clearPendingStudioCompletion();
+		} else {
+			flushPendingStudioCompletionNotification();
 		}
 		suppressedStudioResponse = null;
 	});
@@ -4684,6 +4707,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async () => {
 		lastCommandCtx = null;
 		agentBusy = false;
+		clearPendingStudioCompletion();
 		clearCompactionState();
 		setTerminalActivity("idle");
 		await stopServer();
