@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.19] — 2026-03-19
+
+### Fixed
+- Studio now waits until `agent_end` before emitting the terminal/cmux “response ready” notification for completed requests, and it keeps the cmux `running…` status pill visible until that same turn fully finishes.
+
 ## [0.5.18] — 2026-03-17
 
 ### Fixed
