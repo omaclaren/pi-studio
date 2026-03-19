@@ -758,9 +758,14 @@
       max-width: 100%;
     }
 
+    .rendered-markdown math {
+      font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", "STIXGeneral", serif;
+    }
+
     .rendered-markdown math[display="block"] {
       display: block;
       margin: 1em 0;
+      text-align: center;
       overflow-x: auto;
       overflow-y: hidden;
     }

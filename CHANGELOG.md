@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- LaTeX preview/PDF export now runs pandoc from the resolved source/working directory, so project-relative `\input{...}` files, shared macros, and similar local assets resolve more reliably for multi-file documents.
+- LaTeX preview/PDF export now also detects basic bibliography directives such as `\bibliography{...}` and `\addbibresource{...}` and passes the resolved `.bib` files to pandoc citeproc, so references show up more often in Studio without a full `latexmk` build.
+- Display-math blocks in preview are now styled to center more naturally, and the raw-editor highlight cutoff is bumped to `100_000` characters so moderately large `.tex` files still get inline syntax colouring.
+
 ## [0.5.19] — 2026-03-19
 
 ### Fixed

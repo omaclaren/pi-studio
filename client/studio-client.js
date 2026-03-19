@@ -163,7 +163,7 @@
       };
       let activePane = "left";
       let paneFocusTarget = "off";
-      const EDITOR_HIGHLIGHT_MAX_CHARS = 80_000;
+      const EDITOR_HIGHLIGHT_MAX_CHARS = 100_000;
       const EDITOR_HIGHLIGHT_STORAGE_KEY = "piStudio.editorHighlightEnabled";
       const EDITOR_LANGUAGE_STORAGE_KEY = "piStudio.editorLanguage";
       // Single source of truth: language -> file extensions (and display label)

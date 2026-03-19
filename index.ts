@@ -994,18 +994,109 @@ function buildStudioSyntheticNewFileDiff(filePath: string, content: string): str
 	return diffLines.join("\n");
 }
 
-function resolveStudioGitDiffBaseDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
+function resolveStudioBaseDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
 	const source = typeof sourcePath === "string" ? sourcePath.trim() : "";
 	if (source) {
-		return dirname(source);
+		const expanded = expandHome(source);
+		return dirname(isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded));
 	}
 
 	const resource = typeof resourceDir === "string" ? resourceDir.trim() : "";
 	if (resource) {
-		return isAbsolute(resource) ? resource : resolve(fallbackCwd, resource);
+		const expanded = expandHome(resource);
+		return isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded);
 	}
 
 	return fallbackCwd;
+}
+
+function resolveStudioGitDiffBaseDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
+	return resolveStudioBaseDir(sourcePath, resourceDir, fallbackCwd);
+}
+
+function resolveStudioPandocWorkingDir(baseDir: string | undefined): string | undefined {
+	const normalized = typeof baseDir === "string" ? baseDir.trim() : "";
+	if (!normalized) return undefined;
+	try {
+		return statSync(normalized).isDirectory() ? normalized : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function stripStudioLatexComments(text: string): string {
+	const lines = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
+	return lines.map((line) => {
+		let out = "";
+		let backslashRun = 0;
+		for (let i = 0; i < line.length; i++) {
+			const ch = line[i]!;
+			if (ch === "%" && backslashRun % 2 === 0) break;
+			out += ch;
+			if (ch === "\\") backslashRun++;
+			else backslashRun = 0;
+		}
+		return out;
+	}).join("\n");
+}
+
+function collectStudioLatexBibliographyCandidates(markdown: string): string[] {
+	const stripped = stripStudioLatexComments(markdown);
+	const candidates: string[] = [];
+	const seen = new Set<string>();
+	const pushCandidate = (raw: string) => {
+		let candidate = String(raw ?? "").trim().replace(/^file:/i, "").replace(/^['"]|['"]$/g, "");
+		if (!candidate) return;
+		if (!/\.[A-Za-z0-9]+$/.test(candidate)) candidate += ".bib";
+		if (seen.has(candidate)) return;
+		seen.add(candidate);
+		candidates.push(candidate);
+	};
+
+	for (const match of stripped.matchAll(/\\bibliography\s*\{([^}]+)\}/g)) {
+		const rawList = match[1] ?? "";
+		for (const part of rawList.split(",")) {
+			pushCandidate(part);
+		}
+	}
+
+	for (const match of stripped.matchAll(/\\addbibresource(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
+		pushCandidate(match[1] ?? "");
+	}
+
+	return candidates;
+}
+
+function resolveStudioLatexBibliographyPaths(markdown: string, baseDir: string | undefined): string[] {
+	const workingDir = resolveStudioPandocWorkingDir(baseDir);
+	if (!workingDir) return [];
+	const resolvedPaths: string[] = [];
+	const seen = new Set<string>();
+
+	for (const candidate of collectStudioLatexBibliographyCandidates(markdown)) {
+		const expanded = expandHome(candidate);
+		const resolvedPath = isAbsolute(expanded) ? expanded : resolve(workingDir, expanded);
+		try {
+			if (!statSync(resolvedPath).isFile()) continue;
+			if (seen.has(resolvedPath)) continue;
+			seen.add(resolvedPath);
+			resolvedPaths.push(resolvedPath);
+		} catch {
+			// Ignore missing bibliography files; pandoc can still render the document body.
+		}
+	}
+
+	return resolvedPaths;
+}
+
+function buildStudioPandocBibliographyArgs(markdown: string, isLatex: boolean | undefined, baseDir: string | undefined): string[] {
+	if (!isLatex) return [];
+	const bibliographyPaths = resolveStudioLatexBibliographyPaths(markdown, baseDir);
+	if (bibliographyPaths.length === 0) return [];
+	return [
+		"--citeproc",
+		...bibliographyPaths.flatMap((path) => ["--bibliography", path]),
+	];
 }
 
 function readStudioGitDiff(baseDir: string):
@@ -1593,16 +1684,18 @@ async function preprocessStudioMermaidForPdf(markdown: string, workDir: string):
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
-	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none"];
+	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
+	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
 	if (resourcePath) {
 		args.push(`--resource-path=${resourcePath}`);
 		// Embed images as data URIs so they render in the browser preview
 		args.push("--embed-resources", "--standalone");
 	}
 	const normalizedMarkdown = isLatex ? markdown : normalizeObsidianImages(normalizeMathDelimiters(markdown));
+	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
 
 	return await new Promise<string>((resolve, reject) => {
-		const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
 		const stdoutChunks: Buffer[] = [];
 		const stderrChunks: Buffer[] = [];
 		let settled = false;
@@ -1743,6 +1836,8 @@ async function renderStudioPdfWithPandoc(
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
 	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorPdfLanguage);
+	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
+	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 
 	const runPandocPdfExport = async (
 		inputFormat: string,
@@ -1766,12 +1861,13 @@ async function renderStudioPdfWithPandoc(
 			"-V", "urlcolor=blue",
 			"-V", "linkcolor=blue",
 			"--include-in-header", preamblePath,
+			...bibliographyArgs,
 		];
 		if (resourcePath) args.push(`--resource-path=${resourcePath}`);
 
 		try {
 			await new Promise<void>((resolve, reject) => {
-				const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"] });
+				const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
 				const stderrChunks: Buffer[] = [];
 				let settled = false;
 
@@ -1862,12 +1958,13 @@ async function renderStudioPdfWithPandoc(
 		"-V", "urlcolor=blue",
 		"-V", "linkcolor=blue",
 		"--include-in-header", preamblePath,
+		...bibliographyArgs,
 	];
 	if (resourcePath) args.push(`--resource-path=${resourcePath}`);
 
 	try {
 		await new Promise<void>((resolve, reject) => {
-			const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"] });
+			const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
 			const stderrChunks: Buffer[] = [];
 			let settled = false;
 
@@ -4054,7 +4151,7 @@ export default function (pi: ExtensionAPI) {
 				parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { resourceDir?: unknown }).resourceDir === "string"
 					? (parsedBody as { resourceDir: string }).resourceDir
 					: "";
-			const resourcePath = sourcePath ? dirname(sourcePath) : (userResourceDir || studioCwd || undefined);
+			const resourcePath = resolveStudioBaseDir(sourcePath || undefined, userResourceDir || undefined, studioCwd);
 			const isLatex = /\\documentclass\b|\\begin\{document\}/.test(markdown);
 			const html = await renderStudioMarkdownWithPandoc(markdown, isLatex, resourcePath);
 			respondJson(res, 200, { ok: true, html, renderer: "pandoc" });
@@ -4108,7 +4205,7 @@ export default function (pi: ExtensionAPI) {
 			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { resourceDir?: unknown }).resourceDir === "string"
 				? (parsedBody as { resourceDir: string }).resourceDir
 				: "";
-		const resourcePath = sourcePath ? dirname(sourcePath) : (userResourceDir || studioCwd || undefined);
+		const resourcePath = resolveStudioBaseDir(sourcePath || undefined, userResourceDir || undefined, studioCwd);
 		const requestedIsLatex =
 			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { isLatex?: unknown }).isLatex === "boolean"
 				? (parsedBody as { isLatex: boolean }).isLatex
