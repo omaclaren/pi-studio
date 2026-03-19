@@ -4,6 +4,10 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Citeproc-rendered LaTeX bibliographies now request a visible `References` section heading in Studio preview/PDF output.
+- The editor language dropdown is now alphabetised for quicker scanning.
+
 ## [0.5.21] — 2026-03-19
 
 ### Fixed

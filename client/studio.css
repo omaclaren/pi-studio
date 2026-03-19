@@ -569,6 +569,14 @@
       text-align: center;
       margin-bottom: 2em;
     }
+
+    .rendered-markdown #bibliography {
+      margin-bottom: 0.75em;
+    }
+
+    .rendered-markdown #refs {
+      margin-top: 0.5em;
+    }
     .rendered-markdown #title-block-header .title {
       margin-bottom: 0.25em;
     }

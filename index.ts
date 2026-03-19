@@ -1106,6 +1106,8 @@ function buildStudioPandocBibliographyArgs(markdown: string, isLatex: boolean | 
 	if (bibliographyPaths.length === 0) return [];
 	return [
 		"--citeproc",
+		"-M",
+		"reference-section-title=References",
 		...bibliographyPaths.flatMap((path) => ["--bibliography", path]),
 	];
 }
@@ -3130,32 +3132,31 @@ ${cssVarsBlock}
                 <option value="on" selected>Syntax highlight: On</option>
               </select>
               <select id="langSelect" aria-label="Highlight language">
-                <option value="markdown" selected>Lang: Markdown</option>
-                <option value="javascript">Lang: JavaScript</option>
-                <option value="typescript">Lang: TypeScript</option>
-                <option value="python">Lang: Python</option>
                 <option value="bash">Lang: Bash</option>
-                <option value="json">Lang: JSON</option>
-                <option value="rust">Lang: Rust</option>
                 <option value="c">Lang: C</option>
                 <option value="cpp">Lang: C++</option>
-                <option value="julia">Lang: Julia</option>
-                <option value="fortran">Lang: Fortran</option>
-                <option value="r">Lang: R</option>
-                <option value="matlab">Lang: MATLAB</option>
-                <option value="latex">Lang: LaTeX</option>
-                <option value="diff">Lang: Diff</option>
-                <option value="java">Lang: Java</option>
-                <option value="go">Lang: Go</option>
-                <option value="ruby">Lang: Ruby</option>
-                <option value="swift">Lang: Swift</option>
-                <option value="html">Lang: HTML</option>
                 <option value="css">Lang: CSS</option>
+                <option value="diff">Lang: Diff</option>
+                <option value="fortran">Lang: Fortran</option>
+                <option value="go">Lang: Go</option>
+                <option value="html">Lang: HTML</option>
+                <option value="java">Lang: Java</option>
+                <option value="javascript">Lang: JavaScript</option>
+                <option value="json">Lang: JSON</option>
+                <option value="julia">Lang: Julia</option>
+                <option value="latex">Lang: LaTeX</option>
+                <option value="lua">Lang: Lua</option>
+                <option value="markdown" selected>Lang: Markdown</option>
+                <option value="matlab">Lang: MATLAB</option>
+                <option value="text">Lang: Plain Text</option>
+                <option value="python">Lang: Python</option>
+                <option value="r">Lang: R</option>
+                <option value="rust">Lang: Rust</option>
+                <option value="swift">Lang: Swift</option>
+                <option value="toml">Lang: TOML</option>
+                <option value="typescript">Lang: TypeScript</option>
                 <option value="xml">Lang: XML</option>
                 <option value="yaml">Lang: YAML</option>
-                <option value="toml">Lang: TOML</option>
-                <option value="lua">Lang: Lua</option>
-                <option value="text">Lang: Plain Text</option>
               </select>
             </div>
           </div>
