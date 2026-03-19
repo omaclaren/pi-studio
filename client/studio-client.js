@@ -1351,6 +1351,8 @@
 
         let response;
         try {
+          const effectivePath = getEffectiveSavePath();
+          const sourcePath = effectivePath || sourceState.path || "";
           response = await fetch("/render-preview?token=" + encodeURIComponent(token), {
             method: "POST",
             headers: {
@@ -1358,8 +1360,8 @@
             },
             body: JSON.stringify({
               markdown: String(markdown || ""),
-              sourcePath: sourceState.path || "",
-              resourceDir: (!sourceState.path && resourceDirInput) ? resourceDirInput.value.trim() : "",
+              sourcePath: sourcePath,
+              resourceDir: (!sourcePath && resourceDirInput) ? resourceDirInput.value.trim() : "",
             }),
             signal: controller ? controller.signal : undefined,
           });
@@ -1444,16 +1446,17 @@
           return;
         }
 
-        const sourcePath = sourceState.path || "";
-        const resourceDir = (!sourceState.path && resourceDirInput) ? resourceDirInput.value.trim() : "";
+        const effectivePath = getEffectiveSavePath();
+        const sourcePath = effectivePath || sourceState.path || "";
+        const resourceDir = (!sourcePath && resourceDirInput) ? resourceDirInput.value.trim() : "";
         const isEditorPreview = rightView === "editor-preview";
         const editorPdfLanguage = isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "";
         const isLatex = isEditorPreview
           ? editorPdfLanguage === "latex"
           : /\\documentclass\b|\\begin\{document\}/.test(markdown);
         let filenameHint = isEditorPreview ? "studio-editor-preview.pdf" : "studio-response-preview.pdf";
-        if (sourceState.path) {
-          const baseName = sourceState.path.split(/[\\/]/).pop() || "studio";
+        if (sourcePath) {
+          const baseName = sourcePath.split(/[\\/]/).pop() || "studio";
           const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
           filenameHint = stem + "-preview.pdf";
         }
@@ -4077,7 +4080,7 @@
           const text = typeof reader.result === "string" ? reader.result : "";
           setEditorText(text, { preserveScroll: false, preserveSelection: false });
           setSourceState({
-            source: "blank",
+            source: "upload",
             label: "upload: " + file.name,
             path: null,
           });

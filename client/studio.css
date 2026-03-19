@@ -762,6 +762,33 @@
       font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", "STIXGeneral", serif;
     }
 
+    .rendered-markdown .studio-display-equation {
+      position: relative;
+      margin: 1em 0;
+    }
+
+    .rendered-markdown .studio-display-equation-body {
+      padding-right: 4.5em;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .rendered-markdown .studio-display-equation-body math[display="block"] {
+      margin: 0;
+    }
+
+    .rendered-markdown .studio-display-equation-number {
+      position: absolute;
+      top: 50%;
+      right: 0;
+      transform: translateY(-50%);
+      color: var(--muted);
+      font-size: 0.95em;
+      line-height: 1;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
     .rendered-markdown math[display="block"] {
       display: block;
       margin: 1em 0;

@@ -1110,6 +1110,160 @@ function buildStudioPandocBibliographyArgs(markdown: string, isLatex: boolean | 
 	];
 }
 
+function parseStudioAuxTopLevelGroups(input: string): string[] {
+	const groups: string[] = [];
+	let i = 0;
+	while (i < input.length) {
+		while (i < input.length && /\s/.test(input[i]!)) i++;
+		if (i >= input.length) break;
+		if (input[i] !== "{") break;
+		i++;
+		let depth = 1;
+		let current = "";
+		while (i < input.length && depth > 0) {
+			const ch = input[i]!;
+			i++;
+			if (ch === "{") {
+				depth++;
+				current += ch;
+				continue;
+			}
+			if (ch === "}") {
+				depth--;
+				if (depth > 0) current += ch;
+				continue;
+			}
+			current += ch;
+		}
+		groups.push(current);
+	}
+	return groups;
+}
+
+function resolveStudioLatexAuxPath(sourcePath: string | undefined, baseDir: string | undefined): string | undefined {
+	const source = typeof sourcePath === "string" ? sourcePath.trim() : "";
+	const workingDir = resolveStudioPandocWorkingDir(baseDir);
+	if (!source) return undefined;
+	const expanded = expandHome(source);
+	const resolvedSource = isAbsolute(expanded)
+		? expanded
+		: resolve(workingDir || process.cwd(), expanded);
+
+	if (!/\.(tex|latex)$/i.test(resolvedSource)) return undefined;
+	const auxPath = resolvedSource.replace(/\.[^.]+$/i, ".aux");
+	try {
+		return statSync(auxPath).isFile() ? auxPath : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function readStudioLatexAuxLabels(sourcePath: string | undefined, baseDir: string | undefined): Map<string, { number: string; kind: string }> {
+	const auxPath = resolveStudioLatexAuxPath(sourcePath, baseDir);
+	const labels = new Map<string, { number: string; kind: string }>();
+	if (!auxPath) return labels;
+
+	let text = "";
+	try {
+		text = readFileSync(auxPath, "utf-8");
+	} catch {
+		return labels;
+	}
+
+	for (const line of text.split(/\r?\n/)) {
+		const match = line.match(/^\\newlabel\{([^}]+)\}\{(.*)\}$/);
+		if (!match) continue;
+		const label = match[1] ?? "";
+		if (!label || label.endsWith("@cref")) continue;
+		const groups = parseStudioAuxTopLevelGroups(match[2] ?? "");
+		if (groups.length === 0) continue;
+		const number = String(groups[0] ?? "").trim();
+		if (!number) continue;
+		const rawKind = String(groups[3] ?? "").trim();
+		const kind = rawKind.split(".")[0] || (label.startsWith("eq:") ? "equation" : label.startsWith("fig:") ? "figure" : "ref");
+		labels.set(label, { number, kind });
+	}
+
+	return labels;
+}
+
+function formatStudioLatexReference(label: string, referenceType: "eqref" | "ref" | "autoref", labels: Map<string, { number: string; kind: string }>): string | null {
+	const entry = labels.get(label);
+	if (!entry) return null;
+	if (referenceType === "eqref") return `(${entry.number})`;
+	if (referenceType === "autoref") {
+		if (entry.kind === "equation") return `Equation ${entry.number}`;
+		if (entry.kind === "figure") return `Figure ${entry.number}`;
+		if (entry.kind === "section" || entry.kind === "subsection" || entry.kind === "subsubsection") return `Section ${entry.number}`;
+		if (entry.kind === "algorithm") return `Algorithm ${entry.number}`;
+	}
+	return entry.number;
+}
+
+function preprocessStudioLatexReferences(markdown: string, sourcePath: string | undefined, baseDir: string | undefined): string {
+	const labels = readStudioLatexAuxLabels(sourcePath, baseDir);
+	if (labels.size === 0) return markdown;
+	let transformed = String(markdown ?? "");
+	transformed = transformed.replace(/\\eqref\s*\{([^}]+)\}/g, (match, label) => formatStudioLatexReference(String(label || "").trim(), "eqref", labels) ?? match);
+	transformed = transformed.replace(/\\autoref\s*\{([^}]+)\}/g, (match, label) => formatStudioLatexReference(String(label || "").trim(), "autoref", labels) ?? match);
+	transformed = transformed.replace(/\\ref\s*\{([^}]+)\}/g, (match, label) => formatStudioLatexReference(String(label || "").trim(), "ref", labels) ?? match);
+	return transformed;
+}
+
+function escapeStudioHtmlText(text: string): string {
+	return String(text ?? "")
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+
+function decorateStudioLatexRenderedHtml(html: string, sourcePath: string | undefined, baseDir: string | undefined): string {
+	const labels = readStudioLatexAuxLabels(sourcePath, baseDir);
+	if (labels.size === 0) return html;
+	let transformed = String(html ?? "");
+
+	transformed = transformed.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/g, (match, attrs) => {
+		const typeMatch = String(attrs ?? "").match(/\bdata-reference-type="([^"]+)"/);
+		const labelMatch = String(attrs ?? "").match(/\bdata-reference="([^"]+)"/);
+		if (!typeMatch || !labelMatch) return match;
+		const referenceTypeRaw = String(typeMatch[1] ?? "").trim();
+		const label = String(labelMatch[1] ?? "").trim();
+		const referenceType =
+			referenceTypeRaw === "eqref" || referenceTypeRaw === "autoref" || referenceTypeRaw === "ref"
+				? referenceTypeRaw
+				: null;
+		if (!referenceType || !label) return match;
+		const formatted = formatStudioLatexReference(label, referenceType, labels);
+		if (!formatted) return match;
+		return `<a${attrs}>${escapeStudioHtmlText(formatted)}</a>`;
+	});
+
+	transformed = transformed.replace(/<math\b[^>]*display="block"[^>]*>[\s\S]*?<\/math>/g, (block) => {
+		if (/studio-display-equation/.test(block)) return block;
+		const labelMatch = block.match(/\\label\s*\{([^}]+)\}/);
+		if (!labelMatch) return block;
+		const label = String(labelMatch[1] ?? "").trim();
+		if (!label) return block;
+		const formatted = formatStudioLatexReference(label, "eqref", labels);
+		if (!formatted) return block;
+		return `<div class="studio-display-equation"><div class="studio-display-equation-body">${block}</div><div class="studio-display-equation-number">${escapeStudioHtmlText(formatted)}</div></div>`;
+	});
+
+	return transformed;
+}
+
+function injectStudioLatexEquationTags(markdown: string, sourcePath: string | undefined, baseDir: string | undefined): string {
+	const labels = readStudioLatexAuxLabels(sourcePath, baseDir);
+	if (labels.size === 0) return markdown;
+	return String(markdown ?? "").replace(/\\label\s*\{([^}]+)\}/g, (match, label) => {
+		const entry = labels.get(String(label || "").trim());
+		if (!entry || entry.kind !== "equation") return match;
+		return `\\tag{${entry.number}}\\label{${String(label || "").trim()}}`;
+	});
+}
+
 function readStudioGitDiff(baseDir: string):
 	| { ok: true; text: string; label: string }
 	| { ok: false; level: "info" | "warning" | "error"; message: string } {
@@ -1692,17 +1846,18 @@ async function preprocessStudioMermaidForPdf(markdown: string, workDir: string):
 	};
 }
 
-async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string): Promise<string> {
+async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
+	const sourceWithResolvedRefs = isLatex ? preprocessStudioLatexReferences(markdown, sourcePath, resourcePath) : markdown;
 	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
-	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
+	const bibliographyArgs = buildStudioPandocBibliographyArgs(sourceWithResolvedRefs, isLatex, resourcePath);
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
 	if (resourcePath) {
 		args.push(`--resource-path=${resourcePath}`);
 		// Embed images as data URIs so they render in the browser preview
 		args.push("--embed-resources", "--standalone");
 	}
-	const normalizedMarkdown = isLatex ? markdown : normalizeObsidianImages(normalizeMathDelimiters(markdown));
+	const normalizedMarkdown = isLatex ? sourceWithResolvedRefs : normalizeObsidianImages(normalizeMathDelimiters(sourceWithResolvedRefs));
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
 
 	return await new Promise<string>((resolve, reject) => {
@@ -1747,6 +1902,9 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 				if (resourcePath) {
 					const bodyMatch = renderedHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
 					if (bodyMatch) renderedHtml = bodyMatch[1];
+				}
+				if (isLatex) {
+					renderedHtml = decorateStudioLatexRenderedHtml(renderedHtml, sourcePath, resourcePath);
 				}
 				succeed(stripMathMlAnnotationTags(renderedHtml));
 				return;
@@ -1843,12 +2001,16 @@ async function renderStudioPdfWithPandoc(
 	isLatex?: boolean,
 	resourcePath?: string,
 	editorPdfLanguage?: string,
+	sourcePath?: string,
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
-	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorPdfLanguage);
+	const sourceWithResolvedRefs = isLatex
+		? injectStudioLatexEquationTags(preprocessStudioLatexReferences(markdown, sourcePath, resourcePath), sourcePath, resourcePath)
+		: markdown;
+	const effectiveEditorLanguage = inferStudioPdfLanguage(sourceWithResolvedRefs, editorPdfLanguage);
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
-	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
+	const bibliographyArgs = buildStudioPandocBibliographyArgs(sourceWithResolvedRefs, isLatex, resourcePath);
 
 	const runPandocPdfExport = async (
 		inputFormat: string,
@@ -1945,7 +2107,7 @@ async function renderStudioPdfWithPandoc(
 	const inputFormat = isLatex
 		? "latex"
 		: "markdown+lists_without_preceding_blankline+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris+superscript+subscript-raw_html";
-	const normalizedMarkdown = prepareStudioPdfMarkdown(markdown, isLatex, effectiveEditorLanguage);
+	const normalizedMarkdown = prepareStudioPdfMarkdown(sourceWithResolvedRefs, isLatex, effectiveEditorLanguage);
 
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
 	const preamblePath = join(tempDir, "_pdf_preamble.tex");
@@ -4280,7 +4442,7 @@ export default function (pi: ExtensionAPI) {
 					: "";
 			const resourcePath = resolveStudioBaseDir(sourcePath || undefined, userResourceDir || undefined, studioCwd);
 			const isLatex = /\\documentclass\b|\\begin\{document\}/.test(markdown);
-			const html = await renderStudioMarkdownWithPandoc(markdown, isLatex, resourcePath);
+			const html = await renderStudioMarkdownWithPandoc(markdown, isLatex, resourcePath, sourcePath || undefined);
 			respondJson(res, 200, { ok: true, html, renderer: "pandoc" });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -4354,7 +4516,7 @@ export default function (pi: ExtensionAPI) {
 		const filename = sanitizePdfFilename(requestedFilename || (isLatex ? "studio-latex-preview.pdf" : "studio-preview.pdf"));
 
 		try {
-			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath, editorPdfLanguage);
+			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath, editorPdfLanguage, sourcePath || undefined);
 			const exportId = storePreparedPdfExport(pdf, filename, warning);
 			const token = serverState?.token ?? "";
 			let openedExternal = false;
