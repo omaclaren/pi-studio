@@ -56,6 +56,15 @@ interface StudioContextUsageSnapshot {
 	percent: number | null;
 }
 
+interface PreparedStudioPdfExport {
+	pdf: Buffer;
+	filename: string;
+	warning?: string;
+	createdAt: number;
+	filePath?: string;
+	tempDirPath?: string;
+}
+
 interface InitialStudioDocument {
 	text: string;
 	label: string;
@@ -158,6 +167,8 @@ const REQUEST_BODY_MAX_BYTES = 1_000_000;
 const RESPONSE_HISTORY_LIMIT = 30;
 const UPDATE_CHECK_TIMEOUT_MS = 1800;
 const CMUX_NOTIFY_TIMEOUT_MS = 1200;
+const PREPARED_PDF_EXPORT_TTL_MS = 5 * 60 * 1000;
+const MAX_PREPARED_PDF_EXPORTS = 8;
 const STUDIO_TERMINAL_NOTIFY_TITLE = "pi Studio";
 const CMUX_STUDIO_STATUS_KEY = "pi_studio";
 const CMUX_STUDIO_STATUS_COLOR_DARK = "#5ea1ff";
@@ -2095,6 +2106,27 @@ function openUrlInDefaultBrowser(url: string): Promise<void> {
 	});
 }
 
+function openPathInDefaultViewer(path: string): Promise<void> {
+	const openCommand =
+		process.platform === "darwin"
+			? { command: "open", args: [path] }
+			: process.platform === "win32"
+				? { command: "cmd", args: ["/c", "start", "", path] }
+				: { command: "xdg-open", args: [path] };
+
+	return new Promise<void>((resolve, reject) => {
+		const child = spawn(openCommand.command, openCommand.args, {
+			stdio: "ignore",
+			detached: true,
+		});
+		child.once("error", reject);
+		child.once("spawn", () => {
+			child.unref();
+			resolve();
+		});
+	});
+}
+
 function detectLensFromText(text: string): Lens {
 	const lines = text.split("\n");
 	const fencedCodeBlocks = (text.match(/```[\w-]*\n[\s\S]*?```/g) ?? []).length;
@@ -3044,6 +3076,7 @@ export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
 	let activeRequest: ActiveStudioRequest | null = null;
 	let lastStudioResponse: LastStudioResponse | null = null;
+	let preparedPdfExports = new Map<string, PreparedStudioPdfExport>();
 	let initialStudioDocument: InitialStudioDocument | null = null;
 	let studioCwd = process.cwd();
 	let lastCommandCtx: ExtensionCommandContext | null = null;
@@ -4105,6 +4138,100 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const disposePreparedPdfExport = (entry: PreparedStudioPdfExport | null | undefined) => {
+		if (!entry?.tempDirPath) return;
+		void rm(entry.tempDirPath, { recursive: true, force: true }).catch(() => undefined);
+	};
+
+	const clearPreparedPdfExports = () => {
+		for (const entry of preparedPdfExports.values()) {
+			disposePreparedPdfExport(entry);
+		}
+		preparedPdfExports.clear();
+	};
+
+	const prunePreparedPdfExports = () => {
+		const now = Date.now();
+		for (const [id, entry] of preparedPdfExports) {
+			if (entry.createdAt + PREPARED_PDF_EXPORT_TTL_MS <= now) {
+				preparedPdfExports.delete(id);
+				disposePreparedPdfExport(entry);
+			}
+		}
+		while (preparedPdfExports.size > MAX_PREPARED_PDF_EXPORTS) {
+			const oldestKey = preparedPdfExports.keys().next().value;
+			if (!oldestKey) break;
+			const oldestEntry = preparedPdfExports.get(oldestKey);
+			preparedPdfExports.delete(oldestKey);
+			disposePreparedPdfExport(oldestEntry);
+		}
+	};
+
+	const storePreparedPdfExport = (pdf: Buffer, filename: string, warning?: string): string => {
+		prunePreparedPdfExports();
+		const exportId = randomUUID();
+		preparedPdfExports.set(exportId, {
+			pdf,
+			filename,
+			warning,
+			createdAt: Date.now(),
+		});
+		return exportId;
+	};
+
+	const ensurePreparedPdfExportFile = async (exportId: string): Promise<PreparedStudioPdfExport | null> => {
+		prunePreparedPdfExports();
+		const entry = preparedPdfExports.get(exportId);
+		if (!entry) return null;
+		if (entry.filePath && entry.tempDirPath) return entry;
+
+		const tempDirPath = join(tmpdir(), `pi-studio-prepared-pdf-${Date.now()}-${randomUUID()}`);
+		const filePath = join(tempDirPath, sanitizePdfFilename(entry.filename));
+		await mkdir(tempDirPath, { recursive: true });
+		await writeFile(filePath, entry.pdf);
+		entry.tempDirPath = tempDirPath;
+		entry.filePath = filePath;
+		preparedPdfExports.set(exportId, entry);
+		return entry;
+	};
+
+	const getPreparedPdfExport = (exportId: string): PreparedStudioPdfExport | null => {
+		prunePreparedPdfExports();
+		return preparedPdfExports.get(exportId) ?? null;
+	};
+
+	const handlePreparedPdfDownloadRequest = (requestUrl: URL, res: ServerResponse) => {
+		const exportId = requestUrl.searchParams.get("id") ?? "";
+		if (!exportId) {
+			respondText(res, 400, "Missing PDF export id.");
+			return;
+		}
+
+		const prepared = getPreparedPdfExport(exportId);
+		if (!prepared) {
+			respondText(res, 404, "PDF export is no longer available. Re-export the document.");
+			return;
+		}
+
+		const safeAsciiName = prepared.filename
+			.replace(/[\x00-\x1f\x7f]/g, "")
+			.replace(/[;"\\]/g, "_")
+			.replace(/\s+/g, " ")
+			.trim() || "studio-preview.pdf";
+
+		const headers: Record<string, string> = {
+			"Content-Type": "application/pdf",
+			"Cache-Control": "no-store",
+			"X-Content-Type-Options": "nosniff",
+			"Content-Disposition": `inline; filename="${safeAsciiName}"; filename*=UTF-8''${encodeURIComponent(prepared.filename)}`,
+			"Content-Length": String(prepared.pdf.length),
+		};
+		if (prepared.warning) headers["X-Pi-Studio-Export-Warning"] = prepared.warning;
+
+		res.writeHead(200, headers);
+		res.end(prepared.pdf);
+	};
+
 	const handleRenderPreviewRequest = async (req: IncomingMessage, res: ServerResponse) => {
 		let rawBody = "";
 		try {
@@ -4228,23 +4355,28 @@ export default function (pi: ExtensionAPI) {
 
 		try {
 			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath, editorPdfLanguage);
-			const safeAsciiName = filename
-				.replace(/[\x00-\x1f\x7f]/g, "")
-				.replace(/[;"\\]/g, "_")
-				.replace(/\s+/g, " ")
-				.trim() || "studio-preview.pdf";
-
-			const headers: Record<string, string> = {
-				"Content-Type": "application/pdf",
-				"Cache-Control": "no-store",
-				"X-Content-Type-Options": "nosniff",
-				"Content-Disposition": `attachment; filename="${safeAsciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
-				"Content-Length": String(pdf.length),
-			};
-			if (warning) headers["X-Pi-Studio-Export-Warning"] = warning;
-
-			res.writeHead(200, headers);
-			res.end(pdf);
+			const exportId = storePreparedPdfExport(pdf, filename, warning);
+			const token = serverState?.token ?? "";
+			let openedExternal = false;
+			let openError: string | null = null;
+			try {
+				const prepared = await ensurePreparedPdfExportFile(exportId);
+				if (!prepared?.filePath) {
+					throw new Error("Prepared PDF file was not available for external open.");
+				}
+				await openPathInDefaultViewer(prepared.filePath);
+				openedExternal = true;
+			} catch (viewerError) {
+				openError = viewerError instanceof Error ? viewerError.message : String(viewerError);
+			}
+			respondJson(res, 200, {
+				ok: true,
+				filename,
+				warning: warning ?? null,
+				openedExternal,
+				openError,
+				downloadUrl: `/export-pdf?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}`,
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			respondJson(res, 500, { ok: false, error: `PDF export failed: ${message}` });
@@ -4361,14 +4493,23 @@ export default function (pi: ExtensionAPI) {
 		if (requestUrl.pathname === "/export-pdf") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
-				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				const method = (req.method ?? "GET").toUpperCase();
+				if (method === "GET") {
+					respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
+				} else {
+					respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				}
 				return;
 			}
 
 			const method = (req.method ?? "GET").toUpperCase();
+			if (method === "GET") {
+				handlePreparedPdfDownloadRequest(requestUrl, res);
+				return;
+			}
 			if (method !== "POST") {
-				res.setHeader("Allow", "POST");
-				respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+				res.setHeader("Allow", "GET, POST");
+				respondJson(res, 405, { ok: false, error: "Method not allowed. Use GET or POST." });
 				return;
 			}
 
@@ -4534,6 +4675,7 @@ export default function (pi: ExtensionAPI) {
 		if (!serverState) return;
 		clearActiveRequest();
 		clearPendingStudioCompletion();
+		clearPreparedPdfExports();
 		clearCompactionState();
 		closeAllClients(1001, "Server shutting down");
 
@@ -4552,6 +4694,7 @@ export default function (pi: ExtensionAPI) {
 	const rotateToken = () => {
 		if (!serverState) return;
 		serverState.token = createSessionToken();
+		clearPreparedPdfExports();
 		closeAllClients(4001, "Session invalidated");
 		broadcastState();
 	};
@@ -4566,6 +4709,7 @@ export default function (pi: ExtensionAPI) {
 		clearCompactionState();
 		agentBusy = false;
 		clearPendingStudioCompletion();
+		clearPreparedPdfExports();
 		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
 		refreshContextUsage(ctx);
 		emitDebugEvent("session_start", {
@@ -4585,6 +4729,7 @@ export default function (pi: ExtensionAPI) {
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		agentBusy = false;
 		clearPendingStudioCompletion();
+		clearPreparedPdfExports();
 		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
 		refreshContextUsage(ctx);
 		emitDebugEvent("session_switch", {
@@ -4805,6 +4950,7 @@ export default function (pi: ExtensionAPI) {
 		lastCommandCtx = null;
 		agentBusy = false;
 		clearPendingStudioCompletion();
+		clearPreparedPdfExports();
 		clearCompactionState();
 		setTerminalActivity("idle");
 		await stopServer();

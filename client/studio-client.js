@@ -1478,8 +1478,8 @@
             }),
           });
 
+          const contentType = String(response.headers.get("content-type") || "").toLowerCase();
           if (!response.ok) {
-            const contentType = String(response.headers.get("content-type") || "").toLowerCase();
             let message = "PDF export failed with HTTP " + response.status + ".";
             if (contentType.includes("application/json")) {
               const payload = await response.json().catch(() => null);
@@ -1493,6 +1493,53 @@
               }
             }
             throw new Error(message);
+          }
+
+          if (contentType.includes("application/json")) {
+            const payload = await response.json().catch(() => null);
+            if (!payload || typeof payload.downloadUrl !== "string") {
+              throw new Error("PDF export prepared successfully, but Studio did not receive a download URL.");
+            }
+
+            const exportWarning = typeof payload.warning === "string" ? payload.warning.trim() : "";
+            const openError = typeof payload.openError === "string" ? payload.openError.trim() : "";
+            const openedExternal = payload.openedExternal === true;
+            let downloadName = typeof payload.filename === "string" && payload.filename.trim()
+              ? payload.filename.trim()
+              : (filenameHint || "studio-preview.pdf");
+            if (!/\.pdf$/i.test(downloadName)) {
+              downloadName += ".pdf";
+            }
+
+            if (openedExternal) {
+              if (exportWarning) {
+                setStatus("Opened PDF in default viewer with warning: " + exportWarning, "warning");
+              } else {
+                setStatus("Opened PDF in default viewer: " + downloadName, "success");
+              }
+              return;
+            }
+
+            const link = document.createElement("a");
+            link.href = payload.downloadUrl;
+            link.download = downloadName;
+            link.rel = "noopener";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+            if (openError) {
+              if (exportWarning) {
+                setStatus("Opened browser fallback because external viewer failed (" + openError + "). Warning: " + exportWarning, "warning");
+              } else {
+                setStatus("Opened browser fallback because external viewer failed (" + openError + ").", "warning");
+              }
+            } else if (exportWarning) {
+              setStatus("Exported PDF with warning: " + exportWarning, "warning");
+            } else {
+              setStatus("Exported PDF: " + downloadName, "success");
+            }
+            return;
           }
 
           const exportWarning = String(response.headers.get("x-pi-studio-export-warning") || "").trim();
