@@ -766,6 +766,52 @@
       max-width: 100%;
     }
 
+    .rendered-markdown .studio-subfigure-group {
+      margin: 1.25em auto;
+    }
+
+    .rendered-markdown .studio-subfigure-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      justify-content: center;
+      align-items: flex-start;
+    }
+
+    .rendered-markdown .studio-subfigure-entry {
+      flex: 1 1 220px;
+      margin: 0;
+      max-width: 100%;
+    }
+
+    .rendered-markdown .studio-subfigure-entry img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .rendered-markdown .studio-subfigure-entry > figcaption,
+    .rendered-markdown .studio-subfigure-group > figcaption {
+      text-align: center;
+    }
+
+    .rendered-markdown .studio-subfigure-group > figcaption {
+      margin-top: 0.8em;
+    }
+
+    .rendered-markdown .studio-subfigure-caption-label,
+    .rendered-markdown .studio-figure-caption-label {
+      font-weight: 600;
+    }
+
+    .rendered-markdown .studio-subfigure-caption-label {
+      margin-right: 0.35em;
+    }
+
+    .rendered-markdown .studio-figure-caption-label {
+      margin-right: 0.45em;
+    }
+
     .rendered-markdown math {
       font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", "STIXGeneral", serif;
     }

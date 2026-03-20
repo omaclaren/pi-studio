@@ -1112,6 +1112,296 @@ function buildStudioPandocBibliographyArgs(markdown: string, isLatex: boolean | 
 	];
 }
 
+interface StudioLatexSubfigurePreviewGroup {
+	markerId: string;
+	label: string | null;
+	subfigureWidths: Array<string | null>;
+}
+
+interface StudioLatexSubfigurePreviewTransformResult {
+	markdown: string;
+	subfigureGroups: StudioLatexSubfigurePreviewGroup[];
+}
+
+function findStudioLatexMatchingBrace(input: string, openBraceIndex: number): number {
+	if (input[openBraceIndex] !== "{") return -1;
+	let depth = 0;
+	for (let i = openBraceIndex; i < input.length; i++) {
+		const ch = input[i]!;
+		if (ch === "%") {
+			while (i + 1 < input.length && input[i + 1] !== "\n") i++;
+			continue;
+		}
+		if (ch === "\\") {
+			i++;
+			continue;
+		}
+		if (ch === "{") depth++;
+		else if (ch === "}") {
+			depth--;
+			if (depth === 0) return i;
+		}
+	}
+	return -1;
+}
+
+function readStudioLatexEnvironmentBlock(
+	input: string,
+	startIndex: number,
+	envName: string,
+): { fullText: string; innerText: string; endIndex: number } | null {
+	const escapedEnvName = envName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const beginPattern = new RegExp(`\\\\begin\\s*\\{${escapedEnvName}\\}`, "g");
+	beginPattern.lastIndex = startIndex;
+	const beginMatch = beginPattern.exec(input);
+	if (!beginMatch || beginMatch.index !== startIndex) return null;
+	const contentStart = beginPattern.lastIndex;
+	const tokenPattern = new RegExp(`\\\\(?:begin|end)\\s*\\{${escapedEnvName}\\}`, "g");
+	tokenPattern.lastIndex = startIndex;
+	let depth = 0;
+	for (;;) {
+		const tokenMatch = tokenPattern.exec(input);
+		if (!tokenMatch) break;
+		if (tokenMatch.index === startIndex) {
+			depth = 1;
+			continue;
+		}
+		if (tokenMatch[0].startsWith("\\begin")) depth++;
+		else depth--;
+		if (depth === 0) {
+			return {
+				fullText: input.slice(startIndex, tokenPattern.lastIndex),
+				innerText: input.slice(contentStart, tokenMatch.index),
+				endIndex: tokenPattern.lastIndex,
+			};
+		}
+	}
+	return null;
+}
+
+function extractStudioLatexLastCommandArgument(input: string, commandName: string, allowStar = false): string | null {
+	const escapedCommand = commandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const pattern = new RegExp(`\\\\${escapedCommand}${allowStar ? "\\*?" : ""}(?:\\s*\\[[^\\]]*\\])?\\s*\\{`, "g");
+	let lastValue: string | null = null;
+	for (;;) {
+		const match = pattern.exec(input);
+		if (!match) break;
+		const openBraceIndex = pattern.lastIndex - 1;
+		const closeBraceIndex = findStudioLatexMatchingBrace(input, openBraceIndex);
+		if (closeBraceIndex < 0) continue;
+		lastValue = input.slice(openBraceIndex + 1, closeBraceIndex).trim() || null;
+		pattern.lastIndex = closeBraceIndex + 1;
+	}
+	return lastValue;
+}
+
+function convertStudioLatexLengthToCss(length: string): string | null {
+	const normalized = String(length ?? "").replace(/\s+/g, "");
+	if (!normalized) return null;
+	const fractionalMatch = normalized.match(/^([0-9]*\.?[0-9]+)\\(?:textwidth|linewidth|columnwidth|hsize)$/);
+	if (fractionalMatch) {
+		const fraction = Number.parseFloat(fractionalMatch[1] ?? "");
+		if (Number.isFinite(fraction) && fraction > 0) {
+			return `${Math.min(fraction * 100, 100)}%`;
+		}
+	}
+	const percentMatch = normalized.match(/^([0-9]*\.?[0-9]+)%$/);
+	if (percentMatch) {
+		const percent = Number.parseFloat(percentMatch[1] ?? "");
+		if (Number.isFinite(percent) && percent > 0) {
+			return `${Math.min(percent, 100)}%`;
+		}
+	}
+	return null;
+}
+
+function extractStudioLatexSubfigureWidth(blockText: string): string | null {
+	const match = blockText.match(/^\\begin\s*\{subfigure\*?\}(?:\s*\[[^\]]*\])?\s*\{([^}]*)\}/);
+	if (!match) return null;
+	return convertStudioLatexLengthToCss(match[1] ?? "");
+}
+
+function preprocessStudioLatexSubfiguresForPreview(markdown: string): StudioLatexSubfigurePreviewTransformResult {
+	const subfigureGroups: StudioLatexSubfigurePreviewGroup[] = [];
+	const figurePattern = /\\begin\s*\{(figure\*?)\}/g;
+	let transformed = "";
+	let cursor = 0;
+
+	for (;;) {
+		const figureMatch = figurePattern.exec(markdown);
+		if (!figureMatch) break;
+		const envName = figureMatch[1] ?? "figure";
+		const block = readStudioLatexEnvironmentBlock(markdown, figureMatch.index, envName);
+		if (!block) continue;
+		const inner = block.innerText;
+		const subfigurePattern = /\\begin\s*\{(subfigure\*?)\}/g;
+		const subfigureBlocks: Array<{ start: number; end: number; fullText: string; widthCss: string | null }> = [];
+		for (;;) {
+			const subfigureMatch = subfigurePattern.exec(inner);
+			if (!subfigureMatch) break;
+			const subfigureEnvName = subfigureMatch[1] ?? "subfigure";
+			const subfigureBlock = readStudioLatexEnvironmentBlock(inner, subfigureMatch.index, subfigureEnvName);
+			if (!subfigureBlock) continue;
+			subfigureBlocks.push({
+				start: subfigureMatch.index,
+				end: subfigureBlock.endIndex,
+				fullText: subfigureBlock.fullText.trim(),
+				widthCss: extractStudioLatexSubfigureWidth(subfigureBlock.fullText),
+			});
+			subfigurePattern.lastIndex = subfigureBlock.endIndex;
+		}
+
+		if (subfigureBlocks.length === 0) continue;
+
+		let outerResidual = "";
+		let residualCursor = 0;
+		for (const subfigureBlock of subfigureBlocks) {
+			outerResidual += inner.slice(residualCursor, subfigureBlock.start);
+			residualCursor = subfigureBlock.end;
+		}
+		outerResidual += inner.slice(residualCursor);
+
+		const markerId = String(subfigureGroups.length + 1);
+		const overallCaption = extractStudioLatexLastCommandArgument(outerResidual, "caption", true);
+		const overallLabel = extractStudioLatexLastCommandArgument(outerResidual, "label");
+		subfigureGroups.push({
+			markerId,
+			label: overallLabel,
+			subfigureWidths: subfigureBlocks.map((blockEntry) => blockEntry.widthCss),
+		});
+
+		const replacementParts = [
+			`PISTUDIOSUBFIGURESTART${markerId}`,
+			...subfigureBlocks.map((blockEntry) => blockEntry.fullText),
+			overallCaption ? `PISTUDIOSUBFIGURECAPTION${markerId} ${overallCaption}` : "",
+			`PISTUDIOSUBFIGUREEND${markerId}`,
+		].filter(Boolean);
+
+		transformed += markdown.slice(cursor, figureMatch.index);
+		transformed += replacementParts.join("\n\n");
+		cursor = block.endIndex;
+		figurePattern.lastIndex = block.endIndex;
+	}
+
+	transformed += markdown.slice(cursor);
+	return {
+		markdown: transformed,
+		subfigureGroups,
+	};
+}
+
+function appendStudioHtmlClassAttribute(attrs: string, className: string): string {
+	if (/\bclass="([^"]*)"/.test(attrs)) {
+		return attrs.replace(/\bclass="([^"]*)"/, (_match, existing) => {
+			const classNames = String(existing ?? "").split(/\s+/).filter(Boolean);
+			if (!classNames.includes(className)) classNames.push(className);
+			return `class="${classNames.join(" ")}"`;
+		});
+	}
+	return `${attrs} class="${className}"`;
+}
+
+function appendStudioHtmlStyleAttribute(attrs: string, styleText: string): string {
+	if (/\bstyle="([^"]*)"/.test(attrs)) {
+		return attrs.replace(/\bstyle="([^"]*)"/, (_match, existing) => {
+			const prefix = String(existing ?? "").trim();
+			const separator = prefix && !prefix.endsWith(";") ? "; " : (prefix ? " " : "");
+			return `style="${prefix}${separator}${styleText}"`;
+		});
+	}
+	return `${attrs} style="${styleText}"`;
+}
+
+function prependStudioHtmlCaptionLabel(captionHtml: string, labelHtml: string, className: string): string {
+	const normalizedCaption = String(captionHtml ?? "");
+	const normalizedLabel = String(labelHtml ?? "").trim();
+	if (!normalizedCaption || !normalizedLabel) return normalizedCaption;
+	if (normalizedCaption.includes(`class="${className}"`)) return normalizedCaption;
+	return normalizedCaption.replace(/<figcaption\b([^>]*)>([\s\S]*?)<\/figcaption>/i, (_match, attrs, inner) => {
+		const trimmedInner = String(inner ?? "").trim();
+		const spacer = trimmedInner ? " " : "";
+		return `<figcaption${attrs}><span class="${className}">${normalizedLabel}</span>${spacer}${trimmedInner}</figcaption>`;
+	});
+}
+
+function extractStudioHtmlIdAttribute(html: string): string | null {
+	const match = String(html ?? "").match(/\bid="([^"]+)"/i);
+	return match?.[1]?.trim() || null;
+}
+
+function formatStudioLatexSubfigureCaptionLabel(label: string | null, labels: Map<string, { number: string; kind: string }>): string | null {
+	const normalizedLabel = String(label ?? "").trim();
+	if (!normalizedLabel) return null;
+	const subfigureEntry = labels.get(`sub@${normalizedLabel}`);
+	if (subfigureEntry?.number) return `(${subfigureEntry.number})`;
+	const figureEntry = labels.get(normalizedLabel);
+	if (!figureEntry?.number) return null;
+	const suffixMatch = figureEntry.number.match(/([A-Za-z]+)$/);
+	return suffixMatch ? `(${suffixMatch[1]})` : null;
+}
+
+function formatStudioLatexMainFigureCaptionLabel(label: string | null, labels: Map<string, { number: string; kind: string }>): string | null {
+	const normalizedLabel = String(label ?? "").trim();
+	if (!normalizedLabel) return null;
+	const entry = labels.get(normalizedLabel);
+	if (!entry?.number) return null;
+	if (entry.kind === "table") return `Table ${entry.number}`;
+	return `Figure ${entry.number}`;
+}
+
+function decorateStudioLatexSubfigureRenderedHtml(
+	html: string,
+	subfigureGroups: StudioLatexSubfigurePreviewGroup[],
+	labels: Map<string, { number: string; kind: string }>,
+): string {
+	let transformed = String(html ?? "");
+	for (const group of subfigureGroups) {
+		const startMarker = `<p>PISTUDIOSUBFIGURESTART${group.markerId}</p>`;
+		const endMarker = `<p>PISTUDIOSUBFIGUREEND${group.markerId}</p>`;
+		const startIndex = transformed.indexOf(startMarker);
+		if (startIndex < 0) continue;
+		const endIndex = transformed.indexOf(endMarker, startIndex + startMarker.length);
+		if (endIndex < 0) continue;
+
+		let groupBody = transformed.slice(startIndex + startMarker.length, endIndex).trim();
+		let captionHtml = "";
+		const captionPattern = new RegExp(`<p>PISTUDIOSUBFIGURECAPTION${group.markerId}\\s*([\\s\\S]*?)<\\/p>\\s*$`);
+		const captionMatch = groupBody.match(captionPattern);
+		if (captionMatch) {
+			captionHtml = String(captionMatch[1] ?? "").trim();
+			groupBody = groupBody.slice(0, captionMatch.index).trim();
+		}
+		if (!/<figure\b/i.test(groupBody)) continue;
+
+		let figureIndex = 0;
+		const figureBlocks = Array.from(groupBody.matchAll(/<figure\b([^>]*)>([\s\S]*?)<\/figure>/g));
+		const gridHtml = figureBlocks.map((figureMatch) => {
+			let attrs = String(figureMatch[1] ?? "");
+			let innerHtml = String(figureMatch[2] ?? "").trim();
+			attrs = appendStudioHtmlClassAttribute(attrs, "studio-subfigure-entry");
+			const widthCss = group.subfigureWidths[figureIndex++] ?? null;
+			if (widthCss) {
+				attrs = appendStudioHtmlStyleAttribute(attrs, `flex-basis: ${widthCss}; width: min(100%, ${widthCss});`);
+			}
+			const subfigureLabel = formatStudioLatexSubfigureCaptionLabel(extractStudioHtmlIdAttribute(innerHtml), labels);
+			if (subfigureLabel) {
+				innerHtml = prependStudioHtmlCaptionLabel(innerHtml, subfigureLabel, "studio-subfigure-caption-label");
+			}
+			return `<figure${attrs}>${innerHtml}</figure>`;
+		}).join("\n").trim();
+		if (!gridHtml) continue;
+
+		const idAttr = group.label ? ` id="${escapeStudioHtmlText(group.label)}"` : "";
+		const mainFigureLabel = formatStudioLatexMainFigureCaptionLabel(group.label, labels);
+		const figcaptionHtml = captionHtml
+			? prependStudioHtmlCaptionLabel(`<figcaption>${captionHtml}</figcaption>`, mainFigureLabel ?? "", "studio-figure-caption-label")
+			: "";
+		const replacement = `<figure class="studio-subfigure-group"${idAttr}><div class="studio-subfigure-grid">${gridHtml}</div>${figcaptionHtml}</figure>`;
+		transformed = transformed.slice(0, startIndex) + replacement + transformed.slice(endIndex + endMarker.length);
+	}
+	return transformed;
+}
+
 function parseStudioAuxTopLevelGroups(input: string): string[] {
 	const groups: string[] = [];
 	let i = 0;
@@ -1221,37 +1511,47 @@ function escapeStudioHtmlText(text: string): string {
 		.replace(/'/g, "&#39;");
 }
 
-function decorateStudioLatexRenderedHtml(html: string, sourcePath: string | undefined, baseDir: string | undefined): string {
+function decorateStudioLatexRenderedHtml(
+	html: string,
+	sourcePath: string | undefined,
+	baseDir: string | undefined,
+	subfigureGroups: StudioLatexSubfigurePreviewGroup[] = [],
+): string {
 	const labels = readStudioLatexAuxLabels(sourcePath, baseDir);
-	if (labels.size === 0) return html;
 	let transformed = String(html ?? "");
 
-	transformed = transformed.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/g, (match, attrs) => {
-		const typeMatch = String(attrs ?? "").match(/\bdata-reference-type="([^"]+)"/);
-		const labelMatch = String(attrs ?? "").match(/\bdata-reference="([^"]+)"/);
-		if (!typeMatch || !labelMatch) return match;
-		const referenceTypeRaw = String(typeMatch[1] ?? "").trim();
-		const label = String(labelMatch[1] ?? "").trim();
-		const referenceType =
-			referenceTypeRaw === "eqref" || referenceTypeRaw === "autoref" || referenceTypeRaw === "ref"
-				? referenceTypeRaw
-				: null;
-		if (!referenceType || !label) return match;
-		const formatted = formatStudioLatexReference(label, referenceType, labels);
-		if (!formatted) return match;
-		return `<a${attrs}>${escapeStudioHtmlText(formatted)}</a>`;
-	});
+	if (labels.size > 0) {
+		transformed = transformed.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/g, (match, attrs) => {
+			const typeMatch = String(attrs ?? "").match(/\bdata-reference-type="([^"]+)"/);
+			const labelMatch = String(attrs ?? "").match(/\bdata-reference="([^"]+)"/);
+			if (!typeMatch || !labelMatch) return match;
+			const referenceTypeRaw = String(typeMatch[1] ?? "").trim();
+			const label = String(labelMatch[1] ?? "").trim();
+			const referenceType =
+				referenceTypeRaw === "eqref" || referenceTypeRaw === "autoref" || referenceTypeRaw === "ref"
+					? referenceTypeRaw
+					: null;
+			if (!referenceType || !label) return match;
+			const formatted = formatStudioLatexReference(label, referenceType, labels);
+			if (!formatted) return match;
+			return `<a${attrs}>${escapeStudioHtmlText(formatted)}</a>`;
+		});
 
-	transformed = transformed.replace(/<math\b[^>]*display="block"[^>]*>[\s\S]*?<\/math>/g, (block) => {
-		if (/studio-display-equation/.test(block)) return block;
-		const labelMatch = block.match(/\\label\s*\{([^}]+)\}/);
-		if (!labelMatch) return block;
-		const label = String(labelMatch[1] ?? "").trim();
-		if (!label) return block;
-		const formatted = formatStudioLatexReference(label, "eqref", labels);
-		if (!formatted) return block;
-		return `<div class="studio-display-equation"><div class="studio-display-equation-body">${block}</div><div class="studio-display-equation-number">${escapeStudioHtmlText(formatted)}</div></div>`;
-	});
+		transformed = transformed.replace(/<math\b[^>]*display="block"[^>]*>[\s\S]*?<\/math>/g, (block) => {
+			if (/studio-display-equation/.test(block)) return block;
+			const labelMatch = block.match(/\\label\s*\{([^}]+)\}/);
+			if (!labelMatch) return block;
+			const label = String(labelMatch[1] ?? "").trim();
+			if (!label) return block;
+			const formatted = formatStudioLatexReference(label, "eqref", labels);
+			if (!formatted) return block;
+			return `<div class="studio-display-equation"><div class="studio-display-equation-body">${block}</div><div class="studio-display-equation-number">${escapeStudioHtmlText(formatted)}</div></div>`;
+		});
+	}
+
+	if (subfigureGroups.length > 0) {
+		transformed = decorateStudioLatexSubfigureRenderedHtml(transformed, subfigureGroups, labels);
+	}
 
 	return transformed;
 }
@@ -1850,9 +2150,14 @@ async function preprocessStudioMermaidForPdf(markdown: string, workDir: string):
 
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const sourceWithResolvedRefs = isLatex ? preprocessStudioLatexReferences(markdown, sourcePath, resourcePath) : markdown;
+	const latexPreviewTransform = isLatex
+		? preprocessStudioLatexSubfiguresForPreview(markdown)
+		: { markdown, subfigureGroups: [] };
+	const sourceWithResolvedRefs = isLatex
+		? preprocessStudioLatexReferences(latexPreviewTransform.markdown, sourcePath, resourcePath)
+		: markdown;
 	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
-	const bibliographyArgs = buildStudioPandocBibliographyArgs(sourceWithResolvedRefs, isLatex, resourcePath);
+	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
 	if (resourcePath) {
 		args.push(`--resource-path=${resourcePath}`);
@@ -1906,7 +2211,12 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 					if (bodyMatch) renderedHtml = bodyMatch[1];
 				}
 				if (isLatex) {
-					renderedHtml = decorateStudioLatexRenderedHtml(renderedHtml, sourcePath, resourcePath);
+					renderedHtml = decorateStudioLatexRenderedHtml(
+						renderedHtml,
+						sourcePath,
+						resourcePath,
+						latexPreviewTransform.subfigureGroups,
+					);
 				}
 				succeed(stripMathMlAnnotationTags(renderedHtml));
 				return;
