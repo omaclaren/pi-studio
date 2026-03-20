@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.22] — 2026-03-20
+
 ### Fixed
 - Citeproc-rendered LaTeX bibliographies now request a visible `References` section heading in Studio preview/PDF output.
 - LaTeX preview now regroups `subfigure`-based figures so adjacent subfigures keep their shared overall figure/caption structure instead of rendering as unrelated standalone figures, including visible `(a)` / `(b)` subfigure markers and `Figure n` main-caption labels when `.aux` labels are available.
