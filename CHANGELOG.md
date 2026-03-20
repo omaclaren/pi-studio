@@ -4,11 +4,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.24] — 2026-03-20
+
+### Fixed
+- LaTeX PDF export now intercepts grouped `subfigure` blocks before Pandoc and reinjects them into the generated LaTeX as grouped minipage-based figure pages with aux-derived `Figure n` / `(a)` / `(b)` labels, preserving grouped subfigure layout more faithfully in exported PDFs.
+
 ## [0.5.23] — 2026-03-20
 
 ### Fixed
 - LaTeX PDF export now preprocesses common `algorithm` / `algorithmic` / `algpseudocode` blocks into pandoc-friendly quoted step layouts, improving exported algorithm readability while keeping the existing Studio PDF pipeline.
-- LaTeX PDF export now intercepts grouped `subfigure` blocks before Pandoc and reinjects them into the generated LaTeX as grouped minipage-based figure pages with aux-derived `Figure n` / `(a)` / `(b)` labels, preserving grouped subfigure layout more faithfully in exported PDFs.
 
 ## [0.5.22] — 2026-03-20
 
