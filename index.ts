@@ -1560,6 +1560,78 @@ function preprocessStudioLatexAlgorithmsForPreview(markdown: string): StudioLate
 	};
 }
 
+function renderStudioLatexAlgorithmPdfLines(
+	lines: StudioLatexAlgorithmPreviewLine[],
+	startIndex: number,
+	indent: number,
+): { latex: string; nextIndex: number } {
+	const parts: string[] = [];
+	let index = startIndex;
+
+	while (index < lines.length) {
+		const line = lines[index]!;
+		if (line.indent < indent) break;
+		if (line.indent > indent) {
+			const nested = renderStudioLatexAlgorithmPdfLines(lines, index, line.indent);
+			if (nested.latex.trim()) {
+				parts.push(`\\begin{quote}\n${nested.latex}\n\\end{quote}`);
+			}
+			index = nested.nextIndex;
+			continue;
+		}
+
+		const prefix = line.lineNumber == null ? "" : `${line.lineNumber}. `;
+		parts.push(`${prefix}${line.content}`.trim());
+		index++;
+
+		while (index < lines.length && lines[index]!.indent > indent) {
+			const nested = renderStudioLatexAlgorithmPdfLines(lines, index, lines[index]!.indent);
+			if (nested.latex.trim()) {
+				parts.push(`\\begin{quote}\n${nested.latex}\n\\end{quote}`);
+			}
+			index = nested.nextIndex;
+		}
+	}
+
+	return {
+		latex: parts.filter(Boolean).join("\n\n"),
+		nextIndex: index,
+	};
+}
+
+function buildStudioLatexAlgorithmPdfBlock(
+	block: StudioLatexAlgorithmPreviewBlock,
+	labels: Map<string, { number: string; kind: string }>,
+): string {
+	const body = renderStudioLatexAlgorithmPdfLines(block.lines, 0, 0).latex.trim();
+	const captionLabel = formatStudioLatexMainAlgorithmCaptionLabel(block.label, labels);
+	const heading = captionLabel
+		? (block.caption ? `\\textbf{${captionLabel}} ${block.caption}` : `\\textbf{${captionLabel}}`)
+		: (block.caption ? `\\textbf{${block.caption}}` : "");
+	const parts = [heading, body].filter(Boolean);
+	return `\n\n\\begin{quote}\n${parts.join("\n\n")}\n\\end{quote}\n\n`;
+}
+
+function preprocessStudioLatexAlgorithmsForPdf(markdown: string, sourcePath: string | undefined, baseDir: string | undefined): string {
+	const previewTransform = preprocessStudioLatexAlgorithmsForPreview(markdown);
+	if (previewTransform.algorithmBlocks.length === 0) return markdown;
+	const labels = readStudioLatexAuxLabels(sourcePath, baseDir);
+	let transformed = previewTransform.markdown;
+
+	for (const block of previewTransform.algorithmBlocks) {
+		const startMarker = `PISTUDIOALGORITHMSTART${block.markerId}`;
+		const endMarker = `PISTUDIOALGORITHMEND${block.markerId}`;
+		const startIndex = transformed.indexOf(startMarker);
+		if (startIndex < 0) continue;
+		const endIndex = transformed.indexOf(endMarker, startIndex + startMarker.length);
+		if (endIndex < 0) continue;
+		const endSliceIndex = endIndex + endMarker.length;
+		transformed = transformed.slice(0, startIndex) + buildStudioLatexAlgorithmPdfBlock(block, labels) + transformed.slice(endSliceIndex);
+	}
+
+	return transformed;
+}
+
 function appendStudioHtmlClassAttribute(attrs: string, className: string): string {
 	if (/\bclass="([^"]*)"/.test(attrs)) {
 		return attrs.replace(/\bclass="([^"]*)"/, (_match, existing) => {
@@ -2646,12 +2718,15 @@ async function renderStudioPdfWithPandoc(
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
+	const latexPdfSource = isLatex
+		? preprocessStudioLatexAlgorithmsForPdf(markdown, sourcePath, resourcePath)
+		: markdown;
 	const sourceWithResolvedRefs = isLatex
-		? injectStudioLatexEquationTags(preprocessStudioLatexReferences(markdown, sourcePath, resourcePath), sourcePath, resourcePath)
+		? injectStudioLatexEquationTags(preprocessStudioLatexReferences(latexPdfSource, sourcePath, resourcePath), sourcePath, resourcePath)
 		: markdown;
 	const effectiveEditorLanguage = inferStudioPdfLanguage(sourceWithResolvedRefs, editorPdfLanguage);
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
-	const bibliographyArgs = buildStudioPandocBibliographyArgs(sourceWithResolvedRefs, isLatex, resourcePath);
+	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 
 	const runPandocPdfExport = async (
 		inputFormat: string,

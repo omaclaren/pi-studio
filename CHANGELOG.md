@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- LaTeX PDF export now preprocesses common `algorithm` / `algorithmic` / `algpseudocode` blocks into pandoc-friendly quoted step layouts, improving exported algorithm readability while keeping the existing Studio PDF pipeline.
+
 ## [0.5.22] — 2026-03-20
 
 ### Fixed
