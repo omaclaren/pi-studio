@@ -812,6 +812,58 @@
       margin-right: 0.45em;
     }
 
+    .rendered-markdown .studio-algorithm-block {
+      margin: 1.25em 0;
+      border: 1px solid var(--md-codeblock-border);
+      border-radius: 10px;
+      background: var(--panel-2);
+      overflow: hidden;
+    }
+
+    .rendered-markdown .studio-algorithm-block > figcaption {
+      padding: 0.8em 1em 0.65em;
+      border-bottom: 1px solid var(--border-muted);
+      background: rgba(127, 127, 127, 0.06);
+      text-align: left;
+    }
+
+    .rendered-markdown .studio-algorithm-caption-label {
+      font-weight: 600;
+      margin-right: 0.45em;
+    }
+
+    .rendered-markdown .studio-algorithm-body {
+      padding: 0.7em 0.9em 0.85em;
+      font-family: var(--font-mono);
+      font-size: 0.95em;
+    }
+
+    .rendered-markdown .studio-algorithm-line {
+      display: grid;
+      grid-template-columns: 2.6em minmax(0, 1fr);
+      gap: 0.8em;
+      align-items: baseline;
+      padding: 0.08em 0;
+    }
+
+    .rendered-markdown .studio-algorithm-line-number {
+      color: var(--muted);
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      user-select: none;
+    }
+
+    .rendered-markdown .studio-algorithm-line-content {
+      min-width: 0;
+      padding-left: calc(var(--studio-algorithm-indent, 0) * 1.35em);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .rendered-markdown .studio-algorithm-line-content math {
+      font-size: 1em;
+    }
+
     .rendered-markdown math {
       font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", "STIXGeneral", serif;
     }

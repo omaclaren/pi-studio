@@ -1123,6 +1123,24 @@ interface StudioLatexSubfigurePreviewTransformResult {
 	subfigureGroups: StudioLatexSubfigurePreviewGroup[];
 }
 
+interface StudioLatexAlgorithmPreviewLine {
+	indent: number;
+	content: string;
+	lineNumber: number | null;
+}
+
+interface StudioLatexAlgorithmPreviewBlock {
+	markerId: string;
+	label: string | null;
+	caption: string | null;
+	lines: StudioLatexAlgorithmPreviewLine[];
+}
+
+interface StudioLatexAlgorithmPreviewTransformResult {
+	markdown: string;
+	algorithmBlocks: StudioLatexAlgorithmPreviewBlock[];
+}
+
 function findStudioLatexMatchingBrace(input: string, openBraceIndex: number): number {
 	if (input[openBraceIndex] !== "{") return -1;
 	let depth = 0;
@@ -1290,6 +1308,258 @@ function preprocessStudioLatexSubfiguresForPreview(markdown: string): StudioLate
 	};
 }
 
+function parseStudioLatexLeadingCommand(line: string): { name: string; args: string[]; rest: string } | null {
+	const trimmed = String(line ?? "").trim();
+	const commandMatch = trimmed.match(/^\\([A-Za-z]+\*?)/);
+	if (!commandMatch) return null;
+	let cursor = commandMatch[0].length;
+	const args: string[] = [];
+
+	for (;;) {
+		while (cursor < trimmed.length && /\s/.test(trimmed[cursor]!)) cursor++;
+		if (trimmed[cursor] === "[") {
+			const closeBracket = trimmed.indexOf("]", cursor + 1);
+			if (closeBracket < 0) break;
+			cursor = closeBracket + 1;
+			continue;
+		}
+		if (trimmed[cursor] !== "{") break;
+		const closeBraceIndex = findStudioLatexMatchingBrace(trimmed, cursor);
+		if (closeBraceIndex < 0) break;
+		args.push(trimmed.slice(cursor + 1, closeBraceIndex));
+		cursor = closeBraceIndex + 1;
+	}
+
+	return {
+		name: commandMatch[1] ?? "",
+		args,
+		rest: trimmed.slice(cursor).trim(),
+	};
+}
+
+function stripStudioLatexOptionalBracketPrefix(text: string): string {
+	const normalized = String(text ?? "").trimStart();
+	if (!normalized.startsWith("[")) return normalized;
+	const closeBracketIndex = normalized.indexOf("]");
+	if (closeBracketIndex < 0) return normalized;
+	return normalized.slice(closeBracketIndex + 1).trimStart();
+}
+
+function normalizeStudioLatexAlgorithmInlineText(text: string): string {
+	return String(text ?? "")
+		.replace(/\\Comment\s*\{([^}]*)\}/g, " // $1")
+		.replace(/\\\s+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function pushStudioLatexAlgorithmPreviewLine(
+	lines: StudioLatexAlgorithmPreviewLine[],
+	indent: number,
+	content: string,
+	showLineNumbers: boolean,
+	lineCounterRef: { value: number },
+): void {
+	const normalizedContent = normalizeStudioLatexAlgorithmInlineText(content);
+	if (!normalizedContent) return;
+	lines.push({
+		indent: Math.max(0, indent),
+		content: normalizedContent,
+		lineNumber: showLineNumbers ? lineCounterRef.value++ : null,
+	});
+}
+
+function parseStudioLatexAlgorithmicLines(content: string, showLineNumbers: boolean): StudioLatexAlgorithmPreviewLine[] {
+	const lines: StudioLatexAlgorithmPreviewLine[] = [];
+	const lineCounterRef = { value: 1 };
+	let indent = 0;
+	const stripped = stripStudioLatexComments(content);
+
+	for (const rawLine of stripped.split(/\r?\n/)) {
+		const trimmed = rawLine.trim();
+		if (!trimmed) continue;
+		const command = parseStudioLatexLeadingCommand(trimmed);
+		if (!command) {
+			if (lines.length > 0) {
+				const continuation = normalizeStudioLatexAlgorithmInlineText(trimmed);
+				if (continuation) {
+					lines[lines.length - 1]!.content += ` ${continuation}`;
+				}
+			} else {
+				pushStudioLatexAlgorithmPreviewLine(lines, indent, trimmed, showLineNumbers, lineCounterRef);
+			}
+			continue;
+		}
+
+		const name = command.name.replace(/\*$/, "");
+		const arg0 = command.args[0] ?? "";
+		const arg1 = command.args[1] ?? "";
+
+		if (/^(caption|label|begin|end)$/.test(name)) continue;
+		if (/^End(?:For|ForAll|While|If|Procedure|Function)$/i.test(name)) {
+			indent = Math.max(0, indent - 1);
+			const suffix = name.replace(/^End/i, "").replace(/ForAll/i, "for all");
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `end ${suffix.toLowerCase()}`, showLineNumbers, lineCounterRef);
+			continue;
+		}
+		if (/^Else$/i.test(name)) {
+			indent = Math.max(0, indent - 1);
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, "else", showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+		if (/^ElsIf$/i.test(name)) {
+			indent = Math.max(0, indent - 1);
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `else if ${arg0}`, showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+		if (/^Until$/i.test(name)) {
+			indent = Math.max(0, indent - 1);
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `until ${arg0}`, showLineNumbers, lineCounterRef);
+			continue;
+		}
+		if (/^Statex$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, command.rest, false, lineCounterRef);
+			continue;
+		}
+		if (/^State$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, command.rest || arg0, showLineNumbers, lineCounterRef);
+			continue;
+		}
+		if (/^Return$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `return ${command.rest || arg0}`.trim(), showLineNumbers, lineCounterRef);
+			continue;
+		}
+		if (/^(Require|Input)$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `Input: ${command.rest || arg0}`.trim(), showLineNumbers, lineCounterRef);
+			continue;
+		}
+		if (/^(Ensure|Output)$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `Output: ${command.rest || arg0}`.trim(), showLineNumbers, lineCounterRef);
+			continue;
+		}
+		if (/^Comment$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `// ${arg0 || command.rest}`.trim(), false, lineCounterRef);
+			continue;
+		}
+		if (/^Repeat$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, "repeat", showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+		if (/^ForAll$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `for all ${arg0}`, showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+		if (/^For$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `for ${arg0}`, showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+		if (/^While$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `while ${arg0}`, showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+		if (/^If$/i.test(name)) {
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `if ${arg0}`, showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+		if (/^Procedure$/i.test(name)) {
+			const signature = arg1 ? `${arg0}(${arg1})` : arg0;
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `procedure ${signature}`.trim(), showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+		if (/^Function$/i.test(name)) {
+			const signature = arg1 ? `${arg0}(${arg1})` : arg0;
+			pushStudioLatexAlgorithmPreviewLine(lines, indent, `function ${signature}`.trim(), showLineNumbers, lineCounterRef);
+			indent++;
+			continue;
+		}
+
+		pushStudioLatexAlgorithmPreviewLine(lines, indent, trimmed, showLineNumbers, lineCounterRef);
+	}
+
+	return lines;
+}
+
+function buildStudioLatexAlgorithmPreviewReplacement(block: StudioLatexAlgorithmPreviewBlock): string {
+	const parts = [
+		`PISTUDIOALGORITHMSTART${block.markerId}`,
+		block.caption ? `PISTUDIOALGORITHMCAPTION${block.markerId} ${block.caption}` : "",
+		...block.lines.map((line) => `PISTUDIOALGORITHMLINE${block.markerId}::${line.indent}::${line.lineNumber == null ? "-" : String(line.lineNumber)}:: ${line.content}`),
+		`PISTUDIOALGORITHMEND${block.markerId}`,
+	].filter(Boolean);
+	return `\n\n${parts.join("\n\n")}\n\n`;
+}
+
+function preprocessStudioLatexAlgorithmsForPreview(markdown: string): StudioLatexAlgorithmPreviewTransformResult {
+	const algorithmBlocks: StudioLatexAlgorithmPreviewBlock[] = [];
+	const transformEnvironment = (input: string, envPattern: RegExp, buildBlock: (block: { fullText: string; innerText: string; endIndex: number }, markerId: string) => StudioLatexAlgorithmPreviewBlock | null): string => {
+		let transformed = "";
+		let cursor = 0;
+		envPattern.lastIndex = 0;
+		for (;;) {
+			const envMatch = envPattern.exec(input);
+			if (!envMatch) break;
+			const envName = envMatch[1] ?? "";
+			const block = readStudioLatexEnvironmentBlock(input, envMatch.index, envName);
+			if (!block) continue;
+			const markerId = String(algorithmBlocks.length + 1);
+			const previewBlock = buildBlock(block, markerId);
+			if (!previewBlock || previewBlock.lines.length === 0) continue;
+			algorithmBlocks.push(previewBlock);
+			transformed += input.slice(cursor, envMatch.index);
+			transformed += buildStudioLatexAlgorithmPreviewReplacement(previewBlock);
+			cursor = block.endIndex;
+			envPattern.lastIndex = block.endIndex;
+		}
+		transformed += input.slice(cursor);
+		return transformed;
+	};
+
+	let transformed = transformEnvironment(markdown, /\\begin\s*\{(algorithm\*?)\}/g, (block, markerId) => {
+		const inner = block.innerText;
+		const algorithmicPattern = /\\begin\s*\{(algorithmic\*?)\}(?:\s*\[[^\]]*\])?/g;
+		const algorithmicMatch = algorithmicPattern.exec(inner);
+		let content = inner;
+		let showLineNumbers = false;
+		if (algorithmicMatch) {
+			const algorithmicEnvName = algorithmicMatch[1] ?? "algorithmic";
+			const algorithmicBlock = readStudioLatexEnvironmentBlock(inner, algorithmicMatch.index, algorithmicEnvName);
+			if (algorithmicBlock) {
+				content = stripStudioLatexOptionalBracketPrefix(algorithmicBlock.innerText);
+				showLineNumbers = /^\\begin\s*\{algorithmic\*?\}\s*\[[^\]]+\]/.test(algorithmicBlock.fullText);
+			}
+		}
+		return {
+			markerId,
+			label: extractStudioLatexLastCommandArgument(inner, "label"),
+			caption: extractStudioLatexLastCommandArgument(inner, "caption", true),
+			lines: parseStudioLatexAlgorithmicLines(content, showLineNumbers),
+		};
+	});
+
+	transformed = transformEnvironment(transformed, /\\begin\s*\{(algorithmic\*?)\}(?:\s*\[[^\]]*\])?/g, (block, markerId) => ({
+		markerId,
+		label: extractStudioLatexLastCommandArgument(block.innerText, "label"),
+		caption: null,
+		lines: parseStudioLatexAlgorithmicLines(
+			stripStudioLatexOptionalBracketPrefix(block.innerText),
+			/^\\begin\s*\{algorithmic\*?\}\s*\[[^\]]+\]/.test(block.fullText),
+		),
+	}));
+
+	return {
+		markdown: transformed,
+		algorithmBlocks,
+	};
+}
+
 function appendStudioHtmlClassAttribute(attrs: string, className: string): string {
 	if (/\bclass="([^"]*)"/.test(attrs)) {
 		return attrs.replace(/\bclass="([^"]*)"/, (_match, existing) => {
@@ -1349,6 +1619,14 @@ function formatStudioLatexMainFigureCaptionLabel(label: string | null, labels: M
 	return `Figure ${entry.number}`;
 }
 
+function formatStudioLatexMainAlgorithmCaptionLabel(label: string | null, labels: Map<string, { number: string; kind: string }>): string | null {
+	const normalizedLabel = String(label ?? "").trim();
+	if (!normalizedLabel) return null;
+	const entry = labels.get(normalizedLabel);
+	if (!entry?.number) return null;
+	return `Algorithm ${entry.number}`;
+}
+
 function decorateStudioLatexSubfigureRenderedHtml(
 	html: string,
 	subfigureGroups: StudioLatexSubfigurePreviewGroup[],
@@ -1397,6 +1675,49 @@ function decorateStudioLatexSubfigureRenderedHtml(
 			? prependStudioHtmlCaptionLabel(`<figcaption>${captionHtml}</figcaption>`, mainFigureLabel ?? "", "studio-figure-caption-label")
 			: "";
 		const replacement = `<figure class="studio-subfigure-group"${idAttr}><div class="studio-subfigure-grid">${gridHtml}</div>${figcaptionHtml}</figure>`;
+		transformed = transformed.slice(0, startIndex) + replacement + transformed.slice(endIndex + endMarker.length);
+	}
+	return transformed;
+}
+
+function decorateStudioLatexAlgorithmRenderedHtml(
+	html: string,
+	algorithmBlocks: StudioLatexAlgorithmPreviewBlock[],
+	labels: Map<string, { number: string; kind: string }>,
+): string {
+	let transformed = String(html ?? "");
+	for (const block of algorithmBlocks) {
+		const startMarker = `<p>PISTUDIOALGORITHMSTART${block.markerId}</p>`;
+		const endMarker = `<p>PISTUDIOALGORITHMEND${block.markerId}</p>`;
+		const startIndex = transformed.indexOf(startMarker);
+		if (startIndex < 0) continue;
+		const endIndex = transformed.indexOf(endMarker, startIndex + startMarker.length);
+		if (endIndex < 0) continue;
+
+		let blockBody = transformed.slice(startIndex + startMarker.length, endIndex).trim();
+		let captionHtml = "";
+		const captionPattern = new RegExp(`<p>PISTUDIOALGORITHMCAPTION${block.markerId}\\s*([\\s\\S]*?)<\\/p>`);
+		const captionMatch = blockBody.match(captionPattern);
+		if (captionMatch && captionMatch.index != null) {
+			captionHtml = String(captionMatch[1] ?? "").trim();
+			blockBody = blockBody.slice(0, captionMatch.index) + blockBody.slice(captionMatch.index + captionMatch[0].length);
+		}
+
+		const linePattern = new RegExp(`<p>PISTUDIOALGORITHMLINE${block.markerId}::(\\d+)::([^:]+)::\\s*([\\s\\S]*?)<\\/p>`, "g");
+		const renderedLines = Array.from(blockBody.matchAll(linePattern)).map((lineMatch) => {
+			const indent = Number.parseInt(lineMatch[1] ?? "0", 10);
+			const lineNumber = String(lineMatch[2] ?? "-").trim();
+			const lineHtml = String(lineMatch[3] ?? "").trim();
+			return `<div class="studio-algorithm-line" style="--studio-algorithm-indent:${Number.isFinite(indent) ? Math.max(0, indent) : 0};"><span class="studio-algorithm-line-number">${lineNumber === "-" ? "" : escapeStudioHtmlText(lineNumber)}</span><span class="studio-algorithm-line-content">${lineHtml}</span></div>`;
+		}).join("");
+		if (!renderedLines) continue;
+
+		const idAttr = block.label ? ` id="${escapeStudioHtmlText(block.label)}"` : "";
+		const captionLabel = formatStudioLatexMainAlgorithmCaptionLabel(block.label, labels);
+		const figcaptionHtml = captionHtml
+			? prependStudioHtmlCaptionLabel(`<figcaption>${captionHtml}</figcaption>`, captionLabel ?? "", "studio-algorithm-caption-label")
+			: (captionLabel ? `<figcaption><span class="studio-algorithm-caption-label">${escapeStudioHtmlText(captionLabel)}</span></figcaption>` : "");
+		const replacement = `<figure class="studio-algorithm-block"${idAttr}>${figcaptionHtml}<div class="studio-algorithm-body">${renderedLines}</div></figure>`;
 		transformed = transformed.slice(0, startIndex) + replacement + transformed.slice(endIndex + endMarker.length);
 	}
 	return transformed;
@@ -1516,6 +1837,7 @@ function decorateStudioLatexRenderedHtml(
 	sourcePath: string | undefined,
 	baseDir: string | undefined,
 	subfigureGroups: StudioLatexSubfigurePreviewGroup[] = [],
+	algorithmBlocks: StudioLatexAlgorithmPreviewBlock[] = [],
 ): string {
 	const labels = readStudioLatexAuxLabels(sourcePath, baseDir);
 	let transformed = String(html ?? "");
@@ -1551,6 +1873,9 @@ function decorateStudioLatexRenderedHtml(
 
 	if (subfigureGroups.length > 0) {
 		transformed = decorateStudioLatexSubfigureRenderedHtml(transformed, subfigureGroups, labels);
+	}
+	if (algorithmBlocks.length > 0) {
+		transformed = decorateStudioLatexAlgorithmRenderedHtml(transformed, algorithmBlocks, labels);
 	}
 
 	return transformed;
@@ -2150,11 +2475,14 @@ async function preprocessStudioMermaidForPdf(markdown: string, workDir: string):
 
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const latexPreviewTransform = isLatex
+	const latexSubfigurePreviewTransform = isLatex
 		? preprocessStudioLatexSubfiguresForPreview(markdown)
 		: { markdown, subfigureGroups: [] };
+	const latexAlgorithmPreviewTransform = isLatex
+		? preprocessStudioLatexAlgorithmsForPreview(latexSubfigurePreviewTransform.markdown)
+		: { markdown, algorithmBlocks: [] };
 	const sourceWithResolvedRefs = isLatex
-		? preprocessStudioLatexReferences(latexPreviewTransform.markdown, sourcePath, resourcePath)
+		? preprocessStudioLatexReferences(latexAlgorithmPreviewTransform.markdown, sourcePath, resourcePath)
 		: markdown;
 	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
 	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
@@ -2215,7 +2543,8 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 						renderedHtml,
 						sourcePath,
 						resourcePath,
-						latexPreviewTransform.subfigureGroups,
+						latexSubfigurePreviewTransform.subfigureGroups,
+						latexAlgorithmPreviewTransform.algorithmBlocks,
 					);
 				}
 				succeed(stripMathMlAnnotationTags(renderedHtml));

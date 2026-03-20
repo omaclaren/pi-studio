@@ -7,6 +7,7 @@ All notable changes to `pi-studio` are documented here.
 ### Fixed
 - Citeproc-rendered LaTeX bibliographies now request a visible `References` section heading in Studio preview/PDF output.
 - LaTeX preview now regroups `subfigure`-based figures so adjacent subfigures keep their shared overall figure/caption structure instead of rendering as unrelated standalone figures, including visible `(a)` / `(b)` subfigure markers and `Figure n` main-caption labels when `.aux` labels are available.
+- LaTeX preview now converts common `algorithm` / `algorithmic` / `algpseudocode` blocks into readable algorithm cards with preserved captions, indentation, and optional line numbers instead of showing the raw environment text.
 - The editor language dropdown is now alphabetised for quicker scanning.
 
 ## [0.5.21] — 2026-03-19
