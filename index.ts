@@ -175,11 +175,13 @@ const CMUX_STUDIO_STATUS_COLOR_DARK = "#5ea1ff";
 const CMUX_STUDIO_STATUS_COLOR_LIGHT = "#0047ab";
 
 const PDF_PREAMBLE = `\\usepackage{titlesec}
-\\titleformat{\\section}{\\Large\\bfseries\\sffamily}{}{0pt}{}[\\vspace{2pt}\\titlerule]
+\\titleformat{\\section}{\\Large\\bfseries\\sffamily}{}{0pt}{}[\\vspace{3pt}\\titlerule\\vspace{12pt}]
 \\titleformat{\\subsection}{\\large\\bfseries\\sffamily}{}{0pt}{}
 \\titleformat{\\subsubsection}{\\normalsize\\bfseries\\sffamily}{}{0pt}{}
 \\titlespacing*{\\section}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{1ex plus 0.2ex}
 \\titlespacing*{\\subsection}{0pt}{1.2ex plus 0.4ex minus 0.2ex}{0.6ex plus 0.1ex}
+\\usepackage{caption}
+\\captionsetup[figure]{justification=raggedright,singlelinecheck=false}
 \\usepackage{enumitem}
 \\setlist[itemize]{nosep, leftmargin=1.5em}
 \\setlist[enumerate]{nosep, leftmargin=1.5em}
@@ -1827,7 +1829,7 @@ function buildStudioLatexInjectedPdfSubfigureBlock(
 		? (group.caption ? `\\textbf{${figureLabel}} ${group.caption}` : `\\textbf{${figureLabel}}`)
 		: (group.caption ? group.caption : "");
 
-		const minipageBlocks = group.items.map((item) => {
+	const minipageBlocks = group.items.map((item) => {
 		const widthSpec = item.widthSpec || "0.48\\textwidth";
 		const imageCommand = `\\includegraphics${item.imageOptions ? `[${item.imageOptions}]` : "[width=\\linewidth]"}{${item.imagePath}}`;
 		const subfigureLabel = formatStudioLatexSubfigureCaptionLabel(item.label, labels);
@@ -1838,7 +1840,7 @@ function buildStudioLatexInjectedPdfSubfigureBlock(
 			`\\begin{minipage}[t]{${widthSpec}}`,
 			"\\centering",
 			imageCommand,
-			captionLine ? `\\par\\smallskip ${captionLine}` : "",
+			captionLine ? `\\par\\smallskip{\\raggedright ${captionLine}\\par}` : "",
 			"\\end{minipage}",
 		].filter(Boolean);
 		return {
@@ -1866,7 +1868,7 @@ function buildStudioLatexInjectedPdfSubfigureBlock(
 		"\\begin{figure}[p]",
 		"\\centering",
 		rows.join("\n\\par\\medskip\n"),
-		figureCaption ? `\\par\\bigskip ${figureCaption}` : "",
+		figureCaption ? `\\par\\bigskip{\\raggedright ${figureCaption}\\par}` : "",
 		"\\end{figure}",
 		"\\clearpage",
 	].filter(Boolean);
@@ -1907,6 +1909,15 @@ function injectStudioLatexPdfSubfigureBlocks(
 		transformed = transformed.replace(entry.placeholder, buildStudioLatexInjectedPdfSubfigureBlock(entry.group, labels));
 	}
 	return transformed;
+}
+
+function normalizeStudioGeneratedFigureCaptions(latex: string): string {
+	return String(latex ?? "").replace(/\\begin\{figure\*?\}(?:\[[^\]]*\])?[\s\S]*?\\end\{figure\*?\}/g, (figureEnv) => {
+		return String(figureEnv).replace(/\\caption(\[[^\]]*\])?\{/g, (_match, optionalArg) => {
+			const suffix = typeof optionalArg === "string" ? optionalArg : "";
+			return `\\captionsetup{justification=raggedright,singlelinecheck=false}\\caption${suffix}{\\raggedright `;
+		});
+	});
 }
 
 function formatStudioLatexMainAlgorithmCaptionLabel(label: string | null, labels: Map<string, { number: string; kind: string }>): string | null {
@@ -3004,7 +3015,8 @@ async function renderStudioPdfFromGeneratedLatex(
 
 		const generatedLatex = await readFile(latexPath, "utf-8");
 		const injectedLatex = injectStudioLatexPdfSubfigureBlocks(generatedLatex, subfigureGroups, sourcePath, resourcePath);
-		await writeFile(latexPath, injectedLatex, "utf-8");
+		const normalizedLatex = normalizeStudioGeneratedFigureCaptions(injectedLatex);
+		await writeFile(latexPath, normalizedLatex, "utf-8");
 
 		await new Promise<void>((resolve, reject) => {
 			const child = spawn(pdfEngine, [
