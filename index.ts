@@ -1123,6 +1123,25 @@ interface StudioLatexSubfigurePreviewTransformResult {
 	subfigureGroups: StudioLatexSubfigurePreviewGroup[];
 }
 
+interface StudioLatexPdfSubfigureItem {
+	imagePath: string;
+	imageOptions: string | null;
+	widthSpec: string | null;
+	caption: string | null;
+	label: string | null;
+}
+
+interface StudioLatexPdfSubfigureGroup {
+	caption: string | null;
+	label: string | null;
+	items: StudioLatexPdfSubfigureItem[];
+}
+
+interface StudioLatexPdfSubfigureTransformResult {
+	markdown: string;
+	groups: Array<{ placeholder: string; group: StudioLatexPdfSubfigureGroup }>;
+}
+
 interface StudioLatexAlgorithmPreviewLine {
 	indent: number;
 	content: string;
@@ -1197,6 +1216,17 @@ function readStudioLatexEnvironmentBlock(
 	return null;
 }
 
+function extractStudioLatexFirstCommandArgument(input: string, commandName: string, allowStar = false): string | null {
+	const escapedCommand = commandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const pattern = new RegExp(`\\\\${escapedCommand}${allowStar ? "\\*?" : ""}(?:\\s*\\[[^\\]]*\\])?\\s*\\{`, "g");
+	const match = pattern.exec(input);
+	if (!match) return null;
+	const openBraceIndex = pattern.lastIndex - 1;
+	const closeBraceIndex = findStudioLatexMatchingBrace(input, openBraceIndex);
+	if (closeBraceIndex < 0) return null;
+	return input.slice(openBraceIndex + 1, closeBraceIndex).trim() || null;
+}
+
 function extractStudioLatexLastCommandArgument(input: string, commandName: string, allowStar = false): string | null {
 	const escapedCommand = commandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const pattern = new RegExp(`\\\\${escapedCommand}${allowStar ? "\\*?" : ""}(?:\\s*\\[[^\\]]*\\])?\\s*\\{`, "g");
@@ -1233,10 +1263,98 @@ function convertStudioLatexLengthToCss(length: string): string | null {
 	return null;
 }
 
-function extractStudioLatexSubfigureWidth(blockText: string): string | null {
+function extractStudioLatexSubfigureWidthSpec(blockText: string): string | null {
 	const match = blockText.match(/^\\begin\s*\{subfigure\*?\}(?:\s*\[[^\]]*\])?\s*\{([^}]*)\}/);
+	return match?.[1]?.trim() || null;
+}
+
+function extractStudioLatexSubfigureWidth(blockText: string): string | null {
+	const widthSpec = extractStudioLatexSubfigureWidthSpec(blockText);
+	if (!widthSpec) return null;
+	return convertStudioLatexLengthToCss(widthSpec);
+}
+
+function extractStudioLatexIncludeGraphics(input: string): { path: string; options: string | null } | null {
+	const pattern = /\\includegraphics\*?(?:\s*\[[^\]]*\])?\s*\{/g;
+	const match = pattern.exec(input);
 	if (!match) return null;
-	return convertStudioLatexLengthToCss(match[1] ?? "");
+	const openBraceIndex = pattern.lastIndex - 1;
+	const closeBraceIndex = findStudioLatexMatchingBrace(input, openBraceIndex);
+	if (closeBraceIndex < 0) return null;
+	const optionMatch = match[0].match(/\[([^\]]*)\]/);
+	return {
+		path: input.slice(openBraceIndex + 1, closeBraceIndex).trim(),
+		options: optionMatch?.[1]?.trim() || null,
+	};
+}
+
+function collectStudioLatexPdfSubfigureGroups(markdown: string): Array<{ start: number; end: number; group: StudioLatexPdfSubfigureGroup }> {
+	const groups: Array<{ start: number; end: number; group: StudioLatexPdfSubfigureGroup }> = [];
+	const figurePattern = /\\begin\s*\{(figure\*?)\}/g;
+
+	for (;;) {
+		const figureMatch = figurePattern.exec(markdown);
+		if (!figureMatch) break;
+		const envName = figureMatch[1] ?? "figure";
+		const block = readStudioLatexEnvironmentBlock(markdown, figureMatch.index, envName);
+		if (!block) continue;
+		const inner = block.innerText;
+		const subfigurePattern = /\\begin\s*\{(subfigure\*?)\}/g;
+		const subfigureBlocks: Array<{ start: number; end: number; fullText: string }> = [];
+		for (;;) {
+			const subfigureMatch = subfigurePattern.exec(inner);
+			if (!subfigureMatch) break;
+			const subfigureEnvName = subfigureMatch[1] ?? "subfigure";
+			const subfigureBlock = readStudioLatexEnvironmentBlock(inner, subfigureMatch.index, subfigureEnvName);
+			if (!subfigureBlock) continue;
+			subfigureBlocks.push({
+				start: subfigureMatch.index,
+				end: subfigureBlock.endIndex,
+				fullText: subfigureBlock.fullText.trim(),
+			});
+			subfigurePattern.lastIndex = subfigureBlock.endIndex;
+		}
+		if (subfigureBlocks.length === 0) continue;
+
+		let outerResidual = "";
+		let residualCursor = 0;
+		for (const subfigureBlock of subfigureBlocks) {
+			outerResidual += inner.slice(residualCursor, subfigureBlock.start);
+			residualCursor = subfigureBlock.end;
+		}
+		outerResidual += inner.slice(residualCursor);
+
+		const items: StudioLatexPdfSubfigureItem[] = [];
+		let allHaveImages = true;
+		for (const subfigureBlock of subfigureBlocks) {
+			const image = extractStudioLatexIncludeGraphics(subfigureBlock.fullText);
+			if (!image?.path) {
+				allHaveImages = false;
+				break;
+			}
+			items.push({
+				imagePath: image.path,
+				imageOptions: image.options,
+				widthSpec: extractStudioLatexSubfigureWidthSpec(subfigureBlock.fullText),
+				caption: extractStudioLatexFirstCommandArgument(subfigureBlock.fullText, "caption", true),
+				label: extractStudioLatexLastCommandArgument(subfigureBlock.fullText, "label"),
+			});
+		}
+		if (!allHaveImages || items.length === 0) continue;
+
+		groups.push({
+			start: figureMatch.index,
+			end: block.endIndex,
+			group: {
+				caption: extractStudioLatexLastCommandArgument(outerResidual, "caption", true),
+				label: extractStudioLatexLastCommandArgument(outerResidual, "label"),
+				items,
+			},
+		});
+		figurePattern.lastIndex = block.endIndex;
+	}
+
+	return groups;
 }
 
 function preprocessStudioLatexSubfiguresForPreview(markdown: string): StudioLatexSubfigurePreviewTransformResult {
@@ -1689,6 +1807,106 @@ function formatStudioLatexMainFigureCaptionLabel(label: string | null, labels: M
 	if (!entry?.number) return null;
 	if (entry.kind === "table") return `Table ${entry.number}`;
 	return `Figure ${entry.number}`;
+}
+
+function estimateStudioLatexRelativeWidth(widthSpec: string | null | undefined): number | null {
+	const normalized = String(widthSpec ?? "").replace(/\s+/g, "");
+	if (!normalized) return null;
+	const fractionalMatch = normalized.match(/^([0-9]*\.?[0-9]+)\\(?:textwidth|linewidth|columnwidth|hsize)$/);
+	if (!fractionalMatch) return null;
+	const value = Number.parseFloat(fractionalMatch[1] ?? "");
+	return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function buildStudioLatexInjectedPdfSubfigureBlock(
+	group: StudioLatexPdfSubfigureGroup,
+	labels: Map<string, { number: string; kind: string }>,
+): string {
+	const figureLabel = formatStudioLatexMainFigureCaptionLabel(group.label, labels);
+	const figureCaption = figureLabel
+		? (group.caption ? `\\textbf{${figureLabel}} ${group.caption}` : `\\textbf{${figureLabel}}`)
+		: (group.caption ? group.caption : "");
+
+		const minipageBlocks = group.items.map((item) => {
+		const widthSpec = item.widthSpec || "0.48\\textwidth";
+		const imageCommand = `\\includegraphics${item.imageOptions ? `[${item.imageOptions}]` : "[width=\\linewidth]"}{${item.imagePath}}`;
+		const subfigureLabel = formatStudioLatexSubfigureCaptionLabel(item.label, labels);
+		const captionLine = subfigureLabel
+			? (item.caption ? `\\textbf{${subfigureLabel}} ${item.caption}` : `\\textbf{${subfigureLabel}}`)
+			: (item.caption ? item.caption : "");
+		const parts = [
+			`\\begin{minipage}[t]{${widthSpec}}`,
+			"\\centering",
+			imageCommand,
+			captionLine ? `\\par\\smallskip ${captionLine}` : "",
+			"\\end{minipage}",
+		].filter(Boolean);
+		return {
+			latex: parts.join("\n"),
+			relativeWidth: estimateStudioLatexRelativeWidth(widthSpec) ?? 0.48,
+		};
+	});
+
+	const rows: string[] = [];
+	let currentRow: string[] = [];
+	let currentWidth = 0;
+	for (const block of minipageBlocks) {
+		if (currentRow.length > 0 && currentWidth + block.relativeWidth > 1.02) {
+			rows.push(currentRow.join("\n\\hfill\n"));
+			currentRow = [];
+			currentWidth = 0;
+		}
+		currentRow.push(block.latex);
+		currentWidth += block.relativeWidth;
+	}
+	if (currentRow.length > 0) rows.push(currentRow.join("\n\\hfill\n"));
+
+	const bodyParts = [
+		"\\clearpage",
+		"\\begin{figure}[p]",
+		"\\centering",
+		rows.join("\n\\par\\medskip\n"),
+		figureCaption ? `\\par\\bigskip ${figureCaption}` : "",
+		"\\end{figure}",
+		"\\clearpage",
+	].filter(Boolean);
+	return `\n${bodyParts.join("\n")}\n`;
+}
+
+function preprocessStudioLatexSubfiguresForPdf(markdown: string): StudioLatexPdfSubfigureTransformResult {
+	const groups = collectStudioLatexPdfSubfigureGroups(markdown);
+	if (groups.length === 0) return { markdown, groups: [] };
+	let transformed = "";
+	let cursor = 0;
+	const placeholderGroups: Array<{ placeholder: string; group: StudioLatexPdfSubfigureGroup }> = [];
+
+	for (const [index, entry] of groups.entries()) {
+		const placeholder = `PISTUDIOSUBFIGUREPDFPLACEHOLDER${index + 1}`;
+		placeholderGroups.push({ placeholder, group: entry.group });
+		transformed += markdown.slice(cursor, entry.start);
+		transformed += `\n\n${placeholder}\n\n`;
+		cursor = entry.end;
+	}
+	transformed += markdown.slice(cursor);
+	return {
+		markdown: transformed,
+		groups: placeholderGroups,
+	};
+}
+
+function injectStudioLatexPdfSubfigureBlocks(
+	latex: string,
+	groups: Array<{ placeholder: string; group: StudioLatexPdfSubfigureGroup }>,
+	sourcePath: string | undefined,
+	baseDir: string | undefined,
+): string {
+	if (groups.length === 0) return latex;
+	const labels = readStudioLatexAuxLabels(sourcePath, baseDir);
+	let transformed = String(latex ?? "");
+	for (const entry of groups) {
+		transformed = transformed.replace(entry.placeholder, buildStudioLatexInjectedPdfSubfigureBlock(entry.group, labels));
+	}
+	return transformed;
 }
 
 function formatStudioLatexMainAlgorithmCaptionLabel(label: string | null, labels: Map<string, { number: string; kind: string }>): string | null {
@@ -2709,6 +2927,141 @@ async function renderStudioLiteralTextPdf(text: string, title = "Studio export")
 	}
 }
 
+async function renderStudioPdfFromGeneratedLatex(
+	markdown: string,
+	pandocCommand: string,
+	pdfEngine: string,
+	resourcePath: string | undefined,
+	pandocWorkingDir: string | undefined,
+	bibliographyArgs: string[],
+	sourcePath: string | undefined,
+	subfigureGroups: Array<{ placeholder: string; group: StudioLatexPdfSubfigureGroup }>,
+): Promise<{ pdf: Buffer; warning?: string }> {
+	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
+	const preamblePath = join(tempDir, "_pdf_preamble.tex");
+	const latexPath = join(tempDir, "studio-export.tex");
+	const outputPath = join(tempDir, "studio-export.pdf");
+
+	await mkdir(tempDir, { recursive: true });
+	await writeFile(preamblePath, PDF_PREAMBLE, "utf-8");
+
+	const pandocArgs = [
+		"-f", "latex",
+		"-t", "latex",
+		"-s",
+		"-o", latexPath,
+		"-V", "geometry:margin=2.2cm",
+		"-V", "fontsize=11pt",
+		"-V", "linestretch=1.25",
+		"-V", "urlcolor=blue",
+		"-V", "linkcolor=blue",
+		"--include-in-header", preamblePath,
+		...bibliographyArgs,
+	];
+	if (resourcePath) pandocArgs.push(`--resource-path=${resourcePath}`);
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const child = spawn(pandocCommand, pandocArgs, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
+			const stderrChunks: Buffer[] = [];
+			let settled = false;
+
+			const fail = (error: Error) => {
+				if (settled) return;
+				settled = true;
+				reject(error);
+			};
+
+			child.stderr.on("data", (chunk: Buffer | string) => {
+				stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+			});
+
+			child.once("error", (error) => {
+				const errno = error as NodeJS.ErrnoException;
+				if (errno.code === "ENOENT") {
+					const commandHint = pandocCommand === "pandoc"
+						? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
+						: `${pandocCommand} was not found. Check PANDOC_PATH.`;
+					fail(new Error(commandHint));
+					return;
+				}
+				fail(error);
+			});
+
+			child.once("close", (code) => {
+				if (settled) return;
+				if (code === 0) {
+					settled = true;
+					resolve();
+					return;
+				}
+				const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+				fail(new Error(`pandoc LaTeX generation failed with exit code ${code}${stderr ? `: ${stderr}` : ""}`));
+			});
+
+			child.stdin.end(markdown);
+		});
+
+		const generatedLatex = await readFile(latexPath, "utf-8");
+		const injectedLatex = injectStudioLatexPdfSubfigureBlocks(generatedLatex, subfigureGroups, sourcePath, resourcePath);
+		await writeFile(latexPath, injectedLatex, "utf-8");
+
+		await new Promise<void>((resolve, reject) => {
+			const child = spawn(pdfEngine, [
+				"-interaction=nonstopmode",
+				"-halt-on-error",
+				`-output-directory=${tempDir}`,
+				latexPath,
+			], { stdio: ["ignore", "pipe", "pipe"], cwd: pandocWorkingDir });
+			const stdoutChunks: Buffer[] = [];
+			const stderrChunks: Buffer[] = [];
+			let settled = false;
+
+			const fail = (error: Error) => {
+				if (settled) return;
+				settled = true;
+				reject(error);
+			};
+
+			child.stdout.on("data", (chunk: Buffer | string) => {
+				stdoutChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+			});
+			child.stderr.on("data", (chunk: Buffer | string) => {
+				stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+			});
+
+			child.once("error", (error) => {
+				const errno = error as NodeJS.ErrnoException;
+				if (errno.code === "ENOENT") {
+					fail(new Error(
+						`${pdfEngine} was not found. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE.`,
+					));
+					return;
+				}
+				fail(error);
+			});
+
+			child.once("close", (code) => {
+				if (settled) return;
+				if (code === 0) {
+					settled = true;
+					resolve();
+					return;
+				}
+				const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+				const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+				const errorMatch = stdout.match(/^! .+$/m);
+				const hint = errorMatch ? `: ${errorMatch[0]}` : (stderr ? `: ${stderr}` : "");
+				fail(new Error(`${pdfEngine} PDF export failed with exit code ${code}${hint}`));
+			});
+		});
+
+		return { pdf: await readFile(outputPath) };
+	} finally {
+		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+	}
+}
+
 async function renderStudioPdfWithPandoc(
 	markdown: string,
 	isLatex?: boolean,
@@ -2718,8 +3071,15 @@ async function renderStudioPdfWithPandoc(
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
+	const latexSubfigurePdfTransform = isLatex
+		? preprocessStudioLatexSubfiguresForPdf(markdown)
+		: { markdown, groups: [] };
 	const latexPdfSource = isLatex
-		? preprocessStudioLatexAlgorithmsForPdf(markdown, sourcePath, resourcePath)
+		? preprocessStudioLatexAlgorithmsForPdf(
+			latexSubfigurePdfTransform.markdown,
+			sourcePath,
+			resourcePath,
+		)
 		: markdown;
 	const sourceWithResolvedRefs = isLatex
 		? injectStudioLatexEquationTags(preprocessStudioLatexReferences(latexPdfSource, sourcePath, resourcePath), sourcePath, resourcePath)
@@ -2804,6 +3164,19 @@ async function renderStudioPdfWithPandoc(
 			await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
 		}
 	};
+
+	if (isLatex && latexSubfigurePdfTransform.groups.length > 0) {
+		return await renderStudioPdfFromGeneratedLatex(
+			sourceWithResolvedRefs,
+			pandocCommand,
+			pdfEngine,
+			resourcePath,
+			pandocWorkingDir,
+			bibliographyArgs,
+			sourcePath,
+			latexSubfigurePdfTransform.groups,
+		);
+	}
 
 	if (!isLatex && effectiveEditorLanguage === "diff") {
 		const inputFormat = "markdown+lists_without_preceding_blankline+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
