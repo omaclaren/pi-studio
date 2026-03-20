@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.25] — 2026-03-21
+
 ### Fixed
 - Studio PDF exports now add more space below ruled section headings to keep bibliography entries clear of the `References` underline, and figure captions now use left-aligned ragged-right formatting for long multi-line captions, including reinjected PDF subfigure groups, without disturbing normal figure centering.
 
