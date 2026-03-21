@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.26] — 2026-03-21
+
 ### Added
 - Added a file-based `/studio-pdf <path>` command that exports a local file to `<name>.studio.pdf` using the existing Studio PDF pipeline and opens the result in the default PDF viewer, without requiring the Studio browser UI.
 
