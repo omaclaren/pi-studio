@@ -28,6 +28,7 @@ Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens 
   - saves `.annotated.md`
 - Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi
 - Exports right-pane preview as PDF (pandoc + LaTeX)
+- Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf`
 - Shows model/session/context usage in the footer, plus a compact-context action
 
 ## Commands
@@ -41,6 +42,7 @@ Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens 
 | `/studio --status` | Show studio server status |
 | `/studio --stop` | Stop studio server |
 | `/studio --help` | Show help |
+| `/studio-pdf <path>` | Export a local file to `<name>.studio.pdf` via the Studio PDF pipeline |
 
 ## Install
 

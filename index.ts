@@ -5,7 +5,7 @@ import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { URL, pathToFileURL } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 
@@ -925,6 +925,23 @@ function readStudioFile(pathArg: string, cwd: string):
 			message: `Failed to read file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
 		};
 	}
+}
+
+function inferStudioPdfLanguageFromPath(pathInput: string): string | undefined {
+	const extension = extname(pathInput).toLowerCase();
+	if (extension === ".tex" || extension === ".latex") return "latex";
+	if (extension === ".md" || extension === ".markdown" || extension === ".mdx") return "markdown";
+	if (extension === ".diff" || extension === ".patch") return "diff";
+	return undefined;
+}
+
+function buildStudioPdfOutputPath(sourcePath: string): string {
+	const sourceDir = dirname(sourcePath);
+	const sourceName = basename(sourcePath);
+	const sourceExt = extname(sourceName);
+	const sourceStem = sourceExt ? sourceName.slice(0, -sourceExt.length) : sourceName;
+	const outputStem = sourceStem || sourceName || "studio-export";
+	return join(sourceDir, `${outputStem}.studio.pdf`);
 }
 
 function writeStudioFile(pathArg: string, cwd: string, content: string):
@@ -6250,7 +6267,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio --last    Open with last model response\n"
 						+ "  /studio --status  Show studio status\n"
 						+ "  /studio --stop    Stop studio server\n"
-						+ "  /studio-current <path>  Load a file into currently open Studio tab(s)",
+						+ "  /studio-current <path>  Load a file into currently open Studio tab(s)\n"
+						+ "  /studio-pdf <path>      Export a file to <name>.studio.pdf via Studio PDF",
 					"info",
 				);
 				return;
@@ -6364,6 +6382,86 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`Failed to open browser: ${error instanceof Error ? error.message : String(error)}`, "error");
 			} finally {
 				void maybeNotifyUpdateAvailable(ctx);
+			}
+		},
+	});
+
+	pi.registerCommand("studio-pdf", {
+		description: "Export a file to PDF via the Studio PDF pipeline (/studio-pdf <file>)",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const trimmed = args.trim();
+			if (!trimmed || trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
+				ctx.ui.notify(
+					"Usage: /studio-pdf <path>\n"
+						+ "  Export a local Markdown/LaTeX file to <name>.studio.pdf using the Studio PDF pipeline.",
+					"info",
+				);
+				return;
+			}
+
+			if (trimmed.startsWith("-")) {
+				ctx.ui.notify(`Unknown flag: ${trimmed}. Use /studio-pdf --help`, "error");
+				return;
+			}
+
+			const pathArg = parsePathArgument(trimmed);
+			if (!pathArg) {
+				ctx.ui.notify("Invalid file path argument.", "error");
+				return;
+			}
+
+			const file = readStudioFile(pathArg, ctx.cwd);
+			if (file.ok === false) {
+				ctx.ui.notify(file.message, "error");
+				return;
+			}
+
+			if (file.text.length > PDF_EXPORT_MAX_CHARS) {
+				ctx.ui.notify(`PDF export text exceeds ${PDF_EXPORT_MAX_CHARS} characters.`, "error");
+				return;
+			}
+
+			await ctx.waitForIdle();
+			const pathPdfLanguage = inferStudioPdfLanguageFromPath(file.resolvedPath);
+			const editorPdfLanguage = pathPdfLanguage ?? inferStudioPdfLanguage(file.text);
+			const isLatex = editorPdfLanguage === "latex"
+				|| (
+					!pathPdfLanguage
+					&& (editorPdfLanguage === undefined || editorPdfLanguage === "markdown")
+					&& /\\documentclass\b|\\begin\{document\}/.test(file.text)
+				);
+			const resourcePath = resolveStudioBaseDir(file.resolvedPath, undefined, ctx.cwd);
+			const outputPath = buildStudioPdfOutputPath(file.resolvedPath);
+
+			try {
+				const { pdf, warning } = await renderStudioPdfWithPandoc(
+					file.text,
+					isLatex,
+					resourcePath,
+					editorPdfLanguage,
+					file.resolvedPath,
+				);
+				await writeFile(outputPath, pdf);
+
+				let openError: string | null = null;
+				try {
+					await openPathInDefaultViewer(outputPath);
+				} catch (error) {
+					openError = error instanceof Error ? error.message : String(error);
+				}
+
+				ctx.ui.notify(`Exported Studio PDF: ${outputPath}`, "info");
+				if (warning) {
+					ctx.ui.notify(warning, "warning");
+				}
+				if (openError) {
+					ctx.ui.notify(`PDF was exported but could not be opened automatically: ${openError}`, "warning");
+				}
+			} catch (error) {
+				ctx.ui.notify(
+					`Studio PDF export failed for ${file.label}: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
 			}
 		},
 	});
