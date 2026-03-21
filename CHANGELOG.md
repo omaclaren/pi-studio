@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.27] — 2026-03-21
+
 ### Fixed
 - Markdown preview/PDF parsing now also allows ATX headings without a preceding blank line, so patterns like `Paragraph` followed immediately by `# Heading` on the next line are treated as headings rather than plain paragraph text.
 
