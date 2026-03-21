@@ -860,12 +860,21 @@
       overflow-wrap: anywhere;
     }
 
-    .rendered-markdown .studio-algorithm-line-content math {
+    .rendered-markdown .studio-algorithm-line-content math,
+    .rendered-markdown .studio-algorithm-line-content mjx-container {
       font-size: 1em;
     }
 
     .rendered-markdown math {
       font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", "STIXGeneral", serif;
+    }
+
+    .rendered-markdown mjx-container[display="true"] {
+      display: block;
+      margin: 1em 0;
+      text-align: center;
+      overflow-x: auto;
+      overflow-y: hidden;
     }
 
     .rendered-markdown .studio-display-equation {
@@ -879,7 +888,8 @@
       overflow-y: hidden;
     }
 
-    .rendered-markdown .studio-display-equation-body math[display="block"] {
+    .rendered-markdown .studio-display-equation-body math[display="block"],
+    .rendered-markdown .studio-display-equation-body mjx-container[display="true"] {
       margin: 0;
     }
 

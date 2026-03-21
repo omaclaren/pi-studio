@@ -223,6 +223,7 @@
       const ANNOTATION_MARKER_REGEX = /\[an:\s*([^\]]+?)\]/gi;
       const EMPTY_OVERLAY_LINE = "\u200b";
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      const MATHJAX_CDN_URL = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
       const BOOT = (typeof window.__PI_STUDIO_BOOT__ === "object" && window.__PI_STUDIO_BOOT__)
         ? window.__PI_STUDIO_BOOT__
         : {};
@@ -231,8 +232,11 @@
         : {};
       const MERMAID_UNAVAILABLE_MESSAGE = "Mermaid renderer unavailable. Showing mermaid blocks as code.";
       const MERMAID_RENDER_FAIL_MESSAGE = "Mermaid render failed. Showing diagram source text.";
+      const MATHJAX_UNAVAILABLE_MESSAGE = "Math fallback unavailable. Some unsupported equations may remain as raw TeX.";
+      const MATHJAX_RENDER_FAIL_MESSAGE = "Math fallback could not render some unsupported equations.";
       let mermaidModulePromise = null;
       let mermaidInitialized = false;
+      let mathJaxPromise = null;
 
       const DEBUG_ENABLED = (() => {
         try {
@@ -1137,6 +1141,171 @@
         return buildPreviewErrorHtml("Preview sanitizer unavailable. Showing plain markdown.", markdown);
       }
 
+      function appendMathFallbackNotice(targetEl, message) {
+        if (!targetEl || typeof targetEl.querySelector !== "function" || typeof targetEl.appendChild !== "function") {
+          return;
+        }
+
+        if (targetEl.querySelector(".preview-math-warning")) {
+          return;
+        }
+
+        const warningEl = document.createElement("div");
+        warningEl.className = "preview-warning preview-math-warning";
+        warningEl.textContent = String(message || MATHJAX_UNAVAILABLE_MESSAGE);
+        targetEl.appendChild(warningEl);
+      }
+
+      function extractMathFallbackTex(text, displayMode) {
+        const source = typeof text === "string" ? text.trim() : "";
+        if (!source) return "";
+
+        if (displayMode) {
+          if (source.startsWith("$$") && source.endsWith("$$") && source.length >= 4) {
+            return source.slice(2, -2).replace(/^\s+|\s+$/g, "");
+          }
+          if (source.startsWith("\\[") && source.endsWith("\\]") && source.length >= 4) {
+            return source.slice(2, -2).replace(/^\s+|\s+$/g, "");
+          }
+          return source;
+        }
+
+        if (source.startsWith("\\(") && source.endsWith("\\)") && source.length >= 4) {
+          return source.slice(2, -2).trim();
+        }
+        if (source.startsWith("$") && source.endsWith("$") && source.length >= 2) {
+          return source.slice(1, -1).trim();
+        }
+        return source;
+      }
+
+      function collectMathFallbackTargets(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") return [];
+
+        const nodes = Array.from(targetEl.querySelectorAll(".math.display, .math.inline"));
+        const targets = [];
+        const seenTargets = new Set();
+
+        nodes.forEach((node) => {
+          if (!node || !node.classList) return;
+          const displayMode = node.classList.contains("display");
+          const rawText = typeof node.textContent === "string" ? node.textContent : "";
+          const tex = extractMathFallbackTex(rawText, displayMode);
+          if (!tex) return;
+
+          let renderTarget = node;
+          if (displayMode) {
+            const parent = node.parentElement;
+            const parentText = parent && typeof parent.textContent === "string" ? parent.textContent.trim() : "";
+            if (parent && parent.tagName === "P" && parentText === rawText.trim()) {
+              renderTarget = parent;
+            }
+          }
+
+          if (seenTargets.has(renderTarget)) return;
+          seenTargets.add(renderTarget);
+          targets.push({ node, renderTarget, displayMode, tex });
+        });
+
+        return targets;
+      }
+
+      function ensureMathJax() {
+        if (window.MathJax && typeof window.MathJax.typesetPromise === "function") {
+          return Promise.resolve(window.MathJax);
+        }
+
+        if (mathJaxPromise) {
+          return mathJaxPromise;
+        }
+
+        mathJaxPromise = new Promise((resolve, reject) => {
+          const globalMathJax = (window.MathJax && typeof window.MathJax === "object") ? window.MathJax : {};
+          const texConfig = (globalMathJax.tex && typeof globalMathJax.tex === "object") ? globalMathJax.tex : {};
+          const loaderConfig = (globalMathJax.loader && typeof globalMathJax.loader === "object") ? globalMathJax.loader : {};
+          const startupConfig = (globalMathJax.startup && typeof globalMathJax.startup === "object") ? globalMathJax.startup : {};
+          const optionsConfig = (globalMathJax.options && typeof globalMathJax.options === "object") ? globalMathJax.options : {};
+          const loaderEntries = Array.isArray(loaderConfig.load) ? loaderConfig.load.slice() : [];
+          ["[tex]/ams", "[tex]/noerrors", "[tex]/noundefined"].forEach((entry) => {
+            if (loaderEntries.indexOf(entry) === -1) loaderEntries.push(entry);
+          });
+
+          window.MathJax = Object.assign({}, globalMathJax, {
+            loader: Object.assign({}, loaderConfig, {
+              load: loaderEntries,
+            }),
+            tex: Object.assign({}, texConfig, {
+              inlineMath: [["\\(", "\\)"], ["$", "$"]],
+              displayMath: [["\\[", "\\]"], ["$$", "$$"]],
+              packages: Object.assign({}, texConfig.packages || {}, { "[+]": ["ams", "noerrors", "noundefined"] }),
+            }),
+            options: Object.assign({}, optionsConfig, {
+              skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"],
+            }),
+            startup: Object.assign({}, startupConfig, {
+              typeset: false,
+            }),
+          });
+
+          const script = document.createElement("script");
+          script.src = MATHJAX_CDN_URL;
+          script.async = true;
+          script.dataset.piStudioMathjax = "1";
+          script.onload = () => {
+            const api = window.MathJax;
+            if (api && api.startup && api.startup.promise && typeof api.startup.promise.then === "function") {
+              api.startup.promise.then(() => resolve(api)).catch(reject);
+              return;
+            }
+            if (api && typeof api.typesetPromise === "function") {
+              resolve(api);
+              return;
+            }
+            reject(new Error("MathJax did not initialize."));
+          };
+          script.onerror = () => {
+            reject(new Error("Failed to load MathJax."));
+          };
+          document.head.appendChild(script);
+        }).catch((error) => {
+          mathJaxPromise = null;
+          throw error;
+        });
+
+        return mathJaxPromise;
+      }
+
+      async function renderMathFallbackInElement(targetEl) {
+        const fallbackTargets = collectMathFallbackTargets(targetEl);
+        if (fallbackTargets.length === 0) return;
+
+        fallbackTargets.forEach((entry) => {
+          entry.renderTarget.classList.add("studio-mathjax-fallback");
+          if (entry.displayMode) {
+            entry.renderTarget.classList.add("studio-mathjax-fallback-display");
+            entry.renderTarget.textContent = "\\[\n" + entry.tex + "\n\\]";
+          } else {
+            entry.renderTarget.textContent = "\\(" + entry.tex + "\\)";
+          }
+        });
+
+        let mathJax;
+        try {
+          mathJax = await ensureMathJax();
+        } catch (error) {
+          console.error("MathJax load failed:", error);
+          appendMathFallbackNotice(targetEl, MATHJAX_UNAVAILABLE_MESSAGE);
+          return;
+        }
+
+        try {
+          await mathJax.typesetPromise(fallbackTargets.map((entry) => entry.renderTarget));
+        } catch (error) {
+          console.error("MathJax fallback render failed:", error);
+          appendMathFallbackNotice(targetEl, MATHJAX_RENDER_FAIL_MESSAGE);
+        }
+      }
+
       function applyAnnotationMarkersToElement(targetEl, mode) {
         if (!targetEl || mode === "none") return;
         if (typeof document.createTreeWalker !== "function") return;
@@ -1596,6 +1765,7 @@
             : "none";
           applyAnnotationMarkersToElement(targetEl, annotationMode);
           await renderMermaidInElement(targetEl);
+          await renderMathFallbackInElement(targetEl);
 
           // Warn if relative images are present but unlikely to resolve (non-file-backed content)
           if (!sourceState.path && !(resourceDirInput && resourceDirInput.value.trim())) {

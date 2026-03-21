@@ -9,6 +9,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Fixed
 - Markdown preview/PDF rendering now also allows blockquotes without a preceding blank line, matching the earlier tolerant list parsing and preventing leading `>` quote lines from collapsing into plain paragraph text.
+- Studio browser preview now keeps the existing MathML rendering for ordinary equations but falls back to MathJax for pandoc-unsupported math blocks, improving advanced LaTeX matrix/array preview cases without switching all preview math to MathJax.
 
 ## [0.5.25] — 2026-03-21
 
