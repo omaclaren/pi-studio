@@ -7,6 +7,9 @@ All notable changes to `pi-studio` are documented here.
 ### Added
 - Added a file-based `/studio-pdf <path>` command that exports a local file to `<name>.studio.pdf` using the existing Studio PDF pipeline and opens the result in the default PDF viewer, without requiring the Studio browser UI.
 
+### Fixed
+- Markdown preview/PDF rendering now also allows blockquotes without a preceding blank line, matching the earlier tolerant list parsing and preventing leading `>` quote lines from collapsing into plain paragraph text.
+
 ## [0.5.25] — 2026-03-21
 
 ### Fixed
