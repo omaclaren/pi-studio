@@ -1,6 +1,6 @@
 # pi-studio
 
-Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens a local browser workspace with editor and response panes for interacting with pi: annotating model responses/files, running edited prompts, requesting critiques, browsing history, and rendering previews.
+Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace for working with prompts, responses, Markdown and LaTeX documents, code files, and other common text-based files side by side. Annotate responses and files, write, edit, and run prompts, browse prompt and response history, request critiques, and use live preview for code, Markdown, and LaTeX.
 
 ## Screenshots
 
@@ -42,6 +42,7 @@ Experimental extension for [pi](https://github.com/badlogic/pi-mono) that opens 
 | `/studio --status` | Show studio server status |
 | `/studio --stop` | Stop studio server |
 | `/studio --help` | Show help |
+| `/studio-current <path>` | Load a file into currently open Studio tab(s) without opening a new browser window |
 | `/studio-pdf <path>` | Export a local file to `<name>.studio.pdf` via the Studio PDF pipeline |
 
 ## Install
@@ -68,6 +69,7 @@ pi -e https://github.com/omaclaren/pi-studio
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
   - `brew install pandoc`
   - install TeX Live/MacTeX for PDF export
+- Mermaid diagrams in exported PDFs may also require Mermaid CLI (`mmdc` / `@mermaid-js/mermaid-cli`) when you want diagram blocks rendered as diagrams rather than left as code.
 
 ## License
 

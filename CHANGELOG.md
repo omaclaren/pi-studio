@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.28] — 2026-03-21
+
+### Changed
+- Refreshed the Studio package description and README opening/docs so they describe Studio more accurately as a two-pane browser workspace for prompt/response editing, annotations, history, live preview, and related workflows, and documented `/studio-current` plus the optional Mermaid CLI requirement for Mermaid PDF rendering.
+
 ## [0.5.27] — 2026-03-21
 
 ### Fixed
