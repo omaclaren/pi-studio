@@ -2802,7 +2802,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	const sourceWithResolvedRefs = isLatex
 		? preprocessStudioLatexReferences(latexAlgorithmPreviewTransform.markdown, sourcePath, resourcePath)
 		: markdown;
-	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline-blank_before_blockquote+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
+	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
 	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
 	if (resourcePath) {
@@ -3208,7 +3208,7 @@ async function renderStudioPdfWithPandoc(
 	}
 
 	if (!isLatex && effectiveEditorLanguage === "diff") {
-		const inputFormat = "markdown+lists_without_preceding_blankline-blank_before_blockquote+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
+		const inputFormat = "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
 		const diffMarkdown = prepareStudioPdfMarkdown(markdown, false, effectiveEditorLanguage);
 		try {
 			return await runPandocPdfExport(inputFormat, diffMarkdown);
@@ -3224,7 +3224,7 @@ async function renderStudioPdfWithPandoc(
 
 	const inputFormat = isLatex
 		? "latex"
-		: "markdown+lists_without_preceding_blankline-blank_before_blockquote+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris+superscript+subscript-raw_html";
+		: "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris+superscript+subscript-raw_html";
 	const normalizedMarkdown = prepareStudioPdfMarkdown(sourceWithResolvedRefs, isLatex, effectiveEditorLanguage);
 
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
