@@ -715,8 +715,8 @@
           btn.setAttribute("aria-pressed", isFocusedPane ? "true" : "false");
           btn.textContent = isFocusedPane ? "Exit focus" : "Focus pane";
           btn.title = isFocusedPane
-            ? "Exit focus mode for the " + paneName + " pane."
-            : "Show only the " + paneName + " pane. Shortcut: Cmd/Ctrl+Esc or F10.";
+            ? "Return to the two-pane layout. Shortcut: F10 or Cmd/Ctrl+Esc."
+            : "Show only the " + paneName + " pane. Shortcut: F10 or Cmd/Ctrl+Esc.";
         });
       }
 
@@ -754,7 +754,7 @@
         setActivePane(pane);
         paneFocusTarget = pane;
         applyPaneFocusClasses();
-        setStatus("Focus mode: " + paneLabel(pane) + " pane (Esc to exit).");
+        setStatus("Focus mode: " + paneLabel(pane) + " pane. Toggle with F10 or Cmd/Ctrl+Esc.");
       }
 
       function togglePaneFocus() {
@@ -777,7 +777,7 @@
       }
 
       function handlePaneShortcut(event) {
-        if (!event) return;
+        if (!event || event.defaultPrevented) return;
 
         const key = typeof event.key === "string" ? event.key : "";
         const isToggleShortcut =
@@ -797,9 +797,16 @@
           && !event.altKey
           && !event.shiftKey
         ) {
+          const activeKind = getAbortablePendingKind();
+          if (activeKind === "direct" || activeKind === "critique") {
+            event.preventDefault();
+            requestCancelForPendingRequest(activeKind);
+            return;
+          }
           if (exitPaneFocus()) {
             event.preventDefault();
           }
+          return;
         }
 
         if (
@@ -2814,10 +2821,10 @@
           sendRunBtn.classList.toggle("request-stop-active", sendRunIsStop);
           sendRunBtn.disabled = sendRunIsStop ? wsState === "Disconnected" : (uiBusy || critiqueIsStop);
           sendRunBtn.title = sendRunIsStop
-            ? "Stop the running editor-text request."
+            ? "Stop the running editor-text request. Shortcut: Esc."
             : (annotationsEnabled
-              ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter."
-              : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter.");
+              ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc."
+              : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc.");
         }
 
         if (critiqueBtn) {
@@ -2825,7 +2832,7 @@
           critiqueBtn.classList.toggle("request-stop-active", critiqueIsStop);
           critiqueBtn.disabled = critiqueIsStop ? wsState === "Disconnected" : (uiBusy || sendRunIsStop);
           critiqueBtn.title = critiqueIsStop
-            ? "Stop the running critique request."
+            ? "Stop the running critique request. Shortcut: Esc."
             : (annotationsEnabled
               ? "Critique editor text as-is (includes [an: ...] markers)."
               : "Critique editor text with [an: ...] markers stripped.");

@@ -4206,7 +4206,7 @@ ${cssVarsBlock}
           </select>
         </div>
         <div class="section-header-actions">
-          <button id="leftFocusBtn" class="pane-focus-btn" type="button" title="Show only the editor pane. Shortcut: Cmd/Ctrl+Esc or F10.">Focus pane</button>
+          <button id="leftFocusBtn" class="pane-focus-btn" type="button" title="Show only the editor pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
         </div>
       </div>
       <div class="source-wrap">
@@ -4296,7 +4296,7 @@ ${cssVarsBlock}
           </select>
         </div>
         <div class="section-header-actions">
-          <button id="rightFocusBtn" class="pane-focus-btn" type="button" title="Show only the response pane. Shortcut: Cmd/Ctrl+Esc or F10.">Focus pane</button>
+          <button id="rightFocusBtn" class="pane-focus-btn" type="button" title="Show only the response pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
           <button id="exportPdfBtn" type="button" title="Export the current right-pane preview as PDF via pandoc + xelatex.">Export right preview as PDF</button>
         </div>
       </div>
@@ -4338,7 +4338,7 @@ ${cssVarsBlock}
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
     <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text">Model: ${initialModel} · Terminal: ${initialTerminal} · Context: unknown</span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
-    <span class="shortcut-hint">Focus pane: Cmd/Ctrl+Esc (or F10), Esc to exit · Run editor text: Cmd/Ctrl+Enter</span>
+    <span class="shortcut-hint">Focus pane: F10 (or Cmd/Ctrl+Esc) to toggle · Run editor text: Cmd/Ctrl+Enter · Stop request: Esc</span>
   </footer>
 
   <!-- Defer sanitizer script so studio can boot/connect even if CDN is slow or blocked. -->

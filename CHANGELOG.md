@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- Studio keyboard shortcuts now keep `Cmd/Ctrl+Enter` for running editor text while using `Esc` to stop an active request, and the focus-pane hint/button copy now describes focus mode as a toggle via `F10` or `Cmd/Ctrl+Esc`.
+
 ## [0.5.28] — 2026-03-21
 
 ### Changed
