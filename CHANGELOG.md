@@ -6,6 +6,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Changed
 - Studio keyboard shortcuts now keep `Cmd/Ctrl+Enter` for running editor text while using `Esc` to stop an active request, and the focus-pane hint/button copy now describes focus mode as a toggle via `F10` or `Cmd/Ctrl+Esc`.
+- While **Run editor text** is active, Studio now exposes a separate **Queue steering** action (and `Cmd/Ctrl+Enter` queues steering) while preserving a visible **Stop** control, and response-history prompt loading now preserves the effective prompt chain for steered responses rather than only the last correction message.
 
 ## [0.5.28] — 2026-03-21
 

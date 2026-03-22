@@ -87,6 +87,7 @@
     }
 
     #sendRunBtn,
+    #queueSteerBtn,
     #critiqueBtn {
       min-width: 10rem;
       display: inline-flex;
@@ -95,6 +96,7 @@
     }
 
     #sendRunBtn:not(:disabled):not(.request-stop-active),
+    #queueSteerBtn:not(:disabled),
     #loadResponseBtn:not(:disabled):not([hidden]) {
       background: var(--accent);
       border-color: var(--accent);
@@ -103,6 +105,7 @@
     }
 
     #sendRunBtn:not(:disabled):not(.request-stop-active):hover,
+    #queueSteerBtn:not(:disabled):hover,
     #loadResponseBtn:not(:disabled):not([hidden]):hover {
       filter: brightness(0.95);
     }

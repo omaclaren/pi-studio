@@ -78,6 +78,7 @@
       const getEditorBtn = document.getElementById("getEditorBtn");
       const loadGitDiffBtn = document.getElementById("loadGitDiffBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
+      const queueSteerBtn = document.getElementById("queueSteerBtn");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
       const saveAnnotatedBtn = document.getElementById("saveAnnotatedBtn");
       const stripAnnotationsBtn = document.getElementById("stripAnnotationsBtn");
@@ -120,6 +121,8 @@
       let latestCritiqueNotesNormalized = "";
       let responseHistory = [];
       let responseHistoryIndex = -1;
+      let studioRunChainActive = false;
+      let queuedSteeringCount = 0;
       let agentBusyFromServer = false;
       let terminalActivityPhase = "idle";
       let terminalActivityToolName = "";
@@ -150,6 +153,23 @@
         if (typeof value !== "string") return null;
         const trimmed = value.trim();
         return trimmed ? trimmed : null;
+      }
+
+      function applyStudioRunQueueStateFromMessage(message) {
+        if (!message || typeof message !== "object") return false;
+        let changed = false;
+        if (typeof message.studioRunChainActive === "boolean" && studioRunChainActive !== message.studioRunChainActive) {
+          studioRunChainActive = message.studioRunChainActive;
+          changed = true;
+        }
+        if (typeof message.queuedSteeringCount === "number" && Number.isFinite(message.queuedSteeringCount)) {
+          const nextCount = Math.max(0, Math.floor(message.queuedSteeringCount));
+          if (queuedSteeringCount !== nextCount) {
+            queuedSteeringCount = nextCount;
+            changed = true;
+          }
+        }
+        return changed;
       }
 
       contextTokens = parseFiniteNumber(document.body && document.body.dataset ? document.body.dataset.contextTokens : null);
@@ -383,26 +403,80 @@
         return "submitting request";
       }
 
+      function formatQueuedSteeringSuffix() {
+        if (!queuedSteeringCount) return "";
+        return queuedSteeringCount === 1
+          ? " · 1 steering queued"
+          : " · " + queuedSteeringCount + " steering queued";
+      }
+
       function getStudioBusyStatus(kind) {
         const action = getStudioActionLabel(kind);
+        const queueSuffix = studioRunChainActive ? formatQueuedSteeringSuffix() : "";
         if (terminalActivityPhase === "tool") {
           if (terminalActivityLabel) {
-            return "Studio: " + withEllipsis(terminalActivityLabel);
+            return "Studio: " + withEllipsis(terminalActivityLabel) + queueSuffix;
           }
           return terminalActivityToolName
-            ? "Studio: " + action + " (tool: " + terminalActivityToolName + ")…"
-            : "Studio: " + action + " (running tool)…";
+            ? "Studio: " + action + " (tool: " + terminalActivityToolName + ")…" + queueSuffix
+            : "Studio: " + action + " (running tool)…" + queueSuffix;
         }
         if (terminalActivityPhase === "responding") {
           if (lastSpecificToolLabel) {
-            return "Studio: " + lastSpecificToolLabel + " (generating response)…";
+            return "Studio: " + lastSpecificToolLabel + " (generating response)…" + queueSuffix;
           }
-          return "Studio: " + action + " (generating response)…";
+          return "Studio: " + action + " (generating response)…" + queueSuffix;
         }
         if (terminalActivityPhase === "running" && lastSpecificToolLabel) {
-          return "Studio: " + withEllipsis(lastSpecificToolLabel);
+          return "Studio: " + withEllipsis(lastSpecificToolLabel) + queueSuffix;
         }
-        return "Studio: " + action + "…";
+        return "Studio: " + action + "…" + queueSuffix;
+      }
+
+      function getHistoryPromptSourceLabel(item) {
+        if (!item || !item.promptMode) return null;
+        const steeringCount = typeof item.promptSteeringCount === "number" && Number.isFinite(item.promptSteeringCount)
+          ? Math.max(0, Math.floor(item.promptSteeringCount))
+          : 0;
+        if (item.promptMode === "run") return "original run";
+        if (item.promptMode !== "effective") return null;
+        if (steeringCount <= 0) return "original run";
+        return steeringCount === 1
+          ? "original run + 1 steering message"
+          : "original run + " + steeringCount + " steering messages";
+      }
+
+      function getHistoryPromptButtonLabel(item) {
+        if (!item || !item.prompt || !String(item.prompt).trim()) {
+          return "Response prompt unavailable";
+        }
+        if (item.promptMode === "effective") {
+          return "Load effective prompt into editor";
+        }
+        if (item.promptMode === "run") {
+          return "Load run prompt into editor";
+        }
+        return "Load response prompt into editor";
+      }
+
+      function getHistoryPromptLoadedStatus(item) {
+        if (!item || !item.prompt || !String(item.prompt).trim()) {
+          return "Prompt unavailable for the selected response.";
+        }
+        if (item.promptMode === "effective") {
+          return "Loaded effective prompt into editor.";
+        }
+        if (item.promptMode === "run") {
+          return "Loaded run prompt into editor.";
+        }
+        return "Loaded response prompt into editor.";
+      }
+
+      function getHistoryPromptSourceStateLabel(item) {
+        if (!item || !item.prompt || !String(item.prompt).trim()) return "response prompt";
+        if (item.promptMode === "effective") return "effective prompt";
+        if (item.promptMode === "run") return "run prompt";
+        return "response prompt";
       }
 
       function shouldAnimateFooterSpinner() {
@@ -815,11 +889,16 @@
           && !event.altKey
           && !event.shiftKey
           && activePane === "left"
-          && sendRunBtn
-          && !sendRunBtn.disabled
         ) {
-          event.preventDefault();
-          sendRunBtn.click();
+          if (queueSteerBtn && !queueSteerBtn.disabled) {
+            event.preventDefault();
+            queueSteerBtn.click();
+            return;
+          }
+          if (sendRunBtn && !sendRunBtn.disabled) {
+            event.preventDefault();
+            sendRunBtn.click();
+          }
         }
       }
 
@@ -858,6 +937,18 @@
         const thinking = typeof item.thinking === "string"
           ? item.thinking
           : (item.thinking == null ? null : String(item.thinking));
+        const promptMode = item.promptMode === "run" || item.promptMode === "effective"
+          ? item.promptMode
+          : "response";
+        const promptTriggerKind = item.promptTriggerKind === "run" || item.promptTriggerKind === "steer"
+          ? item.promptTriggerKind
+          : null;
+        const promptSteeringCount = typeof item.promptSteeringCount === "number" && Number.isFinite(item.promptSteeringCount)
+          ? Math.max(0, Math.floor(item.promptSteeringCount))
+          : 0;
+        const promptTriggerText = typeof item.promptTriggerText === "string"
+          ? item.promptTriggerText
+          : (item.promptTriggerText == null ? null : String(item.promptTriggerText));
 
         return {
           id,
@@ -866,6 +957,10 @@
           timestamp,
           kind: normalizeHistoryKind(item.kind),
           prompt,
+          promptMode,
+          promptTriggerKind,
+          promptSteeringCount,
+          promptTriggerText,
         };
       }
 
@@ -911,9 +1006,13 @@
         const hasPrompt = Boolean(selectedItem && typeof selectedItem.prompt === "string" && selectedItem.prompt.trim());
         if (loadHistoryPromptBtn) {
           loadHistoryPromptBtn.disabled = uiBusy || !hasPrompt;
-          loadHistoryPromptBtn.textContent = hasPrompt
-            ? "Load response prompt into editor"
-            : "Response prompt unavailable";
+          loadHistoryPromptBtn.textContent = getHistoryPromptButtonLabel(selectedItem);
+          const promptSourceLabel = getHistoryPromptSourceLabel(selectedItem);
+          loadHistoryPromptBtn.title = hasPrompt
+            ? (promptSourceLabel
+              ? "Load the " + promptSourceLabel + " prompt chain that generated the selected response into the editor."
+              : "Load the prompt that generated the selected response into the editor.")
+            : "Prompt unavailable for the selected response.";
         }
       }
 
@@ -2813,29 +2912,43 @@
 
       function syncRunAndCritiqueButtons() {
         const activeKind = getAbortablePendingKind();
-        const sendRunIsStop = activeKind === "direct";
+        const directIsStop = activeKind === "direct";
         const critiqueIsStop = activeKind === "critique";
+        const canQueueSteering = studioRunChainActive && !critiqueIsStop;
 
         if (sendRunBtn) {
-          sendRunBtn.textContent = sendRunIsStop ? "Stop" : "Run editor text";
-          sendRunBtn.classList.toggle("request-stop-active", sendRunIsStop);
-          sendRunBtn.disabled = sendRunIsStop ? wsState === "Disconnected" : (uiBusy || critiqueIsStop);
-          sendRunBtn.title = sendRunIsStop
-            ? "Stop the running editor-text request. Shortcut: Esc."
+          sendRunBtn.textContent = directIsStop ? "Stop" : "Run editor text";
+          sendRunBtn.classList.toggle("request-stop-active", directIsStop);
+          sendRunBtn.disabled = wsState === "Disconnected" || (!directIsStop && (uiBusy || critiqueIsStop));
+          sendRunBtn.title = directIsStop
+            ? "Stop the active run. Shortcut: Esc."
             : (annotationsEnabled
               ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc."
               : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc.");
         }
 
+        if (queueSteerBtn) {
+          queueSteerBtn.hidden = false;
+          queueSteerBtn.disabled = wsState === "Disconnected" || !canQueueSteering;
+          queueSteerBtn.classList.remove("request-stop-active");
+          queueSteerBtn.title = canQueueSteering
+            ? (annotationsEnabled
+              ? "Queue the current editor text as a steering message for the active run. Shortcut: Cmd/Ctrl+Enter."
+              : "Queue the current editor text as a steering message for the active run after stripping [an: ...] markers. Shortcut: Cmd/Ctrl+Enter.")
+            : "Queue steering is available while Run editor text is active.";
+        }
+
         if (critiqueBtn) {
           critiqueBtn.textContent = critiqueIsStop ? "Stop" : "Critique editor text";
           critiqueBtn.classList.toggle("request-stop-active", critiqueIsStop);
-          critiqueBtn.disabled = critiqueIsStop ? wsState === "Disconnected" : (uiBusy || sendRunIsStop);
+          critiqueBtn.disabled = critiqueIsStop ? wsState === "Disconnected" : (uiBusy || canQueueSteering);
           critiqueBtn.title = critiqueIsStop
             ? "Stop the running critique request. Shortcut: Esc."
-            : (annotationsEnabled
-              ? "Critique editor text as-is (includes [an: ...] markers)."
-              : "Critique editor text with [an: ...] markers stripped.");
+            : (canQueueSteering
+              ? "Critique queueing is not supported while Run editor text is active."
+              : (annotationsEnabled
+                ? "Critique editor text as-is (includes [an: ...] markers)."
+                : "Critique editor text with [an: ...] markers stripped."));
         }
       }
 
@@ -2980,6 +3093,7 @@
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
+          applyStudioRunQueueStateFromMessage(message);
           updateFooterMeta();
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
@@ -3052,6 +3166,8 @@
           if (busy) {
             if (agentBusyFromServer && stickyStudioKind) {
               setStatus(getStudioBusyStatus(stickyStudioKind), "warning");
+            } else if (agentBusyFromServer && studioRunChainActive) {
+              setStatus(getStudioBusyStatus("direct"), "warning");
             } else if (agentBusyFromServer) {
               setStatus(getTerminalBusyStatus(), "warning");
             } else {
@@ -3072,12 +3188,23 @@
           pendingRequestId = typeof message.requestId === "string" ? message.requestId : pendingRequestId;
           pendingKind = typeof message.kind === "string" ? message.kind : "unknown";
           stickyStudioKind = pendingKind;
+          if (pendingKind === "direct") {
+            studioRunChainActive = true;
+          }
           if (pendingKind === "compact") {
             compactInProgress = true;
           }
           setBusy(true);
           setWsState("Submitting");
           setStatus(getStudioBusyStatus(pendingKind), "warning");
+          return;
+        }
+
+        if (message.type === "request_queued") {
+          studioRunChainActive = true;
+          applyStudioRunQueueStateFromMessage(message);
+          syncActionButtons();
+          setStatus("Steering queued.", "success");
           return;
         }
 
@@ -3317,6 +3444,7 @@
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
+          applyStudioRunQueueStateFromMessage(message);
           updateFooterMeta();
 
           if (typeof message.activeRequestId === "string" && message.activeRequestId.length > 0) {
@@ -3353,6 +3481,8 @@
           if (busy) {
             if (agentBusyFromServer && stickyStudioKind) {
               setStatus(getStudioBusyStatus(stickyStudioKind), "warning");
+            } else if (agentBusyFromServer && studioRunChainActive) {
+              setStatus(getStudioBusyStatus("direct"), "warning");
             } else if (agentBusyFromServer) {
               setStatus(getTerminalBusyStatus(), "warning");
             } else {
@@ -3823,8 +3953,8 @@
           }
 
           setEditorText(prompt, { preserveScroll: false, preserveSelection: false });
-          setSourceState({ source: "blank", label: "response prompt", path: null });
-          setStatus("Loaded response prompt into editor.", "success");
+          setSourceState({ source: "blank", label: getHistoryPromptSourceStateLabel(item), path: null });
+          setStatus(getHistoryPromptLoadedStatus(item), "success");
         });
       }
 
@@ -4124,6 +4254,30 @@
           setBusy(false);
         }
       });
+
+      if (queueSteerBtn) {
+        queueSteerBtn.addEventListener("click", () => {
+          const prepared = prepareEditorTextForSend(sourceTextEl.value);
+          if (!prepared.trim()) {
+            setStatus("Editor is empty. Nothing to queue.", "warning");
+            return;
+          }
+          if (!studioRunChainActive) {
+            setStatus("Queue steering is only available while Run editor text is active.", "warning");
+            return;
+          }
+
+          const requestId = makeRequestId();
+          clearTitleAttention();
+          const sent = sendMessage({
+            type: "send_run_request",
+            requestId,
+            text: prepared,
+          });
+          if (!sent) return;
+          setStatus("Queueing steering…", "warning");
+        });
+      }
 
       copyDraftBtn.addEventListener("click", async () => {
         const content = sourceTextEl.value;

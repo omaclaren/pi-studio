@@ -14,6 +14,8 @@ type RequestedLens = Lens | "auto";
 type StudioRequestKind = "critique" | "annotation" | "direct" | "compact";
 type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
+type StudioPromptMode = "response" | "run" | "effective";
+type StudioPromptTriggerKind = "run" | "steer";
 
 const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
@@ -26,10 +28,17 @@ interface StudioServerState {
 	token: string;
 }
 
-interface ActiveStudioRequest {
+interface StudioPromptDescriptor {
+	prompt: string | null;
+	promptMode: StudioPromptMode;
+	promptTriggerKind: StudioPromptTriggerKind | null;
+	promptSteeringCount: number;
+	promptTriggerText: string | null;
+}
+
+interface ActiveStudioRequest extends StudioPromptDescriptor {
 	id: string;
 	kind: StudioRequestKind;
-	prompt: string | null;
 	timer: NodeJS.Timeout;
 	startedAt: number;
 }
@@ -41,13 +50,28 @@ interface LastStudioResponse {
 	kind: StudioRequestKind;
 }
 
-interface StudioResponseHistoryItem {
+interface StudioResponseHistoryItem extends StudioPromptDescriptor {
 	id: string;
 	markdown: string;
 	thinking: string | null;
 	timestamp: number;
 	kind: StudioRequestKind;
-	prompt: string | null;
+}
+
+interface StudioDirectRunChain {
+	id: string;
+	basePrompt: string;
+	steeringPrompts: string[];
+}
+
+interface QueuedStudioDirectRequest extends StudioPromptDescriptor {
+	requestId: string;
+	queuedAt: number;
+}
+
+interface PersistedStudioPromptMetadata extends StudioPromptDescriptor {
+	version: 1;
+	requestKind: "direct";
 }
 
 interface StudioContextUsageSnapshot {
@@ -173,6 +197,7 @@ const STUDIO_TERMINAL_NOTIFY_TITLE = "pi Studio";
 const CMUX_STUDIO_STATUS_KEY = "pi_studio";
 const CMUX_STUDIO_STATUS_COLOR_DARK = "#5ea1ff";
 const CMUX_STUDIO_STATUS_COLOR_LIGHT = "#0047ab";
+const STUDIO_PROMPT_METADATA_CUSTOM_TYPE = "pi-studio/direct-prompt";
 
 const PDF_PREAMBLE = `\\usepackage{titlesec}
 \\titleformat{\\section}{\\Large\\bfseries\\sffamily}{}{0pt}{}[\\vspace{3pt}\\titlerule\\vspace{12pt}]
@@ -3617,6 +3642,95 @@ function normalizePromptText(text: string | null | undefined): string | null {
 	return trimmed.length > 0 ? trimmed : null;
 }
 
+function buildStudioPromptDescriptor(
+	prompt: string | null,
+	promptMode: StudioPromptMode = "response",
+	promptTriggerKind: StudioPromptTriggerKind | null = null,
+	promptSteeringCount = 0,
+	promptTriggerText: string | null = null,
+): StudioPromptDescriptor {
+	return {
+		prompt: normalizePromptText(prompt),
+		promptMode,
+		promptTriggerKind,
+		promptSteeringCount: Number.isFinite(promptSteeringCount) && promptSteeringCount > 0
+			? Math.max(0, Math.floor(promptSteeringCount))
+			: 0,
+		promptTriggerText: normalizePromptText(promptTriggerText),
+	};
+}
+
+function buildStudioEffectivePrompt(basePrompt: string | null | undefined, steeringPrompts: Array<string | null | undefined>): string | null {
+	const normalizedBasePrompt = normalizePromptText(basePrompt);
+	const normalizedSteeringPrompts = steeringPrompts
+		.map((prompt) => normalizePromptText(prompt))
+		.filter((prompt): prompt is string => Boolean(prompt));
+
+	if (!normalizedBasePrompt) {
+		if (normalizedSteeringPrompts.length === 0) return null;
+		return normalizedSteeringPrompts.join("\n\n");
+	}
+	if (normalizedSteeringPrompts.length === 0) return normalizedBasePrompt;
+
+	const sections = ["## Original run prompt\n\n" + normalizedBasePrompt];
+	for (let i = 0; i < normalizedSteeringPrompts.length; i++) {
+		sections.push(`## Steering ${i + 1}\n\n${normalizedSteeringPrompts[i]}`);
+	}
+	return sections.join("\n\n").trim();
+}
+
+function buildStudioDirectRunPromptDescriptor(prompt: string): StudioPromptDescriptor {
+	const normalizedPrompt = normalizePromptText(prompt);
+	return buildStudioPromptDescriptor(normalizedPrompt, "run", "run", 0, normalizedPrompt);
+}
+
+function buildStudioQueuedSteerPromptDescriptor(chain: StudioDirectRunChain, triggerPrompt: string): StudioPromptDescriptor {
+	const normalizedTriggerPrompt = normalizePromptText(triggerPrompt);
+	const steeringPrompts = [...chain.steeringPrompts, normalizedTriggerPrompt].filter((prompt): prompt is string => Boolean(prompt));
+	const effectivePrompt = buildStudioEffectivePrompt(chain.basePrompt, steeringPrompts);
+	return buildStudioPromptDescriptor(effectivePrompt, "effective", "steer", steeringPrompts.length, normalizedTriggerPrompt);
+}
+
+function buildPersistedStudioPromptMetadata(promptDescriptor: StudioPromptDescriptor): PersistedStudioPromptMetadata {
+	return {
+		version: 1,
+		requestKind: "direct",
+		prompt: promptDescriptor.prompt,
+		promptMode: promptDescriptor.promptMode,
+		promptTriggerKind: promptDescriptor.promptTriggerKind,
+		promptSteeringCount: promptDescriptor.promptSteeringCount,
+		promptTriggerText: promptDescriptor.promptTriggerText,
+	};
+}
+
+function extractPersistedStudioPromptMetadata(entry: SessionEntry): PersistedStudioPromptMetadata | null {
+	if (!entry || entry.type !== "custom") return null;
+	const customEntry = entry as { customType?: unknown; data?: unknown };
+	if (customEntry.customType !== STUDIO_PROMPT_METADATA_CUSTOM_TYPE) return null;
+	const data = customEntry.data as Partial<PersistedStudioPromptMetadata> | undefined;
+	if (!data || data.requestKind !== "direct") return null;
+	return {
+		version: data.version === 1 ? 1 : 1,
+		requestKind: "direct",
+		...buildStudioPromptDescriptor(
+			typeof data.prompt === "string" ? data.prompt : null,
+			data.promptMode === "run" || data.promptMode === "effective" ? data.promptMode : "response",
+			data.promptTriggerKind === "run" || data.promptTriggerKind === "steer" ? data.promptTriggerKind : null,
+			typeof data.promptSteeringCount === "number" ? data.promptSteeringCount : 0,
+			typeof data.promptTriggerText === "string" ? data.promptTriggerText : null,
+		),
+	};
+}
+
+function getStudioPromptSourceLabel(promptMode: StudioPromptMode, promptSteeringCount: number): string | null {
+	if (promptMode === "run") return "original run";
+	if (promptMode !== "effective") return null;
+	if (promptSteeringCount <= 0) return "original run";
+	return promptSteeringCount === 1
+		? "original run + 1 steering message"
+		: `original run + ${promptSteeringCount} steering messages`;
+}
+
 function extractUserText(message: unknown): string | null {
 	const msg = message as {
 		role?: string;
@@ -3673,27 +3787,49 @@ function parseEntryTimestamp(timestamp: unknown): number {
 function buildResponseHistoryFromEntries(entries: SessionEntry[], limit = RESPONSE_HISTORY_LIMIT): StudioResponseHistoryItem[] {
 	const history: StudioResponseHistoryItem[] = [];
 	let lastUserPrompt: string | null = null;
+	let pendingPromptDescriptor: StudioPromptDescriptor | null = null;
 
 	for (const entry of entries) {
-		if (!entry || entry.type !== "message") continue;
+		if (!entry) continue;
+
+		const persistedPromptMetadata = extractPersistedStudioPromptMetadata(entry);
+		if (persistedPromptMetadata) {
+			pendingPromptDescriptor = buildStudioPromptDescriptor(
+				persistedPromptMetadata.prompt,
+				persistedPromptMetadata.promptMode,
+				persistedPromptMetadata.promptTriggerKind,
+				persistedPromptMetadata.promptSteeringCount,
+				persistedPromptMetadata.promptTriggerText,
+			);
+			continue;
+		}
+
+		if (entry.type !== "message") continue;
 		const message = (entry as { message?: unknown }).message;
 		const role = (message as { role?: string } | undefined)?.role;
 		if (role === "user") {
 			lastUserPrompt = extractUserText(message);
+			pendingPromptDescriptor = null;
 			continue;
 		}
 		if (role !== "assistant") continue;
 		const markdown = extractAssistantText(message);
 		if (!markdown) continue;
 		const thinking = extractAssistantThinking(message);
+		const promptDescriptor = pendingPromptDescriptor ?? buildStudioPromptDescriptor(lastUserPrompt);
 		history.push({
 			id: typeof (entry as { id?: unknown }).id === "string" ? (entry as { id: string }).id : randomUUID(),
 			markdown,
 			thinking,
 			timestamp: parseEntryTimestamp((entry as { timestamp?: unknown }).timestamp),
 			kind: inferStudioResponseKind(markdown),
-			prompt: lastUserPrompt,
+			prompt: promptDescriptor.prompt,
+			promptMode: promptDescriptor.promptMode,
+			promptTriggerKind: promptDescriptor.promptTriggerKind,
+			promptSteeringCount: promptDescriptor.promptSteeringCount,
+			promptTriggerText: promptDescriptor.promptTriggerText,
 		});
+		pendingPromptDescriptor = null;
 	}
 
 	if (history.length <= limit) return history;
@@ -4223,7 +4359,8 @@ ${cssVarsBlock}
           </div>
           <div class="source-actions">
             <div class="source-actions-row">
-              <button id="sendRunBtn" type="button" title="Send editor text directly to the model as-is. Shortcut: Cmd/Ctrl+Enter when editor pane is active.">Run editor text</button>
+              <button id="sendRunBtn" type="button" title="Run editor text. While a direct run is active, this button becomes Stop. Cmd/Ctrl+Enter queues steering from the current editor text. Stop the active request with Esc.">Run editor text</button>
+              <button id="queueSteerBtn" type="button" title="Queue steering is available while Run editor text is active." disabled>Queue steering</button>
               <button id="copyDraftBtn" type="button">Copy editor text</button>
               <button id="sendEditorBtn" type="button">Send to pi editor</button>
             </div>
@@ -4338,7 +4475,7 @@ ${cssVarsBlock}
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
     <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text">Model: ${initialModel} · Terminal: ${initialTerminal} · Context: unknown</span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
-    <span class="shortcut-hint">Focus pane: F10 (or Cmd/Ctrl+Esc) to toggle · Run editor text: Cmd/Ctrl+Enter · Stop request: Esc</span>
+    <span class="shortcut-hint">Focus pane: F10 (or Cmd/Ctrl+Esc) to toggle · Run / queue steering: Cmd/Ctrl+Enter · Stop request: Esc</span>
   </footer>
 
   <!-- Defer sanitizer script so studio can boot/connect even if CDN is slow or blocked. -->
@@ -4354,6 +4491,9 @@ ${cssVarsBlock}
 export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
 	let activeRequest: ActiveStudioRequest | null = null;
+	let studioDirectRunChain: StudioDirectRunChain | null = null;
+	let queuedStudioDirectRequests: QueuedStudioDirectRequest[] = [];
+	let pendingStudioPromptMetadata: StudioPromptDescriptor | null = null;
 	let lastStudioResponse: LastStudioResponse | null = null;
 	let preparedPdfExports = new Map<string, PreparedStudioPdfExport>();
 	let initialStudioDocument: InitialStudioDocument | null = null;
@@ -4385,6 +4525,20 @@ export default function (pi: ExtensionAPI) {
 	const packageMetadata = readLocalPackageMetadata();
 	const installedPackageVersion = packageMetadata?.version ?? null;
 	let updateAvailableLatestVersion: string | null = null;
+
+	const isStudioDirectRunChainActive = () => Boolean(studioDirectRunChain);
+	const getQueuedStudioSteeringCount = () => queuedStudioDirectRequests.length;
+	const canQueueStudioSteeringRequest = () => {
+		if (compactInProgress) return false;
+		if (!agentBusy) return false;
+		if (!studioDirectRunChain) return false;
+		return !activeRequest || activeRequest.kind === "direct";
+	};
+	const clearStudioDirectRunState = () => {
+		studioDirectRunChain = null;
+		queuedStudioDirectRequests = [];
+		pendingStudioPromptMetadata = null;
+	};
 
 	const isStudioBusy = () => agentBusy || activeRequest !== null || compactInProgress;
 
@@ -4862,6 +5016,8 @@ export default function (pi: ExtensionAPI) {
 			compactInProgress,
 			activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
 			activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
+			studioRunChainActive: isStudioDirectRunChainActive(),
+			queuedSteeringCount: getQueuedStudioSteeringCount(),
 		});
 	};
 
@@ -4916,19 +5072,67 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 
+		if (kind === "direct") {
+			clearStudioDirectRunState();
+		}
 		suppressedStudioResponse = { requestId, kind };
-		emitDebugEvent("cancel_active_request", { requestId, kind });
+		emitDebugEvent("cancel_active_request", { requestId, kind, queuedSteeringCount: getQueuedStudioSteeringCount() });
 		clearActiveRequest({ notify: "Cancelled request.", level: "warning" });
 		return { ok: true, kind };
 	};
 
-	const beginRequest = (requestId: string, kind: StudioRequestKind, prompt?: string | null): boolean => {
+	const activateRequest = (
+		requestId: string,
+		kind: StudioRequestKind,
+		promptDescriptor?: StudioPromptDescriptor | null,
+		options?: { skipNotificationCleanup?: boolean },
+	): boolean => {
+		const descriptor = promptDescriptor ?? buildStudioPromptDescriptor(null);
+		const timer = setTimeout(() => {
+			if (!activeRequest || activeRequest.id !== requestId) return;
+			emitDebugEvent("request_timeout", { requestId, kind });
+			broadcast({ type: "error", requestId, message: "Studio request timed out. Please try again." });
+			clearActiveRequest();
+		}, REQUEST_TIMEOUT_MS);
+
+		activeRequest = {
+			id: requestId,
+			kind,
+			prompt: descriptor.prompt,
+			promptMode: descriptor.promptMode,
+			promptTriggerKind: descriptor.promptTriggerKind,
+			promptSteeringCount: descriptor.promptSteeringCount,
+			promptTriggerText: descriptor.promptTriggerText,
+			startedAt: Date.now(),
+			timer,
+		};
+		if (!options?.skipNotificationCleanup) {
+			maybeClearStaleCmuxStudioNotifications();
+		}
+		syncCmuxStudioStatus();
+
+		emitDebugEvent("begin_request", {
+			requestId,
+			kind,
+			promptMode: descriptor.promptMode,
+			promptTriggerKind: descriptor.promptTriggerKind,
+			promptSteeringCount: descriptor.promptSteeringCount,
+			queuedSteeringCount: getQueuedStudioSteeringCount(),
+		});
+		broadcast({ type: "request_started", requestId, kind });
+		broadcastState();
+		return true;
+	};
+
+	const beginRequest = (requestId: string, kind: StudioRequestKind, promptDescriptor?: StudioPromptDescriptor | null): boolean => {
 		suppressedStudioResponse = null;
 		emitDebugEvent("begin_request_attempt", {
 			requestId,
 			kind,
 			hasActiveRequest: Boolean(activeRequest),
 			agentBusy,
+			studioDirectRunChainActive: isStudioDirectRunChainActive(),
+			queuedSteeringCount: getQueuedStudioSteeringCount(),
 		});
 		if (activeRequest) {
 			broadcast({ type: "busy", requestId, message: "A studio request is already in progress." });
@@ -4942,28 +5146,91 @@ export default function (pi: ExtensionAPI) {
 			broadcast({ type: "busy", requestId, message: "pi is currently busy. Wait for the current turn to finish." });
 			return false;
 		}
+		return activateRequest(requestId, kind, promptDescriptor);
+	};
 
-		const timer = setTimeout(() => {
-			if (!activeRequest || activeRequest.id !== requestId) return;
-			emitDebugEvent("request_timeout", { requestId, kind });
-			broadcast({ type: "error", requestId, message: "Studio request timed out. Please try again." });
-			clearActiveRequest();
-		}, REQUEST_TIMEOUT_MS);
+	const getPromptDescriptorForActiveRequest = (request: ActiveStudioRequest | null | undefined): StudioPromptDescriptor => {
+		return buildStudioPromptDescriptor(
+			request?.prompt ?? null,
+			request?.promptMode ?? "response",
+			request?.promptTriggerKind ?? null,
+			request?.promptSteeringCount ?? 0,
+			request?.promptTriggerText ?? null,
+		);
+	};
 
-		activeRequest = {
-			id: requestId,
-			kind,
-			prompt: normalizePromptText(prompt),
-			startedAt: Date.now(),
-			timer,
+	const startStudioDirectRunChain = (prompt: string): StudioPromptDescriptor => {
+		const normalizedPrompt = normalizePromptText(prompt) ?? prompt.trim();
+		studioDirectRunChain = {
+			id: randomUUID(),
+			basePrompt: normalizedPrompt,
+			steeringPrompts: [],
 		};
-		maybeClearStaleCmuxStudioNotifications();
-		syncCmuxStudioStatus();
+		queuedStudioDirectRequests = [];
+		pendingStudioPromptMetadata = null;
+		return buildStudioDirectRunPromptDescriptor(normalizedPrompt);
+	};
 
-		emitDebugEvent("begin_request", { requestId, kind });
-		broadcast({ type: "request_started", requestId, kind });
-		broadcastState();
-		return true;
+	const enqueueStudioDirectSteeringRequest = (requestId: string, prompt: string): QueuedStudioDirectRequest | null => {
+		if (!studioDirectRunChain) return null;
+		const normalizedPrompt = normalizePromptText(prompt);
+		if (!normalizedPrompt) return null;
+		const descriptor = buildStudioQueuedSteerPromptDescriptor(studioDirectRunChain, normalizedPrompt);
+		studioDirectRunChain.steeringPrompts.push(normalizedPrompt);
+		const queuedRequest: QueuedStudioDirectRequest = {
+			requestId,
+			queuedAt: Date.now(),
+			prompt: descriptor.prompt,
+			promptMode: descriptor.promptMode,
+			promptTriggerKind: descriptor.promptTriggerKind,
+			promptSteeringCount: descriptor.promptSteeringCount,
+			promptTriggerText: descriptor.promptTriggerText,
+		};
+		queuedStudioDirectRequests.push(queuedRequest);
+		return queuedRequest;
+	};
+
+	const claimQueuedStudioDirectRequestForPrompt = (_prompt: string | null): QueuedStudioDirectRequest | null => {
+		if (queuedStudioDirectRequests.length === 0) return null;
+		return queuedStudioDirectRequests.shift() ?? null;
+	};
+
+	const activateQueuedStudioDirectRequestForPrompt = (prompt: string | null): QueuedStudioDirectRequest | null => {
+		if (activeRequest) return null;
+		const queuedRequest = claimQueuedStudioDirectRequestForPrompt(prompt);
+		if (!queuedRequest) return null;
+		activateRequest(queuedRequest.requestId, "direct", queuedRequest, { skipNotificationCleanup: true });
+		return queuedRequest;
+	};
+
+	const stageStudioPromptMetadata = (promptDescriptor: StudioPromptDescriptor | null | undefined) => {
+		const descriptor = promptDescriptor ? buildStudioPromptDescriptor(
+			promptDescriptor.prompt,
+			promptDescriptor.promptMode,
+			promptDescriptor.promptTriggerKind,
+			promptDescriptor.promptSteeringCount,
+			promptDescriptor.promptTriggerText,
+		) : null;
+		pendingStudioPromptMetadata = descriptor && descriptor.prompt ? descriptor : null;
+	};
+
+	const persistPendingStudioPromptMetadata = () => {
+		if (!pendingStudioPromptMetadata) return;
+		const metadata = buildPersistedStudioPromptMetadata(pendingStudioPromptMetadata);
+		try {
+			pi.appendEntry(STUDIO_PROMPT_METADATA_CUSTOM_TYPE, metadata);
+			emitDebugEvent("persist_prompt_metadata", {
+				promptMode: metadata.promptMode,
+				promptTriggerKind: metadata.promptTriggerKind,
+				promptSteeringCount: metadata.promptSteeringCount,
+			});
+		} catch (error) {
+			emitDebugEvent("persist_prompt_metadata_error", {
+				message: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			pendingStudioPromptMetadata = null;
+		}
 	};
 
 	const closeAllClients = (code = 4001, reason = "Session invalidated") => {
@@ -5011,6 +5278,8 @@ export default function (pi: ExtensionAPI) {
 				compactInProgress,
 				activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
 				activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
+				studioRunChainActive: isStudioDirectRunChainActive(),
+				queuedSteeringCount: getQueuedStudioSteeringCount(),
 				lastResponse: lastStudioResponse,
 				responseHistory: studioResponseHistory,
 				initialDocument: initialStudioDocument,
@@ -5107,7 +5376,7 @@ export default function (pi: ExtensionAPI) {
 
 			const lens = resolveLens(msg.lens, document);
 			const prompt = buildCritiquePrompt(document, lens);
-			if (!beginRequest(msg.requestId, "critique", prompt)) return;
+			if (!beginRequest(msg.requestId, "critique", buildStudioPromptDescriptor(prompt))) return;
 
 			try {
 				pi.sendUserMessage(prompt);
@@ -5134,7 +5403,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (!beginRequest(msg.requestId, "annotation", text)) return;
+			if (!beginRequest(msg.requestId, "annotation", buildStudioPromptDescriptor(text))) return;
 
 			try {
 				pi.sendUserMessage(text);
@@ -5161,11 +5430,53 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (!beginRequest(msg.requestId, "direct", msg.text)) return;
+			if (canQueueStudioSteeringRequest()) {
+				const queuedRequest = enqueueStudioDirectSteeringRequest(msg.requestId, msg.text);
+				if (!queuedRequest) {
+					sendToClient(client, {
+						type: "error",
+						requestId: msg.requestId,
+						message: "Could not queue steering for the current run.",
+					});
+					return;
+				}
+
+				try {
+					pi.sendUserMessage(msg.text, { deliverAs: "steer" });
+					broadcast({
+						type: "request_queued",
+						requestId: msg.requestId,
+						kind: "direct",
+						queueKind: "steer",
+						studioRunChainActive: isStudioDirectRunChainActive(),
+						queuedSteeringCount: getQueuedStudioSteeringCount(),
+					});
+					broadcastState();
+				} catch (error) {
+					queuedStudioDirectRequests = queuedStudioDirectRequests.filter((request) => request.requestId !== msg.requestId);
+					if (studioDirectRunChain?.steeringPrompts.length) {
+						studioDirectRunChain.steeringPrompts.pop();
+					}
+					sendToClient(client, {
+						type: "error",
+						requestId: msg.requestId,
+						message: `Failed to queue steering request: ${error instanceof Error ? error.message : String(error)}`,
+					});
+					broadcastState();
+				}
+				return;
+			}
+
+			const promptDescriptor = startStudioDirectRunChain(msg.text);
+			if (!beginRequest(msg.requestId, "direct", promptDescriptor)) {
+				clearStudioDirectRunState();
+				return;
+			}
 
 			try {
 				pi.sendUserMessage(msg.text);
 			} catch (error) {
+				clearStudioDirectRunState();
 				clearActiveRequest();
 				sendToClient(client, {
 					type: "error",
@@ -5952,6 +6263,7 @@ export default function (pi: ExtensionAPI) {
 
 	const stopServer = async () => {
 		if (!serverState) return;
+		clearStudioDirectRunState();
 		clearActiveRequest();
 		clearPendingStudioCompletion();
 		clearPreparedPdfExports();
@@ -5984,6 +6296,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		pendingTurnPrompt = null;
+		clearStudioDirectRunState();
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		clearCompactionState();
 		agentBusy = false;
@@ -6001,6 +6314,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_switch", async (_event, ctx) => {
+		clearStudioDirectRunState();
 		clearActiveRequest({ notify: "Session switched. Studio request state cleared.", level: "warning" });
 		clearCompactionState();
 		pendingTurnPrompt = null;
@@ -6071,6 +6385,9 @@ export default function (pi: ExtensionAPI) {
 	pi.on("message_start", async (event) => {
 		const role = (event.message as { role?: string } | undefined)?.role;
 		emitDebugEvent("message_start", { role: role ?? "", activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
+		if (role === "assistant") {
+			persistPendingStudioPromptMetadata();
+		}
 		if (agentBusy && role === "assistant") {
 			setTerminalActivity("responding");
 		}
@@ -6094,7 +6411,21 @@ export default function (pi: ExtensionAPI) {
 		});
 
 		if (role === "user") {
-			pendingTurnPrompt = extractUserText(event.message);
+			const userPrompt = extractUserText(event.message);
+			pendingTurnPrompt = userPrompt;
+			const activatedQueuedRequest = activateQueuedStudioDirectRequestForPrompt(userPrompt);
+			if (activatedQueuedRequest) {
+				emitDebugEvent("activate_queued_request", {
+					requestId: activatedQueuedRequest.requestId,
+					queuedSteeringCount: getQueuedStudioSteeringCount(),
+					promptSteeringCount: activatedQueuedRequest.promptSteeringCount,
+				});
+			}
+			if (activeRequest?.kind === "direct") {
+				stageStudioPromptMetadata(getPromptDescriptorForActiveRequest(activeRequest));
+			} else {
+				pendingStudioPromptMetadata = null;
+			}
 			return;
 		}
 
@@ -6125,14 +6456,20 @@ export default function (pi: ExtensionAPI) {
 		refreshContextUsage(ctx);
 		const latestHistoryItem = studioResponseHistory[studioResponseHistory.length - 1];
 		if (!latestHistoryItem || latestHistoryItem.markdown !== markdown) {
-			const fallbackPrompt = activeRequest?.prompt ?? pendingTurnPrompt ?? latestSessionUserPrompt ?? null;
+			const fallbackPromptDescriptor = activeRequest
+				? getPromptDescriptorForActiveRequest(activeRequest)
+				: buildStudioPromptDescriptor(pendingTurnPrompt ?? latestSessionUserPrompt ?? null);
 			const fallbackHistoryItem: StudioResponseHistoryItem = {
 				id: randomUUID(),
 				markdown,
 				thinking,
 				timestamp: Date.now(),
 				kind: inferStudioResponseKind(markdown),
-				prompt: fallbackPrompt,
+				prompt: fallbackPromptDescriptor.prompt,
+				promptMode: fallbackPromptDescriptor.promptMode,
+				promptTriggerKind: fallbackPromptDescriptor.promptTriggerKind,
+				promptSteeringCount: fallbackPromptDescriptor.promptSteeringCount,
+				promptTriggerText: fallbackPromptDescriptor.promptTriggerText,
 			};
 			const nextHistory = [...studioResponseHistory, fallbackHistoryItem];
 			studioResponseHistory = nextHistory.slice(-RESPONSE_HISTORY_LIMIT);
@@ -6201,6 +6538,9 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_end", async () => {
 		agentBusy = false;
 		pendingTurnPrompt = null;
+		pendingStudioPromptMetadata = null;
+		const hadStudioDirectRunChain = isStudioDirectRunChainActive();
+		const queuedSteeringCount = getQueuedStudioSteeringCount();
 		refreshContextUsage();
 		emitDebugEvent("agent_end", {
 			activeRequestId: activeRequest?.id ?? null,
@@ -6208,7 +6548,10 @@ export default function (pi: ExtensionAPI) {
 			suppressedRequestId: suppressedStudioResponse?.requestId ?? null,
 			suppressedRequestKind: suppressedStudioResponse?.kind ?? null,
 			pendingCompletionKind: pendingStudioCompletionKind,
+			hadStudioDirectRunChain,
+			queuedSteeringCount,
 		});
+		clearStudioDirectRunState();
 		setTerminalActivity("idle");
 		if (activeRequest) {
 			const requestId = activeRequest.id;
@@ -6221,6 +6564,7 @@ export default function (pi: ExtensionAPI) {
 			clearPendingStudioCompletion();
 		} else {
 			flushPendingStudioCompletionNotification();
+			broadcastState();
 		}
 		suppressedStudioResponse = null;
 	});
@@ -6228,6 +6572,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async () => {
 		lastCommandCtx = null;
 		agentBusy = false;
+		clearStudioDirectRunState();
 		clearPendingStudioCompletion();
 		clearPreparedPdfExports();
 		clearCompactionState();
