@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.30] — 2026-03-24
+
+### Fixed
+- LaTeX preview now preserves structured display-math environments such as `bmatrix` inside `\[ ... \]` instead of flattening their rows during Markdown math normalization, and preview display equations now center more robustly across browser engines.
+- Studio now highlights custom `[an: ...]` markers in LaTeX editor syntax-highlighting mode, and PDF export renders those markers as styled annotation badges for both Markdown and LaTeX documents instead of leaving the raw bracket syntax in the final PDF.
+- Right-pane response PDF export now also respects the current annotation-visibility mode, so hidden annotations do not leak into exported PDFs as raw `[an: ...]` text.
+
 ## [0.5.29] — 2026-03-21
 
 ### Changed

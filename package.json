@@ -1,6 +1,6 @@
 {
   "name": "pi-studio",
-  "version": "0.5.29",
+  "version": "0.5.30",
   "description": "Two-pane browser workspace for pi with prompt/response editing, annotations, critiques, prompt/response history, and live Markdown/LaTeX/code preview",
   "type": "module",
   "license": "MIT",
