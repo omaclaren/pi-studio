@@ -1715,7 +1715,9 @@
           return;
         }
 
-        const markdown = rightView === "editor-preview" ? prepareEditorTextForPdfExport(sourceTextEl.value) : latestResponseMarkdown;
+        const markdown = rightView === "editor-preview"
+          ? prepareEditorTextForPdfExport(sourceTextEl.value)
+          : prepareEditorTextForPreview(latestResponseMarkdown);
         if (!markdown || !markdown.trim()) {
           setStatus("Nothing to export yet.", "warning");
           return;
@@ -2558,17 +2560,49 @@
         }
 
         if (lang === "latex") {
-          const texPattern = /(%.*$)|(\\(?:documentclass|usepackage|newtheorem|begin|end|section|subsection|subsubsection|chapter|part|title|author|date|maketitle|tableofcontents|includegraphics|caption|label|ref|eqref|cite|textbf|textit|texttt|emph|footnote|centering|newcommand|renewcommand|providecommand|bibliography|bibliographystyle|bibitem|item|input|include)\b)|(\\[A-Za-z]+)|(\{|\})|(\$\$?(?:[^$\\]|\\.)+\$\$?)|(\[(?:.*?)\])/g;
-          const highlighted = highlightCodeTokens(source, texPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-kw";
-            if (match[3]) return "hl-code-fn";
-            if (match[4]) return "hl-code-op";
-            if (match[5]) return "hl-code-str";
-            if (match[6]) return "hl-code-num";
-            return "hl-code";
-          });
-          return highlighted;
+          const texPattern = /(%.*$)|(\[an:\s*[^\]]+\])|(\\(?:documentclass|usepackage|newtheorem|begin|end|section|subsection|subsubsection|chapter|part|title|author|date|maketitle|tableofcontents|includegraphics|caption|label|ref|eqref|cite|textbf|textit|texttt|emph|footnote|centering|newcommand|renewcommand|providecommand|bibliography|bibliographystyle|bibitem|item|input|include)\b)|(\\[A-Za-z]+)|(\{|\})|(\$\$?(?:[^$\\]|\\.)+\$\$?)|(\[(?:.*?)\])/gi;
+          let out = "";
+          let lastIndex = 0;
+          texPattern.lastIndex = 0;
+
+          let match;
+          while ((match = texPattern.exec(source)) !== null) {
+            const token = match[0] || "";
+            const start = typeof match.index === "number" ? match.index : 0;
+
+            if (start > lastIndex) {
+              out += escapeHtml(source.slice(lastIndex, start));
+            }
+
+            if (match[1]) {
+              out += wrapHighlight("hl-code-com", token);
+            } else if (match[2]) {
+              out += highlightInlineAnnotations(token, renderMode);
+            } else if (match[3]) {
+              out += wrapHighlight("hl-code-kw", token);
+            } else if (match[4]) {
+              out += wrapHighlight("hl-code-fn", token);
+            } else if (match[5]) {
+              out += wrapHighlight("hl-code-op", token);
+            } else if (match[6]) {
+              out += wrapHighlight("hl-code-str", token);
+            } else if (match[7]) {
+              out += wrapHighlight("hl-code-num", token);
+            } else {
+              out += escapeHtml(token);
+            }
+
+            lastIndex = start + token.length;
+            if (token.length === 0) {
+              texPattern.lastIndex += 1;
+            }
+          }
+
+          if (lastIndex < source.length) {
+            out += escapeHtml(source.slice(lastIndex));
+          }
+
+          return out;
         }
 
         if (lang === "diff") {

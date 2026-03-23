@@ -205,6 +205,11 @@ const PDF_PREAMBLE = `\\usepackage{titlesec}
 \\titleformat{\\subsubsection}{\\normalsize\\bfseries\\sffamily}{}{0pt}{}
 \\titlespacing*{\\section}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{1ex plus 0.2ex}
 \\titlespacing*{\\subsection}{0pt}{1.2ex plus 0.4ex minus 0.2ex}{0.6ex plus 0.1ex}
+\\usepackage{xcolor}
+\\definecolor{StudioAnnotationBg}{HTML}{EAF3FF}
+\\definecolor{StudioAnnotationBorder}{HTML}{8CB8FF}
+\\definecolor{StudioAnnotationText}{HTML}{1F5FBF}
+\\newcommand{\\studioannotation}[1]{\\begingroup\\setlength{\\fboxsep}{1.5pt}\\fcolorbox{StudioAnnotationBorder}{StudioAnnotationBg}{\\textcolor{StudioAnnotationText}{\\sffamily\\footnotesize\\strut #1}}\\endgroup}
 \\usepackage{caption}
 \\captionsetup[figure]{justification=raggedright,singlelinecheck=false}
 \\usepackage{enumitem}
@@ -2649,6 +2654,85 @@ function inferStudioPdfLanguage(markdown: string, editorLanguage?: string): stri
 	return undefined;
 }
 
+function escapeStudioPdfLatexText(text: string): string {
+	return String(text ?? "")
+		.replace(/\r\n/g, "\n")
+		.replace(/\s*\n\s*/g, " ")
+		.trim()
+		.replace(/\\/g, "\\textbackslash{}")
+		.replace(/([{}%#$&_])/g, "\\$1")
+		.replace(/~/g, "\\textasciitilde{}")
+		.replace(/\^/g, "\\textasciicircum{}")
+		.replace(/\s{2,}/g, " ");
+}
+
+function replaceStudioAnnotationMarkersForPdfInSegment(text: string): string {
+	return String(text ?? "")
+		.replace(/\[an:\s*([^\]]+?)\]/gi, (_match, markerText: string) => {
+			const cleaned = escapeStudioPdfLatexText(markerText);
+			if (!cleaned) return "";
+			return `\\studioannotation{${cleaned}}`;
+		})
+		.replace(/\{\[\}\s*an:\s*([\s\S]*?)\s*\{\]\}/gi, (_match, markerText: string) => {
+			const cleaned = escapeStudioPdfLatexText(markerText);
+			if (!cleaned) return "";
+			return `\\studioannotation{${cleaned}}`;
+		});
+}
+
+function replaceStudioAnnotationMarkersForPdf(markdown: string): string {
+	const lines = String(markdown ?? "").split("\n");
+	const out: string[] = [];
+	let plainBuffer: string[] = [];
+	let inFence = false;
+	let fenceChar: "`" | "~" | undefined;
+	let fenceLength = 0;
+
+	const flushPlain = () => {
+		if (plainBuffer.length === 0) return;
+		out.push(replaceStudioAnnotationMarkersForPdfInSegment(plainBuffer.join("\n")));
+		plainBuffer = [];
+	};
+
+	for (const line of lines) {
+		const trimmed = line.trimStart();
+		const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+
+		if (fenceMatch) {
+			const marker = fenceMatch[1]!;
+			const markerChar = marker[0] as "`" | "~";
+			const markerLength = marker.length;
+
+			if (!inFence) {
+				flushPlain();
+				inFence = true;
+				fenceChar = markerChar;
+				fenceLength = markerLength;
+				out.push(line);
+				continue;
+			}
+
+			if (fenceChar === markerChar && markerLength >= fenceLength) {
+				inFence = false;
+				fenceChar = undefined;
+				fenceLength = 0;
+			}
+
+			out.push(line);
+			continue;
+		}
+
+		if (inFence) {
+			out.push(line);
+		} else {
+			plainBuffer.push(line);
+		}
+	}
+
+	flushPlain();
+	return out.join("\n");
+}
+
 function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLanguage?: string): string {
 	if (isLatex) return markdown;
 	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorLanguage);
@@ -2656,7 +2740,10 @@ function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLan
 		&& !isStudioSingleFencedCodeBlock(markdown)
 		? wrapStudioCodeAsMarkdown(markdown, effectiveEditorLanguage)
 		: markdown;
-	return normalizeObsidianImages(normalizeMathDelimiters(source));
+	const annotationReadySource = !effectiveEditorLanguage || effectiveEditorLanguage === "markdown" || effectiveEditorLanguage === "latex"
+		? replaceStudioAnnotationMarkersForPdf(source)
+		: source;
+	return normalizeObsidianImages(normalizeMathDelimiters(annotationReadySource));
 }
 
 function stripMathMlAnnotationTags(html: string): string {
@@ -2983,6 +3070,46 @@ async function renderStudioLiteralTextPdf(text: string, title = "Studio export")
 	}
 }
 
+function replaceStudioAnnotationMarkersInGeneratedLatex(latex: string): string {
+	const lines = String(latex ?? "").split("\n");
+	const out: string[] = [];
+	const rawEnvStack: string[] = [];
+	const rawEnvNames = new Set(["verbatim", "Verbatim", "Highlighting", "lstlisting"]);
+
+	const updateRawEnvStack = (line: string) => {
+		const envPattern = /\\(begin|end)\{([^}]+)\}/g;
+		let match: RegExpExecArray | null;
+		while ((match = envPattern.exec(line)) !== null) {
+			const kind = match[1];
+			const envName = match[2];
+			if (!envName || !rawEnvNames.has(envName)) continue;
+			if (kind === "begin") {
+				rawEnvStack.push(envName);
+			} else {
+				for (let i = rawEnvStack.length - 1; i >= 0; i -= 1) {
+					if (rawEnvStack[i] === envName) {
+						rawEnvStack.splice(i, 1);
+						break;
+					}
+				}
+			}
+		}
+	};
+
+	for (const line of lines) {
+		if (rawEnvStack.length > 0) {
+			out.push(line);
+			updateRawEnvStack(line);
+			continue;
+		}
+
+		out.push(replaceStudioAnnotationMarkersForPdfInSegment(line));
+		updateRawEnvStack(line);
+	}
+
+	return out.join("\n");
+}
+
 async function renderStudioPdfFromGeneratedLatex(
 	markdown: string,
 	pandocCommand: string,
@@ -3060,7 +3187,8 @@ async function renderStudioPdfFromGeneratedLatex(
 
 		const generatedLatex = await readFile(latexPath, "utf-8");
 		const injectedLatex = injectStudioLatexPdfSubfigureBlocks(generatedLatex, subfigureGroups, sourcePath, resourcePath);
-		const normalizedLatex = normalizeStudioGeneratedFigureCaptions(injectedLatex);
+		const annotationReadyLatex = replaceStudioAnnotationMarkersInGeneratedLatex(injectedLatex);
+		const normalizedLatex = normalizeStudioGeneratedFigureCaptions(annotationReadyLatex);
 		await writeFile(latexPath, normalizedLatex, "utf-8");
 
 		await new Promise<void>((resolve, reject) => {
@@ -3222,7 +3350,7 @@ async function renderStudioPdfWithPandoc(
 		}
 	};
 
-	if (isLatex && latexSubfigurePdfTransform.groups.length > 0) {
+	if (isLatex && (latexSubfigurePdfTransform.groups.length > 0 || /\[an:\s*[^\]]+\]/i.test(sourceWithResolvedRefs))) {
 		return await renderStudioPdfFromGeneratedLatex(
 			sourceWithResolvedRefs,
 			pandocCommand,
