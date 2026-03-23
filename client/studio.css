@@ -874,7 +874,9 @@
 
     .rendered-markdown mjx-container[display="true"] {
       display: block;
-      margin: 1em 0;
+      width: fit-content;
+      max-width: 100%;
+      margin: 1em auto;
       text-align: center;
       overflow-x: auto;
       overflow-y: hidden;
@@ -893,7 +895,7 @@
 
     .rendered-markdown .studio-display-equation-body math[display="block"],
     .rendered-markdown .studio-display-equation-body mjx-container[display="true"] {
-      margin: 0;
+      margin: 0 auto;
     }
 
     .rendered-markdown .studio-display-equation-number {
@@ -910,7 +912,9 @@
 
     .rendered-markdown math[display="block"] {
       display: block;
-      margin: 1em 0;
+      width: fit-content;
+      max-width: 100%;
+      margin: 1em auto;
       text-align: center;
       overflow-x: auto;
       overflow-y: hidden;

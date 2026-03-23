@@ -2466,6 +2466,9 @@ function isLikelyMathExpression(expr: string): boolean {
 
 function collapseDisplayMathContent(expr: string): string {
 	let content = expr.trim();
+	if (/\\begin\{[^}]+\}|\\end\{[^}]+\}/.test(content)) {
+		return content;
+	}
 	if (content.includes("\\\\") || content.includes("\n")) {
 		content = content.replace(/\\\\\s*/g, " ");
 		content = content.replace(/\s*\n\s*/g, " ");
