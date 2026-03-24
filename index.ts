@@ -960,7 +960,7 @@ function readStudioFile(pathArg: string, cwd: string):
 function inferStudioPdfLanguageFromPath(pathInput: string): string | undefined {
 	const extension = extname(pathInput).toLowerCase();
 	if (extension === ".tex" || extension === ".latex") return "latex";
-	if (extension === ".md" || extension === ".markdown" || extension === ".mdx") return "markdown";
+	if (extension === ".md" || extension === ".markdown" || extension === ".mdx" || extension === ".qmd") return "markdown";
 	if (extension === ".diff" || extension === ".patch") return "diff";
 	return undefined;
 }
@@ -2563,6 +2563,114 @@ function normalizeMathDelimiters(markdown: string): string {
 	return out.join("\n");
 }
 
+function stripStudioMarkdownHtmlCommentsInSegment(markdown: string): string {
+	const source = String(markdown ?? "");
+	let out = "";
+	let i = 0;
+	let codeSpanFenceLength = 0;
+	let inHtmlComment = false;
+
+	while (i < source.length) {
+		if (inHtmlComment) {
+			if (source.startsWith("-->", i)) {
+				inHtmlComment = false;
+				i += 3;
+				continue;
+			}
+			const ch = source[i]!;
+			if (ch === "\n" || ch === "\r") out += ch;
+			i += 1;
+			continue;
+		}
+
+		if (codeSpanFenceLength > 0) {
+			const fence = "`".repeat(codeSpanFenceLength);
+			if (source.startsWith(fence, i)) {
+				out += fence;
+				i += codeSpanFenceLength;
+				codeSpanFenceLength = 0;
+				continue;
+			}
+			out += source[i]!;
+			i += 1;
+			continue;
+		}
+
+		const backtickMatch = source.slice(i).match(/^`+/);
+		if (backtickMatch) {
+			const fence = backtickMatch[0]!;
+			codeSpanFenceLength = fence.length;
+			out += fence;
+			i += fence.length;
+			continue;
+		}
+
+		if (source.startsWith("<!--", i)) {
+			inHtmlComment = true;
+			i += 4;
+			continue;
+		}
+
+		out += source[i]!;
+		i += 1;
+	}
+
+	return out;
+}
+
+function stripStudioMarkdownHtmlComments(markdown: string): string {
+	const lines = String(markdown ?? "").split("\n");
+	const out: string[] = [];
+	let plainBuffer: string[] = [];
+	let inFence = false;
+	let fenceChar: "`" | "~" | undefined;
+	let fenceLength = 0;
+
+	const flushPlain = () => {
+		if (plainBuffer.length === 0) return;
+		out.push(stripStudioMarkdownHtmlCommentsInSegment(plainBuffer.join("\n")));
+		plainBuffer = [];
+	};
+
+	for (const line of lines) {
+		const trimmed = line.trimStart();
+		const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+
+		if (fenceMatch) {
+			const marker = fenceMatch[1]!;
+			const markerChar = marker[0] as "`" | "~";
+			const markerLength = marker.length;
+
+			if (!inFence) {
+				flushPlain();
+				inFence = true;
+				fenceChar = markerChar;
+				fenceLength = markerLength;
+				out.push(line);
+				continue;
+			}
+
+			if (fenceChar === markerChar && markerLength >= fenceLength) {
+				inFence = false;
+				fenceChar = undefined;
+				fenceLength = 0;
+			}
+
+			out.push(line);
+			continue;
+		}
+
+		if (inFence) {
+			out.push(line);
+		} else {
+			plainBuffer.push(line);
+		}
+	}
+
+	flushPlain();
+	return out.join("\n");
+}
+
 function normalizeStudioEditorLanguage(language: string | undefined): string | undefined {
 	const trimmed = typeof language === "string" ? language.trim().toLowerCase() : "";
 	if (!trimmed) return undefined;
@@ -2743,7 +2851,8 @@ function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLan
 	const annotationReadySource = !effectiveEditorLanguage || effectiveEditorLanguage === "markdown" || effectiveEditorLanguage === "latex"
 		? replaceStudioAnnotationMarkersForPdf(source)
 		: source;
-	return normalizeObsidianImages(normalizeMathDelimiters(annotationReadySource));
+	const commentStrippedSource = stripStudioMarkdownHtmlComments(annotationReadySource);
+	return normalizeObsidianImages(normalizeMathDelimiters(commentStrippedSource));
 }
 
 function stripMathMlAnnotationTags(html: string): string {
@@ -2908,15 +3017,16 @@ async function preprocessStudioMermaidForPdf(markdown: string, workDir: string):
 
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
+	const markdownWithoutHtmlComments = isLatex ? markdown : stripStudioMarkdownHtmlComments(markdown);
 	const latexSubfigurePreviewTransform = isLatex
-		? preprocessStudioLatexSubfiguresForPreview(markdown)
-		: { markdown, subfigureGroups: [] };
+		? preprocessStudioLatexSubfiguresForPreview(markdownWithoutHtmlComments)
+		: { markdown: markdownWithoutHtmlComments, subfigureGroups: [] };
 	const latexAlgorithmPreviewTransform = isLatex
 		? preprocessStudioLatexAlgorithmsForPreview(latexSubfigurePreviewTransform.markdown)
-		: { markdown, algorithmBlocks: [] };
+		: { markdown: markdownWithoutHtmlComments, algorithmBlocks: [] };
 	const sourceWithResolvedRefs = isLatex
 		? preprocessStudioLatexReferences(latexAlgorithmPreviewTransform.markdown, sourcePath, resourcePath)
-		: markdown;
+		: markdownWithoutHtmlComments;
 	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
 	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
@@ -2928,7 +3038,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	const normalizedMarkdown = isLatex ? sourceWithResolvedRefs : normalizeObsidianImages(normalizeMathDelimiters(sourceWithResolvedRefs));
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
 
-	return await new Promise<string>((resolve, reject) => {
+	let renderedHtml = await new Promise<string>((resolve, reject) => {
 		const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
 		const stdoutChunks: Buffer[] = [];
 		const stderrChunks: Buffer[] = [];
@@ -2965,22 +3075,22 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 		child.once("close", (code) => {
 			if (settled) return;
 			if (code === 0) {
-				let renderedHtml = Buffer.concat(stdoutChunks).toString("utf-8");
+				let html = Buffer.concat(stdoutChunks).toString("utf-8");
 				// When --standalone was used, extract only the <body> content
 				if (resourcePath) {
-					const bodyMatch = renderedHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-					if (bodyMatch) renderedHtml = bodyMatch[1];
+					const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+					if (bodyMatch) html = bodyMatch[1];
 				}
 				if (isLatex) {
-					renderedHtml = decorateStudioLatexRenderedHtml(
-						renderedHtml,
+					html = decorateStudioLatexRenderedHtml(
+						html,
 						sourcePath,
 						resourcePath,
 						latexSubfigurePreviewTransform.subfigureGroups,
 						latexAlgorithmPreviewTransform.algorithmBlocks,
 					);
 				}
-				succeed(stripMathMlAnnotationTags(renderedHtml));
+				succeed(stripMathMlAnnotationTags(html));
 				return;
 			}
 			const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
@@ -2989,6 +3099,8 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 
 		child.stdin.end(normalizedMarkdown);
 	});
+
+	return renderedHtml;
 }
 
 async function renderStudioLiteralTextPdf(text: string, title = "Studio export"): Promise<Buffer> {
@@ -4457,7 +4569,7 @@ ${cssVarsBlock}
     <div class="controls">
       <button id="saveAsBtn" type="button" title="Save editor content to a new file path.">Save editor as…</button>
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content." disabled>Save editor</button>
-      <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
+      <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
     </div>

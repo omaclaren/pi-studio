@@ -188,7 +188,7 @@
       const EDITOR_LANGUAGE_STORAGE_KEY = "piStudio.editorLanguage";
       // Single source of truth: language -> file extensions (and display label)
       var LANG_EXT_MAP = {
-        markdown:   { label: "Markdown",   exts: ["md", "markdown", "mdx"] },
+        markdown:   { label: "Markdown",   exts: ["md", "markdown", "mdx", "qmd"] },
         javascript: { label: "JavaScript", exts: ["js", "mjs", "cjs", "jsx"] },
         typescript: { label: "TypeScript", exts: ["ts", "mts", "cts", "tsx"] },
         python:     { label: "Python",     exts: ["py", "pyw"] },
@@ -245,6 +245,8 @@
       const EMPTY_OVERLAY_LINE = "\u200b";
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
       const MATHJAX_CDN_URL = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
+      const PDFJS_CDN_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.min.mjs";
+      const PDFJS_WORKER_CDN_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.worker.min.mjs";
       const BOOT = (typeof window.__PI_STUDIO_BOOT__ === "object" && window.__PI_STUDIO_BOOT__)
         ? window.__PI_STUDIO_BOOT__
         : {};
@@ -255,9 +257,12 @@
       const MERMAID_RENDER_FAIL_MESSAGE = "Mermaid render failed. Showing diagram source text.";
       const MATHJAX_UNAVAILABLE_MESSAGE = "Math fallback unavailable. Some unsupported equations may remain as raw TeX.";
       const MATHJAX_RENDER_FAIL_MESSAGE = "Math fallback could not render some unsupported equations.";
+      const PDF_PREVIEW_UNAVAILABLE_MESSAGE = "PDF figure preview unavailable. Inline PDF rendering is not supported in this Studio browser environment.";
+      const PDF_PREVIEW_RENDER_FAIL_MESSAGE = "PDF figure preview could not be rendered.";
       let mermaidModulePromise = null;
       let mermaidInitialized = false;
       let mathJaxPromise = null;
+      let pdfJsPromise = null;
 
       const DEBUG_ENABLED = (() => {
         try {
@@ -1248,9 +1253,208 @@
               mathMl: true,
               svg: true,
             },
+            ADD_TAGS: ["embed"],
+            ADD_ATTR: ["src", "type", "title", "width", "height", "style", "data-fig-align"],
+            ADD_DATA_URI_TAGS: ["embed"],
           });
         }
         return buildPreviewErrorHtml("Preview sanitizer unavailable. Showing plain markdown.", markdown);
+      }
+
+      function isPdfPreviewSource(src) {
+        return Boolean(src) && (/^data:application\/pdf(?:;|,)/i.test(src) || /\.pdf(?:$|[?#])/i.test(src));
+      }
+
+      function decoratePdfEmbeds(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") {
+          return;
+        }
+
+        const embeds = targetEl.querySelectorAll("embed[src]");
+        embeds.forEach(function(embedEl) {
+          const src = typeof embedEl.getAttribute === "function" ? (embedEl.getAttribute("src") || "") : "";
+          if (!isPdfPreviewSource(src)) {
+            return;
+          }
+          if (!embedEl.getAttribute("type")) {
+            embedEl.setAttribute("type", "application/pdf");
+          }
+          if (!embedEl.getAttribute("title")) {
+            embedEl.setAttribute("title", "Embedded PDF figure");
+          }
+        });
+      }
+
+      function decodePdfDataUri(src) {
+        const match = String(src || "").match(/^data:application\/pdf(?:;[^,]*)?,([A-Za-z0-9+/=\s]+)$/i);
+        if (!match) return null;
+        const payload = (match[1] || "").replace(/\s+/g, "");
+        if (!payload) return null;
+        const binary = window.atob(payload);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+      }
+
+      function ensurePdfJs() {
+        if (window.pdfjsLib && typeof window.pdfjsLib.getDocument === "function") {
+          return Promise.resolve(window.pdfjsLib);
+        }
+        if (pdfJsPromise) {
+          return pdfJsPromise;
+        }
+
+        pdfJsPromise = import(PDFJS_CDN_URL)
+          .then((module) => {
+            const api = module && typeof module.getDocument === "function"
+              ? module
+              : (module && module.default && typeof module.default.getDocument === "function" ? module.default : null);
+            if (!api || typeof api.getDocument !== "function") {
+              throw new Error("pdf.js did not initialize.");
+            }
+            if (api.GlobalWorkerOptions && !api.GlobalWorkerOptions.workerSrc) {
+              api.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_CDN_URL;
+            }
+            window.pdfjsLib = api;
+            return api;
+          })
+          .catch((error) => {
+            pdfJsPromise = null;
+            throw error;
+          });
+
+        return pdfJsPromise;
+      }
+
+      function appendPdfPreviewNotice(targetEl, message) {
+        if (!targetEl || typeof targetEl.querySelector !== "function" || typeof targetEl.appendChild !== "function") {
+          return;
+        }
+        if (targetEl.querySelector(".preview-pdf-warning")) {
+          return;
+        }
+        const warningEl = document.createElement("div");
+        warningEl.className = "preview-warning preview-pdf-warning";
+        warningEl.textContent = String(message || PDF_PREVIEW_UNAVAILABLE_MESSAGE);
+        targetEl.appendChild(warningEl);
+      }
+
+      async function loadPdfDocumentSource(src) {
+        const embedded = decodePdfDataUri(src);
+        if (embedded) {
+          return { data: embedded };
+        }
+        const response = await fetch(src);
+        if (!response.ok) {
+          throw new Error("Failed to fetch PDF figure for preview.");
+        }
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        return { data: bytes };
+      }
+
+      async function renderSinglePdfPreviewEmbed(embedEl, pdfjsLib) {
+        if (!embedEl || embedEl.dataset.studioPdfPreviewRendered === "1") {
+          return false;
+        }
+
+        const src = embedEl.getAttribute("src") || "";
+        if (!isPdfPreviewSource(src)) {
+          return false;
+        }
+
+        const measuredWidth = Math.max(1, Math.round(embedEl.getBoundingClientRect().width || 0));
+        const styleText = embedEl.getAttribute("style") || "";
+        const widthAttr = embedEl.getAttribute("width") || "";
+        const figAlign = embedEl.getAttribute("data-fig-align") || "";
+        const pdfSource = await loadPdfDocumentSource(src);
+        const loadingTask = pdfjsLib.getDocument(pdfSource);
+        const pdfDocument = await loadingTask.promise;
+
+        try {
+          const page = await pdfDocument.getPage(1);
+          const baseViewport = page.getViewport({ scale: 1 });
+          const cssWidth = Math.max(1, measuredWidth || Math.round(baseViewport.width));
+          const renderScale = Math.max(0.25, cssWidth / baseViewport.width) * Math.min(window.devicePixelRatio || 1, 2);
+          const viewport = page.getViewport({ scale: renderScale });
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d", { alpha: false });
+          if (!context) {
+            throw new Error("Canvas 2D context unavailable.");
+          }
+
+          canvas.width = Math.max(1, Math.ceil(viewport.width));
+          canvas.height = Math.max(1, Math.ceil(viewport.height));
+          canvas.style.width = "100%";
+          canvas.style.height = "auto";
+          canvas.setAttribute("aria-label", "PDF figure preview");
+
+          await page.render({
+            canvasContext: context,
+            viewport,
+          }).promise;
+
+          const wrapper = document.createElement("div");
+          wrapper.className = "studio-pdf-preview";
+          if (styleText) {
+            wrapper.style.cssText = styleText;
+          } else if (widthAttr) {
+            wrapper.style.width = /^\d+(?:\.\d+)?$/.test(widthAttr) ? (widthAttr + "px") : widthAttr;
+          } else {
+            wrapper.style.width = "100%";
+          }
+          if (figAlign) {
+            wrapper.setAttribute("data-fig-align", figAlign);
+          }
+          wrapper.title = "PDF figure preview (page 1)";
+          wrapper.appendChild(canvas);
+          embedEl.dataset.studioPdfPreviewRendered = "1";
+          embedEl.replaceWith(wrapper);
+          return true;
+        } finally {
+          if (typeof pdfDocument.cleanup === "function") {
+            try { pdfDocument.cleanup(); } catch {}
+          }
+          if (typeof pdfDocument.destroy === "function") {
+            try { await pdfDocument.destroy(); } catch {}
+          }
+        }
+      }
+
+      async function renderPdfPreviewsInElement(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") {
+          return;
+        }
+
+        const embeds = Array.from(targetEl.querySelectorAll("embed[src]"))
+          .filter((embedEl) => isPdfPreviewSource(embedEl.getAttribute("src") || ""));
+        if (embeds.length === 0) {
+          return;
+        }
+
+        let pdfjsLib;
+        try {
+          pdfjsLib = await ensurePdfJs();
+        } catch (error) {
+          console.error("pdf.js load failed:", error);
+          appendPdfPreviewNotice(targetEl, PDF_PREVIEW_UNAVAILABLE_MESSAGE);
+          return;
+        }
+
+        let hadFailure = false;
+        for (const embedEl of embeds) {
+          try {
+            await renderSinglePdfPreviewEmbed(embedEl, pdfjsLib);
+          } catch (error) {
+            hadFailure = true;
+            console.error("PDF preview render failed:", error);
+          }
+        }
+
+        if (hadFailure) {
+          appendPdfPreviewNotice(targetEl, PDF_PREVIEW_RENDER_FAIL_MESSAGE);
+        }
       }
 
       function appendMathFallbackNotice(targetEl, message) {
@@ -1901,6 +2105,8 @@
 
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
+          decoratePdfEmbeds(targetEl);
+          await renderPdfPreviewsInElement(targetEl);
           const annotationMode = (pane === "source" || pane === "response")
             ? (annotationsEnabled ? "highlight" : "hide")
             : "none";

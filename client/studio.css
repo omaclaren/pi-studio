@@ -769,6 +769,40 @@
       max-width: 100%;
     }
 
+    .rendered-markdown embed[type="application/pdf"],
+    .rendered-markdown embed[src^="data:application/pdf"],
+    .rendered-markdown embed[src$=".pdf"] {
+      display: block;
+      width: 100%;
+      min-height: 18rem;
+      border: 1px solid var(--md-table-border);
+      border-radius: 10px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .rendered-markdown .studio-pdf-preview {
+      display: block;
+      max-width: 100%;
+      border: 1px solid var(--md-table-border);
+      border-radius: 10px;
+      background: #fff;
+      overflow: hidden;
+      line-height: 0;
+    }
+
+    .rendered-markdown .studio-pdf-preview[data-fig-align="center"] {
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .rendered-markdown .studio-pdf-preview canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-width: 100%;
+    }
+
     .rendered-markdown .studio-subfigure-group {
       margin: 1.25em auto;
     }
