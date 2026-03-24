@@ -968,6 +968,12 @@
       opacity: 0.64;
     }
 
+    .panel-scroll.response-repaint-nudge {
+      outline: 1px solid transparent;
+      -webkit-transform: translateZ(0);
+      transform: translateZ(0);
+    }
+
     .preview-error {
       color: var(--warn);
       margin-bottom: 0.75em;

@@ -234,6 +234,7 @@
       let sourcePreviewRenderNonce = 0;
       let responsePreviewRenderNonce = 0;
       let responseEditorPreviewTimer = null;
+      let pendingResponseScrollReset = false;
       let editorMetaUpdateRaf = null;
       let editorHighlightEnabled = false;
       let editorLanguage = "markdown";
@@ -971,6 +972,7 @@
       }
 
       function clearActiveResponseView() {
+        pendingResponseScrollReset = false;
         latestResponseMarkdown = "";
         latestResponseThinking = "";
         latestResponseKind = "annotation";
@@ -1016,13 +1018,13 @@
         }
       }
 
-      function applySelectedHistoryItem() {
+      function applySelectedHistoryItem(options) {
         const item = getSelectedHistoryItem();
         if (!item) {
           clearActiveResponseView();
           return false;
         }
-        handleIncomingResponse(item.markdown, item.kind, item.timestamp, item.thinking);
+        handleIncomingResponse(item.markdown, item.kind, item.timestamp, item.thinking, options);
         return true;
       }
 
@@ -1035,9 +1037,13 @@
           return false;
         }
 
+        const previousItem = getSelectedHistoryItem();
+        const previousId = previousItem && typeof previousItem.id === "string" ? previousItem.id : null;
         const nextIndex = Math.max(0, Math.min(total - 1, Number(index) || 0));
         responseHistoryIndex = nextIndex;
-        const applied = applySelectedHistoryItem();
+        const nextItem = getSelectedHistoryItem();
+        const nextId = nextItem && typeof nextItem.id === "string" ? nextItem.id : null;
+        const applied = applySelectedHistoryItem({ resetScroll: previousId !== nextId });
         updateHistoryControls();
 
         if (applied && !(options && options.silent)) {
@@ -1539,6 +1545,33 @@
         targetEl.classList.remove("preview-pending");
       }
 
+      function scheduleResponsePaneRepaintNudge() {
+        if (!critiqueViewEl || typeof critiqueViewEl.getBoundingClientRect !== "function") return;
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+
+        schedule(() => {
+          if (!critiqueViewEl || !critiqueViewEl.isConnected) return;
+          void critiqueViewEl.getBoundingClientRect();
+          if (!critiqueViewEl.classList) return;
+          critiqueViewEl.classList.add("response-repaint-nudge");
+          schedule(() => {
+            if (!critiqueViewEl || !critiqueViewEl.classList) return;
+            critiqueViewEl.classList.remove("response-repaint-nudge");
+          });
+        });
+      }
+
+      function applyPendingResponseScrollReset() {
+        if (!pendingResponseScrollReset || !critiqueViewEl) return false;
+        if (rightView === "editor-preview") return false;
+        critiqueViewEl.scrollTop = 0;
+        critiqueViewEl.scrollLeft = 0;
+        pendingResponseScrollReset = false;
+        return true;
+      }
+
       async function getMermaidApi() {
         if (mermaidModulePromise) {
           return mermaidModulePromise;
@@ -1883,6 +1916,11 @@
               appendPreviewNotice(targetEl, "Images not displaying? Set working dir in the editor pane or open via /studio <path>.");
             }
           }
+
+          if (pane === "response") {
+            applyPendingResponseScrollReset();
+            scheduleResponsePaneRepaintNudge();
+          }
         } catch (error) {
           if (pane === "source") {
             if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
@@ -1893,6 +1931,10 @@
           const detail = error && error.message ? error.message : String(error || "unknown error");
           finishPreviewRender(targetEl);
           targetEl.innerHTML = buildPreviewErrorHtml("Preview renderer unavailable (" + detail + "). Showing plain markdown.", markdown);
+          if (pane === "response") {
+            applyPendingResponseScrollReset();
+            scheduleResponsePaneRepaintNudge();
+          }
         }
       }
 
@@ -1962,11 +2004,13 @@
           if (!editorText.trim()) {
             finishPreviewRender(critiqueViewEl);
             critiqueViewEl.innerHTML = "<pre class='plain-markdown'>Editor is empty.</pre>";
+            scheduleResponsePaneRepaintNudge();
             return;
           }
           if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
             finishPreviewRender(critiqueViewEl);
             critiqueViewEl.innerHTML = "<div class='response-markdown-highlight'>" + highlightCode(editorText, editorLanguage, "preview") + "</div>";
+            scheduleResponsePaneRepaintNudge();
             return;
           }
           const nonce = ++responsePreviewRenderNonce;
@@ -1981,6 +2025,8 @@
           critiqueViewEl.innerHTML = thinking && thinking.trim()
             ? buildPlainMarkdownHtml(thinking)
             : "<pre class='plain-markdown'>No thinking available for this response.</pre>";
+          applyPendingResponseScrollReset();
+          scheduleResponsePaneRepaintNudge();
           return;
         }
 
@@ -1988,6 +2034,8 @@
         if (!markdown || !markdown.trim()) {
           finishPreviewRender(critiqueViewEl);
           critiqueViewEl.innerHTML = "<pre class='plain-markdown'>No response yet. Run editor text or critique editor text.</pre>";
+          applyPendingResponseScrollReset();
+          scheduleResponsePaneRepaintNudge();
           return;
         }
 
@@ -2005,16 +2053,22 @@
               "Response is too large for markdown highlighting. Showing plain markdown.",
               markdown,
             );
+            applyPendingResponseScrollReset();
+            scheduleResponsePaneRepaintNudge();
             return;
           }
 
           finishPreviewRender(critiqueViewEl);
           critiqueViewEl.innerHTML = "<div class='response-markdown-highlight'>" + highlightMarkdown(markdown) + "</div>";
+          applyPendingResponseScrollReset();
+          scheduleResponsePaneRepaintNudge();
           return;
         }
 
         finishPreviewRender(critiqueViewEl);
         critiqueViewEl.innerHTML = buildPlainMarkdownHtml(markdown);
+        applyPendingResponseScrollReset();
+        scheduleResponsePaneRepaintNudge();
       }
 
       function updateResultActionButtons(normalizedEditorText) {
@@ -3058,15 +3112,29 @@
         return lower.indexOf("## critiques") !== -1 && lower.indexOf("## document") !== -1;
       }
 
-      function handleIncomingResponse(markdown, kind, timestamp, thinking) {
+      function handleIncomingResponse(markdown, kind, timestamp, thinking, options) {
         const responseTimestamp =
           typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0
             ? timestamp
             : Date.now();
+        const responseThinking = typeof thinking === "string" ? thinking : "";
+        const responseKind = kind === "critique" ? "critique" : "annotation";
+        const resetScroll = options && Object.prototype.hasOwnProperty.call(options, "resetScroll")
+          ? Boolean(options.resetScroll)
+          : (
+            latestResponseKind !== responseKind
+            || latestResponseTimestamp !== responseTimestamp
+            || latestResponseNormalized !== normalizeForCompare(markdown)
+            || latestResponseThinkingNormalized !== normalizeForCompare(responseThinking)
+          );
+
+        if (resetScroll) {
+          pendingResponseScrollReset = true;
+        }
 
         latestResponseMarkdown = markdown;
-        latestResponseThinking = typeof thinking === "string" ? thinking : "";
-        latestResponseKind = kind === "critique" ? "critique" : "annotation";
+        latestResponseThinking = responseThinking;
+        latestResponseKind = responseKind;
         latestResponseTimestamp = responseTimestamp;
         latestResponseIsStructuredCritique = isStructuredCritique(markdown);
         latestResponseHasContent = Boolean(markdown && markdown.trim());
@@ -3084,10 +3152,10 @@
         refreshResponseUi();
       }
 
-      function applyLatestPayload(payload) {
+      function applyLatestPayload(payload, options) {
         if (!payload || typeof payload.markdown !== "string") return false;
         const responseKind = payload.kind === "critique" ? "critique" : "annotation";
-        handleIncomingResponse(payload.markdown, responseKind, payload.timestamp, payload.thinking);
+        handleIncomingResponse(payload.markdown, responseKind, payload.timestamp, payload.thinking, options);
         return true;
       }
 
