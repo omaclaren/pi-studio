@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.31] — 2026-03-24
+
+### Fixed
+- The right-pane response view now nudges the browser to repaint after response renders complete, reducing cases where freshly rendered response content stayed visually blank until the user scrolled or interacted with the pane.
+- Newly selected or newly arrived responses now reset the right-pane scroll position to the top by default, while **Editor (Preview)** continues to preserve scroll position so in-place edit/preview workflows still feel natural.
+
 ## [0.5.30] — 2026-03-24
 
 ### Fixed
