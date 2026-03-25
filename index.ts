@@ -216,22 +216,31 @@ function buildStudioPdfHeadingSizeCommand(size: string | undefined, fallback: st
 	return `\\fontsize{${trimmed}}{${lineHeight}}\\selectfont`;
 }
 
+function buildStudioPdfTitleSpacingLength(value: string | undefined, fallback: string): string {
+	const trimmed = String(value ?? "").trim();
+	return trimmed || fallback;
+}
+
 function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 	const sectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.sectionSize, "\\Large");
 	const subsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsectionSize, "\\large");
 	const subsubsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsubsectionSize, "\\normalsize");
+	const sectionSpaceBefore = buildStudioPdfTitleSpacingLength(options?.sectionSpaceBefore, "1.5ex plus 0.5ex minus 0.2ex");
+	const sectionSpaceAfter = buildStudioPdfTitleSpacingLength(options?.sectionSpaceAfter, "1ex plus 0.2ex");
+	const subsectionSpaceBefore = buildStudioPdfTitleSpacingLength(options?.subsectionSpaceBefore, "1.2ex plus 0.4ex minus 0.2ex");
+	const subsectionSpaceAfter = buildStudioPdfTitleSpacingLength(options?.subsectionSpaceAfter, "0.6ex plus 0.1ex");
 	return `\\usepackage{titlesec}
 \\titleformat{\\section}{${sectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}[\\vspace{3pt}\\titlerule\\vspace{12pt}]
 \\titleformat{\\subsection}{${subsectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}
 \\titleformat{\\subsubsection}{${subsubsectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}
-\\titlespacing*{\\section}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{1ex plus 0.2ex}
-\\titlespacing*{\\subsection}{0pt}{1.2ex plus 0.4ex minus 0.2ex}{0.6ex plus 0.1ex}
+\\titlespacing*{\\section}{0pt}{${sectionSpaceBefore}}{${sectionSpaceAfter}}
+\\titlespacing*{\\subsection}{0pt}{${subsectionSpaceBefore}}{${subsectionSpaceAfter}}
 \\usepackage{xcolor}
 \\definecolor{StudioAnnotationBg}{HTML}{EAF3FF}
 \\definecolor{StudioAnnotationBorder}{HTML}{8CB8FF}
 \\definecolor{StudioAnnotationText}{HTML}{1F5FBF}
 \\newcommand{\\studioannotation}[1]{\\begingroup\\setlength{\\fboxsep}{1.5pt}\\fcolorbox{StudioAnnotationBorder}{StudioAnnotationBg}{\\textcolor{StudioAnnotationText}{\\sffamily\\footnotesize\\strut #1}}\\endgroup}
-\\newenvironment{studiocallout}[1]{\\par\\smallskip\\noindent\\begingroup\\color{StudioAnnotationBorder}\\hrule height 0.6pt\\color{black}\\vspace{0.18em}\\noindent{\\sffamily\\bfseries\\textcolor{StudioAnnotationText}{#1}}\\par\\vspace{0.08em}\\leftskip=1em\\rightskip=0pt\\parindent=0pt}{\\par\\vspace{0.08em}\\noindent\\color{StudioAnnotationBorder}\\hrule height 0.6pt\\par\\endgroup\\smallskip}
+\\newenvironment{studiocallout}[1]{\\par\\vspace{0.22em}\\noindent\\begingroup\\color{StudioAnnotationBorder}\\hrule height 0.45pt\\color{black}\\vspace{0.08em}\\noindent{\\sffamily\\bfseries\\textcolor{StudioAnnotationText}{#1}}\\par\\vspace{0.02em}\\leftskip=0.7em\\rightskip=0pt\\parindent=0pt\\parskip=0.15em}{\\par\\vspace{0.02em}\\noindent\\color{StudioAnnotationBorder}\\hrule height 0.45pt\\par\\endgroup\\vspace{0.22em}}
 \\usepackage{caption}
 \\captionsetup[figure]{justification=raggedright,singlelinecheck=false}
 \\usepackage{enumitem}
@@ -2991,6 +3000,7 @@ interface StudioPdfRenderOptions {
 	marginRight?: string;
 	marginBottom?: string;
 	marginLeft?: string;
+	footskip?: string;
 	linestretch?: string;
 	mainfont?: string;
 	papersize?: string;
@@ -2998,6 +3008,10 @@ interface StudioPdfRenderOptions {
 	sectionSize?: string;
 	subsectionSize?: string;
 	subsubsectionSize?: string;
+	sectionSpaceBefore?: string;
+	sectionSpaceAfter?: string;
+	subsectionSpaceBefore?: string;
+	subsectionSpaceAfter?: string;
 }
 
 interface StudioParsedPdfCommandArgs {
@@ -3330,6 +3344,22 @@ function parseStudioPdfCommandArgs(args: string): StudioParsedPdfCommandArgs | {
 				if (!isValidStudioPdfLength(value)) return { error: "Invalid --subsubsection-size value. Example: 14pt" };
 				options.subsubsectionSize = value;
 				break;
+			case "--section-space-before":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --section-space-before value. Example: 10mm" };
+				options.sectionSpaceBefore = value;
+				break;
+			case "--section-space-after":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --section-space-after value. Example: 6mm" };
+				options.sectionSpaceAfter = value;
+				break;
+			case "--subsection-space-before":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --subsection-space-before value. Example: 8mm" };
+				options.subsectionSpaceBefore = value;
+				break;
+			case "--subsection-space-after":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --subsection-space-after value. Example: 4mm" };
+				options.subsectionSpaceAfter = value;
+				break;
 			case "--margin":
 				if (!isValidStudioPdfLength(value)) return { error: "Invalid --margin value. Example: 25mm" };
 				options.margin = value;
@@ -3349,6 +3379,10 @@ function parseStudioPdfCommandArgs(args: string): StudioParsedPdfCommandArgs | {
 			case "--margin-left":
 				if (!isValidStudioPdfLength(value)) return { error: "Invalid --margin-left value. Example: 25mm" };
 				options.marginLeft = value;
+				break;
+			case "--footskip":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --footskip value. Example: 12mm" };
+				options.footskip = value;
 				break;
 			case "--linestretch":
 				if (!isValidStudioPdfLineStretch(value)) return { error: "Invalid --linestretch value. Example: 1.2" };
@@ -3372,8 +3406,8 @@ function parseStudioPdfCommandArgs(args: string): StudioParsedPdfCommandArgs | {
 	}
 
 	if (!pathArg) return { error: "Missing file path." };
-	if (options.geometry && (options.margin || options.marginTop || options.marginRight || options.marginBottom || options.marginLeft)) {
-		return { error: "Use either --geometry or the --margin/--margin-* flags, not both." };
+	if (options.geometry && (options.margin || options.marginTop || options.marginRight || options.marginBottom || options.marginLeft || options.footskip)) {
+		return { error: "Use either --geometry or the --margin/--margin-*/--footskip flags, not both." };
 	}
 
 	return { pathArg, options };
@@ -3392,11 +3426,19 @@ function shouldUseStudioAltMarkdownPdfDocumentClass(options?: StudioPdfRenderOpt
 	return Boolean(sizePt && sizePt > 12);
 }
 
+function getStudioDefaultPdfFootskip(options: StudioPdfRenderOptions | undefined, useAltClass: boolean): string | undefined {
+	if (!useAltClass) return undefined;
+	if (options?.geometry || options?.footskip) return undefined;
+	return "12mm";
+}
+
 function buildStudioPdfPandocVariableArgs(options?: StudioPdfRenderOptions, allowAltDocumentClass = false): string[] {
 	const resolved = options ?? {};
 	const args: string[] = [];
+	const useAltClass = allowAltDocumentClass && shouldUseStudioAltMarkdownPdfDocumentClass(resolved);
+	const defaultFootskip = getStudioDefaultPdfFootskip(resolved, useAltClass);
 
-	if (allowAltDocumentClass && shouldUseStudioAltMarkdownPdfDocumentClass(resolved)) {
+	if (useAltClass) {
 		args.push("-V", "documentclass=scrartcl");
 	}
 
@@ -3408,6 +3450,8 @@ function buildStudioPdfPandocVariableArgs(options?: StudioPdfRenderOptions, allo
 		if (resolved.marginRight) args.push("-V", `geometry:right=${resolved.marginRight}`);
 		if (resolved.marginBottom) args.push("-V", `geometry:bottom=${resolved.marginBottom}`);
 		if (resolved.marginLeft) args.push("-V", `geometry:left=${resolved.marginLeft}`);
+		if (resolved.footskip) args.push("-V", `geometry:footskip=${resolved.footskip}`);
+		else if (defaultFootskip) args.push("-V", `geometry:footskip=${defaultFootskip}`);
 	}
 
 	args.push("-V", `fontsize=${resolved.fontsize ?? "11pt"}`);
@@ -3435,6 +3479,7 @@ function buildStudioLiteralTextPdfTexConfig(options?: StudioPdfRenderOptions): {
 		if (resolved.marginRight) geometryParts.push(`right=${resolved.marginRight}`);
 		if (resolved.marginBottom) geometryParts.push(`bottom=${resolved.marginBottom}`);
 		if (resolved.marginLeft) geometryParts.push(`left=${resolved.marginLeft}`);
+		if (resolved.footskip) geometryParts.push(`footskip=${resolved.footskip}`);
 	}
 	const classPaperOption = resolved.papersize ? `,${resolved.papersize}paper` : "";
 	const fontCommands = resolved.mainfont
@@ -3442,6 +3487,8 @@ function buildStudioLiteralTextPdfTexConfig(options?: StudioPdfRenderOptions): {
 		: "";
 	const lineStretch = sanitizeStudioPdfFreeformOption(resolved.linestretch || "1.25") || "1.25";
 	const useAltClass = shouldUseStudioAltMarkdownPdfDocumentClass(resolved);
+	const defaultFootskip = getStudioDefaultPdfFootskip(resolved, useAltClass);
+	if (!resolved.geometry && !resolved.footskip && defaultFootskip) geometryParts.push(`footskip=${defaultFootskip}`);
 	const fontSizeCommand = resolved.fontsize && !useAltClass
 		? `\\fontsize{${resolved.fontsize}}{${resolved.fontsize}}\\selectfont\n`
 		: "";
@@ -7636,16 +7683,21 @@ export default function (pi: ExtensionAPI) {
 						+ "  --section-size <value>   e.g. 24pt\n"
 						+ "  --subsection-size <value>\n"
 						+ "  --subsubsection-size <value>\n"
+						+ "  --section-space-before <value>\n"
+						+ "  --section-space-after <value>\n"
+						+ "  --subsection-space-before <value>\n"
+						+ "  --subsection-space-after <value>\n"
 						+ "  --margin <value>         e.g. 25mm\n"
 						+ "  --margin-top <value>\n"
 						+ "  --margin-right <value>\n"
 						+ "  --margin-bottom <value>\n"
 						+ "  --margin-left <value>\n"
+						+ "  --footskip <value>      e.g. 12mm\n"
 						+ "  --linestretch <value>    e.g. 1.2\n"
 						+ "  --mainfont <name>        e.g. \"TeX Gyre Pagella\"\n"
 						+ "  --papersize <name>       e.g. a4\n"
-						+ "  --geometry <spec>        e.g. \"top=30mm,left=25mm,right=25mm,bottom=30mm\"\n"
-						+ "  Note: use either --geometry or the --margin/--margin-* flags.",
+						+ "  --geometry <spec>        e.g. \"top=30mm,left=25mm,right=25mm,bottom=30mm,footskip=12mm\"\n"
+						+ "  Note: use either --geometry or the --margin/--margin-*/--footskip flags.",
 					"info",
 				);
 				return;
