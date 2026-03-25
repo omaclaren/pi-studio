@@ -4,6 +4,19 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.32] — 2026-03-25
+
+### Added
+- `/studio-pdf <path>` now accepts a curated set of advanced layout controls for file-based exports, including font size, margins, line stretch, main font, paper size, geometry, heading sizes, heading spacing, and footer skip.
+
+### Changed
+- Large-font Markdown/QMD Studio PDF exports now switch to a more suitable LaTeX document class and use a safer default footer skip unless you explicitly override the geometry.
+- PDF callout blocks now render more compactly, reducing extra vertical whitespace around note/tip/warning content.
+
+### Fixed
+- Studio preview/PDF preparation now treats `.qmd` files like Markdown, strips HTML comments more narrowly, shows standalone LaTeX page-break commands as subtle preview dividers, and supports common Quarto-style callout and `fig-align` patterns in preview/PDF output.
+- Markdown/QMD preview now renders embedded local PDF figures more reliably via `pdf.js`, avoiding grey-box browser embed failures in the Studio preview surface.
+
 ## [0.5.31] — 2026-03-24
 
 ### Fixed

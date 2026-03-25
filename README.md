@@ -43,7 +43,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 | `/studio --stop` | Stop studio server |
 | `/studio --help` | Show help |
 | `/studio-current <path>` | Load a file into currently open Studio tab(s) without opening a new browser window |
-| `/studio-pdf <path>` | Export a local file to `<name>.studio.pdf` via the Studio PDF pipeline |
+| `/studio-pdf <path> [options]` | Export a local file to `<name>.studio.pdf` via the Studio PDF pipeline, with optional layout controls |
 
 ## Install
 
