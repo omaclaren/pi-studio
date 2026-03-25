@@ -199,10 +199,31 @@ const CMUX_STUDIO_STATUS_COLOR_DARK = "#5ea1ff";
 const CMUX_STUDIO_STATUS_COLOR_LIGHT = "#0047ab";
 const STUDIO_PROMPT_METADATA_CUSTOM_TYPE = "pi-studio/direct-prompt";
 
-const PDF_PREAMBLE = `\\usepackage{titlesec}
-\\titleformat{\\section}{\\Large\\bfseries\\sffamily}{}{0pt}{}[\\vspace{3pt}\\titlerule\\vspace{12pt}]
-\\titleformat{\\subsection}{\\large\\bfseries\\sffamily}{}{0pt}{}
-\\titleformat{\\subsubsection}{\\normalsize\\bfseries\\sffamily}{}{0pt}{}
+function scaleStudioPdfLength(length: string, factor: number): string | null {
+	const match = String(length ?? "").trim().match(/^(\d+(?:\.\d+)?)(pt|bp|mm|cm|in|pc)$/i);
+	if (!match) return null;
+	const value = Number(match[1]);
+	if (!Number.isFinite(value)) return null;
+	const scaled = value * factor;
+	const formatted = Number.isInteger(scaled) ? String(scaled) : scaled.toFixed(2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+	return `${formatted}${match[2]}`;
+}
+
+function buildStudioPdfHeadingSizeCommand(size: string | undefined, fallback: string): string {
+	const trimmed = String(size ?? "").trim();
+	if (!trimmed) return fallback;
+	const lineHeight = scaleStudioPdfLength(trimmed, 1.2) ?? trimmed;
+	return `\\fontsize{${trimmed}}{${lineHeight}}\\selectfont`;
+}
+
+function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
+	const sectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.sectionSize, "\\Large");
+	const subsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsectionSize, "\\large");
+	const subsubsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsubsectionSize, "\\normalsize");
+	return `\\usepackage{titlesec}
+\\titleformat{\\section}{${sectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}[\\vspace{3pt}\\titlerule\\vspace{12pt}]
+\\titleformat{\\subsection}{${subsectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}
+\\titleformat{\\subsubsection}{${subsubsectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}
 \\titlespacing*{\\section}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{1ex plus 0.2ex}
 \\titlespacing*{\\subsection}{0pt}{1.2ex plus 0.4ex minus 0.2ex}{0.6ex plus 0.1ex}
 \\usepackage{xcolor}
@@ -210,6 +231,7 @@ const PDF_PREAMBLE = `\\usepackage{titlesec}
 \\definecolor{StudioAnnotationBorder}{HTML}{8CB8FF}
 \\definecolor{StudioAnnotationText}{HTML}{1F5FBF}
 \\newcommand{\\studioannotation}[1]{\\begingroup\\setlength{\\fboxsep}{1.5pt}\\fcolorbox{StudioAnnotationBorder}{StudioAnnotationBg}{\\textcolor{StudioAnnotationText}{\\sffamily\\footnotesize\\strut #1}}\\endgroup}
+\\newenvironment{studiocallout}[1]{\\par\\smallskip\\noindent\\begingroup\\color{StudioAnnotationBorder}\\hrule height 0.6pt\\color{black}\\vspace{0.18em}\\noindent{\\sffamily\\bfseries\\textcolor{StudioAnnotationText}{#1}}\\par\\vspace{0.08em}\\leftskip=1em\\rightskip=0pt\\parindent=0pt}{\\par\\vspace{0.08em}\\noindent\\color{StudioAnnotationBorder}\\hrule height 0.6pt\\par\\endgroup\\smallskip}
 \\usepackage{caption}
 \\captionsetup[figure]{justification=raggedright,singlelinecheck=false}
 \\usepackage{enumitem}
@@ -225,6 +247,7 @@ const PDF_PREAMBLE = `\\usepackage{titlesec}
 }
 \\makeatother
 `;
+}
 
 type StudioThemeMode = "dark" | "light";
 
@@ -884,6 +907,53 @@ function parsePathArgument(args: string): string | null {
 	}
 
 	return trimmed;
+}
+
+function tokenizeStudioCommandArgs(input: string): { tokens: string[]; error?: string } {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: '"' | "'" | null = null;
+
+	for (let i = 0; i < input.length; i += 1) {
+		const ch = input[i]!;
+		if (quote) {
+			if (ch === "\\" && i + 1 < input.length) {
+				const next = input[i + 1]!;
+				if (next === quote || next === "\\") {
+					current += next;
+					i += 1;
+					continue;
+				}
+			}
+			if (ch === quote) {
+				quote = null;
+				continue;
+			}
+			current += ch;
+			continue;
+		}
+
+		if (ch === '"' || ch === "'") {
+			quote = ch;
+			continue;
+		}
+
+		if (/\s/.test(ch)) {
+			if (current) {
+				tokens.push(current);
+				current = "";
+			}
+			continue;
+		}
+
+		current += ch;
+	}
+
+	if (quote) {
+		return { tokens, error: "Unterminated quoted argument." };
+	}
+	if (current) tokens.push(current);
+	return { tokens };
 }
 
 function normalizePathInput(pathInput: string): string {
@@ -2671,6 +2741,79 @@ function stripStudioMarkdownHtmlComments(markdown: string): string {
 	return out.join("\n");
 }
 
+const STUDIO_PREVIEW_PAGE_BREAK_SENTINEL_PREFIX = "PI_STUDIO_PAGE_BREAK__";
+
+function replaceStudioPreviewPageBreakCommands(markdown: string): string {
+	const lines = String(markdown ?? "").split("\n");
+	const out: string[] = [];
+	let plainBuffer: string[] = [];
+	let inFence = false;
+	let fenceChar: "`" | "~" | undefined;
+	let fenceLength = 0;
+
+	const flushPlain = () => {
+		if (plainBuffer.length === 0) return;
+		out.push(
+			plainBuffer.map((line) => {
+				const match = line.trim().match(/^\\(newpage|pagebreak|clearpage)(?:\s*\[[^\]]*\])?\s*$/i);
+				if (!match) return line;
+				const command = match[1]!.toLowerCase();
+				return `${STUDIO_PREVIEW_PAGE_BREAK_SENTINEL_PREFIX}${command.toUpperCase()}__`;
+			}).join("\n"),
+		);
+		plainBuffer = [];
+	};
+
+	for (const line of lines) {
+		const trimmed = line.trimStart();
+		const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+
+		if (fenceMatch) {
+			const marker = fenceMatch[1]!;
+			const markerChar = marker[0] as "`" | "~";
+			const markerLength = marker.length;
+
+			if (!inFence) {
+				flushPlain();
+				inFence = true;
+				fenceChar = markerChar;
+				fenceLength = markerLength;
+				out.push(line);
+				continue;
+			}
+
+			if (fenceChar === markerChar && markerLength >= fenceLength) {
+				inFence = false;
+				fenceChar = undefined;
+				fenceLength = 0;
+			}
+
+			out.push(line);
+			continue;
+		}
+
+		if (inFence) {
+			out.push(line);
+		} else {
+			plainBuffer.push(line);
+		}
+	}
+
+	flushPlain();
+	return out.join("\n");
+}
+
+function decorateStudioPreviewPageBreakHtml(html: string): string {
+	return String(html ?? "").replace(
+		new RegExp(`<p>${STUDIO_PREVIEW_PAGE_BREAK_SENTINEL_PREFIX}(NEWPAGE|PAGEBREAK|CLEARPAGE)__<\\/p>`, "gi"),
+		(_match, command: string) => {
+			const normalized = String(command || "").toLowerCase();
+			const label = normalized === "clearpage" ? "Clear page" : "Page break";
+			return `<div class="studio-page-break" data-page-break-kind="${normalized}"><span class="studio-page-break-rule" aria-hidden="true"></span><span class="studio-page-break-label">${escapeStudioHtmlText(label)}</span><span class="studio-page-break-rule" aria-hidden="true"></span></div>`;
+		},
+	);
+}
+
 function normalizeStudioEditorLanguage(language: string | undefined): string | undefined {
 	const trimmed = typeof language === "string" ? language.trim().toLowerCase() : "";
 	if (!trimmed) return undefined;
@@ -2839,6 +2982,477 @@ function replaceStudioAnnotationMarkersForPdf(markdown: string): string {
 
 	flushPlain();
 	return out.join("\n");
+}
+
+interface StudioPdfRenderOptions {
+	fontsize?: string;
+	margin?: string;
+	marginTop?: string;
+	marginRight?: string;
+	marginBottom?: string;
+	marginLeft?: string;
+	linestretch?: string;
+	mainfont?: string;
+	papersize?: string;
+	geometry?: string;
+	sectionSize?: string;
+	subsectionSize?: string;
+	subsubsectionSize?: string;
+}
+
+interface StudioParsedPdfCommandArgs {
+	pathArg: string;
+	options: StudioPdfRenderOptions;
+}
+
+interface StudioPdfMarkdownCalloutBlock {
+	kind: "note" | "tip" | "warning" | "important" | "caution";
+	markerId: number;
+	content: string;
+}
+
+function parseStudioFencedDivOpenLine(line: string): { markerLength: number; info: string } | null {
+	const trimmed = String(line ?? "").trim();
+	const match = trimmed.match(/^(:{3,})(.+)$/);
+	if (!match) return null;
+	const info = String(match[2] ?? "").trim();
+	if (!info) return null;
+	return {
+		markerLength: match[1]!.length,
+		info,
+	};
+}
+
+function parseStudioPdfCalloutStartLine(line: string): { markerLength: number; kind: StudioPdfMarkdownCalloutBlock["kind"] } | null {
+	const open = parseStudioFencedDivOpenLine(line);
+	if (!open) return null;
+	const kindMatch = open.info.match(/(?:^|[\s{])\.callout-(note|tip|warning|important|caution)(?=[\s}]|$)/i);
+	if (!kindMatch) return null;
+	return {
+		markerLength: open.markerLength,
+		kind: kindMatch[1]!.toLowerCase() as StudioPdfMarkdownCalloutBlock["kind"],
+	};
+}
+
+function preprocessStudioMarkdownCalloutsForPdf(markdown: string): { markdown: string; blocks: StudioPdfMarkdownCalloutBlock[] } {
+	const lines = String(markdown ?? "").split("\n");
+	const out: string[] = [];
+	const blocks: StudioPdfMarkdownCalloutBlock[] = [];
+	let inFence = false;
+	let fenceChar: "`" | "~" | undefined;
+	let fenceLength = 0;
+	let markerId = 0;
+
+	for (let i = 0; i < lines.length; i += 1) {
+		const line = lines[i] ?? "";
+		const trimmed = line.trimStart();
+		const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+		if (fenceMatch) {
+			const marker = fenceMatch[1]!;
+			const markerChar = marker[0] as "`" | "~";
+			const markerLength = marker.length;
+			if (!inFence) {
+				inFence = true;
+				fenceChar = markerChar;
+				fenceLength = markerLength;
+				out.push(line);
+				continue;
+			}
+			if (fenceChar === markerChar && markerLength >= fenceLength) {
+				inFence = false;
+				fenceChar = undefined;
+				fenceLength = 0;
+			}
+			out.push(line);
+			continue;
+		}
+		if (inFence) {
+			out.push(line);
+			continue;
+		}
+
+		const calloutStart = parseStudioPdfCalloutStartLine(line);
+		if (!calloutStart) {
+			out.push(line);
+			continue;
+		}
+
+		const contentLines: string[] = [];
+		let innerInFence = false;
+		let innerFenceChar: "`" | "~" | undefined;
+		let innerFenceLength = 0;
+		let nestedDivDepth = 0;
+		let closed = false;
+		let j = i + 1;
+		for (; j < lines.length; j += 1) {
+			const innerLine = lines[j] ?? "";
+			const innerTrimmed = innerLine.trimStart();
+			const innerFenceMatch = innerTrimmed.match(/^(`{3,}|~{3,})/);
+			if (innerFenceMatch) {
+				const marker = innerFenceMatch[1]!;
+				const markerChar = marker[0] as "`" | "~";
+				const markerLength = marker.length;
+				if (!innerInFence) {
+					innerInFence = true;
+					innerFenceChar = markerChar;
+					innerFenceLength = markerLength;
+					contentLines.push(innerLine);
+					continue;
+				}
+				if (innerFenceChar === markerChar && markerLength >= innerFenceLength) {
+					innerInFence = false;
+					innerFenceChar = undefined;
+					innerFenceLength = 0;
+				}
+				contentLines.push(innerLine);
+				continue;
+			}
+			if (!innerInFence) {
+				const nestedOpen = parseStudioFencedDivOpenLine(innerLine);
+				if (nestedOpen) {
+					nestedDivDepth += 1;
+					contentLines.push(innerLine);
+					continue;
+				}
+				if (/^:{3,}\s*$/.test(innerLine.trim())) {
+					if (nestedDivDepth > 0) {
+						nestedDivDepth -= 1;
+						contentLines.push(innerLine);
+						continue;
+					}
+					closed = true;
+					break;
+				}
+			}
+			contentLines.push(innerLine);
+		}
+
+		if (!closed) {
+			out.push(line);
+			out.push(...contentLines);
+			i = j - 1;
+			continue;
+		}
+
+		const block: StudioPdfMarkdownCalloutBlock = {
+			kind: calloutStart.kind,
+			markerId: markerId += 1,
+			content: contentLines.join("\n").trim(),
+		};
+		blocks.push(block);
+		out.push(`PISTUDIOPDFCALLOUTSTART${block.kind.toUpperCase()}${block.markerId}`);
+		if (block.content) out.push(block.content);
+		out.push(`PISTUDIOPDFCALLOUTEND${block.kind.toUpperCase()}${block.markerId}`);
+		i = j;
+	}
+
+	return { markdown: out.join("\n"), blocks };
+}
+
+interface StudioPdfAlignedImageBlock {
+	align: "center" | "right";
+	markerId: number;
+}
+
+function preprocessStudioMarkdownImageAlignmentForPdf(markdown: string): { markdown: string; blocks: StudioPdfAlignedImageBlock[] } {
+	const lines = String(markdown ?? "").split("\n");
+	const out: string[] = [];
+	const blocks: StudioPdfAlignedImageBlock[] = [];
+	let inFence = false;
+	let fenceChar: "`" | "~" | undefined;
+	let fenceLength = 0;
+	let markerId = 0;
+
+	for (const line of lines) {
+		const trimmed = line.trimStart();
+		const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+		if (fenceMatch) {
+			const marker = fenceMatch[1]!;
+			const markerChar = marker[0] as "`" | "~";
+			const markerLength = marker.length;
+			if (!inFence) {
+				inFence = true;
+				fenceChar = markerChar;
+				fenceLength = markerLength;
+				out.push(line);
+				continue;
+			}
+			if (fenceChar === markerChar && markerLength >= fenceLength) {
+				inFence = false;
+				fenceChar = undefined;
+				fenceLength = 0;
+			}
+			out.push(line);
+			continue;
+		}
+		if (inFence) {
+			out.push(line);
+			continue;
+		}
+
+		const imageMatch = line.trim().match(/^!\[[^\]]*\]\((?:<[^>]+>|[^)]+)\)(\{[^}]*\})\s*$/);
+		if (!imageMatch) {
+			out.push(line);
+			continue;
+		}
+		const attrs = imageMatch[1] ?? "";
+		const alignMatch = attrs.match(/(?:^|\s)fig-align\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s}]+))/i);
+		const alignValue = String(alignMatch?.[1] ?? alignMatch?.[2] ?? alignMatch?.[3] ?? "").trim().toLowerCase();
+		if (alignValue !== "center" && alignValue !== "right") {
+			out.push(line);
+			continue;
+		}
+		const block: StudioPdfAlignedImageBlock = {
+			align: alignValue as StudioPdfAlignedImageBlock["align"],
+			markerId: markerId += 1,
+		};
+		blocks.push(block);
+		out.push(`PISTUDIOPDFALIGNSTART${block.align.toUpperCase()}${block.markerId}`);
+		out.push(line);
+		out.push(`PISTUDIOPDFALIGNEND${block.align.toUpperCase()}${block.markerId}`);
+	}
+
+	return { markdown: out.join("\n"), blocks };
+}
+
+function replaceStudioPdfCalloutBlocksInGeneratedLatex(
+	latex: string,
+	blocks: StudioPdfMarkdownCalloutBlock[],
+): string {
+	if (blocks.length === 0) return latex;
+	let transformed = String(latex ?? "");
+	for (const block of blocks) {
+		const startMarker = `PISTUDIOPDFCALLOUTSTART${block.kind.toUpperCase()}${block.markerId}`;
+		const endMarker = `PISTUDIOPDFCALLOUTEND${block.kind.toUpperCase()}${block.markerId}`;
+		const startIndex = transformed.indexOf(startMarker);
+		if (startIndex < 0) continue;
+		const endIndex = transformed.indexOf(endMarker, startIndex + startMarker.length);
+		if (endIndex < 0) continue;
+		const inner = transformed.slice(startIndex + startMarker.length, endIndex).trim();
+		const label = block.kind === "note"
+			? "Note"
+			: block.kind === "tip"
+				? "Tip"
+				: block.kind === "warning"
+					? "Warning"
+					: block.kind === "important"
+						? "Important"
+						: "Caution";
+		const replacement = `\\begin{studiocallout}{${label}}\n${inner}\n\\end{studiocallout}`;
+		transformed = transformed.slice(0, startIndex) + replacement + transformed.slice(endIndex + endMarker.length);
+	}
+	return transformed;
+}
+
+function replaceStudioPdfAlignedImageBlocksInGeneratedLatex(
+	latex: string,
+	blocks: StudioPdfAlignedImageBlock[],
+): string {
+	if (blocks.length === 0) return latex;
+	let transformed = String(latex ?? "");
+	for (const block of blocks) {
+		const startMarker = `PISTUDIOPDFALIGNSTART${block.align.toUpperCase()}${block.markerId}`;
+		const endMarker = `PISTUDIOPDFALIGNEND${block.align.toUpperCase()}${block.markerId}`;
+		const startIndex = transformed.indexOf(startMarker);
+		if (startIndex < 0) continue;
+		const endIndex = transformed.indexOf(endMarker, startIndex + startMarker.length);
+		if (endIndex < 0) continue;
+		const inner = transformed.slice(startIndex + startMarker.length, endIndex).trim();
+		const env = block.align === "right" ? "flushright" : "center";
+		const replacement = `\\begin{${env}}\n${inner}\n\\end{${env}}`;
+		transformed = transformed.slice(0, startIndex) + replacement + transformed.slice(endIndex + endMarker.length);
+	}
+	return transformed;
+}
+
+function isValidStudioPdfLength(value: string): boolean {
+	return /^\d+(?:\.\d+)?(?:pt|bp|mm|cm|in|pc)$/i.test(value.trim());
+}
+
+function isValidStudioPdfLineStretch(value: string): boolean {
+	return /^\d+(?:\.\d+)?$/.test(value.trim());
+}
+
+function isValidStudioPdfPaperSize(value: string): boolean {
+	return /^[A-Za-z0-9-]+$/.test(value.trim());
+}
+
+function sanitizeStudioPdfFreeformOption(value: string): string {
+	return String(value ?? "").replace(/[\r\n]+/g, " ").trim();
+}
+
+function parseStudioPdfCommandArgs(args: string): StudioParsedPdfCommandArgs | { error: string } {
+	const parsed = tokenizeStudioCommandArgs(args);
+	if (parsed.error) return { error: parsed.error };
+	const tokens = parsed.tokens;
+	if (tokens.length === 0) return { error: "Missing file path." };
+
+	const options: StudioPdfRenderOptions = {};
+	let pathArg: string | null = null;
+
+	const takeValue = (flag: string, index: number): { value: string; nextIndex: number } | { error: string } => {
+		if (index + 1 >= tokens.length) return { error: `Missing value for ${flag}.` };
+		return { value: tokens[index + 1]!, nextIndex: index + 1 };
+	};
+
+	for (let i = 0; i < tokens.length; i += 1) {
+		const token = tokens[i]!;
+		if (!token.startsWith("-")) {
+			if (pathArg !== null) return { error: `Unexpected extra argument: ${token}` };
+			pathArg = token;
+			continue;
+		}
+
+		if (!token.startsWith("--")) {
+			return { error: `Unknown flag: ${token}` };
+		}
+
+		const taken = takeValue(token, i);
+		if ("error" in taken) return taken;
+		const value = taken.value.trim();
+		i = taken.nextIndex;
+		if (!value) return { error: `Empty value for ${token}.` };
+
+		switch (token) {
+			case "--fontsize":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --fontsize value. Example: 12pt" };
+				options.fontsize = value;
+				break;
+			case "--section-size":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --section-size value. Example: 24pt" };
+				options.sectionSize = value;
+				break;
+			case "--subsection-size":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --subsection-size value. Example: 18pt" };
+				options.subsectionSize = value;
+				break;
+			case "--subsubsection-size":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --subsubsection-size value. Example: 14pt" };
+				options.subsubsectionSize = value;
+				break;
+			case "--margin":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --margin value. Example: 25mm" };
+				options.margin = value;
+				break;
+			case "--margin-top":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --margin-top value. Example: 30mm" };
+				options.marginTop = value;
+				break;
+			case "--margin-right":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --margin-right value. Example: 25mm" };
+				options.marginRight = value;
+				break;
+			case "--margin-bottom":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --margin-bottom value. Example: 30mm" };
+				options.marginBottom = value;
+				break;
+			case "--margin-left":
+				if (!isValidStudioPdfLength(value)) return { error: "Invalid --margin-left value. Example: 25mm" };
+				options.marginLeft = value;
+				break;
+			case "--linestretch":
+				if (!isValidStudioPdfLineStretch(value)) return { error: "Invalid --linestretch value. Example: 1.2" };
+				options.linestretch = value;
+				break;
+			case "--mainfont":
+				options.mainfont = sanitizeStudioPdfFreeformOption(value);
+				if (!options.mainfont) return { error: "Invalid --mainfont value." };
+				break;
+			case "--papersize":
+				if (!isValidStudioPdfPaperSize(value)) return { error: "Invalid --papersize value. Example: a4" };
+				options.papersize = value;
+				break;
+			case "--geometry":
+				options.geometry = sanitizeStudioPdfFreeformOption(value);
+				if (!options.geometry) return { error: "Invalid --geometry value." };
+				break;
+			default:
+				return { error: `Unknown flag: ${token}` };
+		}
+	}
+
+	if (!pathArg) return { error: "Missing file path." };
+	if (options.geometry && (options.margin || options.marginTop || options.marginRight || options.marginBottom || options.marginLeft)) {
+		return { error: "Use either --geometry or the --margin/--margin-* flags, not both." };
+	}
+
+	return { pathArg, options };
+}
+
+function getStudioRequestedPdfFontsizePt(options?: StudioPdfRenderOptions): number | null {
+	const raw = String(options?.fontsize ?? "").trim();
+	const match = raw.match(/^(\d+(?:\.\d+)?)pt$/i);
+	if (!match) return null;
+	const value = Number(match[1]);
+	return Number.isFinite(value) ? value : null;
+}
+
+function shouldUseStudioAltMarkdownPdfDocumentClass(options?: StudioPdfRenderOptions): boolean {
+	const sizePt = getStudioRequestedPdfFontsizePt(options);
+	return Boolean(sizePt && sizePt > 12);
+}
+
+function buildStudioPdfPandocVariableArgs(options?: StudioPdfRenderOptions, allowAltDocumentClass = false): string[] {
+	const resolved = options ?? {};
+	const args: string[] = [];
+
+	if (allowAltDocumentClass && shouldUseStudioAltMarkdownPdfDocumentClass(resolved)) {
+		args.push("-V", "documentclass=scrartcl");
+	}
+
+	if (resolved.geometry) {
+		args.push("-V", `geometry:${resolved.geometry}`);
+	} else {
+		args.push("-V", `geometry:margin=${resolved.margin ?? "2.2cm"}`);
+		if (resolved.marginTop) args.push("-V", `geometry:top=${resolved.marginTop}`);
+		if (resolved.marginRight) args.push("-V", `geometry:right=${resolved.marginRight}`);
+		if (resolved.marginBottom) args.push("-V", `geometry:bottom=${resolved.marginBottom}`);
+		if (resolved.marginLeft) args.push("-V", `geometry:left=${resolved.marginLeft}`);
+	}
+
+	args.push("-V", `fontsize=${resolved.fontsize ?? "11pt"}`);
+	args.push("-V", `linestretch=${resolved.linestretch ?? "1.25"}`);
+	if (resolved.mainfont) args.push("-V", `mainfont=${resolved.mainfont}`);
+	if (resolved.papersize) args.push("-V", `papersize=${resolved.papersize}`);
+	return args;
+}
+
+function buildStudioLiteralTextPdfTexConfig(options?: StudioPdfRenderOptions): {
+	className: string;
+	classPaperOption: string;
+	geometryOptions: string;
+	fontCommands: string;
+	lineStretch: string;
+	fontSizeCommand: string;
+} {
+	const resolved = options ?? {};
+	const geometryParts: string[] = [];
+	if (resolved.geometry) {
+		geometryParts.push(sanitizeStudioPdfFreeformOption(resolved.geometry));
+	} else {
+		geometryParts.push(`margin=${resolved.margin ?? "2.2cm"}`);
+		if (resolved.marginTop) geometryParts.push(`top=${resolved.marginTop}`);
+		if (resolved.marginRight) geometryParts.push(`right=${resolved.marginRight}`);
+		if (resolved.marginBottom) geometryParts.push(`bottom=${resolved.marginBottom}`);
+		if (resolved.marginLeft) geometryParts.push(`left=${resolved.marginLeft}`);
+	}
+	const classPaperOption = resolved.papersize ? `,${resolved.papersize}paper` : "";
+	const fontCommands = resolved.mainfont
+		? `\\usepackage{fontspec}\n\\setmainfont{${sanitizeStudioPdfFreeformOption(resolved.mainfont).replace(/[{}\\]/g, "")}}\n`
+		: "";
+	const lineStretch = sanitizeStudioPdfFreeformOption(resolved.linestretch || "1.25") || "1.25";
+	const useAltClass = shouldUseStudioAltMarkdownPdfDocumentClass(resolved);
+	const fontSizeCommand = resolved.fontsize && !useAltClass
+		? `\\fontsize{${resolved.fontsize}}{${resolved.fontsize}}\\selectfont\n`
+		: "";
+	return {
+		className: useAltClass ? "scrartcl" : "article",
+		classPaperOption,
+		geometryOptions: geometryParts.join(","),
+		fontCommands,
+		lineStretch,
+		fontSizeCommand,
+	};
 }
 
 function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLanguage?: string): string {
@@ -3018,15 +3632,16 @@ async function preprocessStudioMermaidForPdf(markdown: string, workDir: string):
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const markdownWithoutHtmlComments = isLatex ? markdown : stripStudioMarkdownHtmlComments(markdown);
+	const markdownWithPreviewPageBreaks = isLatex ? markdownWithoutHtmlComments : replaceStudioPreviewPageBreakCommands(markdownWithoutHtmlComments);
 	const latexSubfigurePreviewTransform = isLatex
-		? preprocessStudioLatexSubfiguresForPreview(markdownWithoutHtmlComments)
-		: { markdown: markdownWithoutHtmlComments, subfigureGroups: [] };
+		? preprocessStudioLatexSubfiguresForPreview(markdownWithPreviewPageBreaks)
+		: { markdown: markdownWithPreviewPageBreaks, subfigureGroups: [] };
 	const latexAlgorithmPreviewTransform = isLatex
 		? preprocessStudioLatexAlgorithmsForPreview(latexSubfigurePreviewTransform.markdown)
-		: { markdown: markdownWithoutHtmlComments, algorithmBlocks: [] };
+		: { markdown: markdownWithPreviewPageBreaks, algorithmBlocks: [] };
 	const sourceWithResolvedRefs = isLatex
 		? preprocessStudioLatexReferences(latexAlgorithmPreviewTransform.markdown, sourcePath, resourcePath)
-		: markdownWithoutHtmlComments;
+		: markdownWithPreviewPageBreaks;
 	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
 	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
@@ -3089,6 +3704,8 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 						latexSubfigurePreviewTransform.subfigureGroups,
 						latexAlgorithmPreviewTransform.algorithmBlocks,
 					);
+				} else {
+					html = decorateStudioPreviewPageBreakHtml(html);
 				}
 				succeed(stripMathMlAnnotationTags(html));
 				return;
@@ -3103,7 +3720,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	return renderedHtml;
 }
 
-async function renderStudioLiteralTextPdf(text: string, title = "Studio export"): Promise<Buffer> {
+async function renderStudioLiteralTextPdf(text: string, title = "Studio export", options?: StudioPdfRenderOptions): Promise<Buffer> {
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
 	const tempDir = join(tmpdir(), `pi-studio-text-pdf-${Date.now()}-${randomUUID()}`);
 	const textPath = join(tempDir, "input.txt");
@@ -3111,13 +3728,15 @@ async function renderStudioLiteralTextPdf(text: string, title = "Studio export")
 	const outputPath = join(tempDir, "input.pdf");
 
 	const normalizedText = String(text ?? "").replace(/\r\n/g, "\n");
-	const texDocument = `\\documentclass[11pt]{article}
-\\usepackage[margin=2.2cm]{geometry}
-\\usepackage{fvextra}
+	const literalPdfConfig = buildStudioLiteralTextPdfTexConfig(options);
+	const texDocument = `\\documentclass[${options?.fontsize ?? "11pt"}${literalPdfConfig.classPaperOption}]{${literalPdfConfig.className}}
+\\usepackage[${literalPdfConfig.geometryOptions}]{geometry}
+${literalPdfConfig.fontCommands}\\usepackage{fvextra}
 \\usepackage{xcolor}
 \\usepackage{upquote}
 \\begin{document}
-\\section*{${title.replace(/[{}\\]/g, "").trim() || "Studio export"}}
+\\renewcommand{\\baselinestretch}{${literalPdfConfig.lineStretch}}\\selectfont
+${literalPdfConfig.fontSizeCommand}\\section*{${title.replace(/[{}\\]/g, "").trim() || "Studio export"}}
 \\VerbatimInput[breaklines,breakanywhere,fontsize=\\small,frame=single,rulecolor=\\color{black!15},framesep=2mm]{input.txt}
 \\end{document}
 `;
@@ -3231,6 +3850,10 @@ async function renderStudioPdfFromGeneratedLatex(
 	bibliographyArgs: string[],
 	sourcePath: string | undefined,
 	subfigureGroups: Array<{ placeholder: string; group: StudioLatexPdfSubfigureGroup }>,
+	inputFormat = "latex",
+	calloutBlocks: StudioPdfMarkdownCalloutBlock[] = [],
+	alignedImageBlocks: StudioPdfAlignedImageBlock[] = [],
+	pdfOptions?: StudioPdfRenderOptions,
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
 	const preamblePath = join(tempDir, "_pdf_preamble.tex");
@@ -3238,16 +3861,14 @@ async function renderStudioPdfFromGeneratedLatex(
 	const outputPath = join(tempDir, "studio-export.pdf");
 
 	await mkdir(tempDir, { recursive: true });
-	await writeFile(preamblePath, PDF_PREAMBLE, "utf-8");
+	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions), "utf-8");
 
 	const pandocArgs = [
-		"-f", "latex",
+		"-f", inputFormat,
 		"-t", "latex",
 		"-s",
 		"-o", latexPath,
-		"-V", "geometry:margin=2.2cm",
-		"-V", "fontsize=11pt",
-		"-V", "linestretch=1.25",
+		...buildStudioPdfPandocVariableArgs(pdfOptions, inputFormat !== "latex"),
 		"-V", "urlcolor=blue",
 		"-V", "linkcolor=blue",
 		"--include-in-header", preamblePath,
@@ -3300,7 +3921,9 @@ async function renderStudioPdfFromGeneratedLatex(
 		const generatedLatex = await readFile(latexPath, "utf-8");
 		const injectedLatex = injectStudioLatexPdfSubfigureBlocks(generatedLatex, subfigureGroups, sourcePath, resourcePath);
 		const annotationReadyLatex = replaceStudioAnnotationMarkersInGeneratedLatex(injectedLatex);
-		const normalizedLatex = normalizeStudioGeneratedFigureCaptions(annotationReadyLatex);
+		const calloutReadyLatex = replaceStudioPdfCalloutBlocksInGeneratedLatex(annotationReadyLatex, calloutBlocks);
+		const alignedReadyLatex = replaceStudioPdfAlignedImageBlocksInGeneratedLatex(calloutReadyLatex, alignedImageBlocks);
+		const normalizedLatex = normalizeStudioGeneratedFigureCaptions(alignedReadyLatex);
 		await writeFile(latexPath, normalizedLatex, "utf-8");
 
 		await new Promise<void>((resolve, reject) => {
@@ -3365,6 +3988,7 @@ async function renderStudioPdfWithPandoc(
 	resourcePath?: string,
 	editorPdfLanguage?: string,
 	sourcePath?: string,
+	pdfOptions?: StudioPdfRenderOptions,
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
@@ -3382,6 +4006,12 @@ async function renderStudioPdfWithPandoc(
 		? injectStudioLatexEquationTags(preprocessStudioLatexReferences(latexPdfSource, sourcePath, resourcePath), sourcePath, resourcePath)
 		: markdown;
 	const effectiveEditorLanguage = inferStudioPdfLanguage(sourceWithResolvedRefs, editorPdfLanguage);
+	const pdfCalloutTransform = !isLatex && (!effectiveEditorLanguage || effectiveEditorLanguage === "markdown")
+		? preprocessStudioMarkdownCalloutsForPdf(sourceWithResolvedRefs)
+		: { markdown: sourceWithResolvedRefs, blocks: [] as StudioPdfMarkdownCalloutBlock[] };
+	const pdfAlignedImageTransform = !isLatex && (!effectiveEditorLanguage || effectiveEditorLanguage === "markdown")
+		? preprocessStudioMarkdownImageAlignmentForPdf(pdfCalloutTransform.markdown)
+		: { markdown: pdfCalloutTransform.markdown, blocks: [] as StudioPdfAlignedImageBlock[] };
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
 	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 
@@ -3395,15 +4025,13 @@ async function renderStudioPdfWithPandoc(
 		const outputPath = join(tempDir, "studio-export.pdf");
 
 		await mkdir(tempDir, { recursive: true });
-		await writeFile(preamblePath, PDF_PREAMBLE, "utf-8");
+		await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions), "utf-8");
 
 		const args = [
 			"-f", inputFormat,
 			"-o", outputPath,
 			`--pdf-engine=${pdfEngine}`,
-			"-V", "geometry:margin=2.2cm",
-			"-V", "fontsize=11pt",
-			"-V", "linestretch=1.25",
+			...buildStudioPdfPandocVariableArgs(pdfOptions, inputFormat !== "latex"),
 			"-V", "urlcolor=blue",
 			"-V", "linkcolor=blue",
 			"--include-in-header", preamblePath,
@@ -3472,6 +4100,10 @@ async function renderStudioPdfWithPandoc(
 			bibliographyArgs,
 			sourcePath,
 			latexSubfigurePdfTransform.groups,
+			"latex",
+			[],
+			[],
+			pdfOptions,
 		);
 	}
 
@@ -3484,7 +4116,7 @@ async function renderStudioPdfWithPandoc(
 			const fenced = parseStudioSingleFencedCodeBlock(diffMarkdown);
 			const diffText = fenced ? fenced.content : markdown;
 			return {
-				pdf: await renderStudioLiteralTextPdf(diffText, "Git diff"),
+				pdf: await renderStudioLiteralTextPdf(diffText, "Git diff", pdfOptions),
 				warning: "Highlighted diff export failed, so Studio used a plain-text fallback without syntax colours.",
 			};
 		}
@@ -3493,27 +4125,44 @@ async function renderStudioPdfWithPandoc(
 	const inputFormat = isLatex
 		? "latex"
 		: "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris+superscript+subscript-raw_html";
-	const normalizedMarkdown = prepareStudioPdfMarkdown(sourceWithResolvedRefs, isLatex, effectiveEditorLanguage);
+	const normalizedMarkdown = prepareStudioPdfMarkdown(pdfAlignedImageTransform.markdown, isLatex, effectiveEditorLanguage);
 
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
 	const preamblePath = join(tempDir, "_pdf_preamble.tex");
 	const outputPath = join(tempDir, "studio-export.pdf");
 
 	await mkdir(tempDir, { recursive: true });
-	await writeFile(preamblePath, PDF_PREAMBLE, "utf-8");
+	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions), "utf-8");
 
 	const mermaidPrepared: StudioMermaidPdfPreprocessResult = isLatex
 		? { markdown: normalizedMarkdown, found: 0, replaced: 0, failed: 0, missingCli: false }
 		: await preprocessStudioMermaidForPdf(normalizedMarkdown, tempDir);
 	const markdownForPdf = mermaidPrepared.markdown;
 
+	if (!isLatex && (pdfCalloutTransform.blocks.length > 0 || pdfAlignedImageTransform.blocks.length > 0)) {
+		const rendered = await renderStudioPdfFromGeneratedLatex(
+			markdownForPdf,
+			pandocCommand,
+			pdfEngine,
+			resourcePath,
+			pandocWorkingDir,
+			bibliographyArgs,
+			sourcePath,
+			[],
+			inputFormat,
+			pdfCalloutTransform.blocks,
+			pdfAlignedImageTransform.blocks,
+			pdfOptions,
+		);
+		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+		return { pdf: rendered.pdf, warning: mermaidPrepared.warning ?? rendered.warning };
+	}
+
 	const args = [
 		"-f", inputFormat,
 		"-o", outputPath,
 		`--pdf-engine=${pdfEngine}`,
-		"-V", "geometry:margin=2.2cm",
-		"-V", "fontsize=11pt",
-		"-V", "linestretch=1.25",
+		...buildStudioPdfPandocVariableArgs(pdfOptions, !isLatex),
 		"-V", "urlcolor=blue",
 		"-V", "linkcolor=blue",
 		"--include-in-header", preamblePath,
@@ -6980,23 +7629,34 @@ export default function (pi: ExtensionAPI) {
 			const trimmed = args.trim();
 			if (!trimmed || trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
 				ctx.ui.notify(
-					"Usage: /studio-pdf <path>\n"
-						+ "  Export a local Markdown/LaTeX file to <name>.studio.pdf using the Studio PDF pipeline.",
+					"Usage: /studio-pdf <path> [options]\n"
+						+ "  Export a local Markdown/LaTeX file to <name>.studio.pdf using the Studio PDF pipeline.\n"
+						+ "Options:\n"
+						+ "  --fontsize <value>       e.g. 12pt\n"
+						+ "  --section-size <value>   e.g. 24pt\n"
+						+ "  --subsection-size <value>\n"
+						+ "  --subsubsection-size <value>\n"
+						+ "  --margin <value>         e.g. 25mm\n"
+						+ "  --margin-top <value>\n"
+						+ "  --margin-right <value>\n"
+						+ "  --margin-bottom <value>\n"
+						+ "  --margin-left <value>\n"
+						+ "  --linestretch <value>    e.g. 1.2\n"
+						+ "  --mainfont <name>        e.g. \"TeX Gyre Pagella\"\n"
+						+ "  --papersize <name>       e.g. a4\n"
+						+ "  --geometry <spec>        e.g. \"top=30mm,left=25mm,right=25mm,bottom=30mm\"\n"
+						+ "  Note: use either --geometry or the --margin/--margin-* flags.",
 					"info",
 				);
 				return;
 			}
 
-			if (trimmed.startsWith("-")) {
-				ctx.ui.notify(`Unknown flag: ${trimmed}. Use /studio-pdf --help`, "error");
+			const parsedArgs = parseStudioPdfCommandArgs(trimmed);
+			if ("error" in parsedArgs) {
+				ctx.ui.notify(parsedArgs.error, "error");
 				return;
 			}
-
-			const pathArg = parsePathArgument(trimmed);
-			if (!pathArg) {
-				ctx.ui.notify("Invalid file path argument.", "error");
-				return;
-			}
+			const { pathArg, options: pdfOptions } = parsedArgs;
 
 			const file = readStudioFile(pathArg, ctx.cwd);
 			if (file.ok === false) {
@@ -7028,6 +7688,7 @@ export default function (pi: ExtensionAPI) {
 					resourcePath,
 					editorPdfLanguage,
 					file.resolvedPath,
+					pdfOptions,
 				);
 				await writeFile(outputPath, pdf);
 

@@ -633,6 +633,91 @@
       color: var(--md-quote);
     }
 
+    .rendered-markdown .callout-note,
+    .rendered-markdown .callout-tip,
+    .rendered-markdown .callout-warning,
+    .rendered-markdown .callout-important,
+    .rendered-markdown .callout-caution {
+      margin: 1.15em 0;
+      padding: 0.8em 1rem 0.95em;
+      border: 1px solid var(--border-muted);
+      border-left-width: 4px;
+      border-radius: 10px;
+      background: var(--panel-2);
+      color: inherit;
+    }
+
+    .rendered-markdown .callout-note::before,
+    .rendered-markdown .callout-tip::before,
+    .rendered-markdown .callout-warning::before,
+    .rendered-markdown .callout-important::before,
+    .rendered-markdown .callout-caution::before {
+      display: inline-block;
+      margin-bottom: 0.45rem;
+      font-size: 0.76em;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .rendered-markdown .callout-note::before {
+      content: "Note";
+      color: var(--accent);
+    }
+
+    .rendered-markdown .callout-tip::before {
+      content: "Tip";
+      color: var(--ok);
+    }
+
+    .rendered-markdown .callout-warning::before {
+      content: "Warning";
+      color: var(--warn);
+    }
+
+    .rendered-markdown .callout-important::before {
+      content: "Important";
+      color: var(--error);
+    }
+
+    .rendered-markdown .callout-caution::before {
+      content: "Caution";
+      color: var(--error);
+    }
+
+    .rendered-markdown .callout-note {
+      border-left-color: var(--accent);
+    }
+
+    .rendered-markdown .callout-tip {
+      border-left-color: var(--ok);
+    }
+
+    .rendered-markdown .callout-warning {
+      border-left-color: var(--warn);
+    }
+
+    .rendered-markdown .callout-important,
+    .rendered-markdown .callout-caution {
+      border-left-color: var(--error);
+    }
+
+    .rendered-markdown .callout-note > :first-child,
+    .rendered-markdown .callout-tip > :first-child,
+    .rendered-markdown .callout-warning > :first-child,
+    .rendered-markdown .callout-important > :first-child,
+    .rendered-markdown .callout-caution > :first-child {
+      margin-top: 0;
+    }
+
+    .rendered-markdown .callout-note > :last-child,
+    .rendered-markdown .callout-tip > :last-child,
+    .rendered-markdown .callout-warning > :last-child,
+    .rendered-markdown .callout-important > :last-child,
+    .rendered-markdown .callout-caution > :last-child {
+      margin-bottom: 0;
+    }
+
     .rendered-markdown pre {
       background: var(--panel-2);
       border: 1px solid var(--md-codeblock-border);
@@ -765,8 +850,47 @@
       margin: 1.25em 0;
     }
 
+    .rendered-markdown .studio-page-break {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      margin: 1.75em 0;
+      color: var(--muted);
+      font-size: 0.88em;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .rendered-markdown .studio-page-break-rule {
+      flex: 1 1 auto;
+      height: 1px;
+      background: var(--md-hr);
+      opacity: 0.95;
+    }
+
+    .rendered-markdown .studio-page-break-label {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+
     .rendered-markdown img {
       max-width: 100%;
+    }
+
+    .rendered-markdown img[data-fig-align="center"],
+    .rendered-markdown embed[data-fig-align="center"],
+    .rendered-markdown .studio-pdf-preview[data-fig-align="center"] {
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .rendered-markdown img[data-fig-align="right"],
+    .rendered-markdown embed[data-fig-align="right"],
+    .rendered-markdown .studio-pdf-preview[data-fig-align="right"] {
+      display: block;
+      margin-left: auto;
+      margin-right: 0;
     }
 
     .rendered-markdown embed[type="application/pdf"],
