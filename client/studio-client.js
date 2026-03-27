@@ -1697,6 +1697,32 @@
         }
       }
 
+      async function renderAnnotationMathInElement(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
+
+        const markers = Array.from(targetEl.querySelectorAll(".annotation-preview-marker")).filter((node) => {
+          const text = typeof node.textContent === "string" ? node.textContent : "";
+          return /\\\(|\\\[|\$\$?|\\[A-Za-z]+/.test(text);
+        });
+        if (markers.length === 0) return;
+
+        let mathJax;
+        try {
+          mathJax = await ensureMathJax();
+        } catch (error) {
+          console.error("Annotation MathJax load failed:", error);
+          appendMathFallbackNotice(targetEl, MATHJAX_UNAVAILABLE_MESSAGE);
+          return;
+        }
+
+        try {
+          await mathJax.typesetPromise(markers);
+        } catch (error) {
+          console.error("Annotation math render failed:", error);
+          appendMathFallbackNotice(targetEl, MATHJAX_RENDER_FAIL_MESSAGE);
+        }
+      }
+
       function applyPreviewAnnotationPlaceholdersToElement(targetEl, placeholders) {
         if (!targetEl || !Array.isArray(placeholders) || placeholders.length === 0) return;
         if (typeof document.createTreeWalker !== "function") return;
@@ -2258,6 +2284,7 @@
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
           applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
+          await renderAnnotationMathInElement(targetEl);
           decoratePdfEmbeds(targetEl);
           await renderPdfPreviewsInElement(targetEl);
           const annotationMode = (pane === "source" || pane === "response")

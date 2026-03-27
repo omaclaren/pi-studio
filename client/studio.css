@@ -742,6 +742,22 @@
       color: var(--md-codeblock);
     }
 
+    .rendered-markdown pre.text,
+    .rendered-markdown pre.plaintext,
+    .rendered-markdown pre.sourceCode.txt {
+      white-space: pre-wrap;
+      overflow-x: hidden;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .rendered-markdown pre.text code,
+    .rendered-markdown pre.plaintext code,
+    .rendered-markdown pre.sourceCode.txt code,
+    .rendered-markdown pre.sourceCode.txt code > span {
+      white-space: inherit;
+    }
+
     .rendered-markdown :not(pre) > code {
       background: rgba(127, 127, 127, 0.13);
       border: 1px solid var(--md-codeblock-border);

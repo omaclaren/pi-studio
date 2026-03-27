@@ -4,6 +4,14 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.34] — 2026-03-27
+
+### Changed
+- Preview-side fenced `text`/`plaintext` blocks now soft-wrap long lines instead of forcing horizontal scrolling, while code/diff blocks keep their existing scrollable behavior.
+
+### Fixed
+- Preview annotation pills once again render inline math within long `[an: ...]` notes instead of leaving `$...$` / `\(...\)` fragments as literal text.
+
 ## [0.5.33] — 2026-03-27
 
 ### Changed
