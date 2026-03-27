@@ -4,6 +4,17 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.33] — 2026-03-27
+
+### Changed
+- Studio browser tabs now use `π Studio` branding plus a simple theme-reactive `π` favicon instead of the generic browser globe.
+
+### Fixed
+- Markdown preview now preserves `[an: ...]` markers more reliably by replacing them with preview-safe placeholders before pandoc and restoring annotation pills afterwards, preventing long or markdown-like annotations from leaking through as raw text.
+- Preview/PDF markdown preparation now normalizes fenced blocks whose contents contain competing backtick/tilde fence runs, avoiding broken rendering/export for diff-heavy content that itself contains code fences.
+- Diff PDF exports now route highlighted diff content through the generated-LaTeX path more reliably, keeping add/delete/meta/hunk styling and line wrapping on exports that previously rendered poorly or fell back unnecessarily.
+- PDF annotation badges now wrap within the page width instead of overflowing on long notes, preserve inline math inside annotation text, and also render correctly inside diff token lines such as `+[an: ...]`.
+
 ## [0.5.32] — 2026-03-25
 
 ### Added

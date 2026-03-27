@@ -516,7 +516,11 @@
       background: var(--accent-soft);
       border: 1px solid var(--marker-border);
       border-radius: 4px;
+      display: inline-block;
+      max-width: 100%;
       padding: 0 4px;
+      white-space: normal;
+      vertical-align: baseline;
     }
 
     #sourcePreview {

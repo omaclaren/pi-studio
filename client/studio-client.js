@@ -242,6 +242,7 @@
       let editorHighlightRenderRaf = null;
       let annotationsEnabled = true;
       const ANNOTATION_MARKER_REGEX = /\[an:\s*([^\]]+?)\]/gi;
+      const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
       const EMPTY_OVERLAY_LINE = "\u200b";
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
       const MATHJAX_CDN_URL = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
@@ -1183,6 +1184,80 @@
         return annotationsEnabled ? raw : stripAnnotationMarkers(raw);
       }
 
+      function normalizePreviewAnnotationLabel(text) {
+        return String(text || "")
+          .replace(/\r\n/g, "\n")
+          .replace(/\s*\n\s*/g, " ")
+          .replace(/\s{2,}/g, " ")
+          .trim();
+      }
+
+      function prepareMarkdownForPandocPreview(markdown) {
+        const source = String(markdown || "").replace(/\r\n/g, "\n");
+        const placeholders = [];
+        if (!source) {
+          return { markdown: source, placeholders: placeholders };
+        }
+
+        const lines = source.split("\n");
+        const out = [];
+        let plainBuffer = [];
+        let inFence = false;
+        let fenceChar = null;
+        let fenceLength = 0;
+
+        function flushPlain() {
+          if (plainBuffer.length === 0) return;
+          const segment = plainBuffer.join("\n").replace(/\[an:\s*([^\]]+?)\]/gi, function(_match, markerText) {
+            const label = normalizePreviewAnnotationLabel(markerText);
+            if (!label) return "";
+            const token = PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX + placeholders.length + "TOKEN";
+            placeholders.push({ token: token, text: label, title: "[an: " + label + "]" });
+            return token;
+          });
+          out.push(segment);
+          plainBuffer = [];
+        }
+
+        for (const line of lines) {
+          const trimmed = line.trimStart();
+          const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+
+          if (fenceMatch) {
+            const marker = fenceMatch[1] || "";
+            const markerChar = marker.charAt(0);
+            const markerLength = marker.length;
+
+            if (!inFence) {
+              flushPlain();
+              inFence = true;
+              fenceChar = markerChar;
+              fenceLength = markerLength;
+              out.push(line);
+              continue;
+            }
+
+            if (fenceChar === markerChar && markerLength >= fenceLength) {
+              inFence = false;
+              fenceChar = null;
+              fenceLength = 0;
+            }
+
+            out.push(line);
+            continue;
+          }
+
+          if (inFence) {
+            out.push(line);
+          } else {
+            plainBuffer.push(line);
+          }
+        }
+
+        flushPlain();
+        return { markdown: out.join("\n"), placeholders: placeholders };
+      }
+
       function wrapAsFencedCodeBlock(text, language) {
         const source = String(text || "").trimEnd();
         const lang = String(language || "").trim();
@@ -1620,6 +1695,79 @@
           console.error("MathJax fallback render failed:", error);
           appendMathFallbackNotice(targetEl, MATHJAX_RENDER_FAIL_MESSAGE);
         }
+      }
+
+      function applyPreviewAnnotationPlaceholdersToElement(targetEl, placeholders) {
+        if (!targetEl || !Array.isArray(placeholders) || placeholders.length === 0) return;
+        if (typeof document.createTreeWalker !== "function") return;
+
+        const placeholderMap = new Map();
+        const placeholderTokens = [];
+        placeholders.forEach(function(entry) {
+          const token = entry && typeof entry.token === "string" ? entry.token : "";
+          if (!token) return;
+          placeholderMap.set(token, entry);
+          placeholderTokens.push(token);
+        });
+        if (placeholderTokens.length === 0) return;
+
+        const placeholderPattern = new RegExp(placeholderTokens.map(escapeRegExp).join("|"), "g");
+        const walker = document.createTreeWalker(targetEl, NodeFilter.SHOW_TEXT);
+        const textNodes = [];
+        let node = walker.nextNode();
+        while (node) {
+          const textNode = node;
+          const value = typeof textNode.nodeValue === "string" ? textNode.nodeValue : "";
+          if (value && value.indexOf(PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX) !== -1) {
+            const parent = textNode.parentElement;
+            const tag = parent && parent.tagName ? parent.tagName.toUpperCase() : "";
+            if (tag !== "CODE" && tag !== "PRE" && tag !== "SCRIPT" && tag !== "STYLE" && tag !== "TEXTAREA") {
+              textNodes.push(textNode);
+            }
+          }
+          node = walker.nextNode();
+        }
+
+        textNodes.forEach(function(textNode) {
+          const text = typeof textNode.nodeValue === "string" ? textNode.nodeValue : "";
+          if (!text) return;
+          placeholderPattern.lastIndex = 0;
+          if (!placeholderPattern.test(text)) return;
+          placeholderPattern.lastIndex = 0;
+
+          const fragment = document.createDocumentFragment();
+          let lastIndex = 0;
+          let match;
+          while ((match = placeholderPattern.exec(text)) !== null) {
+            const token = match[0] || "";
+            const entry = placeholderMap.get(token);
+            const start = typeof match.index === "number" ? match.index : 0;
+            if (start > lastIndex) {
+              fragment.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+            }
+            if (entry) {
+              const markerEl = document.createElement("span");
+              markerEl.className = "annotation-preview-marker";
+              markerEl.textContent = typeof entry.text === "string" ? entry.text : token;
+              markerEl.title = typeof entry.title === "string" ? entry.title : markerEl.textContent;
+              fragment.appendChild(markerEl);
+            } else {
+              fragment.appendChild(document.createTextNode(token));
+            }
+            lastIndex = start + token.length;
+            if (token.length === 0) {
+              placeholderPattern.lastIndex += 1;
+            }
+          }
+
+          if (lastIndex < text.length) {
+            fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+          }
+
+          if (textNode.parentNode) {
+            textNode.parentNode.replaceChild(fragment, textNode);
+          }
+        });
       }
 
       function applyAnnotationMarkersToElement(targetEl, mode) {
@@ -2094,8 +2242,12 @@
       }
 
       async function applyRenderedMarkdown(targetEl, markdown, pane, nonce) {
+        const previewPrepared = annotationsEnabled
+          ? prepareMarkdownForPandocPreview(markdown)
+          : { markdown: stripAnnotationMarkers(String(markdown || "")), placeholders: [] };
+
         try {
-          const renderedHtml = await renderMarkdownWithPandoc(markdown);
+          const renderedHtml = await renderMarkdownWithPandoc(previewPrepared.markdown);
 
           if (pane === "source") {
             if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
@@ -2105,6 +2257,7 @@
 
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
+          applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
           decoratePdfEmbeds(targetEl);
           await renderPdfPreviewsInElement(targetEl);
           const annotationMode = (pane === "source" || pane === "response")
@@ -2542,6 +2695,10 @@
           .replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;")
           .replace(/'/g, "&#39;");
+      }
+
+      function escapeRegExp(text) {
+        return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       }
 
       function wrapHighlight(className, text) {

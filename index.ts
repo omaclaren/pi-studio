@@ -236,10 +236,20 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 \\titlespacing*{\\section}{0pt}{${sectionSpaceBefore}}{${sectionSpaceAfter}}
 \\titlespacing*{\\subsection}{0pt}{${subsectionSpaceBefore}}{${subsectionSpaceAfter}}
 \\usepackage{xcolor}
+\\usepackage{varwidth}
 \\definecolor{StudioAnnotationBg}{HTML}{EAF3FF}
 \\definecolor{StudioAnnotationBorder}{HTML}{8CB8FF}
 \\definecolor{StudioAnnotationText}{HTML}{1F5FBF}
-\\newcommand{\\studioannotation}[1]{\\begingroup\\setlength{\\fboxsep}{1.5pt}\\fcolorbox{StudioAnnotationBorder}{StudioAnnotationBg}{\\textcolor{StudioAnnotationText}{\\sffamily\\footnotesize\\strut #1}}\\endgroup}
+\\definecolor{StudioDiffAddText}{HTML}{1A7F37}
+\\definecolor{StudioDiffDelText}{HTML}{CF222E}
+\\definecolor{StudioDiffMetaText}{HTML}{57606A}
+\\definecolor{StudioDiffHunkText}{HTML}{0969DA}
+\\newcommand{\\studioannotation}[1]{\\begingroup\\setlength{\\fboxsep}{1.5pt}\\fcolorbox{StudioAnnotationBorder}{StudioAnnotationBg}{\\begin{varwidth}{\\dimexpr\\linewidth-2\\fboxsep-2\\fboxrule\\relax}\\raggedright\\textcolor{StudioAnnotationText}{\\sffamily\\footnotesize\\strut #1}\\end{varwidth}}\\endgroup}
+\\newcommand{\\StudioDiffAddTok}[1]{\\textcolor{StudioDiffAddText}{#1}}
+\\newcommand{\\StudioDiffDelTok}[1]{\\textcolor{StudioDiffDelText}{#1}}
+\\newcommand{\\StudioDiffMetaTok}[1]{\\textcolor{StudioDiffMetaText}{#1}}
+\\newcommand{\\StudioDiffHunkTok}[1]{\\textcolor{StudioDiffHunkText}{#1}}
+\\newcommand{\\StudioDiffHeaderTok}[1]{\\textcolor{StudioDiffHunkText}{\\textbf{#1}}}
 \\newenvironment{studiocallout}[1]{\\par\\vspace{0.22em}\\noindent\\begingroup\\color{StudioAnnotationBorder}\\hrule height 0.45pt\\color{black}\\vspace{0.08em}\\noindent{\\sffamily\\bfseries\\textcolor{StudioAnnotationText}{#1}}\\par\\vspace{0.02em}\\leftskip=0.7em\\rightskip=0pt\\parindent=0pt\\parskip=0.15em}{\\par\\vspace{0.02em}\\noindent\\color{StudioAnnotationBorder}\\hrule height 0.45pt\\par\\endgroup\\vspace{0.22em}}
 \\usepackage{caption}
 \\captionsetup[figure]{justification=raggedright,singlelinecheck=false}
@@ -2892,6 +2902,105 @@ function wrapStudioCodeAsMarkdown(code: string, language?: string): string {
 	return `${marker}${lang}\n${source}\n${marker}`;
 }
 
+function extractStudioFenceInfoLanguage(info: string): string | undefined {
+	const firstToken = String(info ?? "").trim().split(/\s+/)[0]?.replace(/^\./, "") ?? "";
+	return normalizeStudioEditorLanguage(firstToken || undefined);
+}
+
+function normalizeStudioMarkdownFencedBlocks(markdown: string): string {
+	const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+	const out: string[] = [];
+
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index] ?? "";
+		const openingMatch = line.match(/^(\s{0,3})(`{3,}|~{3,})([^\n]*)$/);
+		if (!openingMatch) {
+			out.push(line);
+			continue;
+		}
+
+		const indent = openingMatch[1] ?? "";
+		const openingFence = openingMatch[2]!;
+		const openingSuffix = openingMatch[3] ?? "";
+		const fenceChar = openingFence[0] as "`" | "~";
+		const fenceLength = openingFence.length;
+
+		let closingIndex = -1;
+		for (let innerIndex = index + 1; innerIndex < lines.length; innerIndex += 1) {
+			const innerLine = lines[innerIndex] ?? "";
+			const closingMatch = innerLine.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+			if (!closingMatch) continue;
+			const closingFence = closingMatch[1]!;
+			if (closingFence[0] !== fenceChar || closingFence.length < fenceLength) continue;
+			closingIndex = innerIndex;
+			break;
+		}
+
+		if (closingIndex === -1) {
+			out.push(line);
+			continue;
+		}
+
+		const contentLines = lines.slice(index + 1, closingIndex);
+		const content = contentLines.join("\n");
+		const maxBackticks = getLongestStudioFenceRun(content, "`");
+		const maxTildes = getLongestStudioFenceRun(content, "~");
+		const currentMaxRun = fenceChar === "`" ? maxBackticks : maxTildes;
+
+		if (currentMaxRun < fenceLength) {
+			out.push(line, ...contentLines, lines[closingIndex] ?? "");
+			index = closingIndex;
+			continue;
+		}
+
+		const neededBackticks = Math.max(3, maxBackticks + 1);
+		const neededTildes = Math.max(3, maxTildes + 1);
+		let markerChar: "`" | "~" = fenceChar;
+
+		if (neededBackticks < neededTildes) {
+			markerChar = "`";
+		} else if (neededTildes < neededBackticks) {
+			markerChar = "~";
+		} else if (fenceChar === "`") {
+			markerChar = "~";
+		}
+
+		const markerLength = markerChar === "`" ? neededBackticks : neededTildes;
+		const marker = markerChar.repeat(markerLength);
+		out.push(`${indent}${marker}${openingSuffix}`, ...contentLines, `${indent}${marker}`);
+		index = closingIndex;
+	}
+
+	return out.join("\n");
+}
+
+function hasStudioMarkdownDiffFence(markdown: string): boolean {
+	const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index] ?? "";
+		const openingMatch = line.match(/^\s{0,3}(`{3,}|~{3,})([^\n]*)$/);
+		if (!openingMatch) continue;
+
+		const openingFence = openingMatch[1]!;
+		const infoLanguage = extractStudioFenceInfoLanguage(openingMatch[2] ?? "");
+		if (infoLanguage !== "diff") continue;
+
+		const fenceChar = openingFence[0];
+		const fenceLength = openingFence.length;
+		for (let innerIndex = index + 1; innerIndex < lines.length; innerIndex += 1) {
+			const innerLine = lines[innerIndex] ?? "";
+			const closingMatch = innerLine.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+			if (!closingMatch) continue;
+			const closingFence = closingMatch[1]!;
+			if (closingFence[0] !== fenceChar || closingFence.length < fenceLength) continue;
+			return true;
+		}
+	}
+
+	return false;
+}
+
 function isLikelyRawStudioGitDiff(markdown: string): boolean {
 	const text = String(markdown ?? "");
 	if (!text.trim() || isStudioSingleFencedCodeBlock(text)) return false;
@@ -2914,16 +3023,66 @@ function inferStudioPdfLanguage(markdown: string, editorLanguage?: string): stri
 	return undefined;
 }
 
-function escapeStudioPdfLatexText(text: string): string {
+function escapeStudioPdfLatexTextFragment(text: string): string {
 	return String(text ?? "")
-		.replace(/\r\n/g, "\n")
-		.replace(/\s*\n\s*/g, " ")
-		.trim()
 		.replace(/\\/g, "\\textbackslash{}")
 		.replace(/([{}%#$&_])/g, "\\$1")
 		.replace(/~/g, "\\textasciitilde{}")
-		.replace(/\^/g, "\\textasciicircum{}")
-		.replace(/\s{2,}/g, " ");
+		.replace(/\^/g, "\\textasciicircum{}");
+}
+
+function escapeStudioPdfLatexText(text: string): string {
+	const normalized = String(text ?? "")
+		.replace(/\r\n/g, "\n")
+		.replace(/\s*\n\s*/g, " ")
+		.replace(/\s{2,}/g, " ")
+		.trim();
+	if (!normalized) return "";
+
+	const mathPattern = /\\\(([\s\S]*?)\\\)|\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$|\$([^$\n]+?)\$/g;
+	let out = "";
+	let lastIndex = 0;
+	let match: RegExpExecArray | null;
+
+	while ((match = mathPattern.exec(normalized)) !== null) {
+		const token = match[0] ?? "";
+		const start = match.index;
+		if (start > lastIndex) {
+			out += escapeStudioPdfLatexTextFragment(normalized.slice(lastIndex, start));
+		}
+
+		const inlineParenExpr = match[1];
+		const displayBracketExpr = match[2];
+		const displayDollarExpr = match[3];
+		const inlineDollarExpr = match[4];
+		let mathLatex = "";
+
+		if (typeof inlineParenExpr === "string" && isLikelyMathExpression(inlineParenExpr)) {
+			const content = inlineParenExpr.trim();
+			mathLatex = content ? `\\(${content}\\)` : "";
+		} else if (typeof displayBracketExpr === "string" && isLikelyMathExpression(displayBracketExpr)) {
+			const content = collapseDisplayMathContent(displayBracketExpr);
+			mathLatex = content ? `\\(${content}\\)` : "";
+		} else if (typeof displayDollarExpr === "string" && isLikelyMathExpression(displayDollarExpr)) {
+			const content = collapseDisplayMathContent(displayDollarExpr);
+			mathLatex = content ? `\\(${content}\\)` : "";
+		} else if (typeof inlineDollarExpr === "string" && isLikelyMathExpression(inlineDollarExpr)) {
+			const content = inlineDollarExpr.trim();
+			mathLatex = content ? `\\(${content}\\)` : "";
+		}
+
+		out += mathLatex || escapeStudioPdfLatexTextFragment(token);
+		lastIndex = start + token.length;
+		if (token.length === 0) {
+			mathPattern.lastIndex += 1;
+		}
+	}
+
+	if (lastIndex < normalized.length) {
+		out += escapeStudioPdfLatexTextFragment(normalized.slice(lastIndex));
+	}
+
+	return out.trim();
 }
 
 function replaceStudioAnnotationMarkersForPdfInSegment(text: string): string {
@@ -3697,7 +3856,9 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 		// Embed images as data URIs so they render in the browser preview
 		args.push("--embed-resources", "--standalone");
 	}
-	const normalizedMarkdown = isLatex ? sourceWithResolvedRefs : normalizeObsidianImages(normalizeMathDelimiters(sourceWithResolvedRefs));
+	const normalizedMarkdown = isLatex
+		? sourceWithResolvedRefs
+		: normalizeStudioMarkdownFencedBlocks(normalizeObsidianImages(normalizeMathDelimiters(sourceWithResolvedRefs)));
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
 
 	let renderedHtml = await new Promise<string>((resolve, reject) => {
@@ -3888,6 +4049,114 @@ function replaceStudioAnnotationMarkersInGeneratedLatex(latex: string): string {
 	return out.join("\n");
 }
 
+function isStudioGeneratedDiffHighlightingBlock(lines: string[]): boolean {
+	const body = lines.join("\n");
+	const hasAdditionOrDeletion = /\\VariableTok\{\+|\\StringTok\{\{-\}/.test(body);
+	const hasDiffStructure = /\\DataTypeTok\{@@|\\NormalTok\{diff \{-\}\{-\}git |\\KeywordTok\{\{-\}\{-\}\{-\}|\\DataTypeTok\{\+\+\+/.test(body);
+	return hasAdditionOrDeletion && hasDiffStructure;
+}
+
+function replaceStudioAnnotationMarkersInDiffTokenLine(line: string, macroName: string): string {
+	const tokenMatch = line.match(new RegExp(`^\\\\${macroName}\\{([\\s\\S]*)\\}$`));
+	if (!tokenMatch) return line;
+
+	const body = tokenMatch[1] ?? "";
+	const markerPattern = /\[an:\s*([^\]]+?)\]/gi;
+	let lastIndex = 0;
+	let rewritten = "";
+	let match: RegExpExecArray | null;
+
+	const wrapText = (text: string): string => text ? `\\${macroName}{${text}}` : "";
+
+	while ((match = markerPattern.exec(body)) !== null) {
+		const token = match[0] ?? "";
+		const start = match.index;
+		if (start > lastIndex) {
+			rewritten += wrapText(body.slice(lastIndex, start));
+		}
+
+		const markerText = (match[1] ?? "").replace(/\s{2,}/g, " ").trim();
+		if (markerText) {
+			rewritten += `\\studioannotation{${markerText}}`;
+		}
+
+		lastIndex = start + token.length;
+		if (token.length === 0) {
+			markerPattern.lastIndex += 1;
+		}
+	}
+
+	if (lastIndex === 0) return line;
+	if (lastIndex < body.length) {
+		rewritten += wrapText(body.slice(lastIndex));
+	}
+
+	return rewritten || wrapText(body);
+}
+
+function rewriteStudioGeneratedDiffHighlighting(latex: string): string {
+	const lines = String(latex ?? "").split("\n");
+	const out: string[] = [];
+
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index] ?? "";
+		if (!/^\\begin\{Highlighting\}/.test(line)) {
+			out.push(line);
+			continue;
+		}
+
+		let closingIndex = -1;
+		for (let innerIndex = index + 1; innerIndex < lines.length; innerIndex += 1) {
+			if (/^\\end\{Highlighting\}/.test(lines[innerIndex] ?? "")) {
+				closingIndex = innerIndex;
+				break;
+			}
+		}
+
+		if (closingIndex === -1) {
+			out.push(line);
+			continue;
+		}
+
+		const blockLines = lines.slice(index, closingIndex + 1);
+		if (!isStudioGeneratedDiffHighlightingBlock(blockLines)) {
+			out.push(...blockLines);
+			index = closingIndex;
+			continue;
+		}
+
+		const rewrittenBlock = blockLines.map((blockLine) => {
+			if (/^\\VariableTok\{/.test(blockLine)) {
+				return replaceStudioAnnotationMarkersInDiffTokenLine(
+					blockLine.replace(/^\\VariableTok\{/, "\\StudioDiffAddTok{"),
+					"StudioDiffAddTok",
+				);
+			}
+			if (/^\\StringTok\{/.test(blockLine)) {
+				return replaceStudioAnnotationMarkersInDiffTokenLine(
+					blockLine.replace(/^\\StringTok\{/, "\\StudioDiffDelTok{"),
+					"StudioDiffDelTok",
+				);
+			}
+			if (/^\\DataTypeTok\{@@/.test(blockLine)) return blockLine.replace(/^\\DataTypeTok\{/, "\\StudioDiffHunkTok{");
+			if (/^\\DataTypeTok\{\+\+\+/.test(blockLine)) return blockLine.replace(/^\\DataTypeTok\{/, "\\StudioDiffHeaderTok{");
+			if (/^\\KeywordTok\{\{-\}\{-\}\{-\}/.test(blockLine)) return blockLine.replace(/^\\KeywordTok\{/, "\\StudioDiffHeaderTok{");
+			if (/^\\NormalTok\{(?:diff \{-\}\{-\}git |index |new file mode |deleted file mode |similarity index |rename from |rename to |Binary files )/.test(blockLine)) {
+				return replaceStudioAnnotationMarkersInDiffTokenLine(
+					blockLine.replace(/^\\NormalTok\{/, "\\StudioDiffMetaTok{"),
+					"StudioDiffMetaTok",
+				);
+			}
+			return blockLine;
+		});
+
+		out.push(...rewrittenBlock);
+		index = closingIndex;
+	}
+
+	return out.join("\n");
+}
+
 async function renderStudioPdfFromGeneratedLatex(
 	markdown: string,
 	pandocCommand: string,
@@ -3922,6 +4191,8 @@ async function renderStudioPdfFromGeneratedLatex(
 		...bibliographyArgs,
 	];
 	if (resourcePath) pandocArgs.push(`--resource-path=${resourcePath}`);
+
+	const pandocSource = inputFormat === "latex" ? markdown : normalizeStudioMarkdownFencedBlocks(markdown);
 
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -3962,13 +4233,14 @@ async function renderStudioPdfFromGeneratedLatex(
 				fail(new Error(`pandoc LaTeX generation failed with exit code ${code}${stderr ? `: ${stderr}` : ""}`));
 			});
 
-			child.stdin.end(markdown);
+			child.stdin.end(pandocSource);
 		});
 
 		const generatedLatex = await readFile(latexPath, "utf-8");
 		const injectedLatex = injectStudioLatexPdfSubfigureBlocks(generatedLatex, subfigureGroups, sourcePath, resourcePath);
 		const annotationReadyLatex = replaceStudioAnnotationMarkersInGeneratedLatex(injectedLatex);
-		const calloutReadyLatex = replaceStudioPdfCalloutBlocksInGeneratedLatex(annotationReadyLatex, calloutBlocks);
+		const diffReadyLatex = rewriteStudioGeneratedDiffHighlighting(annotationReadyLatex);
+		const calloutReadyLatex = replaceStudioPdfCalloutBlocksInGeneratedLatex(diffReadyLatex, calloutBlocks);
 		const alignedReadyLatex = replaceStudioPdfAlignedImageBlocksInGeneratedLatex(calloutReadyLatex, alignedImageBlocks);
 		const normalizedLatex = normalizeStudioGeneratedFigureCaptions(alignedReadyLatex);
 		await writeFile(latexPath, normalizedLatex, "utf-8");
@@ -4067,6 +4339,7 @@ async function renderStudioPdfWithPandoc(
 		markdownForPdf: string,
 		warning?: string,
 	): Promise<{ pdf: Buffer; warning?: string }> => {
+		const pandocSource = inputFormat === "latex" ? markdownForPdf : normalizeStudioMarkdownFencedBlocks(markdownForPdf);
 		const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
 		const preamblePath = join(tempDir, "_pdf_preamble.tex");
 		const outputPath = join(tempDir, "studio-export.pdf");
@@ -4128,7 +4401,7 @@ async function renderStudioPdfWithPandoc(
 					fail(new Error(`pandoc PDF export failed with exit code ${code}${stderr ? `: ${stderr}` : ""}${hint}`));
 				});
 
-				child.stdin.end(markdownForPdf);
+				child.stdin.end(pandocSource);
 			});
 
 			return { pdf: await readFile(outputPath), warning };
@@ -4158,7 +4431,20 @@ async function renderStudioPdfWithPandoc(
 		const inputFormat = "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+autolink_bare_uris+superscript+subscript-raw_html";
 		const diffMarkdown = prepareStudioPdfMarkdown(markdown, false, effectiveEditorLanguage);
 		try {
-			return await runPandocPdfExport(inputFormat, diffMarkdown);
+			return await renderStudioPdfFromGeneratedLatex(
+				diffMarkdown,
+				pandocCommand,
+				pdfEngine,
+				resourcePath,
+				pandocWorkingDir,
+				bibliographyArgs,
+				sourcePath,
+				[],
+				inputFormat,
+				[],
+				[],
+				pdfOptions,
+			);
 		} catch {
 			const fenced = parseStudioSingleFencedCodeBlock(diffMarkdown);
 			const diffText = fenced ? fenced.content : markdown;
@@ -4185,8 +4471,9 @@ async function renderStudioPdfWithPandoc(
 		? { markdown: normalizedMarkdown, found: 0, replaced: 0, failed: 0, missingCli: false }
 		: await preprocessStudioMermaidForPdf(normalizedMarkdown, tempDir);
 	const markdownForPdf = mermaidPrepared.markdown;
+	const hasDiffBlocks = !isLatex && hasStudioMarkdownDiffFence(markdownForPdf);
 
-	if (!isLatex && (pdfCalloutTransform.blocks.length > 0 || pdfAlignedImageTransform.blocks.length > 0)) {
+	if (!isLatex && (pdfCalloutTransform.blocks.length > 0 || pdfAlignedImageTransform.blocks.length > 0 || hasDiffBlocks)) {
 		const rendered = await renderStudioPdfFromGeneratedLatex(
 			markdownForPdf,
 			pandocCommand,
@@ -4216,6 +4503,7 @@ async function renderStudioPdfWithPandoc(
 		...bibliographyArgs,
 	];
 	if (resourcePath) args.push(`--resource-path=${resourcePath}`);
+	const pandocSource = isLatex ? markdownForPdf : normalizeStudioMarkdownFencedBlocks(markdownForPdf);
 
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -4259,7 +4547,7 @@ async function renderStudioPdfWithPandoc(
 				fail(new Error(`pandoc PDF export failed with exit code ${code}${stderr ? `: ${stderr}` : ""}${hint}`));
 			});
 
-			child.stdin.end(markdownForPdf);
+			child.stdin.end(pandocSource);
 		});
 
 		return { pdf: await readFile(outputPath), warning: mermaidPrepared.warning };
@@ -5185,6 +5473,16 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 	};
 }
 
+function buildStudioFaviconDataUri(style: StudioThemeStyle): string {
+	const iconFg = style.palette.text;
+	const svg = [
+		'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">',
+		`<text x="32" y="35" text-anchor="middle" dominant-baseline="middle" font-size="50" font-weight="700" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="${iconFg}">π</text>`,
+		"</svg>",
+	].join("");
+	return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 function buildStudioHtml(
 	initialDocument: InitialStudioDocument | null,
 	studioToken?: string,
@@ -5244,6 +5542,7 @@ function buildStudioHtml(
 	const cssVarsBlock = Object.entries(vars).map(([k, v]) => `      ${k}: ${v};`).join("\n");
 	const stylesheetHref = `/studio.css?token=${encodeURIComponent(studioToken ?? "")}`;
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
+	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
 
 	return `<!doctype html>
@@ -5251,7 +5550,8 @@ function buildStudioHtml(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>pi Studio</title>
+  <title>π Studio</title>
+  <link rel="icon" href="${faviconHref}" type="image/svg+xml" />
   <style>
     :root {
 ${cssVarsBlock}
