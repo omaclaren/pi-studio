@@ -4056,6 +4056,91 @@ function isStudioGeneratedDiffHighlightingBlock(lines: string[]): boolean {
 	return hasAdditionOrDeletion && hasDiffStructure;
 }
 
+function decodeStudioGeneratedCodeLatexText(text: string): string {
+	return String(text ?? "")
+		.replace(/\\textbackslash\{\}/g, "\\")
+		.replace(/\\textasciitilde\{\}/g, "~")
+		.replace(/\\textasciicircum\{\}/g, "^")
+		.replace(/\\([{}$&#_%])/g, "$1");
+}
+
+function readStudioVerbatimMathOperand(expr: string, startIndex: number): { operand: string; nextIndex: number } | null {
+	if (startIndex >= expr.length) return null;
+	const first = expr[startIndex]!;
+
+	if (first === "{") {
+		let depth = 1;
+		let index = startIndex + 1;
+		while (index < expr.length) {
+			const char = expr[index]!;
+			if (char === "{") {
+				depth += 1;
+			} else if (char === "}") {
+				depth -= 1;
+				if (depth === 0) {
+					return {
+						operand: expr.slice(startIndex + 1, index),
+						nextIndex: index + 1,
+					};
+				}
+			}
+			index += 1;
+		}
+		return {
+			operand: expr.slice(startIndex + 1),
+			nextIndex: expr.length,
+		};
+	}
+
+	if (first === "\\") {
+		let index = startIndex + 1;
+		while (index < expr.length && /[A-Za-z]/.test(expr[index]!)) {
+			index += 1;
+		}
+		if (index === startIndex + 1 && index < expr.length) {
+			index += 1;
+		}
+		return {
+			operand: expr.slice(startIndex, index),
+			nextIndex: index,
+		};
+	}
+
+	return {
+		operand: first,
+		nextIndex: startIndex + 1,
+	};
+}
+
+function makeStudioHighlightingMathScriptsVerbatimSafe(text: string): string {
+	const rewriteExpr = (expr: string): string => {
+		let out = "";
+		for (let index = 0; index < expr.length; index += 1) {
+			const char = expr[index]!;
+			if (char !== "_" && char !== "^") {
+				out += char;
+				continue;
+			}
+
+			const operand = readStudioVerbatimMathOperand(expr, index + 1);
+			if (!operand || !operand.operand) {
+				out += char;
+				continue;
+			}
+
+			out += char === "_" ? `\\sb{${operand.operand}}` : `\\sp{${operand.operand}}`;
+			index = operand.nextIndex - 1;
+		}
+		return out;
+	};
+
+	return String(text ?? "")
+		.replace(/\\\(([\s\S]*?)\\\)/g, (_match, expr: string) => `\\(${rewriteExpr(expr)}\\)`)
+		.replace(/\\\[([\s\S]*?)\\\]/g, (_match, expr: string) => `\\[${rewriteExpr(expr)}\\]`)
+		.replace(/\$\$([\s\S]*?)\$\$/g, (_match, expr: string) => `$$${rewriteExpr(expr)}$$`)
+		.replace(/\$([^$\n]+?)\$/g, (_match, expr: string) => `$${rewriteExpr(expr)}$`);
+}
+
 function replaceStudioAnnotationMarkersInDiffTokenLine(line: string, macroName: string): string {
 	const tokenMatch = line.match(new RegExp(`^\\\\${macroName}\\{([\\s\\S]*)\\}$`));
 	if (!tokenMatch) return line;
@@ -4075,9 +4160,10 @@ function replaceStudioAnnotationMarkersInDiffTokenLine(line: string, macroName: 
 			rewritten += wrapText(body.slice(lastIndex, start));
 		}
 
-		const markerText = (match[1] ?? "").replace(/\s{2,}/g, " ").trim();
-		if (markerText) {
-			rewritten += `\\studioannotation{${markerText}}`;
+		const markerText = decodeStudioGeneratedCodeLatexText((match[1] ?? "").replace(/\s{2,}/g, " ").trim());
+		const cleaned = makeStudioHighlightingMathScriptsVerbatimSafe(escapeStudioPdfLatexText(markerText));
+		if (cleaned) {
+			rewritten += `\\studioannotation{${cleaned}}`;
 		}
 
 		lastIndex = start + token.length;

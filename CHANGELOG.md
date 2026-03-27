@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.35] — 2026-03-27
+
+### Fixed
+- Diff/file exports via `/studio-pdf <path>` now also make inline math scripts in diff-line annotation badges verbatim-safe inside Pandoc's generated `Highlighting` environment, so subscripts/superscripts like `$x_n$` and `$\epsilon_n=\frac{1}{n}$` render correctly instead of showing literal underscores in the exported PDF.
+
 ## [0.5.34] — 2026-03-27
 
 ### Changed
@@ -11,6 +16,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Fixed
 - Preview annotation pills once again render inline math within long `[an: ...]` notes instead of leaving `$...$` / `\(...\)` fragments as literal text.
+- Diff/file exports via `/studio-pdf <path>` now also preserve math inside diff-line annotation badges such as `[an: add note $\epsilon_n=\frac{1}{n}$]`, instead of leaving escaped TeX literals in the exported PDF.
 
 ## [0.5.33] — 2026-03-27
 
