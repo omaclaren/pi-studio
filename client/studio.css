@@ -523,6 +523,14 @@
       vertical-align: baseline;
     }
 
+    .annotation-preview-marker code {
+      font-family: var(--mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+      font-size: 0.95em;
+      background: rgba(0, 0, 0, 0.08);
+      border-radius: 3px;
+      padding: 0 0.2em;
+    }
+
     #sourcePreview {
       flex: 1 1 auto;
       min-height: 0;

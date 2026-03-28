@@ -8,6 +8,16 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { URL, pathToFileURL } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
+import {
+	collectStudioInlineAnnotationMarkers,
+	hasStudioMarkdownAnnotationMarkers,
+	isStudioAnnotationWordChar,
+	normalizeStudioAnnotationText,
+	readStudioAnnotationProtectedTokenAt,
+	replaceStudioInlineAnnotationMarkers,
+	transformStudioMarkdownOutsideFences,
+} from "./shared/studio-annotation-scanner.js";
+import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
@@ -18,6 +28,7 @@ type StudioPromptMode = "response" | "run" | "effective";
 type StudioPromptTriggerKind = "run" | "steer";
 
 const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
+const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
 
 interface StudioServerState {
@@ -3023,14 +3034,6 @@ function inferStudioPdfLanguage(markdown: string, editorLanguage?: string): stri
 	return undefined;
 }
 
-function escapeStudioPdfLatexTextFragment(text: string): string {
-	return String(text ?? "")
-		.replace(/\\/g, "\\textbackslash{}")
-		.replace(/([{}%#$&_])/g, "\\$1")
-		.replace(/~/g, "\\textasciitilde{}")
-		.replace(/\^/g, "\\textasciicircum{}");
-}
-
 function escapeStudioPdfLatexText(text: string): string {
 	const normalized = String(text ?? "")
 		.replace(/\r\n/g, "\n")
@@ -3085,71 +3088,158 @@ function escapeStudioPdfLatexText(text: string): string {
 	return out.trim();
 }
 
+function renderStudioAnnotationCodeSpanPdfLatex(rawToken: string): string {
+	const raw = String(rawToken ?? "");
+	if (!raw || raw[0] !== "`") return escapeStudioPdfLatexTextFragment(raw);
+
+	let fenceLength = 1;
+	while (raw[fenceLength] === "`") fenceLength += 1;
+	const fence = "`".repeat(fenceLength);
+	if (raw.length < fenceLength * 2 || raw.slice(raw.length - fenceLength) !== fence) {
+		return escapeStudioPdfLatexTextFragment(raw);
+	}
+
+	return `\\texttt{${escapeStudioPdfLatexTextFragment(raw.slice(fenceLength, raw.length - fenceLength))}}`;
+}
+
+function canOpenStudioAnnotationEmphasisDelimiter(source: string, startIndex: number, delimiter: string): boolean {
+	if (source.slice(startIndex, startIndex + delimiter.length) !== delimiter) return false;
+	const prev = startIndex > 0 ? source[startIndex - 1] ?? "" : "";
+	const next = source[startIndex + delimiter.length] ?? "";
+	if (!next || /\s/.test(next)) return false;
+	return !isStudioAnnotationWordChar(prev);
+}
+
+function canCloseStudioAnnotationEmphasisDelimiter(source: string, startIndex: number, delimiter: string): boolean {
+	if (source.slice(startIndex, startIndex + delimiter.length) !== delimiter) return false;
+	const prev = startIndex > 0 ? source[startIndex - 1] ?? "" : "";
+	const next = source[startIndex + delimiter.length] ?? "";
+	if (!prev || /\s/.test(prev)) return false;
+	return !isStudioAnnotationWordChar(next);
+}
+
+function renderStudioAnnotationPdfLatexContent(text: string): string {
+	const source = String(text ?? "");
+	let out = "";
+	let plainStart = 0;
+	let index = 0;
+
+	while (index < source.length) {
+		const token = readStudioAnnotationProtectedTokenAt(source, index);
+		if (!token) {
+			index += 1;
+			continue;
+		}
+
+		if (index > plainStart) {
+			out += renderStudioAnnotationPlainTextPdfLatex(source.slice(plainStart, index));
+		}
+
+		if (token.type === "code") {
+			out += renderStudioAnnotationCodeSpanPdfLatex(token.raw);
+		} else if (token.type === "math") {
+			out += escapeStudioPdfLatexText(token.raw);
+		} else {
+			out += escapeStudioPdfLatexTextFragment(token.raw);
+		}
+
+		index = token.end;
+		plainStart = index;
+	}
+
+	if (plainStart < source.length) {
+		out += renderStudioAnnotationPlainTextPdfLatex(source.slice(plainStart));
+	}
+
+	return out;
+}
+
+function readStudioAnnotationPdfEmphasisSpanAt(source: string, startIndex: number, delimiter: string, commandName: string): { end: number; latex: string } | null {
+	if (!canOpenStudioAnnotationEmphasisDelimiter(source, startIndex, delimiter)) return null;
+
+	let index = startIndex + delimiter.length;
+	while (index < source.length) {
+		if (source[index] === "\\") {
+			index = Math.min(source.length, index + 2);
+			continue;
+		}
+
+		const protectedToken = readStudioAnnotationProtectedTokenAt(source, index);
+		if (protectedToken) {
+			index = protectedToken.end;
+			continue;
+		}
+
+		if (canCloseStudioAnnotationEmphasisDelimiter(source, index, delimiter)) {
+			const inner = source.slice(startIndex + delimiter.length, index);
+			return {
+				end: index + delimiter.length,
+				latex: `\\${commandName}{${renderStudioAnnotationPdfLatexContent(inner)}}`,
+			};
+		}
+
+		index += 1;
+	}
+
+	return null;
+}
+
+function renderStudioAnnotationPlainTextPdfLatex(text: string): string {
+	const source = String(text ?? "");
+	let out = "";
+	let index = 0;
+
+	while (index < source.length) {
+		const strongMatch = readStudioAnnotationPdfEmphasisSpanAt(source, index, "**", "textbf")
+			?? readStudioAnnotationPdfEmphasisSpanAt(source, index, "__", "textbf");
+		if (strongMatch) {
+			out += strongMatch.latex;
+			index = strongMatch.end;
+			continue;
+		}
+
+		const emphasisMatch = readStudioAnnotationPdfEmphasisSpanAt(source, index, "*", "emph")
+			?? readStudioAnnotationPdfEmphasisSpanAt(source, index, "_", "emph");
+		if (emphasisMatch) {
+			out += emphasisMatch.latex;
+			index = emphasisMatch.end;
+			continue;
+		}
+
+		out += escapeStudioPdfLatexTextFragment(source[index] ?? "");
+		index += 1;
+	}
+
+	return out;
+}
+
+function renderStudioAnnotationPdfLatex(text: string): string {
+	const normalized = normalizeStudioAnnotationText(text);
+	if (!normalized) return "";
+	return renderStudioAnnotationPdfLatexContent(normalized).trim();
+}
+
 function replaceStudioAnnotationMarkersForPdfInSegment(text: string): string {
-	return String(text ?? "")
-		.replace(/\[an:\s*([^\]]+?)\]/gi, (_match, markerText: string) => {
-			const cleaned = escapeStudioPdfLatexText(markerText);
+	const replaced = replaceStudioInlineAnnotationMarkers(
+		String(text ?? ""),
+		(marker) => {
+			const cleaned = renderStudioAnnotationPdfLatex(marker.body);
 			if (!cleaned) return "";
 			return `\\studioannotation{${cleaned}}`;
-		})
+		},
+	);
+
+	return String(replaced ?? "")
 		.replace(/\{\[\}\s*an:\s*([\s\S]*?)\s*\{\]\}/gi, (_match, markerText: string) => {
-			const cleaned = escapeStudioPdfLatexText(markerText);
+			const cleaned = renderStudioAnnotationPdfLatex(markerText);
 			if (!cleaned) return "";
 			return `\\studioannotation{${cleaned}}`;
 		});
 }
 
 function replaceStudioAnnotationMarkersForPdf(markdown: string): string {
-	const lines = String(markdown ?? "").split("\n");
-	const out: string[] = [];
-	let plainBuffer: string[] = [];
-	let inFence = false;
-	let fenceChar: "`" | "~" | undefined;
-	let fenceLength = 0;
-
-	const flushPlain = () => {
-		if (plainBuffer.length === 0) return;
-		out.push(replaceStudioAnnotationMarkersForPdfInSegment(plainBuffer.join("\n")));
-		plainBuffer = [];
-	};
-
-	for (const line of lines) {
-		const trimmed = line.trimStart();
-		const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
-
-		if (fenceMatch) {
-			const marker = fenceMatch[1]!;
-			const markerChar = marker[0] as "`" | "~";
-			const markerLength = marker.length;
-
-			if (!inFence) {
-				flushPlain();
-				inFence = true;
-				fenceChar = markerChar;
-				fenceLength = markerLength;
-				out.push(line);
-				continue;
-			}
-
-			if (fenceChar === markerChar && markerLength >= fenceLength) {
-				inFence = false;
-				fenceChar = undefined;
-				fenceLength = 0;
-			}
-
-			out.push(line);
-			continue;
-		}
-
-		if (inFence) {
-			out.push(line);
-		} else {
-			plainBuffer.push(line);
-		}
-	}
-
-	flushPlain();
-	return out.join("\n");
+	if (!hasStudioMarkdownAnnotationMarkers(markdown)) return String(markdown ?? "");
+	return transformStudioMarkdownOutsideFences(markdown, (segment) => replaceStudioAnnotationMarkersForPdfInSegment(segment));
 }
 
 interface StudioPdfRenderOptions {
@@ -4146,38 +4236,19 @@ function replaceStudioAnnotationMarkersInDiffTokenLine(line: string, macroName: 
 	if (!tokenMatch) return line;
 
 	const body = tokenMatch[1] ?? "";
-	const markerPattern = /\[an:\s*([^\]]+?)\]/gi;
-	let lastIndex = 0;
-	let rewritten = "";
-	let match: RegExpExecArray | null;
-
 	const wrapText = (text: string): string => text ? `\\${macroName}{${text}}` : "";
+	const rewritten = replaceStudioInlineAnnotationMarkers(
+		body,
+		(marker) => {
+			const markerText = decodeStudioGeneratedCodeLatexText(normalizeStudioAnnotationText(marker.body));
+			const cleaned = makeStudioHighlightingMathScriptsVerbatimSafe(renderStudioAnnotationPdfLatex(markerText));
+			if (!cleaned) return "";
+			return `\\studioannotation{${cleaned}}`;
+		},
+		(segment) => wrapText(segment),
+	);
 
-	while ((match = markerPattern.exec(body)) !== null) {
-		const token = match[0] ?? "";
-		const start = match.index;
-		if (start > lastIndex) {
-			rewritten += wrapText(body.slice(lastIndex, start));
-		}
-
-		const markerText = decodeStudioGeneratedCodeLatexText((match[1] ?? "").replace(/\s{2,}/g, " ").trim());
-		const cleaned = makeStudioHighlightingMathScriptsVerbatimSafe(escapeStudioPdfLatexText(markerText));
-		if (cleaned) {
-			rewritten += `\\studioannotation{${cleaned}}`;
-		}
-
-		lastIndex = start + token.length;
-		if (token.length === 0) {
-			markerPattern.lastIndex += 1;
-		}
-	}
-
-	if (lastIndex === 0) return line;
-	if (lastIndex < body.length) {
-		rewritten += wrapText(body.slice(lastIndex));
-	}
-
-	return rewritten || wrapText(body);
+	return rewritten === body ? line : (rewritten || wrapText(body));
 }
 
 function rewriteStudioGeneratedDiffHighlighting(latex: string): string {
@@ -4496,7 +4567,7 @@ async function renderStudioPdfWithPandoc(
 		}
 	};
 
-	if (isLatex && (latexSubfigurePdfTransform.groups.length > 0 || /\[an:\s*[^\]]+\]/i.test(sourceWithResolvedRefs))) {
+	if (isLatex && (latexSubfigurePdfTransform.groups.length > 0 || collectStudioInlineAnnotationMarkers(sourceWithResolvedRefs).length > 0)) {
 		return await renderStudioPdfFromGeneratedLatex(
 			sourceWithResolvedRefs,
 			pandocCommand,
@@ -5627,6 +5698,7 @@ function buildStudioHtml(
 	};
 	const cssVarsBlock = Object.entries(vars).map(([k, v]) => `      ${k}: ${v};`).join("\n");
 	const stylesheetHref = `/studio.css?token=${encodeURIComponent(studioToken ?? "")}`;
+	const annotationHelpersScriptHref = `/studio-annotation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
@@ -5808,6 +5880,7 @@ ${cssVarsBlock}
   <script>
     window.__PI_STUDIO_BOOT__ = ${bootConfigJson};
   </script>
+  <script src="${annotationHelpersScriptHref}"></script>
   <script src="${clientScriptHref}"></script>
 </body>
 </html>`;
@@ -7353,7 +7426,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		if (requestUrl.pathname === "/studio-client.js") {
+		if (requestUrl.pathname === "/studio-annotation-helpers.js" || requestUrl.pathname === "/studio-client.js") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
 				respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
@@ -7367,8 +7440,15 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			const targetUrl = requestUrl.pathname === "/studio-annotation-helpers.js"
+				? STUDIO_ANNOTATION_HELPERS_URL
+				: STUDIO_CLIENT_URL;
+			const targetLabel = requestUrl.pathname === "/studio-annotation-helpers.js"
+				? "studio annotation helper script"
+				: "studio client script";
+
 			try {
-				const clientScript = readFileSync(STUDIO_CLIENT_URL, "utf-8");
+				const clientScript = readFileSync(targetUrl, "utf-8");
 				res.writeHead(200, {
 					"Content-Type": "application/javascript; charset=utf-8",
 					"Cache-Control": "no-store",
@@ -7377,7 +7457,7 @@ export default function (pi: ExtensionAPI) {
 				});
 				res.end(clientScript);
 			} catch (error) {
-				respondText(res, 500, `Failed to load studio client script: ${error instanceof Error ? error.message : String(error)}`);
+				respondText(res, 500, `Failed to load ${targetLabel}: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}

@@ -241,8 +241,11 @@
       let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
       let annotationsEnabled = true;
-      const ANNOTATION_MARKER_REGEX = /\[an:\s*([^\]]+?)\]/gi;
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
+      const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
+      if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
+        throw new Error("Studio annotation helpers failed to load.");
+      }
       const EMPTY_OVERLAY_LINE = "\u200b";
       const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
       const MATHJAX_CDN_URL = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
@@ -1163,15 +1166,11 @@
       }
 
       function hasAnnotationMarkers(text) {
-        const source = String(text || "");
-        ANNOTATION_MARKER_REGEX.lastIndex = 0;
-        const hasMarker = ANNOTATION_MARKER_REGEX.test(source);
-        ANNOTATION_MARKER_REGEX.lastIndex = 0;
-        return hasMarker;
+        return annotationHelpers.hasAnnotationMarkers(text);
       }
 
       function stripAnnotationMarkers(text) {
-        return String(text || "").replace(ANNOTATION_MARKER_REGEX, "");
+        return annotationHelpers.stripAnnotationMarkers(text);
       }
 
       function prepareEditorTextForSend(text) {
@@ -1184,78 +1183,8 @@
         return annotationsEnabled ? raw : stripAnnotationMarkers(raw);
       }
 
-      function normalizePreviewAnnotationLabel(text) {
-        return String(text || "")
-          .replace(/\r\n/g, "\n")
-          .replace(/\s*\n\s*/g, " ")
-          .replace(/\s{2,}/g, " ")
-          .trim();
-      }
-
       function prepareMarkdownForPandocPreview(markdown) {
-        const source = String(markdown || "").replace(/\r\n/g, "\n");
-        const placeholders = [];
-        if (!source) {
-          return { markdown: source, placeholders: placeholders };
-        }
-
-        const lines = source.split("\n");
-        const out = [];
-        let plainBuffer = [];
-        let inFence = false;
-        let fenceChar = null;
-        let fenceLength = 0;
-
-        function flushPlain() {
-          if (plainBuffer.length === 0) return;
-          const segment = plainBuffer.join("\n").replace(/\[an:\s*([^\]]+?)\]/gi, function(_match, markerText) {
-            const label = normalizePreviewAnnotationLabel(markerText);
-            if (!label) return "";
-            const token = PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX + placeholders.length + "TOKEN";
-            placeholders.push({ token: token, text: label, title: "[an: " + label + "]" });
-            return token;
-          });
-          out.push(segment);
-          plainBuffer = [];
-        }
-
-        for (const line of lines) {
-          const trimmed = line.trimStart();
-          const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
-
-          if (fenceMatch) {
-            const marker = fenceMatch[1] || "";
-            const markerChar = marker.charAt(0);
-            const markerLength = marker.length;
-
-            if (!inFence) {
-              flushPlain();
-              inFence = true;
-              fenceChar = markerChar;
-              fenceLength = markerLength;
-              out.push(line);
-              continue;
-            }
-
-            if (fenceChar === markerChar && markerLength >= fenceLength) {
-              inFence = false;
-              fenceChar = null;
-              fenceLength = 0;
-            }
-
-            out.push(line);
-            continue;
-          }
-
-          if (inFence) {
-            out.push(line);
-          } else {
-            plainBuffer.push(line);
-          }
-        }
-
-        flushPlain();
-        return { markdown: out.join("\n"), placeholders: placeholders };
+        return annotationHelpers.prepareMarkdownForPandocPreview(markdown, PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX);
       }
 
       function wrapAsFencedCodeBlock(text, language) {
@@ -1774,8 +1703,9 @@
             if (entry) {
               const markerEl = document.createElement("span");
               markerEl.className = "annotation-preview-marker";
-              markerEl.textContent = typeof entry.text === "string" ? entry.text : token;
-              markerEl.title = typeof entry.title === "string" ? entry.title : markerEl.textContent;
+              const markerText = typeof entry.text === "string" ? entry.text : token;
+              markerEl.title = typeof entry.title === "string" ? entry.title : markerText;
+              setAnnotationPreviewMarkerContent(markerEl, markerText);
               fragment.appendChild(markerEl);
             } else {
               fragment.appendChild(document.createTextNode(token));
@@ -1819,33 +1749,28 @@
         for (const textNode of textNodes) {
           const text = typeof textNode.nodeValue === "string" ? textNode.nodeValue : "";
           if (!text) continue;
-          ANNOTATION_MARKER_REGEX.lastIndex = 0;
-          if (!ANNOTATION_MARKER_REGEX.test(text)) continue;
-          ANNOTATION_MARKER_REGEX.lastIndex = 0;
+          const markers = annotationHelpers.collectInlineAnnotationMarkers(text);
+          if (markers.length === 0) continue;
 
           const fragment = document.createDocumentFragment();
           let lastIndex = 0;
-          let match;
-          while ((match = ANNOTATION_MARKER_REGEX.exec(text)) !== null) {
-            const token = match[0] || "";
-            const start = typeof match.index === "number" ? match.index : 0;
-            if (start > lastIndex) {
-              fragment.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+          markers.forEach(function(marker) {
+            const token = marker.raw || "";
+            if (marker.start > lastIndex) {
+              fragment.appendChild(document.createTextNode(text.slice(lastIndex, marker.start)));
             }
 
             if (mode === "highlight") {
               const markerEl = document.createElement("span");
               markerEl.className = "annotation-preview-marker";
-              markerEl.textContent = typeof match[1] === "string" ? match[1].trim() : token;
+              const markerText = annotationHelpers.normalizePreviewAnnotationLabel(marker.body) || token;
               markerEl.title = token;
+              setAnnotationPreviewMarkerContent(markerEl, markerText);
               fragment.appendChild(markerEl);
             }
 
-            lastIndex = start + token.length;
-            if (token.length === 0) {
-              ANNOTATION_MARKER_REGEX.lastIndex += 1;
-            }
-          }
+            lastIndex = marker.end;
+          });
 
           if (lastIndex < text.length) {
             fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
@@ -2732,50 +2657,44 @@
         return "<span class='" + className + "'>" + escapeHtml(String(text || "")) + "</span>";
       }
 
-      function wrapHighlightWithTitle(className, text, title) {
+      function buildAnnotationPreviewMarkerHtml(text, title) {
         const titleAttr = title ? " title='" + escapeHtml(String(title)) + "'" : "";
-        return "<span class='" + className + "'" + titleAttr + ">" + escapeHtml(String(text || "")) + "</span>";
+        const rendered = typeof annotationHelpers.renderPreviewAnnotationHtml === "function"
+          ? annotationHelpers.renderPreviewAnnotationHtml(text)
+          : escapeHtml(String(text || ""));
+        return "<span class='annotation-preview-marker'" + titleAttr + ">" + rendered + "</span>";
+      }
+
+      function setAnnotationPreviewMarkerContent(markerEl, text) {
+        if (!markerEl) return;
+        const rendered = typeof annotationHelpers.renderPreviewAnnotationHtml === "function"
+          ? annotationHelpers.renderPreviewAnnotationHtml(text)
+          : escapeHtml(String(text || ""));
+        markerEl.innerHTML = rendered;
       }
 
       function highlightInlineAnnotations(text, mode) {
         const source = String(text || "");
         const renderMode = mode === "preview" ? "preview" : "overlay";
-        ANNOTATION_MARKER_REGEX.lastIndex = 0;
-        let lastIndex = 0;
-        let out = "";
-
-        let match;
-        while ((match = ANNOTATION_MARKER_REGEX.exec(source)) !== null) {
-          const token = match[0] || "";
-          const start = typeof match.index === "number" ? match.index : 0;
-          const markerText = typeof match[1] === "string" ? match[1].trim() : token;
-
-          if (start > lastIndex) {
-            out += escapeHtml(source.slice(lastIndex, start));
-          }
-
-          if (renderMode === "preview") {
-            out += wrapHighlightWithTitle("annotation-preview-marker", markerText || token, token);
-          } else {
-            out += wrapHighlight(annotationsEnabled ? "hl-annotation" : "hl-annotation-muted", token);
-          }
-          lastIndex = start + token.length;
-          if (token.length === 0) {
-            ANNOTATION_MARKER_REGEX.lastIndex += 1;
-          }
-        }
-
-        ANNOTATION_MARKER_REGEX.lastIndex = 0;
-        if (lastIndex < source.length) {
-          out += escapeHtml(source.slice(lastIndex));
-        }
-
-        return out;
+        return annotationHelpers.replaceInlineAnnotationMarkers(
+          source,
+          function(marker) {
+            const token = marker.raw || "";
+            const markerText = annotationHelpers.normalizePreviewAnnotationLabel(marker.body) || token;
+            if (renderMode === "preview") {
+              return buildAnnotationPreviewMarkerHtml(markerText, token);
+            }
+            return wrapHighlight(annotationsEnabled ? "hl-annotation" : "hl-annotation-muted", token);
+          },
+          function(segment) {
+            return escapeHtml(segment);
+          },
+        );
       }
 
-      function highlightInlineMarkdown(text) {
+      function highlightInlineMarkdownWithoutAnnotations(text) {
         const source = String(text || "");
-        const pattern = /(\x60[^\x60]*\x60)|(\[[^\]]+\]\([^)]+\))|(\[an:\s*[^\]]+\])/gi;
+        const pattern = /(\x60[^\x60]*\x60)|(\[[^\]]+\]\([^)]+\))/g;
         let lastIndex = 0;
         let out = "";
 
@@ -2798,8 +2717,6 @@
             } else {
               out += escapeHtml(token);
             }
-          } else if (match[3]) {
-            out += highlightInlineAnnotations(token);
           } else {
             out += escapeHtml(token);
           }
@@ -2812,6 +2729,18 @@
         }
 
         return out;
+      }
+
+      function highlightInlineMarkdown(text) {
+        return annotationHelpers.replaceInlineAnnotationMarkers(
+          String(text || ""),
+          function(marker) {
+            return highlightInlineAnnotations(marker.raw || "");
+          },
+          function(segment) {
+            return highlightInlineMarkdownWithoutAnnotations(segment);
+          },
+        );
       }
 
       function normalizeFenceLanguage(info) {

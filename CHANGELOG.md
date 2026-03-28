@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.36] — 2026-03-28
+
+### Changed
+- Annotation pills in Studio preview now render a small safe subset of inline formatting inside `[an: ...]` notes — emphasis/bold, inline code, and math — while still keeping bare URLs and markdown links inert literal text so annotation notes remain robust and self-contained.
+- PDF/export-side annotation handling now follows the same bracket-aware parsing model as the preview for raw Markdown annotation markers, so markdown-ish note content is treated as one annotation body instead of being cut off at the first `]`.
+
+### Fixed
+- Preview-side annotation placeholder insertion now keeps inline-code examples such as `` `[an: prefer \`npm test\` here]` `` from desynchronizing later annotation parsing and leaking raw `PISTUDIOANNOT...TOKEN` placeholders.
+- `/studio-pdf` and generated-LaTeX annotation rewriting now handle markdown links, inline code, emphasis markers, escaped backticks, and multiple annotations more reliably inside `[an: ...]` markers, while still leaving fenced-code literals untouched.
+
 ## [0.5.35] — 2026-03-27
 
 ### Fixed
