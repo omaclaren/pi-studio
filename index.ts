@@ -22,6 +22,7 @@ import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js"
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
 type StudioRequestKind = "critique" | "annotation" | "direct" | "compact";
+type StudioUiMode = "full" | "editor-only";
 type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 type StudioPromptMode = "response" | "run" | "effective";
@@ -35,6 +36,7 @@ interface StudioServerState {
 	server: Server;
 	wsServer: WebSocketServer;
 	clients: Set<WebSocket>;
+	clientModes: Map<WebSocket, StudioUiMode>;
 	port: number;
 	token: string;
 }
@@ -5511,9 +5513,14 @@ function isAllowedOrigin(_origin: string | undefined, _port: number): boolean {
 	return true;
 }
 
-function buildStudioUrl(port: number, token: string): string {
-	const encoded = encodeURIComponent(token);
-	return `http://127.0.0.1:${port}/?token=${encoded}`;
+function normalizeStudioUiMode(raw: string | null | undefined): StudioUiMode {
+	return raw === "editor-only" ? "editor-only" : "full";
+}
+
+function buildStudioUrl(port: number, token: string, mode: StudioUiMode = "full"): string {
+	const params = new URLSearchParams({ token });
+	if (mode !== "full") params.set("mode", mode);
+	return `http://127.0.0.1:${port}/?${params.toString()}`;
 }
 
 function formatModelLabel(model: { provider?: string; id?: string } | undefined): string {
@@ -5647,6 +5654,7 @@ function buildStudioHtml(
 	initialModelLabel?: string,
 	initialTerminalLabel?: string,
 	initialContextUsage?: StudioContextUsageSnapshot,
+	studioMode: StudioUiMode = "full",
 ): string {
 	const initialText = escapeHtmlForInline(initialDocument?.text ?? "");
 	const initialSource = initialDocument?.source ?? "blank";
@@ -5702,13 +5710,16 @@ function buildStudioHtml(
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
+	const isEditorOnlyMode = studioMode === "editor-only";
+	const appTitle = isEditorOnlyMode ? "π Studio — Editor" : "π Studio";
+	const appSubtitle = isEditorOnlyMode ? "Editor Workspace" : "Editor & Response Workspace";
 
 	return `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>π Studio</title>
+  <title>${appTitle}</title>
   <link rel="icon" href="${faviconHref}" type="image/svg+xml" />
   <style>
     :root {
@@ -5717,9 +5728,9 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}">
   <header>
-    <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">Editor & Response Workspace</span></h1>
+    <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
       <button id="saveAsBtn" type="button" title="Save editor content to a new file path.">Save editor as…</button>
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content." disabled>Save editor</button>
@@ -5949,6 +5960,22 @@ export default function (pi: ExtensionAPI) {
 
 	const isStudioDirectRunChainActive = () => Boolean(studioDirectRunChain);
 	const getQueuedStudioSteeringCount = () => queuedStudioDirectRequests.length;
+	const getStudioClientCounts = (): { full: number; editorOnly: number } => {
+		if (!serverState) return { full: 0, editorOnly: 0 };
+		let full = 0;
+		let editorOnly = 0;
+		for (const client of serverState.clients) {
+			if (client.readyState !== WebSocket.OPEN) continue;
+			const mode = serverState.clientModes.get(client) ?? "full";
+			if (mode === "editor-only") {
+				editorOnly += 1;
+			} else {
+				full += 1;
+			}
+		}
+		return { full, editorOnly };
+	};
+	const hasConnectedFullStudioView = () => getStudioClientCounts().full > 0;
 	const canQueueStudioSteeringRequest = () => {
 		if (compactInProgress) return false;
 		if (!agentBusy) return false;
@@ -6664,6 +6691,26 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 		serverState.clients.clear();
+		serverState.clientModes.clear();
+	};
+
+	const closeStudioClientsByMode = (mode: StudioUiMode, code = 4001, reason = "Session invalidated"): number => {
+		if (!serverState) return 0;
+		let closed = 0;
+		for (const client of Array.from(serverState.clients)) {
+			if (client.readyState !== WebSocket.OPEN) continue;
+			const clientMode = serverState.clientModes.get(client) ?? "full";
+			if (clientMode !== mode) continue;
+			serverState.clients.delete(client);
+			serverState.clientModes.delete(client);
+			closed += 1;
+			try {
+				client.close(code, reason);
+			} catch {
+				// Ignore close errors
+			}
+		}
+		return closed;
 	};
 
 	const handleStudioMessage = (client: WebSocket, msg: IncomingStudioMessage) => {
@@ -7560,7 +7607,8 @@ export default function (pi: ExtensionAPI) {
 			"Cross-Origin-Resource-Policy": "same-origin",
 		});
 		refreshContextUsage();
-		res.end(buildStudioHtml(initialStudioDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, contextUsageSnapshot));
+		const studioMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
+		res.end(buildStudioHtml(initialStudioDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, contextUsageSnapshot, studioMode));
 	};
 
 	const ensureServer = async (): Promise<StudioServerState> => {
@@ -7569,11 +7617,13 @@ export default function (pi: ExtensionAPI) {
 		const server = createServer(handleHttpRequest);
 		const wsServer = new WebSocketServer({ noServer: true });
 		const clients = new Set<WebSocket>();
+		const clientModes = new Map<WebSocket, StudioUiMode>();
 
 		const state: StudioServerState = {
 			server,
 			wsServer,
 			clients,
+			clientModes,
 			port: 0,
 			token: createSessionToken(),
 		};
@@ -7606,9 +7656,26 @@ export default function (pi: ExtensionAPI) {
 			});
 		});
 
-		wsServer.on("connection", (ws) => {
+		wsServer.on("connection", (ws, req) => {
+			const host = req.headers.host ?? `127.0.0.1:${state.port}`;
+			const requestUrl = new URL(req.url ?? "/ws", `http://${host}`);
+			const clientMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
+			if (clientMode === "full") {
+				for (const client of clients) {
+					if (client.readyState !== WebSocket.OPEN) continue;
+					const existingMode = clientModes.get(client) ?? "full";
+					if (existingMode !== "full") continue;
+					try {
+						ws.close(4004, "Full Studio already active");
+					} catch {
+						// Ignore close errors
+					}
+					return;
+				}
+			}
 			clients.add(ws);
-			emitDebugEvent("studio_ws_connected", { clients: clients.size });
+			clientModes.set(ws, clientMode);
+			emitDebugEvent("studio_ws_connected", { clients: clients.size, mode: clientMode });
 			broadcastState();
 
 			ws.on("message", (data) => {
@@ -7622,11 +7689,13 @@ export default function (pi: ExtensionAPI) {
 
 			ws.on("close", () => {
 				clients.delete(ws);
+				clientModes.delete(ws);
 				emitDebugEvent("studio_ws_disconnected", { clients: clients.size });
 			});
 
 			ws.on("error", () => {
 				clients.delete(ws);
+				clientModes.delete(ws);
 			});
 		});
 
@@ -7708,14 +7777,6 @@ export default function (pi: ExtensionAPI) {
 		await new Promise<void>((resolve) => {
 			state.server.close(() => resolve());
 		});
-	};
-
-	const rotateToken = () => {
-		if (!serverState) return;
-		serverState.token = createSessionToken();
-		clearPreparedPdfExports();
-		closeAllClients(4001, "Session invalidated");
-		broadcastState();
 	};
 
 	const hydrateLatestAssistant = (entries: SessionEntry[]) => {
@@ -8008,6 +8069,147 @@ export default function (pi: ExtensionAPI) {
 		await stopServer();
 	});
 
+	const resolveStudioLaunchDocument = (
+		trimmed: string,
+		ctx: ExtensionCommandContext,
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string },
+	): InitialStudioDocument | null => {
+		const defaultSource = options?.defaultSource === "blank" ? "blank" : "last-response";
+		const commandLabel = options?.commandLabel ?? "/studio";
+		const latestAssistant =
+			extractLatestAssistantFromEntries(ctx.sessionManager.getBranch())
+				?? extractLatestAssistantFromEntries(ctx.sessionManager.getEntries())
+				?? lastStudioResponse?.markdown
+				?? null;
+
+		if (!trimmed) {
+			if (defaultSource === "last-response" && latestAssistant) {
+				return {
+					text: latestAssistant,
+					label: "last model response",
+					source: "last-response",
+				};
+			}
+			return {
+				text: "",
+				label: "blank",
+				source: "blank",
+			};
+		}
+
+		if (trimmed === "--blank" || trimmed === "blank") {
+			return {
+				text: "",
+				label: "blank",
+				source: "blank",
+			};
+		}
+
+		if (trimmed === "--last" || trimmed === "last") {
+			if (!latestAssistant) {
+				ctx.ui.notify("No assistant response found; opening blank studio.", "warning");
+				return {
+					text: "",
+					label: "blank",
+					source: "blank",
+				};
+			}
+			return {
+				text: latestAssistant,
+				label: "last model response",
+				source: "last-response",
+			};
+		}
+
+		if (trimmed.startsWith("-")) {
+			ctx.ui.notify(`Unknown flag: ${trimmed}. Use ${commandLabel} --help`, "error");
+			return null;
+		}
+
+		const pathArg = parsePathArgument(trimmed);
+		if (!pathArg) {
+			ctx.ui.notify("Invalid file path argument.", "error");
+			return null;
+		}
+
+		const file = readStudioFile(pathArg, ctx.cwd);
+		if (file.ok === false) {
+			ctx.ui.notify(file.message, "error");
+			return null;
+		}
+
+		if (file.text.length > 200_000) {
+			ctx.ui.notify(
+				"Loaded a large file. Studio critique requests currently reject documents over 200k characters.",
+				"warning",
+			);
+		}
+
+		return {
+			text: file.text,
+			label: file.label,
+			source: "file",
+			path: file.resolvedPath,
+		};
+	};
+
+	const openStudioView = async (
+		trimmed: string,
+		ctx: ExtensionCommandContext,
+		mode: StudioUiMode,
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; replaceExistingFull?: boolean },
+	) => {
+		if (mode === "full" && hasConnectedFullStudioView()) {
+			if (options?.replaceExistingFull) {
+				closeStudioClientsByMode("full", 4001, "Full Studio replaced");
+			} else {
+				ctx.ui.notify("A full pi Studio view is already open for this session. Close it first, use /studio-replace for a fresh full Studio view, or use /studio-editor-only for a concurrent editor-only Studio view.", "warning");
+				if (serverState) {
+					ctx.ui.notify(`Studio URL: ${buildStudioUrl(serverState.port, serverState.token, "full")}`, "info");
+				}
+				return;
+			}
+		}
+
+		await ctx.waitForIdle();
+		lastCommandCtx = ctx;
+		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
+		refreshContextUsage(ctx);
+		syncStudioResponseHistory(ctx.sessionManager.getBranch());
+		broadcastState();
+		broadcastResponseHistory();
+		try {
+			const currentStyle = getStudioThemeStyle(ctx.ui.theme);
+			lastThemeVarsJson = JSON.stringify(buildThemeCssVars(currentStyle));
+		} catch {
+			// ignore theme read errors
+		}
+
+		const selected = resolveStudioLaunchDocument(trimmed, ctx, options);
+		if (!selected) return;
+		initialStudioDocument = selected;
+
+		const state = await ensureServer();
+		const url = buildStudioUrl(state.port, state.token, mode);
+		const openedLabel = mode === "editor-only" ? "pi Studio editor-only view" : "pi Studio";
+
+		try {
+			await openUrlInDefaultBrowser(url);
+			if (selected.source === "file") {
+				ctx.ui.notify(`Opened ${openedLabel} with file loaded: ${selected.label}`, "info");
+			} else if (selected.source === "last-response") {
+				ctx.ui.notify(`Opened ${openedLabel} with last model response (${selected.text.length} chars).`, "info");
+			} else {
+				ctx.ui.notify(`Opened ${openedLabel} with blank editor.`, "info");
+			}
+			ctx.ui.notify(`Studio URL: ${url}`, "info");
+		} catch (error) {
+			ctx.ui.notify(`Failed to open browser: ${error instanceof Error ? error.message : String(error)}`, "error");
+		} finally {
+			void maybeNotifyUpdateAvailable(ctx);
+		}
+	};
+
 	pi.registerCommand("studio", {
 		description: "Open pi Studio browser UI (/studio, /studio <file>, /studio --blank, /studio --last)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -8024,8 +8226,9 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Studio server is not running.", "info");
 					return;
 				}
+				const counts = getStudioClientCounts();
 				ctx.ui.notify(
-					`Studio running at http://127.0.0.1:${serverState.port}/ (busy: ${isStudioBusy() ? "yes" : "no"})`,
+					`Studio running at http://127.0.0.1:${serverState.port}/ (busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
 					"info",
 				);
 				return;
@@ -8040,6 +8243,9 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio --last    Open with last model response\n"
 						+ "  /studio --status  Show studio status\n"
 						+ "  /studio --stop    Stop studio server\n"
+						+ "  Note: only one full /studio view is allowed per Pi session.\n"
+						+ "  /studio-replace [path]  Replace the current full Studio view with a new one\n"
+						+ "  /studio-editor-only [path]  Open another Studio tab in editor-only mode\n"
 						+ "  /studio-current <path>  Load a file into currently open Studio tab(s)\n"
 						+ "  /studio-pdf <path>      Export a file to <name>.studio.pdf via Studio PDF",
 					"info",
@@ -8047,115 +8253,53 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			await ctx.waitForIdle();
-			lastCommandCtx = ctx;
-			refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
-			refreshContextUsage(ctx);
-			syncStudioResponseHistory(ctx.sessionManager.getBranch());
-			broadcastState();
-			broadcastResponseHistory();
-			// Seed theme vars so first ping doesn't trigger a false update
-			try {
-				const currentStyle = getStudioThemeStyle(ctx.ui.theme);
-				lastThemeVarsJson = JSON.stringify(buildThemeCssVars(currentStyle));
-			} catch { /* ignore */ }
+			await openStudioView(trimmed, ctx, "full", { defaultSource: "last-response", commandLabel: "/studio" });
+		},
+	});
 
-			const latestAssistant =
-				extractLatestAssistantFromEntries(ctx.sessionManager.getBranch())
-				?? extractLatestAssistantFromEntries(ctx.sessionManager.getEntries())
-				?? lastStudioResponse?.markdown
-				?? null;
-			let selected: InitialStudioDocument | null = null;
-
-			if (!trimmed) {
-				if (latestAssistant) {
-					selected = {
-						text: latestAssistant,
-						label: "last model response",
-						source: "last-response",
-					};
-				} else {
-					selected = {
-						text: "",
-						label: "blank",
-						source: "blank",
-					};
-				}
-			} else if (trimmed === "--blank" || trimmed === "blank") {
-				selected = {
-					text: "",
-					label: "blank",
-					source: "blank",
-				};
-			} else if (trimmed === "--last" || trimmed === "last") {
-				if (!latestAssistant) {
-					ctx.ui.notify("No assistant response found; opening blank studio.", "warning");
-					selected = {
-						text: "",
-						label: "blank",
-						source: "blank",
-					};
-				} else {
-					selected = {
-						text: latestAssistant,
-						label: "last model response",
-						source: "last-response",
-					};
-				}
-			} else if (trimmed.startsWith("-")) {
-				ctx.ui.notify(`Unknown flag: ${trimmed}. Use /studio --help`, "error");
+	pi.registerCommand("studio-replace", {
+		description: "Replace the current full pi Studio view (/studio-replace, /studio-replace <file>)",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const trimmed = args.trim();
+			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
+				ctx.ui.notify(
+					"Usage: /studio-replace [path|--blank|--last]\n"
+						+ "  /studio-replace         Replace the current full Studio view (default: last response, fallback: blank)\n"
+						+ "  /studio-replace <path>  Replace the current full Studio view with file preloaded\n"
+						+ "  /studio-replace --blank Replace with blank editor\n"
+						+ "  /studio-replace --last  Replace with last model response\n"
+						+ "Editor-only Studio views stay open.",
+					"info",
+				);
 				return;
-			} else {
-				const pathArg = parsePathArgument(trimmed);
-				if (!pathArg) {
-					ctx.ui.notify("Invalid file path argument.", "error");
-					return;
-				}
-
-				const file = readStudioFile(pathArg, ctx.cwd);
-				if (file.ok === false) {
-					ctx.ui.notify(file.message, "error");
-					return;
-				}
-
-				selected = {
-					text: file.text,
-					label: file.label,
-					source: "file",
-					path: file.resolvedPath,
-				};
-				if (file.text.length > 200_000) {
-					ctx.ui.notify(
-						"Loaded a large file. Studio critique requests currently reject documents over 200k characters.",
-						"warning",
-					);
-				}
 			}
 
-			initialStudioDocument = selected;
+			await openStudioView(trimmed, ctx, "full", {
+				defaultSource: "last-response",
+				commandLabel: "/studio-replace",
+				replaceExistingFull: true,
+			});
+		},
+	});
 
-			const state = await ensureServer();
-			rotateToken();
-			const url = buildStudioUrl(state.port, state.token);
-
-			try {
-				await openUrlInDefaultBrowser(url);
-				if (initialStudioDocument?.source === "file") {
-					ctx.ui.notify(`Opened pi Studio with file loaded: ${initialStudioDocument.label}`, "info");
-				} else if (initialStudioDocument?.source === "last-response") {
-					ctx.ui.notify(
-						`Opened pi Studio with last model response (${initialStudioDocument.text.length} chars).`,
-						"info",
-					);
-				} else {
-					ctx.ui.notify("Opened pi Studio with blank editor.", "info");
-				}
-				ctx.ui.notify(`Studio URL: ${url}`, "info");
-			} catch (error) {
-				ctx.ui.notify(`Failed to open browser: ${error instanceof Error ? error.message : String(error)}`, "error");
-			} finally {
-				void maybeNotifyUpdateAvailable(ctx);
+	pi.registerCommand("studio-editor-only", {
+		description: "Open pi Studio in editor-only mode (/studio-editor-only, /studio-editor-only <file>)",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const trimmed = args.trim();
+			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
+				ctx.ui.notify(
+					"Usage: /studio-editor-only [path|--blank|--last]\n"
+						+ "  /studio-editor-only         Open an editor-only Studio view (default: blank editor)\n"
+						+ "  /studio-editor-only <path>  Open an editor-only Studio view with file preloaded\n"
+						+ "  /studio-editor-only --blank Open with blank editor\n"
+						+ "  /studio-editor-only --last  Open with last model response loaded into the editor\n"
+						+ "Multiple editor-only views are allowed in the same Pi session.",
+					"info",
+				);
+				return;
 			}
+
+			await openStudioView(trimmed, ctx, "editor-only", { defaultSource: "blank", commandLabel: "/studio-editor-only" });
 		},
 	});
 

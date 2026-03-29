@@ -15,6 +15,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 ## What it does
 
 - Opens a two-pane browser workspace: **Editor** (left) + **Response/Thinking/Editor Preview** (right)
+- Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
 - Browses response history (`Prev/Next/Last`) and loads either:
@@ -43,6 +44,8 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 | `/studio --status` | Show studio server status |
 | `/studio --stop` | Stop studio server |
 | `/studio --help` | Show help |
+| `/studio-replace [path\|--blank\|--last]` | Replace the current full Studio view with a new full Studio view |
+| `/studio-editor-only [path\|--blank\|--last]` | Open an editor-only Studio view; multiple editor-only views may be open at once |
 | `/studio-current <path>` | Load a file into currently open Studio tab(s) without opening a new browser window |
 | `/studio-pdf <path> [options]` | Export a local file to `<name>.studio.pdf` via the Studio PDF pipeline, with optional layout controls |
 
@@ -64,7 +67,8 @@ pi -e https://github.com/omaclaren/pi-studio
 
 ## Notes
 
-- Local-only server (`127.0.0.1`) with rotating tokenized URLs.
+- Local-only server (`127.0.0.1`) with tokenized Studio URLs.
+- Full Studio is a singleton per Pi session: use `/studio` to open it, `/studio-replace` to explicitly replace it, and `/studio-editor-only` for extra editing/preview tabs that do not take over the full Studio session view.
 - Studio is designed as a complement to terminal pi, not a replacement.
 - Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack.
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):

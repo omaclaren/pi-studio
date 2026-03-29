@@ -240,6 +240,44 @@
       appearance: menulist;
     }
 
+    body[data-studio-mode="editor-only"] #editorViewSelect,
+    body[data-studio-mode="editor-only"] #rightViewSelect,
+    body[data-studio-mode="editor-only"] #sendRunBtn,
+    body[data-studio-mode="editor-only"] #queueSteerBtn,
+    body[data-studio-mode="editor-only"] #sendEditorBtn,
+    body[data-studio-mode="editor-only"] #insertHeaderBtn,
+    body[data-studio-mode="editor-only"] #lensSelect,
+    body[data-studio-mode="editor-only"] #critiqueBtn,
+    body[data-studio-mode="editor-only"] #followSelect,
+    body[data-studio-mode="editor-only"] #responseHighlightSelect,
+    body[data-studio-mode="editor-only"] #pullLatestBtn,
+    body[data-studio-mode="editor-only"] #historyPrevBtn,
+    body[data-studio-mode="editor-only"] #historyIndexBadge,
+    body[data-studio-mode="editor-only"] #historyNextBtn,
+    body[data-studio-mode="editor-only"] #historyLastBtn,
+    body[data-studio-mode="editor-only"] #loadResponseBtn,
+    body[data-studio-mode="editor-only"] #loadCritiqueNotesBtn,
+    body[data-studio-mode="editor-only"] #loadCritiqueFullBtn,
+    body[data-studio-mode="editor-only"] #loadHistoryPromptBtn,
+    body[data-studio-mode="editor-only"] #copyResponseBtn,
+    body[data-studio-mode="editor-only"] #compactBtn,
+    body[data-studio-mode="editor-only"] .reference-meta,
+    body[data-studio-mode="editor-only"] #responseActions {
+      display: none !important;
+    }
+
+    body[data-studio-mode="editor-only"] #leftSectionHeader .section-header-main::before {
+      content: "Editor";
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    body[data-studio-mode="editor-only"] #rightSectionHeader .section-header-main::before {
+      content: "Preview";
+      font-weight: 600;
+      font-size: 14px;
+    }
+
     .reference-meta {
       padding: 8px 10px;
       border-bottom: 1px solid var(--border-muted);

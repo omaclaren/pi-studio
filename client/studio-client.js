@@ -99,6 +99,11 @@
       const scratchpadCloseBtn = document.getElementById("scratchpadCloseBtn");
       const scratchpadDoneBtn = document.getElementById("scratchpadDoneBtn");
 
+      const studioMode = (document.body && document.body.dataset && document.body.dataset.studioMode) === "editor-only"
+        ? "editor-only"
+        : "full";
+      const isEditorOnlyMode = studioMode === "editor-only";
+
       const initialSourceState = {
         source: (document.body && document.body.dataset && document.body.dataset.initialSource) || "blank",
         label: (document.body && document.body.dataset && document.body.dataset.initialLabel) || "blank",
@@ -115,9 +120,9 @@
       let pendingKind = null;
       let stickyStudioKind = null;
       let initialDocumentApplied = false;
-      let editorView = "markdown";
-      let rightView = "preview";
-      let followLatest = true;
+      let editorView = isEditorOnlyMode ? "markdown" : "markdown";
+      let rightView = isEditorOnlyMode ? "editor-preview" : "preview";
+      let followLatest = !isEditorOnlyMode;
       let queuedLatestResponse = null;
       let latestResponseMarkdown = "";
       let latestResponseThinking = "";
@@ -928,6 +933,7 @@
           && !event.altKey
           && !event.shiftKey
           && activePane === "left"
+          && !isEditorOnlyMode
         ) {
           if (queueSteerBtn && !queueSteerBtn.disabled) {
             event.preventDefault();
@@ -2532,7 +2538,7 @@
         fileInput.disabled = uiBusy;
         saveAsBtn.disabled = uiBusy;
         saveOverBtn.disabled = uiBusy || !canSaveOver;
-        sendEditorBtn.disabled = uiBusy;
+        sendEditorBtn.disabled = uiBusy || isEditorOnlyMode;
         if (getEditorBtn) getEditorBtn.disabled = uiBusy;
         if (loadGitDiffBtn) loadGitDiffBtn.disabled = uiBusy;
         syncRunAndCritiqueButtons();
@@ -2542,13 +2548,13 @@
         if (annotationModeSelect) annotationModeSelect.disabled = uiBusy;
         if (saveAnnotatedBtn) saveAnnotatedBtn.disabled = uiBusy;
         if (stripAnnotationsBtn) stripAnnotationsBtn.disabled = uiBusy || !hasAnnotationMarkers(sourceTextEl.value);
-        if (compactBtn) compactBtn.disabled = uiBusy || compactInProgress || wsState === "Disconnected";
-        editorViewSelect.disabled = false;
-        rightViewSelect.disabled = false;
-        followSelect.disabled = uiBusy;
-        if (responseHighlightSelect) responseHighlightSelect.disabled = rightView !== "markdown";
-        insertHeaderBtn.disabled = uiBusy;
-        lensSelect.disabled = uiBusy;
+        if (compactBtn) compactBtn.disabled = isEditorOnlyMode || uiBusy || compactInProgress || wsState === "Disconnected";
+        editorViewSelect.disabled = isEditorOnlyMode;
+        rightViewSelect.disabled = isEditorOnlyMode;
+        followSelect.disabled = isEditorOnlyMode || uiBusy;
+        if (responseHighlightSelect) responseHighlightSelect.disabled = isEditorOnlyMode || rightView !== "markdown";
+        insertHeaderBtn.disabled = uiBusy || isEditorOnlyMode;
+        lensSelect.disabled = uiBusy || isEditorOnlyMode;
         updateSaveFileTooltip();
         updateHistoryControls();
         updateResultActionButtons();
@@ -3472,6 +3478,28 @@
         const critiqueIsStop = activeKind === "critique";
         const canQueueSteering = studioRunChainActive && !critiqueIsStop;
 
+        if (isEditorOnlyMode) {
+          if (sendRunBtn) {
+            sendRunBtn.textContent = "Run editor text";
+            sendRunBtn.classList.remove("request-stop-active");
+            sendRunBtn.disabled = true;
+            sendRunBtn.title = "Run is unavailable in editor-only mode.";
+          }
+          if (queueSteerBtn) {
+            queueSteerBtn.hidden = false;
+            queueSteerBtn.disabled = true;
+            queueSteerBtn.classList.remove("request-stop-active");
+            queueSteerBtn.title = "Queue steering is unavailable in editor-only mode.";
+          }
+          if (critiqueBtn) {
+            critiqueBtn.textContent = "Critique editor text";
+            critiqueBtn.classList.remove("request-stop-active");
+            critiqueBtn.disabled = true;
+            critiqueBtn.title = "Critique is unavailable in editor-only mode.";
+          }
+          return;
+        }
+
         if (sendRunBtn) {
           sendRunBtn.textContent = directIsStop ? "Stop" : "Run editor text";
           sendRunBtn.classList.toggle("request-stop-active", directIsStop);
@@ -4174,7 +4202,14 @@
         }
 
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
-        const wsUrl = wsProtocol + "://" + window.location.host + "/ws?token=" + encodeURIComponent(token) + (DEBUG_ENABLED ? "&debug=1" : "");
+        const wsParams = new URLSearchParams({ token: token });
+        if (studioMode !== "full") {
+          wsParams.set("mode", studioMode);
+        }
+        if (DEBUG_ENABLED) {
+          wsParams.set("debug", "1");
+        }
+        const wsUrl = wsProtocol + "://" + window.location.host + "/ws?" + wsParams.toString();
         const wasReconnect = reconnectAttempt > 0;
         let disconnectHandled = false;
 
@@ -4203,7 +4238,15 @@
             clearScheduledReconnect();
             reconnectAttempt = 0;
             setWsState("Disconnected");
-            setStatus("This tab was invalidated by a newer /studio session.", "warning");
+            setStatus("This full Studio tab was replaced by a newer Studio session.", "warning");
+            return;
+          }
+
+          if (kind === "full_conflict") {
+            clearScheduledReconnect();
+            reconnectAttempt = 0;
+            setWsState("Disconnected");
+            setStatus("Another full Studio view is already active for this session. Use /studio-replace for a fresh full Studio view, or /studio-editor-only for a concurrent editor-only Studio view.", "warning");
             return;
           }
 
@@ -4242,6 +4285,10 @@
         socket.addEventListener("close", (event) => {
           if (event && event.code === 4001) {
             handleDisconnect("invalidated", 4001);
+            return;
+          }
+          if (event && event.code === 4004) {
+            handleDisconnect("full_conflict", 4004);
             return;
           }
           if (event && event.code === 1001) {

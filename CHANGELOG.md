@@ -4,6 +4,19 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.38] — 2026-03-29
+
+### Added
+- Studio now supports `/studio-editor-only` for opening additional editor/preview companion views from the same Pi session, without taking over the main full Studio workspace.
+- Studio now supports `/studio-replace` for explicitly replacing the current full Studio view while leaving editor-only views open.
+
+### Changed
+- Full Studio is now treated as a singleton per Pi session: `/studio` opens the canonical full workspace, while attempts to open another full Studio now guide you toward `/studio-replace` or `/studio-editor-only` instead of silently invalidating the existing full Studio tab.
+- README/help text and Studio status/warning messages now describe the updated full-vs-editor-only session model more clearly.
+
+### Fixed
+- Editor-only Studio views now hide remaining critique/history controls, including the critique-focus dropdown, and keep their WebSocket mode metadata aligned with the server-side full/editor-only view tracking.
+
 ## [0.5.37] — 2026-03-29
 
 ### Added
