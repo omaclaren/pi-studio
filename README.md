@@ -16,6 +16,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 
 - Opens a two-pane browser workspace: **Editor** (left) + **Response/Thinking/Editor Preview** (right)
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
+- Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
 - Browses response history (`Prev/Next/Last`) and loads either:
   - response text
   - critique notes/full critique

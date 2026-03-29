@@ -5740,6 +5740,7 @@ ${cssVarsBlock}
         </div>
         <div class="section-header-actions">
           <button id="leftFocusBtn" class="pane-focus-btn" type="button" title="Show only the editor pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
+          <button id="scratchpadBtn" type="button" title="Open a local persistent scratchpad for quick notes. Scratchpad text is never run, critiqued, or exported unless you explicitly insert it into the editor.">Scratchpad</button>
         </div>
       </div>
       <div class="source-wrap">
@@ -5874,6 +5875,28 @@ ${cssVarsBlock}
     <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text">Model: ${initialModel} · Terminal: ${initialTerminal} · Context: unknown</span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
     <span class="shortcut-hint">Focus pane: F10 (or Cmd/Ctrl+Esc) to toggle · Run / queue steering: Cmd/Ctrl+Enter · Stop request: Esc</span>
   </footer>
+
+  <div id="scratchpadOverlay" class="scratchpad-overlay" hidden>
+    <div id="scratchpadDialog" class="scratchpad-dialog" role="dialog" aria-modal="true" aria-labelledby="scratchpadTitle">
+      <div class="scratchpad-header">
+        <div>
+          <h2 id="scratchpadTitle">Scratchpad</h2>
+          <p class="scratchpad-description">Local persistent notes for thoughts you want to park while working. Closing the scratchpad does not clear it: notes persist locally until you edit or clear them. Scratchpad text is not run, critiqued, sent, or exported unless you explicitly insert it into the editor.</p>
+        </div>
+        <button id="scratchpadCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Keep current scratchpad text and close scratchpad" title="Keep current scratchpad text and close scratchpad">✕</button>
+      </div>
+      <textarea id="scratchpadText" class="scratchpad-textarea" placeholder="Jot quick thoughts, TODOs, or prompt ideas here..."></textarea>
+      <div class="scratchpad-footer">
+        <span id="scratchpadMeta" class="scratchpad-meta">Empty · local only</span>
+        <div class="scratchpad-actions">
+          <button id="scratchpadInsertBtn" type="button" title="Insert the scratchpad text into the editor at the current selection, or append it if no editor selection is available.">Insert into editor</button>
+          <button id="scratchpadCopyBtn" type="button" title="Copy scratchpad text to the clipboard.">Copy</button>
+          <button id="scratchpadClearBtn" type="button" title="Clear scratchpad text.">Clear</button>
+          <button id="scratchpadDoneBtn" type="button" title="Keep the current scratchpad text and close the scratchpad.">Keep and close</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Defer sanitizer script so studio can boot/connect even if CDN is slow or blocked. -->
   <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>

@@ -88,6 +88,16 @@
       const compactBtn = document.getElementById("compactBtn");
       const leftFocusBtn = document.getElementById("leftFocusBtn");
       const rightFocusBtn = document.getElementById("rightFocusBtn");
+      const scratchpadBtn = document.getElementById("scratchpadBtn");
+      const scratchpadOverlayEl = document.getElementById("scratchpadOverlay");
+      const scratchpadDialogEl = document.getElementById("scratchpadDialog");
+      const scratchpadTextEl = document.getElementById("scratchpadText");
+      const scratchpadMetaEl = document.getElementById("scratchpadMeta");
+      const scratchpadInsertBtn = document.getElementById("scratchpadInsertBtn");
+      const scratchpadCopyBtn = document.getElementById("scratchpadCopyBtn");
+      const scratchpadClearBtn = document.getElementById("scratchpadClearBtn");
+      const scratchpadCloseBtn = document.getElementById("scratchpadCloseBtn");
+      const scratchpadDoneBtn = document.getElementById("scratchpadDoneBtn");
 
       const initialSourceState = {
         source: (document.body && document.body.dataset && document.body.dataset.initialSource) || "blank",
@@ -227,6 +237,7 @@
       const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
       const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
       const ANNOTATION_MODE_STORAGE_KEY = "piStudio.annotationsEnabled";
+      const SCRATCHPAD_STORAGE_KEY = "piStudio.scratchpad";
       const PREVIEW_INPUT_DEBOUNCE_MS = 0;
       const PREVIEW_PENDING_BADGE_DELAY_MS = 220;
       const previewPendingTimers = new WeakMap();
@@ -241,6 +252,8 @@
       let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
       let annotationsEnabled = true;
+      let scratchpadText = "";
+      let scratchpadReturnFocusEl = null;
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
       if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
@@ -864,6 +877,28 @@
         if (!event || event.defaultPrevented) return;
 
         const key = typeof event.key === "string" ? event.key : "";
+        const plainEscape = key === "Escape"
+          && !event.metaKey
+          && !event.ctrlKey
+          && !event.altKey
+          && !event.shiftKey;
+        const scratchpadOwnsEvent = Boolean(
+          scratchpadDialogEl
+          && event.target
+          && typeof scratchpadDialogEl.contains === "function"
+          && scratchpadDialogEl.contains(event.target)
+        );
+
+        if (isScratchpadOpen() && plainEscape) {
+          event.preventDefault();
+          closeScratchpad();
+          return;
+        }
+
+        if (scratchpadOwnsEvent) {
+          return;
+        }
+
         const isToggleShortcut =
           (key === "Escape" && (event.metaKey || event.ctrlKey))
           || key === "F10";
@@ -874,13 +909,7 @@
           return;
         }
 
-        if (
-          key === "Escape"
-          && !event.metaKey
-          && !event.ctrlKey
-          && !event.altKey
-          && !event.shiftKey
-        ) {
+        if (plainEscape) {
           const activeKind = getAbortablePendingKind();
           if (activeKind === "direct" || activeKind === "critique") {
             event.preventDefault();
@@ -3209,6 +3238,126 @@
         persistStoredToggle(ANNOTATION_MODE_STORAGE_KEY, enabled);
       }
 
+      function readStoredText(storageKey) {
+        if (!window.localStorage) return null;
+        try {
+          const value = window.localStorage.getItem(storageKey);
+          return typeof value === "string" ? value : null;
+        } catch {
+          return null;
+        }
+      }
+
+      function persistStoredText(storageKey, value) {
+        if (!window.localStorage) return;
+        try {
+          window.localStorage.setItem(storageKey, String(value ?? ""));
+        } catch {
+          // ignore storage failures
+        }
+      }
+
+      function isScratchpadOpen() {
+        return Boolean(scratchpadOverlayEl && !scratchpadOverlayEl.hidden);
+      }
+
+      function readStoredScratchpadText() {
+        return readStoredText(SCRATCHPAD_STORAGE_KEY);
+      }
+
+      function persistScratchpadText(value) {
+        persistStoredText(SCRATCHPAD_STORAGE_KEY, value);
+      }
+
+      function updateScratchpadUi() {
+        const normalized = String(scratchpadText || "");
+        const hasContent = Boolean(normalized.trim());
+        if (scratchpadBtn) {
+          scratchpadBtn.textContent = hasContent ? "Scratchpad •" : "Scratchpad";
+          scratchpadBtn.classList.toggle("has-content", hasContent);
+          scratchpadBtn.title = hasContent
+            ? "Open your local persistent scratchpad. Current notes persist after closing until you edit or clear them."
+            : "Open a local persistent scratchpad for quick notes. Anything you type will persist after closing until you edit or clear it.";
+        }
+        if (scratchpadMetaEl) {
+          scratchpadMetaEl.textContent = hasContent
+            ? "Saved locally · persists after close · " + normalized.length + " chars"
+            : "Empty · local only";
+        }
+        if (scratchpadInsertBtn) scratchpadInsertBtn.disabled = !hasContent;
+        if (scratchpadCopyBtn) scratchpadCopyBtn.disabled = !hasContent;
+        if (scratchpadClearBtn) scratchpadClearBtn.disabled = !normalized.length;
+      }
+
+      function setScratchpadText(nextText, options) {
+        scratchpadText = String(nextText || "");
+        if (scratchpadTextEl && scratchpadTextEl.value !== scratchpadText) {
+          scratchpadTextEl.value = scratchpadText;
+        }
+        if (!options || options.persist !== false) {
+          persistScratchpadText(scratchpadText);
+        }
+        updateScratchpadUi();
+      }
+
+      function closeScratchpad(options) {
+        if (!scratchpadOverlayEl || scratchpadOverlayEl.hidden) return;
+        scratchpadOverlayEl.hidden = true;
+        document.body.classList.remove("scratchpad-open");
+        const focusTarget = options && Object.prototype.hasOwnProperty.call(options, "focusTarget")
+          ? options.focusTarget
+          : (scratchpadReturnFocusEl || scratchpadBtn || sourceTextEl);
+        scratchpadReturnFocusEl = null;
+        if (focusTarget && typeof focusTarget.focus === "function") {
+          const schedule = typeof window.requestAnimationFrame === "function"
+            ? window.requestAnimationFrame.bind(window)
+            : (cb) => window.setTimeout(cb, 16);
+          schedule(() => focusTarget.focus());
+        }
+      }
+
+      function openScratchpad() {
+        if (!scratchpadOverlayEl) return;
+        scratchpadReturnFocusEl = document.activeElement && document.activeElement !== document.body
+          ? document.activeElement
+          : sourceTextEl;
+        scratchpadOverlayEl.hidden = false;
+        document.body.classList.add("scratchpad-open");
+        if (scratchpadTextEl && typeof scratchpadTextEl.focus === "function") {
+          const schedule = typeof window.requestAnimationFrame === "function"
+            ? window.requestAnimationFrame.bind(window)
+            : (cb) => window.setTimeout(cb, 16);
+          schedule(() => {
+            scratchpadTextEl.focus();
+            if (typeof scratchpadTextEl.selectionStart === "number") {
+              const end = scratchpadTextEl.value.length;
+              scratchpadTextEl.setSelectionRange(end, end);
+            }
+          });
+        }
+      }
+
+      function insertScratchpadIntoEditor() {
+        const content = String(scratchpadText || "");
+        if (!content.trim()) {
+          setStatus("Scratchpad is empty.", "warning");
+          return;
+        }
+
+        const current = sourceTextEl.value || "";
+        const start = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : current.length;
+        const end = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : start;
+        const safeStart = Math.max(0, Math.min(start, current.length));
+        const safeEnd = Math.max(safeStart, Math.min(end, current.length));
+        const next = current.slice(0, safeStart) + content + current.slice(safeEnd);
+        setEditorText(next, { preserveScroll: false, preserveSelection: false });
+        const caret = safeStart + content.length;
+        sourceTextEl.setSelectionRange(caret, caret);
+        setActivePane("left");
+        closeScratchpad({ focusTarget: sourceTextEl });
+        setStatus("Inserted scratchpad into editor.", "success");
+      }
+
       function updateEditorHighlightState() {
         const enabled = editorHighlightEnabled && editorView === "markdown";
 
@@ -4715,6 +4864,71 @@
         }
       });
 
+      if (scratchpadBtn) {
+        scratchpadBtn.addEventListener("click", () => {
+          openScratchpad();
+        });
+      }
+
+      if (scratchpadCloseBtn) {
+        scratchpadCloseBtn.addEventListener("click", () => {
+          closeScratchpad();
+        });
+      }
+
+      if (scratchpadDoneBtn) {
+        scratchpadDoneBtn.addEventListener("click", () => {
+          closeScratchpad();
+        });
+      }
+
+      if (scratchpadOverlayEl) {
+        scratchpadOverlayEl.addEventListener("click", (event) => {
+          if (event.target === scratchpadOverlayEl) {
+            closeScratchpad();
+          }
+        });
+      }
+
+      if (scratchpadTextEl) {
+        scratchpadTextEl.addEventListener("input", () => {
+          setScratchpadText(scratchpadTextEl.value);
+        });
+      }
+
+      if (scratchpadInsertBtn) {
+        scratchpadInsertBtn.addEventListener("click", () => {
+          insertScratchpadIntoEditor();
+        });
+      }
+
+      if (scratchpadCopyBtn) {
+        scratchpadCopyBtn.addEventListener("click", async () => {
+          if (!String(scratchpadText || "").trim()) {
+            setStatus("Scratchpad is empty.", "warning");
+            return;
+          }
+
+          try {
+            await navigator.clipboard.writeText(String(scratchpadText || ""));
+            setStatus("Copied scratchpad text.", "success");
+          } catch (error) {
+            setStatus("Clipboard write failed.", "warning");
+          }
+        });
+      }
+
+      if (scratchpadClearBtn) {
+        scratchpadClearBtn.addEventListener("click", () => {
+          if (!String(scratchpadText || "").length) return;
+          const confirmed = window.confirm("Clear scratchpad text?");
+          if (!confirmed) return;
+          setScratchpadText("");
+          if (scratchpadTextEl) scratchpadTextEl.focus();
+          setStatus("Cleared scratchpad.", "success");
+        });
+      }
+
       if (saveAnnotatedBtn) {
         saveAnnotatedBtn.addEventListener("click", () => {
           const content = sourceTextEl.value;
@@ -4853,6 +5067,7 @@
       refreshResponseUi();
       updateAnnotatedReplyHeaderButton();
       setActivePane("left");
+      setScratchpadText(readStoredScratchpadText() || "", { persist: false });
 
       const storedEditorHighlightEnabled = readStoredEditorHighlightEnabled();
       const initialHighlightEnabled = storedEditorHighlightEnabled ?? Boolean(highlightSelect && highlightSelect.value === "on");

@@ -4,6 +4,14 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.37] — 2026-03-29
+
+### Added
+- Studio now includes a local persistent scratchpad for parking quick thoughts while you work. The scratchpad opens as an integrated modal, keeps its contents after closing, and provides copy / clear / insert-into-editor actions.
+
+### Changed
+- Scratchpad UI text and actions now make the persistence semantics explicit: closing keeps the current notes unless you actively clear them.
+
 ## [0.5.36] — 2026-03-28
 
 ### Changed
