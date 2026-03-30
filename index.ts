@@ -249,9 +249,9 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 	const subsectionSpaceBefore = buildStudioPdfTitleSpacingLength(options?.subsectionSpaceBefore, "1.2ex plus 0.4ex minus 0.2ex");
 	const subsectionSpaceAfter = buildStudioPdfTitleSpacingLength(options?.subsectionSpaceAfter, "0.6ex plus 0.1ex");
 	return `\\usepackage{titlesec}
-\\titleformat{\\section}{${sectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}[\\vspace{3pt}\\titlerule\\vspace{12pt}]
-\\titleformat{\\subsection}{${subsectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}
-\\titleformat{\\subsubsection}{${subsubsectionHeadingSize}\\bfseries\\sffamily}{}{0pt}{}
+\\titleformat{\\section}{${sectionHeadingSize}\\bfseries\\sffamily\\raggedright\\hyphenpenalty=10000\\exhyphenpenalty=10000\\relax}{}{0pt}{}[\\vspace{3pt}\\titlerule\\vspace{12pt}]
+\\titleformat{\\subsection}{${subsectionHeadingSize}\\bfseries\\sffamily\\raggedright\\hyphenpenalty=10000\\exhyphenpenalty=10000\\relax}{}{0pt}{}
+\\titleformat{\\subsubsection}{${subsubsectionHeadingSize}\\bfseries\\sffamily\\raggedright\\hyphenpenalty=10000\\exhyphenpenalty=10000\\relax}{}{0pt}{}
 \\titlespacing*{\\section}{0pt}{${sectionSpaceBefore}}{${sectionSpaceAfter}}
 \\titlespacing*{\\subsection}{0pt}{${subsectionSpaceBefore}}{${subsectionSpaceAfter}}
 \\usepackage{xcolor}
