@@ -878,6 +878,19 @@
         return true;
       }
 
+      function triggerEditorSaveShortcut() {
+        if (saveOverBtn && !saveOverBtn.disabled && !saveOverBtn.hidden) {
+          saveOverBtn.click();
+          return true;
+        }
+        if (saveAsBtn && !saveAsBtn.disabled && !saveAsBtn.hidden) {
+          saveAsBtn.click();
+          return true;
+        }
+        setStatus("Save is unavailable right now.", "warning");
+        return false;
+      }
+
       function handlePaneShortcut(event) {
         if (!event || event.defaultPrevented) return;
 
@@ -911,6 +924,18 @@
         if (isToggleShortcut) {
           event.preventDefault();
           togglePaneFocus();
+          return;
+        }
+
+        const isSaveShortcut =
+          key.toLowerCase() === "s"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
+          && !event.shiftKey;
+
+        if (isSaveShortcut) {
+          event.preventDefault();
+          triggerEditorSaveShortcut();
           return;
         }
 
@@ -2525,11 +2550,11 @@
 
         var effectivePath = getEffectiveSavePath();
         if (effectivePath) {
-          saveOverBtn.title = "Overwrite file: " + effectivePath;
+          saveOverBtn.title = "Overwrite file: " + effectivePath + " · Shortcut: Cmd/Ctrl+S.";
           return;
         }
 
-        saveOverBtn.title = "Save editor is available after opening a file, setting a working dir, or using Save editor as…";
+        saveOverBtn.title = "Save editor is available after opening a file, setting a working dir, or using Save editor as…. Shortcut: Cmd/Ctrl+S falls back to Save editor as… when needed.";
       }
 
       function syncActionButtons() {

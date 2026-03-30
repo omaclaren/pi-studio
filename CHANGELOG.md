@@ -4,6 +4,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.39] — 2026-03-30
+
+### Added
+- Studio now supports the familiar `Cmd/Ctrl+S` shortcut for saving editor content.
+
+### Changed
+- `Cmd/Ctrl+S` now triggers **Save editor** when a direct save path is available, and falls back to **Save editor as…** otherwise.
+- Save button tooltips and the footer shortcut hint now advertise the save shortcut explicitly.
+
 ## [0.5.38] — 2026-03-29
 
 ### Added

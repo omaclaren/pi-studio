@@ -5732,8 +5732,8 @@ ${cssVarsBlock}
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
-      <button id="saveAsBtn" type="button" title="Save editor content to a new file path.">Save editor as…</button>
-      <button id="saveOverBtn" type="button" title="Overwrite current file with editor content." disabled>Save editor</button>
+      <button id="saveAsBtn" type="button" title="Save editor content to a new file path. Cmd/Ctrl+S falls back here when no direct save path is available.">Save editor as…</button>
+      <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
@@ -5884,7 +5884,7 @@ ${cssVarsBlock}
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
     <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text">Model: ${initialModel} · Terminal: ${initialTerminal} · Context: unknown</span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
-    <span class="shortcut-hint">Focus pane: F10 (or Cmd/Ctrl+Esc) to toggle · Run / queue steering: Cmd/Ctrl+Enter · Stop request: Esc</span>
+    <span class="shortcut-hint">Focus pane: F10 (or Cmd/Ctrl+Esc) to toggle · Save editor: Cmd/Ctrl+S · Run / queue steering: Cmd/Ctrl+Enter · Stop request: Esc</span>
   </footer>
 
   <div id="scratchpadOverlay" class="scratchpad-overlay" hidden>
