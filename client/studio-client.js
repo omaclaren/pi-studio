@@ -74,6 +74,7 @@
       const loadHistoryPromptBtn = document.getElementById("loadHistoryPromptBtn");
       const saveAsBtn = document.getElementById("saveAsBtn");
       const saveOverBtn = document.getElementById("saveOverBtn");
+      const refreshFromDiskBtn = document.getElementById("refreshFromDiskBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
       const getEditorBtn = document.getElementById("getEditorBtn");
       const loadGitDiffBtn = document.getElementById("loadGitDiffBtn");
@@ -196,6 +197,7 @@
         label: initialSourceState.label,
         path: initialSourceState.path,
       };
+      let fileBackedBaselineText = null;
       let activePane = "left";
       let paneFocusTarget = "off";
       const EDITOR_HIGHLIGHT_MAX_CHARS = 100_000;
@@ -427,6 +429,7 @@
         if (kind === "send_to_editor") return "sending to pi editor";
         if (kind === "get_from_editor") return "loading from pi editor";
         if (kind === "load_git_diff") return "loading git diff";
+        if (kind === "refresh_from_disk") return "refreshing from disk";
         if (kind === "save_as" || kind === "save_over") return "saving editor text";
         return "submitting request";
       }
@@ -779,11 +782,29 @@
         }
       });
 
+      function markFileBackedBaseline(text) {
+        fileBackedBaselineText = String(text || "");
+      }
+
+      function clearFileBackedBaseline() {
+        fileBackedBaselineText = null;
+      }
+
+      function hasRefreshableFilePath() {
+        return Boolean(sourceState && sourceState.path);
+      }
+
+      function editorDiffersFromFileBackedBaseline() {
+        if (!hasRefreshableFilePath()) return false;
+        if (fileBackedBaselineText === null) return true;
+        return sourceTextEl.value !== fileBackedBaselineText;
+      }
+
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
         sourceBadgeEl.textContent = "Editor origin: " + label;
         // Show "Set working dir" button when not file-backed
-        var isFileBacked = sourceState.source === "file" && Boolean(sourceState.path);
+        var isFileBacked = hasRefreshableFilePath();
         if (isFileBacked) {
           if (resourceDirInput) resourceDirInput.value = "";
           if (resourceDirLabel) resourceDirLabel.textContent = "";
@@ -2518,7 +2539,7 @@
 
       function getEffectiveSavePath() {
         // File-backed: use the original path
-        if (sourceState.source === "file" && sourceState.path) return sourceState.path;
+        if (sourceState.path) return sourceState.path;
         // Upload with working dir + filename: derive path
         if (sourceState.source === "upload" && sourceState.label && resourceDirInput && resourceDirInput.value.trim()) {
           var name = sourceState.label.replace(/^upload:\s*/i, "");
@@ -2557,12 +2578,25 @@
         saveOverBtn.title = "Save editor is available after opening a file, setting a working dir, or using Save editor as…. Shortcut: Cmd/Ctrl+S falls back to Save editor as… when needed.";
       }
 
+      function updateRefreshFromDiskTooltip() {
+        if (!refreshFromDiskBtn) return;
+
+        if (hasRefreshableFilePath()) {
+          refreshFromDiskBtn.title = "Reload the current file-backed document from disk: " + sourceState.path;
+          return;
+        }
+
+        refreshFromDiskBtn.title = "Refresh from disk is only available for documents that currently have a file path.";
+      }
+
       function syncActionButtons() {
         const canSaveOver = Boolean(getEffectiveSavePath());
+        const canRefreshFromDisk = hasRefreshableFilePath();
 
         fileInput.disabled = uiBusy;
         saveAsBtn.disabled = uiBusy;
         saveOverBtn.disabled = uiBusy || !canSaveOver;
+        if (refreshFromDiskBtn) refreshFromDiskBtn.disabled = uiBusy || !canRefreshFromDisk;
         sendEditorBtn.disabled = uiBusy || isEditorOnlyMode;
         if (getEditorBtn) getEditorBtn.disabled = uiBusy;
         if (loadGitDiffBtn) loadGitDiffBtn.disabled = uiBusy;
@@ -2581,6 +2615,7 @@
         insertHeaderBtn.disabled = uiBusy || isEditorOnlyMode;
         lensSelect.disabled = uiBusy || isEditorOnlyMode;
         updateSaveFileTooltip();
+        updateRefreshFromDiskTooltip();
         updateHistoryControls();
         updateResultActionButtons();
       }
@@ -2598,6 +2633,9 @@
           label: next && next.label ? next.label : "blank",
           path: next && next.path ? next.path : null,
         };
+        if (!sourceState.path) {
+          clearFileBackedBaseline();
+        }
         updateSourceBadge();
         syncActionButtons();
       }
@@ -3778,6 +3816,9 @@
               label: message.initialDocument.label || "blank",
               path: message.initialDocument.path || null,
             });
+            if (message.initialDocument.path) {
+              markFileBackedBaseline(message.initialDocument.text);
+            }
             refreshResponseUi();
             if (typeof message.initialDocument.label === "string" && message.initialDocument.label.length > 0) {
               setStatus("Loaded " + message.initialDocument.label + ".", "success");
@@ -3978,6 +4019,8 @@
           if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
             pendingRequestId = null;
             pendingKind = null;
+            clearArmedTitleAttention(message.requestId);
+            stickyStudioKind = null;
           }
           if (message.path) {
             setSourceState({
@@ -3985,6 +4028,7 @@
               label: message.label || message.path,
               path: message.path,
             });
+            markFileBackedBaseline(sourceTextEl.value);
           }
           setBusy(false);
           setWsState("Ready");
@@ -4032,6 +4076,15 @@
             return;
           }
 
+          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+            clearArmedTitleAttention(message.requestId);
+            stickyStudioKind = null;
+            setBusy(false);
+            setWsState("Ready");
+          }
+
           const nextSource =
             nextDoc.source === "file" || nextDoc.source === "last-response"
               ? nextDoc.source
@@ -4045,6 +4098,9 @@
 
           setEditorText(nextDoc.text, { preserveScroll: false, preserveSelection: false });
           setSourceState({ source: nextSource, label: nextLabel, path: nextPath });
+          if (nextPath) {
+            markFileBackedBaseline(nextDoc.text);
+          }
           refreshResponseUi();
           setStatus(
             typeof message.message === "string" && message.message.trim()
@@ -4828,6 +4884,34 @@
         }
       });
 
+      if (refreshFromDiskBtn) {
+        refreshFromDiskBtn.addEventListener("click", () => {
+          if (!hasRefreshableFilePath()) {
+            setStatus("Refresh from disk is only available for file-backed documents.", "warning");
+            return;
+          }
+
+          if (editorDiffersFromFileBackedBaseline()) {
+            const confirmed = window.confirm("Replace current editor contents with the latest version from disk?");
+            if (!confirmed) return;
+          }
+
+          const requestId = beginUiAction("refresh_from_disk");
+          if (!requestId) return;
+
+          const sent = sendMessage({
+            type: "refresh_from_disk_request",
+            requestId,
+          });
+
+          if (!sent) {
+            pendingRequestId = null;
+            pendingKind = null;
+            setBusy(false);
+          }
+        });
+      }
+
       sendEditorBtn.addEventListener("click", () => {
         const content = sourceTextEl.value;
         if (!content.trim()) {
@@ -5135,6 +5219,10 @@
       fileInput.addEventListener("change", () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
+
+        // Clear the input immediately so selecting the same file again will
+        // still fire a future change event.
+        fileInput.value = "";
 
         const reader = new FileReader();
         reader.onload = () => {

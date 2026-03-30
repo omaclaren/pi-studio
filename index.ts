@@ -159,6 +159,11 @@ interface SaveOverRequestMessage {
 	content: string;
 }
 
+interface RefreshFromDiskRequestMessage {
+	type: "refresh_from_disk_request";
+	requestId: string;
+}
+
 interface SendToEditorRequestMessage {
 	type: "send_to_editor_request";
 	requestId: string;
@@ -192,6 +197,7 @@ type IncomingStudioMessage =
 	| CompactRequestMessage
 	| SaveAsRequestMessage
 	| SaveOverRequestMessage
+	| RefreshFromDiskRequestMessage
 	| SendToEditorRequestMessage
 	| GetFromEditorRequestMessage
 	| LoadGitDiffRequestMessage
@@ -5401,6 +5407,13 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
+	if (msg.type === "refresh_from_disk_request" && typeof msg.requestId === "string") {
+		return {
+			type: "refresh_from_disk_request",
+			requestId: msg.requestId,
+		};
+	}
+
 	if (msg.type === "send_to_editor_request" && typeof msg.requestId === "string" && typeof msg.content === "string") {
 		return {
 			type: "send_to_editor_request",
@@ -5798,6 +5811,7 @@ ${cssVarsBlock}
     <div class="controls">
       <button id="saveAsBtn" type="button" title="Save editor content to a new file path. Cmd/Ctrl+S falls back here when no direct save path is available.">Save editor as…</button>
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
+      <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
@@ -7180,6 +7194,50 @@ export default function (pi: ExtensionAPI) {
 					message: `Failed to save over file: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
+			return;
+		}
+
+		if (msg.type === "refresh_from_disk_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			if (isStudioBusy()) {
+				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
+				return;
+			}
+			if (!initialStudioDocument || !initialStudioDocument.path) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: "Refresh from disk is only available for file-backed documents.",
+				});
+				return;
+			}
+
+			const refreshed = readStudioFile(initialStudioDocument.path, studioCwd);
+			if (refreshed.ok === false) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: refreshed.message,
+				});
+				return;
+			}
+
+			initialStudioDocument = {
+				text: refreshed.text,
+				label: refreshed.label,
+				source: "file",
+				path: refreshed.resolvedPath,
+			};
+
+			broadcast({
+				type: "studio_document",
+				requestId: msg.requestId,
+				document: initialStudioDocument,
+				message: `Reloaded ${refreshed.label} from disk.`,
+			});
 			return;
 		}
 
