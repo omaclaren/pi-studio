@@ -279,6 +279,7 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 \\newcommand{\\StudioDiffHunkTok}[1]{\\textcolor{StudioDiffHunkText}{#1}}
 \\newcommand{\\StudioDiffHeaderTok}[1]{\\textcolor{StudioDiffHunkText}{\\textbf{#1}}}
 \\newenvironment{studiocallout}[4]{\\par\\vspace{0.6em}\\noindent\\begingroup\\def\\StudioCalloutBorder{#2}\\def\\StudioCalloutText{#3}\\def\\StudioCalloutLabelBg{#4}\\color{\\StudioCalloutBorder}\\hrule height 0.8pt\\relax\\vspace{0.32em}\\noindent\\colorbox{\\StudioCalloutLabelBg}{\\strut\\hspace{0.55em}{\\sffamily\\bfseries\\footnotesize\\textcolor{\\StudioCalloutText}{#1}}\\hspace{0.55em}}\\par\\vspace{0.24em}\\normalcolor\\leftskip=0.9em\\rightskip=0pt\\parindent=0pt\\parskip=0.18em}{\\par\\vspace{0.12em}\\noindent\\color{\\StudioCalloutBorder}\\hrule height 0.55pt\\par\\endgroup\\vspace{0.5em}}
+\\usepackage{float}
 \\usepackage{caption}
 \\captionsetup[figure]{justification=raggedright,singlelinecheck=false}
 \\usepackage{enumitem}
