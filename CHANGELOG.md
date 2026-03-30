@@ -4,6 +4,14 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.41] — 2026-03-30
+
+### Changed
+- `/studio-pdf` PDF callouts now render with a slightly stronger visual treatment in exported PDFs, including per-kind colours and a more obvious title badge, while staying page-break-friendly.
+
+### Fixed
+- `/studio-pdf` fenced Quarto-style callouts that end with lists now keep their marker paragraphs separate during Pandoc processing, avoiding malformed LaTeX such as callouts closing inside the final list item.
+
 ## [0.5.40] — 2026-03-30
 
 ### Changed

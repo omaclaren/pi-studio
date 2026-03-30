@@ -257,13 +257,28 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 \\definecolor{StudioDiffDelText}{HTML}{CF222E}
 \\definecolor{StudioDiffMetaText}{HTML}{57606A}
 \\definecolor{StudioDiffHunkText}{HTML}{0969DA}
+\\definecolor{StudioCalloutNoteBorder}{HTML}{2F6FEB}
+\\definecolor{StudioCalloutNoteText}{HTML}{1F4B99}
+\\definecolor{StudioCalloutNoteLabelBg}{HTML}{EAF2FF}
+\\definecolor{StudioCalloutTipBorder}{HTML}{1A7F37}
+\\definecolor{StudioCalloutTipText}{HTML}{175C2C}
+\\definecolor{StudioCalloutTipLabelBg}{HTML}{EAF7EE}
+\\definecolor{StudioCalloutWarningBorder}{HTML}{B76E00}
+\\definecolor{StudioCalloutWarningText}{HTML}{8A5300}
+\\definecolor{StudioCalloutWarningLabelBg}{HTML}{FFF3D6}
+\\definecolor{StudioCalloutImportantBorder}{HTML}{CF222E}
+\\definecolor{StudioCalloutImportantText}{HTML}{A40E26}
+\\definecolor{StudioCalloutImportantLabelBg}{HTML}{FDEBEC}
+\\definecolor{StudioCalloutCautionBorder}{HTML}{CF222E}
+\\definecolor{StudioCalloutCautionText}{HTML}{A40E26}
+\\definecolor{StudioCalloutCautionLabelBg}{HTML}{FDEBEC}
 \\newcommand{\\studioannotation}[1]{\\begingroup\\setlength{\\fboxsep}{1.5pt}\\fcolorbox{StudioAnnotationBorder}{StudioAnnotationBg}{\\begin{varwidth}{\\dimexpr\\linewidth-2\\fboxsep-2\\fboxrule\\relax}\\raggedright\\textcolor{StudioAnnotationText}{\\sffamily\\footnotesize\\strut #1}\\end{varwidth}}\\endgroup}
 \\newcommand{\\StudioDiffAddTok}[1]{\\textcolor{StudioDiffAddText}{#1}}
 \\newcommand{\\StudioDiffDelTok}[1]{\\textcolor{StudioDiffDelText}{#1}}
 \\newcommand{\\StudioDiffMetaTok}[1]{\\textcolor{StudioDiffMetaText}{#1}}
 \\newcommand{\\StudioDiffHunkTok}[1]{\\textcolor{StudioDiffHunkText}{#1}}
 \\newcommand{\\StudioDiffHeaderTok}[1]{\\textcolor{StudioDiffHunkText}{\\textbf{#1}}}
-\\newenvironment{studiocallout}[1]{\\par\\vspace{0.22em}\\noindent\\begingroup\\color{StudioAnnotationBorder}\\hrule height 0.45pt\\color{black}\\vspace{0.08em}\\noindent{\\sffamily\\bfseries\\textcolor{StudioAnnotationText}{#1}}\\par\\vspace{0.02em}\\leftskip=0.7em\\rightskip=0pt\\parindent=0pt\\parskip=0.15em}{\\par\\vspace{0.02em}\\noindent\\color{StudioAnnotationBorder}\\hrule height 0.45pt\\par\\endgroup\\vspace{0.22em}}
+\\newenvironment{studiocallout}[4]{\\par\\vspace{0.6em}\\noindent\\begingroup\\def\\StudioCalloutBorder{#2}\\def\\StudioCalloutText{#3}\\def\\StudioCalloutLabelBg{#4}\\color{\\StudioCalloutBorder}\\hrule height 0.8pt\\relax\\vspace{0.32em}\\noindent\\colorbox{\\StudioCalloutLabelBg}{\\strut\\hspace{0.55em}{\\sffamily\\bfseries\\footnotesize\\textcolor{\\StudioCalloutText}{#1}}\\hspace{0.55em}}\\par\\vspace{0.24em}\\normalcolor\\leftskip=0.9em\\rightskip=0pt\\parindent=0pt\\parskip=0.18em}{\\par\\vspace{0.12em}\\noindent\\color{\\StudioCalloutBorder}\\hrule height 0.55pt\\par\\endgroup\\vspace{0.5em}}
 \\usepackage{caption}
 \\captionsetup[figure]{justification=raggedright,singlelinecheck=false}
 \\usepackage{enumitem}
@@ -3405,9 +3420,19 @@ function preprocessStudioMarkdownCalloutsForPdf(markdown: string): { markdown: s
 			content: contentLines.join("\n").trim(),
 		};
 		blocks.push(block);
+		// Keep markers on their own paragraphs so pandoc does not absorb them
+		// into neighbouring list items or paragraphs. Without these blank
+		// lines, the end marker for a callout that finishes with a list can be
+		// emitted inside the final \item, which then produces malformed LaTeX
+		// when we later replace the marker range with a custom callout
+		// environment.
+		out.push("");
 		out.push(`PISTUDIOPDFCALLOUTSTART${block.kind.toUpperCase()}${block.markerId}`);
+		out.push("");
 		if (block.content) out.push(block.content);
+		out.push("");
 		out.push(`PISTUDIOPDFCALLOUTEND${block.kind.toUpperCase()}${block.markerId}`);
+		out.push("");
 		i = j;
 	}
 
@@ -3480,6 +3505,52 @@ function preprocessStudioMarkdownImageAlignmentForPdf(markdown: string): { markd
 	return { markdown: out.join("\n"), blocks };
 }
 
+function getStudioPdfCalloutStyle(kind: StudioPdfMarkdownCalloutBlock["kind"]): {
+	label: string;
+	borderColor: string;
+	textColor: string;
+	labelBgColor: string;
+} {
+	switch (kind) {
+		case "note":
+			return {
+				label: "Note",
+				borderColor: "StudioCalloutNoteBorder",
+				textColor: "StudioCalloutNoteText",
+				labelBgColor: "StudioCalloutNoteLabelBg",
+			};
+		case "tip":
+			return {
+				label: "Tip",
+				borderColor: "StudioCalloutTipBorder",
+				textColor: "StudioCalloutTipText",
+				labelBgColor: "StudioCalloutTipLabelBg",
+			};
+		case "warning":
+			return {
+				label: "Warning",
+				borderColor: "StudioCalloutWarningBorder",
+				textColor: "StudioCalloutWarningText",
+				labelBgColor: "StudioCalloutWarningLabelBg",
+			};
+		case "important":
+			return {
+				label: "Important",
+				borderColor: "StudioCalloutImportantBorder",
+				textColor: "StudioCalloutImportantText",
+				labelBgColor: "StudioCalloutImportantLabelBg",
+			};
+		case "caution":
+		default:
+			return {
+				label: "Caution",
+				borderColor: "StudioCalloutCautionBorder",
+				textColor: "StudioCalloutCautionText",
+				labelBgColor: "StudioCalloutCautionLabelBg",
+			};
+	}
+}
+
 function replaceStudioPdfCalloutBlocksInGeneratedLatex(
 	latex: string,
 	blocks: StudioPdfMarkdownCalloutBlock[],
@@ -3494,16 +3565,8 @@ function replaceStudioPdfCalloutBlocksInGeneratedLatex(
 		const endIndex = transformed.indexOf(endMarker, startIndex + startMarker.length);
 		if (endIndex < 0) continue;
 		const inner = transformed.slice(startIndex + startMarker.length, endIndex).trim();
-		const label = block.kind === "note"
-			? "Note"
-			: block.kind === "tip"
-				? "Tip"
-				: block.kind === "warning"
-					? "Warning"
-					: block.kind === "important"
-						? "Important"
-						: "Caution";
-		const replacement = `\\begin{studiocallout}{${label}}\n${inner}\n\\end{studiocallout}`;
+		const style = getStudioPdfCalloutStyle(block.kind);
+		const replacement = `\\begin{studiocallout}{${style.label}}{${style.borderColor}}{${style.textColor}}{${style.labelBgColor}}\n${inner}\n\\end{studiocallout}`;
 		transformed = transformed.slice(0, startIndex) + replacement + transformed.slice(endIndex + endMarker.length);
 	}
 	return transformed;
