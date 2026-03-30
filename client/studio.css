@@ -482,6 +482,10 @@
     }
 
     .hl-code {
+      color: var(--text);
+    }
+
+    .hl-md-code {
       color: var(--md-code);
     }
 
@@ -506,6 +510,18 @@
     .hl-code-var,
     .hl-code-key {
       color: var(--syntax-variable);
+    }
+
+    .hl-code-fn {
+      color: var(--syntax-function);
+    }
+
+    .hl-code-type {
+      color: var(--syntax-type);
+    }
+
+    .hl-code-op {
+      color: var(--syntax-operator);
     }
 
     .hl-diff-add {

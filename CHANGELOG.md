@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.40] — 2026-03-30
+
+### Changed
+- Studio editor highlighting now keeps plain text in code files closer to the normal editor foreground while preserving a distinct markdown-code tint for inline backticks and unlabeled fenced blocks.
+- Language-aware Studio syntax highlighting for code files and labeled fenced code blocks is now a bit richer, with additional highlighting for function-like identifiers, type/class-like names, and a few language-specific constructs such as decorators or macros.
+
 ## [0.5.39] — 2026-03-30
 
 ### Added

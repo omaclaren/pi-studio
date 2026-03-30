@@ -2768,7 +2768,7 @@
           }
 
           if (match[1]) {
-            out += wrapHighlight("hl-code", token);
+            out += wrapHighlight("hl-md-code", token);
           } else if (match[2]) {
             const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
             if (linkMatch) {
@@ -2870,37 +2870,43 @@
         }
 
         if (lang === "javascript" || lang === "typescript") {
-          const jsPattern = /(\/\/.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:const|let|var|function|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|new|class|extends|import|from|export|default|async|await|true|false|null|undefined|typeof|instanceof)\b)|(\b\d+(?:\.\d+)?\b)/g;
+          const jsPattern = /(\/\/.*$|\/\*.*?\*\/)|(`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:const|let|var|function|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|new|class|extends|import|from|export|default|async|await|true|false|null|undefined|typeof|instanceof|interface|implements|enum|type|public|private|protected|readonly|abstract|declare|this|super)\b)|(\b[A-Za-z_$][A-Za-z0-9_$]*(?=\s*\())|(\b[A-Z][A-Za-z0-9_$]*\b)|(\b\d+(?:\.\d+)?\b)/g;
           const highlighted = highlightCodeTokens(source, jsPattern, (match) => {
             if (match[1]) return "hl-code-com";
             if (match[2]) return "hl-code-str";
             if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-num";
+            if (match[4]) return "hl-code-fn";
+            if (match[5]) return "hl-code-type";
+            if (match[6]) return "hl-code-num";
             return "hl-code";
           });
           return "<span class='hl-code'>" + highlighted + "</span>";
         }
 
         if (lang === "python") {
-          const pyPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:def|class|return|if|elif|else|for|while|try|except|finally|import|from|as|with|lambda|yield|True|False|None|and|or|not|in|is|pass|break|continue|raise|global|nonlocal|assert)\b)|(\b\d+(?:\.\d+)?\b)/g;
+          const pyPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[A-Za-z_][A-Za-z0-9_]*)|(\b(?:def|class|return|if|elif|else|for|while|try|except|finally|import|from|as|with|lambda|yield|True|False|None|and|or|not|in|is|pass|break|continue|raise|global|nonlocal|assert)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d+(?:\.\d+)?\b)/g;
           const highlighted = highlightCodeTokens(source, pyPattern, (match) => {
             if (match[1]) return "hl-code-com";
             if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-num";
+            if (match[3]) return "hl-code-fn";
+            if (match[4]) return "hl-code-kw";
+            if (match[5]) return "hl-code-fn";
+            if (match[6]) return "hl-code-type";
+            if (match[7]) return "hl-code-num";
             return "hl-code";
           });
           return "<span class='hl-code'>" + highlighted + "</span>";
         }
 
         if (lang === "bash") {
-          const shPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'[^']*')|(\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*)|(\b(?:if|then|else|fi|for|in|do|done|case|esac|function|local|export|readonly|return|break|continue|while|until)\b)|(\b\d+\b)/g;
+          const shPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'[^']*')|(\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*)|(\b(?:if|then|else|fi|for|in|do|done|case|esac|function|local|export|readonly|return|break|continue|while|until)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\(\s*\)))|(\b\d+\b)/g;
           const highlighted = highlightCodeTokens(source, shPattern, (match) => {
             if (match[1]) return "hl-code-com";
             if (match[2]) return "hl-code-str";
             if (match[3]) return "hl-code-var";
             if (match[4]) return "hl-code-kw";
-            if (match[5]) return "hl-code-num";
+            if (match[5]) return "hl-code-fn";
+            if (match[6]) return "hl-code-num";
             return "hl-code";
           });
           return "<span class='hl-code'>" + highlighted + "</span>";
@@ -2919,74 +2925,85 @@
         }
 
         if (lang === "rust") {
-          const rustPattern = /(\/\/.*$)|("(?:[^"\\]|\\.)*")|(\b(?:fn|let|mut|const|struct|enum|impl|trait|pub|mod|use|crate|self|super|match|if|else|for|while|loop|return|break|continue|where|as|in|ref|move|async|await|unsafe|extern|type|static|true|false|Some|None|Ok|Err|Self)\b)|(\b\d[\d_]*(?:\.\d[\d_]*)?(?:f32|f64|u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize)?\b)/g;
+          const rustPattern = /(\/\/.*$)|("(?:[^"\\]|\\.)*")|(\b[A-Za-z_][A-Za-z0-9_]*!(?=\s*(?:\(|\{|\[)))|(\b(?:fn|let|mut|const|struct|enum|impl|trait|pub|mod|use|crate|self|super|match|if|else|for|while|loop|return|break|continue|where|as|in|ref|move|async|await|unsafe|extern|type|static|true|false|Some|None|Ok|Err|Self)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d[\d_]*(?:\.\d[\d_]*)?(?:f32|f64|u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize)?\b)/g;
           const highlighted = highlightCodeTokens(source, rustPattern, (match) => {
             if (match[1]) return "hl-code-com";
             if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-num";
+            if (match[3]) return "hl-code-fn";
+            if (match[4]) return "hl-code-kw";
+            if (match[5]) return "hl-code-fn";
+            if (match[6]) return "hl-code-type";
+            if (match[7]) return "hl-code-num";
             return "hl-code";
           });
           return "<span class='hl-code'>" + highlighted + "</span>";
         }
 
         if (lang === "c" || lang === "cpp") {
-          const cPattern = /(\/\/.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)')|(#\s*\w+)|(\b(?:if|else|for|while|do|switch|case|break|continue|return|goto|struct|union|enum|typedef|sizeof|void|int|char|short|long|float|double|unsigned|signed|const|static|extern|volatile|register|inline|auto|restrict|true|false|NULL|nullptr|class|public|private|protected|virtual|override|template|typename|namespace|using|new|delete|try|catch|throw|noexcept|constexpr|auto|decltype|static_cast|dynamic_cast|reinterpret_cast|const_cast|std|include|define|ifdef|ifndef|endif|pragma)\b)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[fFlLuU]*\b)/g;
+          const cPattern = /(\/\/.*$|\/\*.*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)')|(#\s*\w+)|(\b(?:if|else|for|while|do|switch|case|break|continue|return|goto|struct|union|enum|typedef|sizeof|void|int|char|short|long|float|double|unsigned|signed|const|static|extern|volatile|register|inline|auto|restrict|true|false|NULL|nullptr|class|public|private|protected|virtual|override|template|typename|namespace|using|new|delete|try|catch|throw|noexcept|constexpr|auto|decltype|static_cast|dynamic_cast|reinterpret_cast|const_cast|std|include|define|ifdef|ifndef|endif|pragma)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[fFlLuU]*\b)/g;
           const highlighted = highlightCodeTokens(source, cPattern, (match) => {
             if (match[1]) return "hl-code-com";
             if (match[2]) return "hl-code-str";
             if (match[3]) return "hl-code-kw";
             if (match[4]) return "hl-code-kw";
-            if (match[5]) return "hl-code-num";
+            if (match[5]) return "hl-code-fn";
+            if (match[6]) return "hl-code-type";
+            if (match[7]) return "hl-code-num";
             return "hl-code";
           });
           return "<span class='hl-code'>" + highlighted + "</span>";
         }
 
         if (lang === "julia") {
-          const jlPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:function|end|if|elseif|else|for|while|begin|let|local|global|const|return|break|continue|do|try|catch|finally|throw|module|import|using|export|struct|mutable|abstract|primitive|where|macro|quote|true|false|nothing|missing|in|isa|typeof)\b)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g;
+          const jlPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[A-Za-z_][A-Za-z0-9_]*)|(\b(?:function|end|if|elseif|else|for|while|begin|let|local|global|const|return|break|continue|do|try|catch|finally|throw|module|import|using|export|struct|mutable|abstract|primitive|where|macro|quote|true|false|nothing|missing|in|isa|typeof)\b)|(\b[A-Za-z_][A-Za-z0-9_]*!?(?=\s*\())|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g;
           const highlighted = highlightCodeTokens(source, jlPattern, (match) => {
             if (match[1]) return "hl-code-com";
             if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-num";
+            if (match[3]) return "hl-code-fn";
+            if (match[4]) return "hl-code-kw";
+            if (match[5]) return "hl-code-fn";
+            if (match[6]) return "hl-code-type";
+            if (match[7]) return "hl-code-num";
             return "hl-code";
           });
           return "<span class='hl-code'>" + highlighted + "</span>";
         }
 
         if (lang === "fortran") {
-          const fPattern = /(!.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:program|end|subroutine|function|module|use|implicit|none|integer|real|double|precision|complex|character|logical|dimension|allocatable|intent|in|out|inout|parameter|data|do|if|then|else|elseif|endif|enddo|call|return|write|read|print|format|stop|contains|type|class|select|case|where|forall|associate|block|procedure|interface|abstract|extends|allocate|deallocate|cycle|exit|go|to|common|equivalence|save|external|intrinsic)\b)|(\b\d+(?:\.\d+)?(?:[dDeE][+-]?\d+)?\b)/gi;
+          const fPattern = /(!.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:program|end|subroutine|function|module|use|implicit|none|integer|real|double|precision|complex|character|logical|dimension|allocatable|intent|in|out|inout|parameter|data|do|if|then|else|elseif|endif|enddo|call|return|write|read|print|format|stop|contains|type|class|select|case|where|forall|associate|block|procedure|interface|abstract|extends|allocate|deallocate|cycle|exit|go|to|common|equivalence|save|external|intrinsic)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b\d+(?:\.\d+)?(?:[dDeE][+-]?\d+)?\b)/gi;
           const highlighted = highlightCodeTokens(source, fPattern, (match) => {
             if (match[1]) return "hl-code-com";
             if (match[2]) return "hl-code-str";
             if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "r") {
-          const rPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:function|if|else|for|while|repeat|in|next|break|return|TRUE|FALSE|NULL|NA|NA_integer_|NA_real_|NA_complex_|NA_character_|Inf|NaN|library|require|source|local|switch)\b)|(<-|->|<<-|->>)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[Li]?\b)/g;
-          const highlighted = highlightCodeTokens(source, rPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-kw";
+            if (match[4]) return "hl-code-fn";
             if (match[5]) return "hl-code-num";
             return "hl-code";
           });
           return "<span class='hl-code'>" + highlighted + "</span>";
         }
 
+        if (lang === "r") {
+          const rPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:function|if|else|for|while|repeat|in|next|break|return|TRUE|FALSE|NULL|NA|NA_integer_|NA_real_|NA_complex_|NA_character_|Inf|NaN|library|require|source|local|switch)\b)|(<-|->|<<-|->>)|(\b[A-Za-z.][A-Za-z0-9._]*(?=\s*\())|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[Li]?\b)/g;
+          const highlighted = highlightCodeTokens(source, rPattern, (match) => {
+            if (match[1]) return "hl-code-com";
+            if (match[2]) return "hl-code-str";
+            if (match[3]) return "hl-code-kw";
+            if (match[4]) return "hl-code-op";
+            if (match[5]) return "hl-code-fn";
+            if (match[6]) return "hl-code-num";
+            return "hl-code";
+          });
+          return "<span class='hl-code'>" + highlighted + "</span>";
+        }
+
         if (lang === "matlab") {
-          const matPattern = /(%.*$)|('(?:[^']|'')*'|"(?:[^"\\]|\\.)*")|(\b(?:function|end|if|elseif|else|for|while|switch|case|otherwise|try|catch|return|break|continue|global|persistent|classdef|properties|methods|events|enumeration|true|false)\b)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[i]?\b)/g;
+          const matPattern = /(%.*$)|('(?:[^']|'')*'|"(?:[^"\\]|\\.)*")|(\b(?:function|end|if|elseif|else|for|while|switch|case|otherwise|try|catch|return|break|continue|global|persistent|classdef|properties|methods|events|enumeration|true|false)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[i]?\b)/g;
           const highlighted = highlightCodeTokens(source, matPattern, (match) => {
             if (match[1]) return "hl-code-com";
             if (match[2]) return "hl-code-str";
             if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-num";
+            if (match[4]) return "hl-code-fn";
+            if (match[5]) return "hl-code-num";
             return "hl-code";
           });
           return "<span class='hl-code'>" + highlighted + "</span>";
@@ -3084,7 +3101,13 @@
           }
 
           if (inFence) {
-            out.push(line.length > 0 ? highlightCodeLine(line, fenceLanguage) : EMPTY_OVERLAY_LINE);
+            if (line.length === 0) {
+              out.push(EMPTY_OVERLAY_LINE);
+            } else if (fenceLanguage) {
+              out.push(highlightCodeLine(line, fenceLanguage));
+            } else {
+              out.push(wrapHighlight("hl-md-code", line));
+            }
             continue;
           }
 
