@@ -252,8 +252,12 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 \\titleformat{\\section}{${sectionHeadingSize}\\bfseries\\sffamily\\raggedright\\hyphenpenalty=10000\\exhyphenpenalty=10000\\relax}{}{0pt}{}[\\vspace{3pt}\\titlerule\\vspace{12pt}]
 \\titleformat{\\subsection}{${subsectionHeadingSize}\\bfseries\\sffamily\\raggedright\\hyphenpenalty=10000\\exhyphenpenalty=10000\\relax}{}{0pt}{}
 \\titleformat{\\subsubsection}{${subsubsectionHeadingSize}\\bfseries\\sffamily\\raggedright\\hyphenpenalty=10000\\exhyphenpenalty=10000\\relax}{}{0pt}{}
+\\titleformat{\\paragraph}[runin]{\\normalsize\\bfseries\\sffamily\\raggedright\\hyphenpenalty=10000\\exhyphenpenalty=10000\\relax}{}{0pt}{}
+\\titleformat{\\subparagraph}[runin]{\\small\\bfseries\\sffamily\\raggedright\\hyphenpenalty=10000\\exhyphenpenalty=10000\\relax}{}{0pt}{}
 \\titlespacing*{\\section}{0pt}{${sectionSpaceBefore}}{${sectionSpaceAfter}}
 \\titlespacing*{\\subsection}{0pt}{${subsectionSpaceBefore}}{${subsectionSpaceAfter}}
+\\titlespacing*{\\paragraph}{0pt}{0.9ex plus 0.3ex minus 0.1ex}{0.8em}
+\\titlespacing*{\\subparagraph}{0pt}{0.7ex plus 0.2ex minus 0.1ex}{0.7em}
 \\usepackage{xcolor}
 \\usepackage{varwidth}
 \\definecolor{StudioAnnotationBg}{HTML}{EAF3FF}
