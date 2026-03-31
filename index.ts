@@ -240,10 +240,18 @@ function buildStudioPdfTitleSpacingLength(value: string | undefined, fallback: s
 	return trimmed || fallback;
 }
 
+function buildStudioPdfCalloutTitleSizeCommand(options?: StudioPdfRenderOptions): string {
+	const sizePt = getStudioRequestedPdfFontsizePt(options);
+	if (sizePt && sizePt >= 14) return "\\normalsize";
+	if (sizePt && sizePt >= 13) return "\\small";
+	return "\\footnotesize";
+}
+
 function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 	const sectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.sectionSize, "\\Large");
 	const subsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsectionSize, "\\large");
 	const subsubsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsubsectionSize, "\\normalsize");
+	const calloutTitleSize = buildStudioPdfCalloutTitleSizeCommand(options);
 	const sectionSpaceBefore = buildStudioPdfTitleSpacingLength(options?.sectionSpaceBefore, "1.5ex plus 0.5ex minus 0.2ex");
 	const sectionSpaceAfter = buildStudioPdfTitleSpacingLength(options?.sectionSpaceAfter, "1ex plus 0.2ex");
 	const subsectionSpaceBefore = buildStudioPdfTitleSpacingLength(options?.subsectionSpaceBefore, "1.2ex plus 0.4ex minus 0.2ex");
@@ -289,7 +297,7 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 \\newcommand{\\StudioDiffMetaTok}[1]{\\textcolor{StudioDiffMetaText}{#1}}
 \\newcommand{\\StudioDiffHunkTok}[1]{\\textcolor{StudioDiffHunkText}{#1}}
 \\newcommand{\\StudioDiffHeaderTok}[1]{\\textcolor{StudioDiffHunkText}{\\textbf{#1}}}
-\\newenvironment{studiocallout}[4]{\\par\\vspace{0.6em}\\noindent\\begingroup\\def\\StudioCalloutBorder{#2}\\def\\StudioCalloutText{#3}\\def\\StudioCalloutLabelBg{#4}\\color{\\StudioCalloutBorder}\\hrule height 0.8pt\\relax\\vspace{0.32em}\\noindent\\colorbox{\\StudioCalloutLabelBg}{\\strut\\hspace{0.55em}{\\sffamily\\bfseries\\footnotesize\\textcolor{\\StudioCalloutText}{#1}}\\hspace{0.55em}}\\par\\vspace{0.24em}\\normalcolor\\leftskip=0.9em\\rightskip=0pt\\parindent=0pt\\parskip=0.18em}{\\par\\vspace{0.12em}\\noindent\\color{\\StudioCalloutBorder}\\hrule height 0.55pt\\par\\endgroup\\vspace{0.5em}}
+\\newenvironment{studiocallout}[4]{\\par\\vspace{0.6em}\\noindent\\begingroup\\def\\StudioCalloutBorder{#2}\\def\\StudioCalloutText{#3}\\def\\StudioCalloutLabelBg{#4}\\color{\\StudioCalloutBorder}\\hrule height 0.8pt\\relax\\vspace{0.32em}\\noindent\\colorbox{\\StudioCalloutLabelBg}{\\strut\\hspace{0.55em}{${calloutTitleSize}\\sffamily\\bfseries\\textcolor{\\StudioCalloutText}{#1}}\\hspace{0.55em}}\\par\\vspace{0.24em}\\normalcolor\\leftskip=0.9em\\rightskip=0pt\\parindent=0pt\\parskip=0.18em}{\\par\\vspace{0.12em}\\noindent\\color{\\StudioCalloutBorder}\\hrule height 0.55pt\\par\\endgroup\\vspace{0.5em}}
 \\usepackage{float}
 \\usepackage{caption}
 \\captionsetup[figure]{justification=raggedright,singlelinecheck=false}
