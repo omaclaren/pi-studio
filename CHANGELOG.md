@@ -4,6 +4,19 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.42] — 2026-03-31
+
+### Added
+- Studio now includes a **Refresh from disk** action for file-backed documents, including files originally opened from disk and documents later saved to disk from Studio.
+
+### Changed
+- `/studio-pdf` section, subsection, and deeper heading styling is now more robust for larger-font exports: headings avoid awkward hyphenation, paragraph-level headings (`####`) render cleanly, callout title badges scale better with larger body font sizes, and exported code blocks now use a subtle shaded background.
+
+### Fixed
+- Re-selecting the same file in **Load file content** now reloads it reliably instead of sometimes doing nothing.
+- `/studio-pdf` now supports LaTeX `[H]` float placement in exported documents.
+- Response preview now resets to the top more reliably for genuinely new replies, while keeping editor preview behavior unchanged.
+
 ## [0.5.41] — 2026-03-30
 
 ### Changed
