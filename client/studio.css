@@ -1220,6 +1220,10 @@
       transform: translateZ(0);
     }
 
+    .panel-scroll.response-scroll-resetting {
+      overflow-anchor: none;
+    }
+
     .preview-error {
       color: var(--warn);
       margin-bottom: 0.75em;

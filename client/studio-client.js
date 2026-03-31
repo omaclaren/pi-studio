@@ -46,7 +46,7 @@
       const rightPaneEl = document.getElementById("rightPane");
       const sourceBadgeEl = document.getElementById("sourceBadge");
       const syncBadgeEl = document.getElementById("syncBadge");
-      const critiqueViewEl = document.getElementById("critiqueView");
+      let critiqueViewEl = document.getElementById("critiqueView");
       const referenceBadgeEl = document.getElementById("referenceBadge");
       const editorViewSelect = document.getElementById("editorViewSelect");
       const rightViewSelect = document.getElementById("rightViewSelect");
@@ -1947,12 +1947,52 @@
         });
       }
 
+      function replaceResponsePaneWithClone() {
+        const currentEl = critiqueViewEl;
+        if (!currentEl || !currentEl.parentNode || typeof currentEl.cloneNode !== "function") {
+          return currentEl;
+        }
+
+        const replacement = currentEl.cloneNode(true);
+        if (!replacement || replacement.nodeType !== 1) {
+          return currentEl;
+        }
+
+        currentEl.parentNode.replaceChild(replacement, currentEl);
+        critiqueViewEl = replacement;
+        return critiqueViewEl;
+      }
+
       function applyPendingResponseScrollReset() {
         if (!pendingResponseScrollReset || !critiqueViewEl) return false;
         if (rightView === "editor-preview") return false;
-        critiqueViewEl.scrollTop = 0;
-        critiqueViewEl.scrollLeft = 0;
+
         pendingResponseScrollReset = false;
+        let targetEl = replaceResponsePaneWithClone();
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+        const resetScroll = () => {
+          if (!targetEl || !targetEl.isConnected) return;
+          if (rightView === "editor-preview") return;
+          targetEl.scrollTop = 0;
+          targetEl.scrollLeft = 0;
+        };
+
+        if (targetEl && targetEl.classList) {
+          targetEl.classList.add("response-scroll-resetting");
+        }
+
+        resetScroll();
+        schedule(() => {
+          resetScroll();
+          schedule(() => {
+            resetScroll();
+            if (targetEl && targetEl.classList) {
+              targetEl.classList.remove("response-scroll-resetting");
+            }
+          });
+        });
         return true;
       }
 
