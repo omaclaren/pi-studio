@@ -263,6 +263,7 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 \\definecolor{StudioAnnotationBg}{HTML}{EAF3FF}
 \\definecolor{StudioAnnotationBorder}{HTML}{8CB8FF}
 \\definecolor{StudioAnnotationText}{HTML}{1F5FBF}
+\\definecolor{StudioCodeBlockBg}{HTML}{F6F8FA}
 \\definecolor{StudioDiffAddText}{HTML}{1A7F37}
 \\definecolor{StudioDiffDelText}{HTML}{CF222E}
 \\definecolor{StudioDiffMetaText}{HTML}{57606A}
@@ -299,9 +300,9 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
 \\usepackage{fvextra}
 \\makeatletter
 \\@ifundefined{Highlighting}{%
-  \\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere}%
+  \\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere,bgcolor=StudioCodeBlockBg,framesep=2mm}%
 }{%
-  \\RecustomVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere}%
+  \\RecustomVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere,bgcolor=StudioCodeBlockBg,framesep=2mm}%
 }
 \\makeatother
 `;
@@ -4107,11 +4108,12 @@ async function renderStudioLiteralTextPdf(text: string, title = "Studio export",
 \\usepackage[${literalPdfConfig.geometryOptions}]{geometry}
 ${literalPdfConfig.fontCommands}\\usepackage{fvextra}
 \\usepackage{xcolor}
+\\definecolor{StudioCodeBlockBg}{HTML}{F6F8FA}
 \\usepackage{upquote}
 \\begin{document}
 \\renewcommand{\\baselinestretch}{${literalPdfConfig.lineStretch}}\\selectfont
 ${literalPdfConfig.fontSizeCommand}\\section*{${title.replace(/[{}\\]/g, "").trim() || "Studio export"}}
-\\VerbatimInput[breaklines,breakanywhere,fontsize=\\small,frame=single,rulecolor=\\color{black!15},framesep=2mm]{input.txt}
+\\VerbatimInput[breaklines,breakanywhere,fontsize=\\small,bgcolor=StudioCodeBlockBg,frame=single,rulecolor=\\color{black!15},framesep=2mm]{input.txt}
 \\end{document}
 `;
 
