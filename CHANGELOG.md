@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.43] — 2026-04-01
+
+### Changed
+- Preview-side fenced code blocks now soft-wrap long lines by default instead of only wrapping `text`/`plaintext` fences, so Markdown code examples, shell snippets, and diffs are easier to read without horizontal scrolling.
+
 ## [0.5.42] — 2026-03-31
 
 ### Added

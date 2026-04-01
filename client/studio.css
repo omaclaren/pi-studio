@@ -795,7 +795,11 @@
       border: 1px solid var(--md-codeblock-border);
       border-radius: 8px;
       padding: 12px 14px;
-      overflow: auto;
+      overflow-x: hidden;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
       margin-top: 0;
       margin-bottom: 1em;
     }
@@ -808,21 +812,10 @@
 
     .rendered-markdown pre code {
       color: var(--md-codeblock);
+      white-space: inherit;
     }
 
-    .rendered-markdown pre.text,
-    .rendered-markdown pre.plaintext,
-    .rendered-markdown pre.sourceCode.txt {
-      white-space: pre-wrap;
-      overflow-x: hidden;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-    }
-
-    .rendered-markdown pre.text code,
-    .rendered-markdown pre.plaintext code,
-    .rendered-markdown pre.sourceCode.txt code,
-    .rendered-markdown pre.sourceCode.txt code > span {
+    .rendered-markdown pre code > span {
       white-space: inherit;
     }
 
