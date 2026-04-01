@@ -955,7 +955,7 @@ function rawDataToString(data: RawData): string {
 	if (typeof data === "string") return data;
 	if (data instanceof Buffer) return data.toString("utf-8");
 	if (Array.isArray(data)) return Buffer.concat(data).toString("utf-8");
-	return Buffer.from(data).toString("utf-8");
+	return Buffer.from(data as ArrayBuffer).toString("utf-8");
 }
 
 function isValidRequestId(id: string): boolean {
@@ -3259,7 +3259,7 @@ function renderStudioAnnotationPdfLatex(text: string): string {
 function replaceStudioAnnotationMarkersForPdfInSegment(text: string): string {
 	const replaced = replaceStudioInlineAnnotationMarkers(
 		String(text ?? ""),
-		(marker) => {
+		(marker: { body: string }) => {
 			const cleaned = renderStudioAnnotationPdfLatex(marker.body);
 			if (!cleaned) return "";
 			return `\\studioannotation{${cleaned}}`;
@@ -3276,7 +3276,7 @@ function replaceStudioAnnotationMarkersForPdfInSegment(text: string): string {
 
 function replaceStudioAnnotationMarkersForPdf(markdown: string): string {
 	if (!hasStudioMarkdownAnnotationMarkers(markdown)) return String(markdown ?? "");
-	return transformStudioMarkdownOutsideFences(markdown, (segment) => replaceStudioAnnotationMarkersForPdfInSegment(segment));
+	return transformStudioMarkdownOutsideFences(markdown, (segment: string) => replaceStudioAnnotationMarkersForPdfInSegment(segment));
 }
 
 interface StudioPdfRenderOptions {
@@ -4325,13 +4325,13 @@ function replaceStudioAnnotationMarkersInDiffTokenLine(line: string, macroName: 
 	const wrapText = (text: string): string => text ? `\\${macroName}{${text}}` : "";
 	const rewritten = replaceStudioInlineAnnotationMarkers(
 		body,
-		(marker) => {
+		(marker: { body: string }) => {
 			const markerText = decodeStudioGeneratedCodeLatexText(normalizeStudioAnnotationText(marker.body));
 			const cleaned = makeStudioHighlightingMathScriptsVerbatimSafe(renderStudioAnnotationPdfLatex(markerText));
 			if (!cleaned) return "";
 			return `\\studioannotation{${cleaned}}`;
 		},
-		(segment) => wrapText(segment),
+		(segment: string) => wrapText(segment),
 	);
 
 	return rewritten === body ? line : (rewritten || wrapText(body));
