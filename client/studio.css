@@ -87,9 +87,14 @@
     }
 
     #sendRunBtn,
-    #queueSteerBtn,
-    #critiqueBtn {
+    #queueSteerBtn {
       min-width: 10rem;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #critiqueBtn {
       display: inline-flex;
       justify-content: center;
       align-items: center;
@@ -412,6 +417,7 @@
     }
 
     .editor-highlight-wrap {
+      --editor-line-number-gutter-width: 0px;
       position: relative;
       display: flex;
       flex: 1 1 auto;
@@ -424,13 +430,63 @@
       overscroll-behavior: none;
     }
 
+    .editor-line-number-gutter {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--editor-line-number-gutter-width);
+      overflow: hidden;
+      border-right: 1px solid var(--border-muted);
+      background: var(--panel-2);
+      color: var(--muted);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .editor-line-number-gutter-content {
+      min-height: 100%;
+      padding: 10px 8px 10px 0;
+      text-align: right;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.45;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .editor-line-number-row {
+      display: block;
+      user-select: none;
+    }
+
+    .editor-line-number-measure {
+      position: absolute;
+      top: 0;
+      left: 0;
+      visibility: hidden;
+      pointer-events: none;
+      overflow: hidden;
+      white-space: pre-wrap;
+      word-break: normal;
+      overflow-wrap: break-word;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.45;
+      tab-size: 2;
+      z-index: -1;
+    }
+
+    .editor-line-number-measure-line {
+      display: block;
+      min-height: 1.45em;
+    }
+
     .editor-highlight {
       position: absolute;
       inset: 0;
       margin: 0;
       border: 0;
       border-radius: 8px;
-      padding: 10px;
+      padding: 10px 10px 10px calc(10px + var(--editor-line-number-gutter-width));
       overflow: auto;
       pointer-events: none;
       white-space: pre-wrap;
@@ -457,6 +513,7 @@
       resize: none;
       outline: none;
       overscroll-behavior: none;
+      padding: 10px 10px 10px calc(10px + var(--editor-line-number-gutter-width));
     }
 
     #sourceText.highlight-active {

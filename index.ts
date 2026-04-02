@@ -5866,7 +5866,7 @@ ${cssVarsBlock}
               <button id="sendEditorBtn" type="button">Send to pi editor</button>
             </div>
             <div class="source-actions-row">
-              <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).">Insert annotated reply header</button>
+              <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).">Annotation header</button>
               <select id="annotationModeSelect" aria-label="Annotation visibility mode" title="On: keep and send [an: ...] markers. Hidden: keep markers in editor, hide in preview, and strip before Run/Critique.">
                 <option value="on" selected>Annotations: On</option>
                 <option value="off">Annotations: Hidden</option>
@@ -5876,46 +5876,51 @@ ${cssVarsBlock}
             </div>
             <div class="source-actions-row">
               <select id="lensSelect" aria-label="Critique focus">
-                <option value="auto" selected>Critique focus: Auto</option>
-                <option value="writing">Critique focus: Writing</option>
-                <option value="code">Critique focus: Code</option>
+                <option value="auto" selected>Critique: Auto</option>
+                <option value="writing">Critique: Writing</option>
+                <option value="code">Critique: Code</option>
               </select>
-              <button id="critiqueBtn" type="button">Critique editor text</button>
+              <button id="critiqueBtn" type="button">Critique text</button>
               <select id="highlightSelect" aria-label="Editor syntax highlighting">
                 <option value="off">Syntax highlight: Off</option>
-                <option value="on" selected>Syntax highlight: On</option>
+                <option value="bash">Syntax highlight: Bash</option>
+                <option value="c">Syntax highlight: C</option>
+                <option value="cpp">Syntax highlight: C++</option>
+                <option value="css">Syntax highlight: CSS</option>
+                <option value="diff">Syntax highlight: Diff</option>
+                <option value="fortran">Syntax highlight: Fortran</option>
+                <option value="go">Syntax highlight: Go</option>
+                <option value="html">Syntax highlight: HTML</option>
+                <option value="java">Syntax highlight: Java</option>
+                <option value="javascript">Syntax highlight: JavaScript</option>
+                <option value="json">Syntax highlight: JSON</option>
+                <option value="julia">Syntax highlight: Julia</option>
+                <option value="latex">Syntax highlight: LaTeX</option>
+                <option value="lua">Syntax highlight: Lua</option>
+                <option value="markdown" selected>Syntax highlight: Markdown</option>
+                <option value="matlab">Syntax highlight: MATLAB</option>
+                <option value="text">Syntax highlight: Plain Text</option>
+                <option value="python">Syntax highlight: Python</option>
+                <option value="r">Syntax highlight: R</option>
+                <option value="rust">Syntax highlight: Rust</option>
+                <option value="swift">Syntax highlight: Swift</option>
+                <option value="toml">Syntax highlight: TOML</option>
+                <option value="typescript">Syntax highlight: TypeScript</option>
+                <option value="xml">Syntax highlight: XML</option>
+                <option value="yaml">Syntax highlight: YAML</option>
               </select>
-              <select id="langSelect" aria-label="Highlight language">
-                <option value="bash">Lang: Bash</option>
-                <option value="c">Lang: C</option>
-                <option value="cpp">Lang: C++</option>
-                <option value="css">Lang: CSS</option>
-                <option value="diff">Lang: Diff</option>
-                <option value="fortran">Lang: Fortran</option>
-                <option value="go">Lang: Go</option>
-                <option value="html">Lang: HTML</option>
-                <option value="java">Lang: Java</option>
-                <option value="javascript">Lang: JavaScript</option>
-                <option value="json">Lang: JSON</option>
-                <option value="julia">Lang: Julia</option>
-                <option value="latex">Lang: LaTeX</option>
-                <option value="lua">Lang: Lua</option>
-                <option value="markdown" selected>Lang: Markdown</option>
-                <option value="matlab">Lang: MATLAB</option>
-                <option value="text">Lang: Plain Text</option>
-                <option value="python">Lang: Python</option>
-                <option value="r">Lang: R</option>
-                <option value="rust">Lang: Rust</option>
-                <option value="swift">Lang: Swift</option>
-                <option value="toml">Lang: TOML</option>
-                <option value="typescript">Lang: TypeScript</option>
-                <option value="xml">Lang: XML</option>
-                <option value="yaml">Lang: YAML</option>
+              <select id="lineNumbersSelect" aria-label="Editor line numbers">
+                <option value="off" selected>Line numbers: Off</option>
+                <option value="on">Line numbers: On</option>
               </select>
             </div>
           </div>
         </div>
         <div id="sourceEditorWrap" class="editor-highlight-wrap">
+          <div id="lineNumberGutter" class="editor-line-number-gutter" hidden aria-hidden="true">
+            <div id="lineNumberGutterContent" class="editor-line-number-gutter-content"></div>
+          </div>
+          <div id="lineNumberMeasure" class="editor-line-number-measure" aria-hidden="true"></div>
           <pre id="sourceHighlight" class="editor-highlight" aria-hidden="true"></pre>
           <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
         </div>

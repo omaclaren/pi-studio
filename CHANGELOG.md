@@ -4,6 +4,10 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- Studio raw editor now has an optional line-number gutter, intended as a lightweight navigation aid when working in **Editor (Raw)** before switching back to preview.
+- Studio editor controls now use a single combined **Syntax highlight** selector with `Off` plus all supported languages, replacing the separate highlight on/off and language selectors.
+
 ## [0.5.43] — 2026-04-01
 
 ### Changed

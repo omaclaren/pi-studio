@@ -41,6 +41,9 @@
       const sourceEditorWrapEl = document.getElementById("sourceEditorWrap");
       const sourceTextEl = document.getElementById("sourceText");
       const sourceHighlightEl = document.getElementById("sourceHighlight");
+      const lineNumberGutterEl = document.getElementById("lineNumberGutter");
+      const lineNumberGutterContentEl = document.getElementById("lineNumberGutterContent");
+      const lineNumberMeasureEl = document.getElementById("lineNumberMeasure");
       const sourcePreviewEl = document.getElementById("sourcePreview");
       const leftPaneEl = document.getElementById("leftPane");
       const rightPaneEl = document.getElementById("rightPane");
@@ -84,7 +87,7 @@
       const saveAnnotatedBtn = document.getElementById("saveAnnotatedBtn");
       const stripAnnotationsBtn = document.getElementById("stripAnnotationsBtn");
       const highlightSelect = document.getElementById("highlightSelect");
-      const langSelect = document.getElementById("langSelect");
+      const lineNumbersSelect = document.getElementById("lineNumbersSelect");
       const annotationModeSelect = document.getElementById("annotationModeSelect");
       const compactBtn = document.getElementById("compactBtn");
       const leftFocusBtn = document.getElementById("leftFocusBtn");
@@ -203,6 +206,7 @@
       const EDITOR_HIGHLIGHT_MAX_CHARS = 100_000;
       const EDITOR_HIGHLIGHT_STORAGE_KEY = "piStudio.editorHighlightEnabled";
       const EDITOR_LANGUAGE_STORAGE_KEY = "piStudio.editorLanguage";
+      const EDITOR_LINE_NUMBERS_STORAGE_KEY = "piStudio.editorLineNumbersEnabled";
       // Single source of truth: language -> file extensions (and display label)
       var LANG_EXT_MAP = {
         markdown:   { label: "Markdown",   exts: ["md", "markdown", "mdx", "qmd"] },
@@ -258,6 +262,8 @@
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
       let editorHighlightRenderRaf = null;
+      let lineNumbersEnabled = false;
+      let lineNumbersRenderRaf = null;
       let annotationsEnabled = true;
       let scratchpadText = "";
       let scratchpadReturnFocusEl = null;
@@ -2410,6 +2416,9 @@
         if (editorHighlightEnabled && editorView === "markdown") {
           scheduleEditorHighlightRender();
         }
+        if (lineNumbersEnabled && editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
         if (rightView === "editor-preview") {
           scheduleResponseEditorPreviewRender(previewDelayMs);
         }
@@ -2643,7 +2652,7 @@
         syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
         if (highlightSelect) highlightSelect.disabled = uiBusy;
-        if (langSelect) langSelect.disabled = uiBusy;
+        if (lineNumbersSelect) lineNumbersSelect.disabled = uiBusy;
         if (annotationModeSelect) annotationModeSelect.disabled = uiBusy;
         if (saveAnnotatedBtn) saveAnnotatedBtn.disabled = uiBusy;
         if (stripAnnotationsBtn) stripAnnotationsBtn.disabled = uiBusy || !hasAnnotationMarkers(sourceTextEl.value);
@@ -2710,6 +2719,9 @@
         schedule(() => {
           syncEditorHighlightScroll();
         });
+        if (lineNumbersEnabled && editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
 
         updateAnnotatedReplyHeaderButton();
 
@@ -2745,7 +2757,11 @@
         }
 
         updateEditorHighlightState();
-        updateLangSelectVisibility();
+        syncHighlightSelectUi();
+        updateLineNumberGutterVisibility();
+        if (!showPreview && lineNumbersEnabled) {
+          scheduleEditorLineNumberRender();
+        }
       }
 
       function setRightView(nextView) {
@@ -2763,6 +2779,115 @@
 
         refreshResponseUi();
         syncActionButtons();
+      }
+
+      function lineNumbersShouldBeVisible() {
+        return Boolean(
+          lineNumbersEnabled
+          && editorView === "markdown"
+          && sourceEditorWrapEl
+          && lineNumberGutterEl
+          && lineNumberGutterContentEl
+          && lineNumberMeasureEl,
+        );
+      }
+
+      function getEditorLineNumberGutterWidthCss(lineCount) {
+        const digits = Math.max(2, String(Math.max(1, lineCount || 0)).length);
+        return "calc(" + digits + "ch + 18px)";
+      }
+
+      function updateLineNumberGutterVisibility() {
+        const visible = lineNumbersShouldBeVisible();
+        if (sourceEditorWrapEl) {
+          sourceEditorWrapEl.classList.toggle("line-numbers-enabled", visible);
+          if (!visible) {
+            sourceEditorWrapEl.style.setProperty("--editor-line-number-gutter-width", "0px");
+          }
+        }
+        if (lineNumberGutterEl) {
+          lineNumberGutterEl.hidden = !visible;
+        }
+        if (!visible) {
+          if (lineNumberGutterContentEl) lineNumberGutterContentEl.innerHTML = "";
+          if (lineNumberMeasureEl) lineNumberMeasureEl.innerHTML = "";
+        }
+        return visible;
+      }
+
+      function renderEditorLineNumbersNow() {
+        if (!updateLineNumberGutterVisibility()) return;
+
+        const text = String(sourceTextEl.value || "").replace(/\r\n/g, "\n");
+        const lines = text.split("\n");
+        const lineCount = Math.max(1, lines.length);
+        sourceEditorWrapEl.style.setProperty("--editor-line-number-gutter-width", getEditorLineNumberGutterWidthCss(lineCount));
+
+        const styles = window.getComputedStyle(sourceTextEl);
+        const lineHeightPx = parseFloat(styles.lineHeight) || 18.85;
+        const paddingTop = parseFloat(styles.paddingTop) || 0;
+        const paddingRight = parseFloat(styles.paddingRight) || 0;
+        const paddingBottom = parseFloat(styles.paddingBottom) || 0;
+        const paddingLeft = parseFloat(styles.paddingLeft) || 0;
+        const contentWidth = Math.max(1, sourceTextEl.clientWidth - paddingLeft - paddingRight);
+
+        lineNumberGutterContentEl.style.paddingTop = paddingTop + "px";
+        lineNumberGutterContentEl.style.paddingBottom = paddingBottom + "px";
+        lineNumberMeasureEl.style.width = contentWidth + "px";
+        lineNumberMeasureEl.innerHTML = lines
+          .map((line) => "<div class='editor-line-number-measure-line'>" + (line.length ? escapeHtml(line) : "&#8203;") + "</div>")
+          .join("");
+
+        const measureLines = Array.from(lineNumberMeasureEl.children);
+        lineNumberGutterContentEl.innerHTML = measureLines
+          .map((lineEl, index) => {
+            const height = Math.max(lineHeightPx, lineEl.getBoundingClientRect().height || 0);
+            return "<div class='editor-line-number-row' style='height:" + height.toFixed(2) + "px'>" + (index + 1) + "</div>";
+          })
+          .join("");
+
+        syncEditorHighlightScroll();
+      }
+
+      function scheduleEditorLineNumberRender() {
+        if (lineNumbersRenderRaf !== null) {
+          if (typeof window.cancelAnimationFrame === "function") {
+            window.cancelAnimationFrame(lineNumbersRenderRaf);
+          } else {
+            window.clearTimeout(lineNumbersRenderRaf);
+          }
+          lineNumbersRenderRaf = null;
+        }
+
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+
+        lineNumbersRenderRaf = schedule(() => {
+          lineNumbersRenderRaf = null;
+          renderEditorLineNumbersNow();
+        });
+      }
+
+      function readStoredEditorLineNumbersEnabled() {
+        return readStoredToggle(EDITOR_LINE_NUMBERS_STORAGE_KEY);
+      }
+
+      function persistEditorLineNumbersEnabled(enabled) {
+        persistStoredToggle(EDITOR_LINE_NUMBERS_STORAGE_KEY, enabled);
+      }
+
+      function setLineNumbersEnabled(enabled) {
+        lineNumbersEnabled = Boolean(enabled);
+        persistEditorLineNumbersEnabled(lineNumbersEnabled);
+        if (lineNumbersSelect) {
+          lineNumbersSelect.value = lineNumbersEnabled ? "on" : "off";
+        }
+        updateLineNumberGutterVisibility();
+        scheduleEditorLineNumberRender();
+        if (editorHighlightEnabled && editorView === "markdown") {
+          scheduleEditorHighlightRender();
+        }
       }
 
       function getToken() {
@@ -3291,9 +3416,13 @@
       }
 
       function syncEditorHighlightScroll() {
-        if (!sourceHighlightEl) return;
-        sourceHighlightEl.scrollTop = sourceTextEl.scrollTop;
-        sourceHighlightEl.scrollLeft = sourceTextEl.scrollLeft;
+        if (sourceHighlightEl) {
+          sourceHighlightEl.scrollTop = sourceTextEl.scrollTop;
+          sourceHighlightEl.scrollLeft = sourceTextEl.scrollLeft;
+        }
+        if (lineNumberGutterEl) {
+          lineNumberGutterEl.scrollTop = sourceTextEl.scrollTop;
+        }
       }
 
       function runEditorMetaUpdateNow() {
@@ -3521,14 +3650,22 @@
         syncEditorHighlightScroll();
       }
 
+      function syncHighlightSelectUi() {
+        if (!highlightSelect) return;
+        if (!editorHighlightEnabled) {
+          highlightSelect.value = "off";
+          return;
+        }
+        highlightSelect.value = (editorLanguage && SUPPORTED_LANGUAGES.indexOf(editorLanguage) !== -1)
+          ? editorLanguage
+          : "markdown";
+      }
+
       function setEditorHighlightEnabled(enabled) {
         editorHighlightEnabled = Boolean(enabled);
         persistEditorHighlightEnabled(editorHighlightEnabled);
-        if (highlightSelect) {
-          highlightSelect.value = editorHighlightEnabled ? "on" : "off";
-        }
+        syncHighlightSelectUi();
         updateEditorHighlightState();
-        updateLangSelectVisibility();
       }
 
       function readStoredEditorLanguage() {
@@ -3552,9 +3689,7 @@
       function setEditorLanguage(lang) {
         editorLanguage = (lang && SUPPORTED_LANGUAGES.indexOf(lang) !== -1) ? lang : "markdown";
         persistEditorLanguage(editorLanguage);
-        if (langSelect) {
-          langSelect.value = editorLanguage;
-        }
+        syncHighlightSelectUi();
         if (editorHighlightEnabled && editorView === "markdown") {
           scheduleEditorHighlightRender();
         }
@@ -3563,11 +3698,13 @@
         }
       }
 
-      function updateLangSelectVisibility() {
-        if (!langSelect) return;
-        const highlightActive = editorHighlightEnabled && editorView === "markdown";
-        const previewActive = editorView === "preview";
-        langSelect.hidden = !(highlightActive || previewActive);
+      function setEditorHighlightMode(mode) {
+        if (mode === "off") {
+          setEditorHighlightEnabled(false);
+          return;
+        }
+        setEditorLanguage(mode);
+        setEditorHighlightEnabled(true);
       }
 
       function setResponseHighlightEnabled(enabled) {
@@ -3618,7 +3755,7 @@
             queueSteerBtn.title = "Queue steering is unavailable in editor-only mode.";
           }
           if (critiqueBtn) {
-            critiqueBtn.textContent = "Critique editor text";
+            critiqueBtn.textContent = "Critique text";
             critiqueBtn.classList.remove("request-stop-active");
             critiqueBtn.disabled = true;
             critiqueBtn.title = "Critique is unavailable in editor-only mode.";
@@ -3649,7 +3786,7 @@
         }
 
         if (critiqueBtn) {
-          critiqueBtn.textContent = critiqueIsStop ? "Stop" : "Critique editor text";
+          critiqueBtn.textContent = critiqueIsStop ? "Stop" : "Critique text";
           critiqueBtn.classList.toggle("request-stop-active", critiqueIsStop);
           critiqueBtn.disabled = critiqueIsStop ? wsState === "Disconnected" : (uiBusy || canQueueSteering);
           critiqueBtn.title = critiqueIsStop
@@ -3657,8 +3794,8 @@
             : (canQueueSteering
               ? "Critique queueing is not supported while Run editor text is active."
               : (annotationsEnabled
-                ? "Critique editor text as-is (includes [an: ...] markers)."
-                : "Critique editor text with [an: ...] markers stripped."));
+                ? "Critique text as-is (includes [an: ...] markers)."
+                : "Critique text with [an: ...] markers stripped."));
         }
       }
 
@@ -4517,11 +4654,11 @@
         if (!insertHeaderBtn) return;
         const hasHeader = stripAnnotationHeader(sourceTextEl.value).hadHeader;
         if (hasHeader) {
-          insertHeaderBtn.textContent = "Remove annotated reply header";
+          insertHeaderBtn.textContent = "Annotation header: On";
           insertHeaderBtn.title = "Remove annotated-reply protocol header while keeping body text.";
           return;
         }
-        insertHeaderBtn.textContent = "Insert annotated reply header";
+        insertHeaderBtn.textContent = "Annotation header: Off";
         insertHeaderBtn.title = "Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).";
       }
 
@@ -4617,7 +4754,7 @@
 
       if (highlightSelect) {
         highlightSelect.addEventListener("change", () => {
-          setEditorHighlightEnabled(highlightSelect.value === "on");
+          setEditorHighlightMode(highlightSelect.value);
         });
       }
 
@@ -4627,9 +4764,9 @@
         });
       }
 
-      if (langSelect) {
-        langSelect.addEventListener("change", () => {
-          setEditorLanguage(langSelect.value);
+      if (lineNumbersSelect) {
+        lineNumbersSelect.addEventListener("change", () => {
+          setLineNumbersEnabled(lineNumbersSelect.value === "on");
         });
       }
 
@@ -4742,23 +4879,26 @@
       });
 
       sourceTextEl.addEventListener("scroll", () => {
-        if (!editorHighlightEnabled || editorView !== "markdown") return;
+        if (editorView !== "markdown") return;
         syncEditorHighlightScroll();
       });
 
       sourceTextEl.addEventListener("keyup", () => {
-        if (!editorHighlightEnabled || editorView !== "markdown") return;
+        if (editorView !== "markdown") return;
         syncEditorHighlightScroll();
       });
 
       sourceTextEl.addEventListener("mouseup", () => {
-        if (!editorHighlightEnabled || editorView !== "markdown") return;
+        if (editorView !== "markdown") return;
         syncEditorHighlightScroll();
       });
 
       window.addEventListener("resize", () => {
-        if (!editorHighlightEnabled || editorView !== "markdown") return;
+        if (editorView !== "markdown") return;
         syncEditorHighlightScroll();
+        if (lineNumbersEnabled) {
+          scheduleEditorLineNumberRender();
+        }
       });
 
       insertHeaderBtn.addEventListener("click", () => {
@@ -5286,6 +5426,14 @@
         reader.readAsText(file);
       });
 
+      if (sourceEditorWrapEl && typeof ResizeObserver === "function") {
+        const editorResizeObserver = new ResizeObserver(() => {
+          if (editorView !== "markdown" || !lineNumbersEnabled) return;
+          scheduleEditorLineNumberRender();
+        });
+        editorResizeObserver.observe(sourceEditorWrapEl);
+      }
+
       setSourceState(initialSourceState);
       refreshResponseUi();
       updateAnnotatedReplyHeaderButton();
@@ -5293,12 +5441,16 @@
       setScratchpadText(readStoredScratchpadText() || "", { persist: false });
 
       const storedEditorHighlightEnabled = readStoredEditorHighlightEnabled();
-      const initialHighlightEnabled = storedEditorHighlightEnabled ?? Boolean(highlightSelect && highlightSelect.value === "on");
+      const initialHighlightEnabled = storedEditorHighlightEnabled ?? Boolean(highlightSelect && highlightSelect.value !== "off");
       setEditorHighlightEnabled(initialHighlightEnabled);
 
       const initialDetectedLang = detectLanguageFromName(initialSourceState.path || initialSourceState.label || "");
       const storedLang = readStoredEditorLanguage();
       setEditorLanguage(initialDetectedLang || storedLang || "markdown");
+
+      const storedLineNumbersEnabled = readStoredEditorLineNumbersEnabled();
+      const initialLineNumbersEnabled = storedLineNumbersEnabled ?? Boolean(lineNumbersSelect && lineNumbersSelect.value === "on");
+      setLineNumbersEnabled(initialLineNumbersEnabled);
 
       const storedResponseHighlightEnabled = readStoredResponseHighlightEnabled();
       const initialResponseHighlightEnabled = storedResponseHighlightEnabled ?? Boolean(responseHighlightSelect && responseHighlightSelect.value === "on");
