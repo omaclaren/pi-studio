@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.44] — 2026-04-03
+
 ### Changed
 - Studio browser tabs now show live browser-side activity state during Studio-owned work, including prefixes like `Running…`, `Responding…`, `Critiquing…`, or `Compacting…`, instead of only changing on completion.
 - Studio favicons now use a clearer browser-side status badge: ready/completed states use a green circular badge, while active running states use an amber hollow ring so busy vs finished is easier to distinguish at a glance without relying on animation.
