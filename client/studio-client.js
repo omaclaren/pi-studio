@@ -759,20 +759,21 @@
         const fg = readThemeColor("--text", "#111111");
         const bg = readThemeColor("--bg", "#ffffff");
         const accent = readThemeColor("--accent", fg);
-        const ok = readThemeColor("--ok", "#16a34a");
-        const warn = readThemeColor("--warn", accent);
         const error = readThemeColor("--error", "#dc2626");
 
         let badgeSvg = "";
 
         if (titleAttentionMessage) {
-          badgeSvg = `<circle cx="50" cy="14" r="9" fill="${ok}" stroke="${bg}" stroke-width="4" />`;
+          badgeSvg = `<circle cx="50" cy="14" r="8.5" fill="${fg}" stroke="${bg}" stroke-width="4" />`;
         } else if (wsState === "Disconnected") {
           badgeSvg = `<circle cx="50" cy="14" r="9" fill="${error}" stroke="${bg}" stroke-width="4" />`;
         } else if (wsState === "Connecting") {
           badgeSvg = `<circle cx="50" cy="14" r="9" fill="${accent}" stroke="${bg}" stroke-width="4" />`;
         } else if (getTitleBusyMessage()) {
-          badgeSvg = `<circle cx="50" cy="14" r="10" fill="none" stroke="${warn}" stroke-width="5" />`;
+          badgeSvg = [
+            `<path d="M14 8 H44" fill="none" stroke="${fg}" stroke-width="5" stroke-linecap="round" />`,
+            `<path d="M36 1 L50 8 L36 15" fill="none" stroke="${fg}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />`,
+          ].join("");
         }
 
         const svg = [

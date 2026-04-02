@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- Studio browser-tab favicon experiments now use the current theme text colour for the base `π` again, while keeping a same-colour over-arrow for running state and restoring a superscript circle marker for completed/ready attention.
+
 ## [0.5.44] — 2026-04-03
 
 ### Changed
