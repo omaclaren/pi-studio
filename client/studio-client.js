@@ -4,6 +4,12 @@
       const statusSpinnerEl = document.getElementById("statusSpinner");
       const footerMetaEl = document.getElementById("footerMeta");
       const footerMetaTextEl = document.getElementById("footerMetaText");
+      let faviconLinkEl = document.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
+      if (!faviconLinkEl) {
+        faviconLinkEl = document.createElement("link");
+        faviconLinkEl.rel = "icon";
+        document.head.appendChild(faviconLinkEl);
+      }
       const BRAILLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
       let spinnerTimer = null;
       let spinnerFrameIndex = 0;
@@ -161,6 +167,7 @@
       let titleAttentionMessage = "";
       let titleAttentionRequestId = null;
       let titleAttentionRequestKind = null;
+      let lastRenderedFaviconHref = "";
 
       function parseFiniteNumber(value) {
         if (value == null || value === "") return null;
@@ -670,14 +677,150 @@
         updateDocumentTitle();
       }
 
+      function truncateTitleSegment(text, maxLength) {
+        const normalized = normalizeActivityLabel(text);
+        if (!normalized) return "";
+        if (!Number.isFinite(maxLength) || maxLength <= 1 || normalized.length <= maxLength) {
+          return normalized;
+        }
+        return normalized.slice(0, maxLength - 1).trimEnd() + "…";
+      }
+
+      function readThemeColor(variableName, fallback) {
+        try {
+          const value = window.getComputedStyle(document.documentElement).getPropertyValue(variableName);
+          const trimmed = typeof value === "string" ? value.trim() : "";
+          return trimmed || fallback;
+        } catch {
+          return fallback;
+        }
+      }
+
+      function getTitleActionMessage(kind) {
+        if (kind === "annotation") return "Replying…";
+        if (kind === "critique") return "Critiquing…";
+        if (kind === "direct") return "Running…";
+        if (kind === "compact") return "Compacting…";
+        if (kind === "send_to_editor") return "Sending to editor…";
+        if (kind === "get_from_editor") return "Loading from editor…";
+        if (kind === "load_git_diff") return "Loading git diff…";
+        if (kind === "refresh_from_disk") return "Refreshing from disk…";
+        if (kind === "save_as" || kind === "save_over") return "Saving…";
+        return "Working…";
+      }
+
+      function getTitleBusyMessage() {
+        const activeKind = pendingKind || (agentBusyFromServer ? stickyStudioKind : null);
+        const hasStudioOwnedBusyState = uiBusy
+          || Boolean(pendingRequestId)
+          || Boolean(pendingKind)
+          || compactInProgress
+          || Boolean(agentBusyFromServer && stickyStudioKind)
+          || Boolean(agentBusyFromServer && studioRunChainActive);
+
+        if (!hasStudioOwnedBusyState) return "";
+
+        if (
+          pendingKind === "compact"
+          || compactInProgress
+          || (agentBusyFromServer && stickyStudioKind === "compact")
+        ) {
+          return "Compacting…";
+        }
+
+        if (terminalActivityPhase === "tool") {
+          if (terminalActivityLabel && !isGenericToolLabel(terminalActivityLabel)) {
+            return truncateTitleSegment(withEllipsis(terminalActivityLabel), 34);
+          }
+          if (activeKind) return getTitleActionMessage(activeKind);
+          if (agentBusyFromServer && studioRunChainActive) return "Running…";
+          return "Working…";
+        }
+
+        if (terminalActivityPhase === "responding") {
+          if (activeKind === "critique") return "Critiquing…";
+          if (activeKind === "annotation") return "Replying…";
+          return "Responding…";
+        }
+
+        if (activeKind) return getTitleActionMessage(activeKind);
+        if (uiBusy || (agentBusyFromServer && studioRunChainActive)) return "Running…";
+        return "";
+      }
+
+      function getDynamicTitlePrefix() {
+        if (titleAttentionMessage) return titleAttentionMessage;
+        if (wsState === "Connecting") return reconnectAttempt > 0 ? "Reconnecting…" : "Connecting…";
+        if (wsState === "Disconnected") return "Disconnected";
+        return getTitleBusyMessage();
+      }
+
+      function buildStudioFaviconHref() {
+        const fg = readThemeColor("--text", "#111111");
+        const bg = readThemeColor("--bg", "#ffffff");
+        const accent = readThemeColor("--accent", fg);
+        const ok = readThemeColor("--ok", "#16a34a");
+        const warn = readThemeColor("--warn", accent);
+        const error = readThemeColor("--error", "#dc2626");
+        const busyBadgePositions = [
+          { cx: 50, cy: 14 },
+          { cx: 50, cy: 50 },
+          { cx: 16, cy: 50 },
+          { cx: 16, cy: 14 },
+        ];
+
+        let badgeColor = "";
+        let badgeCx = 50;
+        let badgeCy = 14;
+
+        if (titleAttentionMessage) {
+          badgeColor = ok;
+        } else if (wsState === "Disconnected") {
+          badgeColor = error;
+        } else if (wsState === "Connecting") {
+          badgeColor = accent;
+        } else if (getTitleBusyMessage()) {
+          badgeColor = warn;
+          const busyPosition = busyBadgePositions[Math.floor(spinnerFrameIndex / 6) % busyBadgePositions.length] || busyBadgePositions[0];
+          badgeCx = busyPosition.cx;
+          badgeCy = busyPosition.cy;
+        }
+
+        const badgeSvg = badgeColor
+          ? `<circle cx="${badgeCx}" cy="${badgeCy}" r="9" fill="${badgeColor}" stroke="${bg}" stroke-width="4" />`
+          : "";
+        const svg = [
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">',
+          `<text x="32" y="35" text-anchor="middle" dominant-baseline="middle" font-size="50" font-weight="700" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="${fg}">π</text>`,
+          badgeSvg,
+          "</svg>",
+        ].join("");
+        return "data:image/svg+xml," + encodeURIComponent(svg);
+      }
+
       function updateDocumentTitle() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
         const titleParts = ["pi Studio"];
         if (terminalText && terminalText !== "unknown") titleParts.push(terminalText);
         if (modelText && modelText !== "none") titleParts.push(modelText);
-        if (titleAttentionMessage) titleParts.unshift(titleAttentionMessage);
-        document.title = titleParts.join(" · ");
+
+        const titlePrefix = getDynamicTitlePrefix();
+        if (titlePrefix) titleParts.unshift(titlePrefix);
+
+        const nextTitle = titleParts.join(" · ");
+        if (document.title !== nextTitle) {
+          document.title = nextTitle;
+        }
+
+        if (faviconLinkEl) {
+          const nextFaviconHref = buildStudioFaviconHref();
+          if (nextFaviconHref !== lastRenderedFaviconHref) {
+            faviconLinkEl.href = nextFaviconHref;
+            faviconLinkEl.type = "image/svg+xml";
+            lastRenderedFaviconHref = nextFaviconHref;
+          }
+        }
       }
 
       function updateFooterMeta() {
@@ -711,7 +854,7 @@
       function startFooterSpinner() {
         if (spinnerTimer) return;
         spinnerTimer = window.setInterval(() => {
-          spinnerFrameIndex = (spinnerFrameIndex + 1) % BRAILLE_SPINNER_FRAMES.length;
+          spinnerFrameIndex += 1;
           renderStatus();
         }, 80);
       }
@@ -4435,6 +4578,7 @@
               root.style.setProperty(key, message.vars[key]);
             }
           });
+          updateDocumentTitle();
         }
       }
 
