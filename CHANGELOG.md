@@ -6,7 +6,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Changed
 - Studio browser tabs now show live browser-side activity state during Studio-owned work, including prefixes like `Running…`, `Responding…`, `Critiquing…`, or `Compacting…`, instead of only changing on completion.
-- Studio favicons now use a clearer browser-side status badge: ready/completed states remain static, while active running states animate the badge around the `π` icon so busy vs finished is easier to distinguish at a glance.
+- Studio favicons now use a clearer browser-side status badge: ready/completed states use a green circular badge, while active running states use an amber hollow ring so busy vs finished is easier to distinguish at a glance without relying on animation.
 - Studio raw editor now has an optional line-number gutter, intended as a lightweight navigation aid when working in **Editor (Raw)** before switching back to preview.
 - Studio editor controls now use a single combined **Syntax highlight** selector with `Off` plus all supported languages, replacing the separate highlight on/off and language selectors.
 

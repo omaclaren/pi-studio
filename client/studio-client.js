@@ -762,33 +762,19 @@
         const ok = readThemeColor("--ok", "#16a34a");
         const warn = readThemeColor("--warn", accent);
         const error = readThemeColor("--error", "#dc2626");
-        const busyBadgePositions = [
-          { cx: 50, cy: 14 },
-          { cx: 50, cy: 50 },
-          { cx: 16, cy: 50 },
-          { cx: 16, cy: 14 },
-        ];
 
-        let badgeColor = "";
-        let badgeCx = 50;
-        let badgeCy = 14;
+        let badgeSvg = "";
 
         if (titleAttentionMessage) {
-          badgeColor = ok;
+          badgeSvg = `<circle cx="50" cy="14" r="9" fill="${ok}" stroke="${bg}" stroke-width="4" />`;
         } else if (wsState === "Disconnected") {
-          badgeColor = error;
+          badgeSvg = `<circle cx="50" cy="14" r="9" fill="${error}" stroke="${bg}" stroke-width="4" />`;
         } else if (wsState === "Connecting") {
-          badgeColor = accent;
+          badgeSvg = `<circle cx="50" cy="14" r="9" fill="${accent}" stroke="${bg}" stroke-width="4" />`;
         } else if (getTitleBusyMessage()) {
-          badgeColor = warn;
-          const busyPosition = busyBadgePositions[Math.floor(spinnerFrameIndex / 6) % busyBadgePositions.length] || busyBadgePositions[0];
-          badgeCx = busyPosition.cx;
-          badgeCy = busyPosition.cy;
+          badgeSvg = `<circle cx="50" cy="14" r="10" fill="none" stroke="${warn}" stroke-width="5" />`;
         }
 
-        const badgeSvg = badgeColor
-          ? `<circle cx="${badgeCx}" cy="${badgeCy}" r="9" fill="${badgeColor}" stroke="${bg}" stroke-width="4" />`
-          : "";
         const svg = [
           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">',
           `<text x="32" y="35" text-anchor="middle" dominant-baseline="middle" font-size="50" font-weight="700" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="${fg}">π</text>`,
