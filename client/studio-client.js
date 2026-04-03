@@ -756,30 +756,26 @@
       }
 
       function buildStudioFaviconHref() {
-        const fg = readThemeColor("--text", "#111111");
-        const bg = readThemeColor("--bg", "#ffffff");
-        const accent = readThemeColor("--accent", fg);
+        const idleColor = readThemeColor("--text", "#111111");
+        const accent = readThemeColor("--accent", "#2563eb");
+        const ok = readThemeColor("--ok", "#16a34a");
+        const warn = readThemeColor("--warn", "#d97706");
         const error = readThemeColor("--error", "#dc2626");
 
-        let badgeSvg = "";
-
+        let piColor = idleColor;
         if (titleAttentionMessage) {
-          badgeSvg = `<circle cx="50" cy="14" r="8.5" fill="${fg}" stroke="${bg}" stroke-width="4" />`;
+          piColor = ok;
         } else if (wsState === "Disconnected") {
-          badgeSvg = `<circle cx="50" cy="14" r="9" fill="${error}" stroke="${bg}" stroke-width="4" />`;
+          piColor = error;
         } else if (wsState === "Connecting") {
-          badgeSvg = `<circle cx="50" cy="14" r="9" fill="${accent}" stroke="${bg}" stroke-width="4" />`;
+          piColor = accent;
         } else if (getTitleBusyMessage()) {
-          badgeSvg = [
-            `<path d="M14 8 H44" fill="none" stroke="${fg}" stroke-width="5" stroke-linecap="round" />`,
-            `<path d="M36 1 L50 8 L36 15" fill="none" stroke="${fg}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />`,
-          ].join("");
+          piColor = warn;
         }
 
         const svg = [
           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">',
-          `<text x="32" y="35" text-anchor="middle" dominant-baseline="middle" font-size="50" font-weight="700" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="${fg}">π</text>`,
-          badgeSvg,
+          `<text x="32" y="35" text-anchor="middle" dominant-baseline="middle" font-size="50" font-weight="700" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="${piColor}">π</text>`,
           "</svg>",
         ].join("");
         return "data:image/svg+xml," + encodeURIComponent(svg);

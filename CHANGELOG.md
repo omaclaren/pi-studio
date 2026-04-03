@@ -5,7 +5,7 @@ All notable changes to `pi-studio` are documented here.
 ## [Unreleased]
 
 ### Changed
-- Studio browser-tab favicon experiments now use the current theme text colour for the base `π` again, while keeping a same-colour over-arrow for running state and restoring a superscript circle marker for completed/ready attention.
+- Studio browser-tab favicon experiments now use a simpler `π`-only state treatment again: idle uses the current theme text colour, running switches the `π` to warn/amber, completed/ready attention switches it to ok/green, connecting uses the accent colour, disconnected uses the error colour, and the title attention text keeps its leading `●` marker for clearer completion notification in the tab text.
 
 ## [0.5.44] — 2026-04-03
 
