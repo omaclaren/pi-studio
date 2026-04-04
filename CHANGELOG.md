@@ -4,7 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Studio now has a lightweight local **Review notes** panel for anchored, non-document notes tied to the current editor document. Notes can be created from the current selection/line, browsed, jumped to, deleted, and promoted into normal `[an: ...]` annotations via **Convert to annotation**.
+
 ### Changed
+- Studio scratchpad persistence is now backed by extension-side local state instead of browser-port-scoped storage alone, so scratchpad text follows the current document identity more coherently: file-backed documents reliably keep their own scratchpads across refreshes and Pi restarts, while unsaved/blank drafts get their own separate draft-scoped scratchpads instead of sharing one global blank scratchpad across Studio views.
+- Studio draft-scoped scratchpads/review-notes now survive same-tab browser refreshes more reliably, and the **Editor origin** badge is now clickable so you can **Reset origin** into a fresh draft while carrying the current local scratchpad/review notes forward.
 - Studio browser-tab favicon experiments now use a simpler `π`-only state treatment again: idle uses the current theme text colour, running switches the `π` to warn/amber, completed/ready attention switches it to ok/green, connecting uses the accent colour, disconnected uses the error colour, and the title attention text keeps its leading `●` marker for clearer completion notification in the tab text.
 
 ## [0.5.44] — 2026-04-03

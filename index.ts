@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, SessionEntry, Theme } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
@@ -107,6 +108,25 @@ interface InitialStudioDocument {
 	label: string;
 	source: StudioSourceKind;
 	path?: string;
+	draftId?: string;
+}
+
+interface PersistedStudioReviewNote {
+	id: string;
+	text: string;
+	createdAt: number;
+	updatedAt: number;
+	selectionStart: number;
+	selectionEnd: number;
+	lineStart: number;
+	lineEnd: number;
+	selectedText: string;
+}
+
+interface StudioPersistentState {
+	version: 2;
+	scratchpadsByDocument: Record<string, string>;
+	reviewNotesByDocument: Record<string, PersistedStudioReviewNote[]>;
 }
 
 interface HelloMessage {
@@ -217,6 +237,172 @@ const CMUX_STUDIO_STATUS_KEY = "pi_studio";
 const CMUX_STUDIO_STATUS_COLOR_DARK = "#5ea1ff";
 const CMUX_STUDIO_STATUS_COLOR_LIGHT = "#0047ab";
 const STUDIO_PROMPT_METADATA_CUSTOM_TYPE = "pi-studio/direct-prompt";
+const STUDIO_DEFAULT_SCRATCHPAD_DOCUMENT_KEY = "doc:blank:blank";
+const STUDIO_PERSISTENT_STATE_DIR = join(getAgentDir(), "pi-studio");
+const STUDIO_PERSISTENT_STATE_PATH = join(STUDIO_PERSISTENT_STATE_DIR, "local-state.json");
+
+let studioPersistentStateCache: StudioPersistentState | null = null;
+let studioPersistentStateQueue: Promise<void> = Promise.resolve();
+
+function createEmptyStudioPersistentState(): StudioPersistentState {
+	return {
+		version: 2,
+		scratchpadsByDocument: {},
+		reviewNotesByDocument: {},
+	};
+}
+
+function normalizePersistedStudioReviewNote(value: unknown): PersistedStudioReviewNote | null {
+	if (!value || typeof value !== "object") return null;
+	const candidate = value as Partial<PersistedStudioReviewNote>;
+	if (typeof candidate.id !== "string" || !candidate.id.trim()) return null;
+	if (typeof candidate.text !== "string") return null;
+	const createdAt = typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
+		? candidate.createdAt
+		: Date.now();
+	const updatedAt = typeof candidate.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
+		? candidate.updatedAt
+		: createdAt;
+	const selectionStart = typeof candidate.selectionStart === "number" && Number.isFinite(candidate.selectionStart)
+		? Math.max(0, Math.floor(candidate.selectionStart))
+		: 0;
+	const selectionEnd = typeof candidate.selectionEnd === "number" && Number.isFinite(candidate.selectionEnd)
+		? Math.max(selectionStart, Math.floor(candidate.selectionEnd))
+		: selectionStart;
+	const lineStart = typeof candidate.lineStart === "number" && Number.isFinite(candidate.lineStart)
+		? Math.max(1, Math.floor(candidate.lineStart))
+		: 1;
+	const lineEnd = typeof candidate.lineEnd === "number" && Number.isFinite(candidate.lineEnd)
+		? Math.max(lineStart, Math.floor(candidate.lineEnd))
+		: lineStart;
+	return {
+		id: candidate.id,
+		text: candidate.text,
+		createdAt,
+		updatedAt,
+		selectionStart,
+		selectionEnd,
+		lineStart,
+		lineEnd,
+		selectedText: typeof candidate.selectedText === "string" ? candidate.selectedText : "",
+	};
+}
+
+function normalizeStudioPersistentState(value: unknown): StudioPersistentState {
+	const fallback = createEmptyStudioPersistentState();
+	if (!value || typeof value !== "object") return fallback;
+	const candidate = value as Partial<StudioPersistentState> & {
+		reviewNotesByDocument?: unknown;
+		scratchpadsByDocument?: unknown;
+		scratchpadText?: unknown;
+	};
+	const reviewNotesByDocument: Record<string, PersistedStudioReviewNote[]> = {};
+	if (candidate.reviewNotesByDocument && typeof candidate.reviewNotesByDocument === "object") {
+		for (const [documentKey, rawNotes] of Object.entries(candidate.reviewNotesByDocument as Record<string, unknown>)) {
+			if (typeof documentKey !== "string" || !documentKey.trim() || !Array.isArray(rawNotes)) continue;
+			const normalizedNotes = rawNotes
+				.map((note) => normalizePersistedStudioReviewNote(note))
+				.filter((note): note is PersistedStudioReviewNote => Boolean(note));
+			if (normalizedNotes.length > 0) {
+				reviewNotesByDocument[documentKey] = normalizedNotes;
+			}
+		}
+	}
+	const scratchpadsByDocument: Record<string, string> = {};
+	if (candidate.scratchpadsByDocument && typeof candidate.scratchpadsByDocument === "object") {
+		for (const [documentKey, rawText] of Object.entries(candidate.scratchpadsByDocument as Record<string, unknown>)) {
+			if (typeof documentKey !== "string" || !documentKey.trim() || typeof rawText !== "string") continue;
+			scratchpadsByDocument[documentKey] = rawText;
+		}
+	} else if (typeof candidate.scratchpadText === "string" && candidate.scratchpadText.length > 0) {
+		scratchpadsByDocument[STUDIO_DEFAULT_SCRATCHPAD_DOCUMENT_KEY] = candidate.scratchpadText;
+	}
+	return {
+		version: 2,
+		scratchpadsByDocument,
+		reviewNotesByDocument,
+	};
+}
+
+async function loadStudioPersistentState(): Promise<StudioPersistentState> {
+	if (studioPersistentStateCache) return studioPersistentStateCache;
+	try {
+		const raw = await readFile(STUDIO_PERSISTENT_STATE_PATH, "utf-8");
+		studioPersistentStateCache = normalizeStudioPersistentState(JSON.parse(raw));
+	} catch (error) {
+		if (!(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT")) {
+			// Ignore parse/read errors and fall back to a fresh local state blob.
+		}
+		studioPersistentStateCache = createEmptyStudioPersistentState();
+	}
+	return studioPersistentStateCache;
+}
+
+async function saveStudioPersistentState(state: StudioPersistentState): Promise<void> {
+	await mkdir(STUDIO_PERSISTENT_STATE_DIR, { recursive: true });
+	await writeFile(STUDIO_PERSISTENT_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+	studioPersistentStateCache = state;
+}
+
+async function mutateStudioPersistentState(mutator: (state: StudioPersistentState) => void): Promise<void> {
+	const run = studioPersistentStateQueue.catch(() => undefined).then(async () => {
+		const state = normalizeStudioPersistentState(await loadStudioPersistentState());
+		mutator(state);
+		await saveStudioPersistentState(state);
+	});
+	studioPersistentStateQueue = run.then(() => undefined, () => undefined);
+	await run;
+}
+
+async function readPersistedStudioScratchpadText(documentKey: string): Promise<string> {
+	const key = String(documentKey ?? "").trim();
+	if (!key) return "";
+	const state = await loadStudioPersistentState();
+	const value = state.scratchpadsByDocument[key];
+	return typeof value === "string" ? value : "";
+}
+
+async function writePersistedStudioScratchpadText(documentKey: string, text: string): Promise<void> {
+	const key = String(documentKey ?? "").trim();
+	if (!key) return;
+	await mutateStudioPersistentState((state) => {
+		const normalized = String(text ?? "");
+		if (normalized.length === 0) {
+			delete state.scratchpadsByDocument[key];
+			return;
+		}
+		state.scratchpadsByDocument[key] = normalized;
+	});
+}
+
+function clonePersistedStudioReviewNotes(notes: PersistedStudioReviewNote[]): PersistedStudioReviewNote[] {
+	return notes.map((note) => ({ ...note }));
+}
+
+async function readPersistedStudioReviewNotes(documentKey: string): Promise<PersistedStudioReviewNote[]> {
+	const key = String(documentKey ?? "").trim();
+	if (!key) return [];
+	const state = await loadStudioPersistentState();
+	const notes = state.reviewNotesByDocument[key];
+	return Array.isArray(notes) ? clonePersistedStudioReviewNotes(notes) : [];
+}
+
+async function writePersistedStudioReviewNotes(documentKey: string, notes: PersistedStudioReviewNote[]): Promise<void> {
+	const key = String(documentKey ?? "").trim();
+	if (!key) return;
+	const normalizedNotes = Array.isArray(notes)
+		? notes
+			.map((note) => normalizePersistedStudioReviewNote(note))
+			.filter((note): note is PersistedStudioReviewNote => Boolean(note))
+		: [];
+	await mutateStudioPersistentState((state) => {
+		if (normalizedNotes.length === 0) {
+			delete state.reviewNotesByDocument[key];
+			return;
+		}
+		state.reviewNotesByDocument[key] = clonePersistedStudioReviewNotes(normalizedNotes);
+	});
+}
 
 function scaleStudioPdfLength(length: string, factor: number): string | null {
 	const match = String(length ?? "").trim().match(/^(\d+(?:\.\d+)?)(pt|bp|mm|cm|in|pc)$/i);
@@ -949,6 +1135,10 @@ function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
 
 function createSessionToken(): string {
 	return randomUUID();
+}
+
+function createStudioDraftId(): string {
+	return `draft_${randomUUID().replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
 function rawDataToString(data: RawData): string {
@@ -5608,10 +5798,63 @@ function normalizeStudioUiMode(raw: string | null | undefined): StudioUiMode {
 	return raw === "editor-only" ? "editor-only" : "full";
 }
 
-function buildStudioUrl(port: number, token: string, mode: StudioUiMode = "full"): string {
+function buildStudioUrl(
+	port: number,
+	token: string,
+	mode: StudioUiMode = "full",
+	doc?: InitialStudioDocument | null,
+): string {
 	const params = new URLSearchParams({ token });
 	if (mode !== "full") params.set("mode", mode);
+	if (doc?.source) params.set("docSource", doc.source);
+	if (doc?.label) params.set("docLabel", doc.label);
+	if (doc?.path) params.set("docPath", doc.path);
+	if (doc?.draftId) params.set("draftId", doc.draftId);
 	return `http://127.0.0.1:${port}/?${params.toString()}`;
+}
+
+function resolveRequestedStudioDocumentFromUrl(
+	requestUrl: URL,
+	fallback: InitialStudioDocument | null,
+	studioCwd: string,
+	latestResponse?: LastStudioResponse | null,
+): InitialStudioDocument | null {
+	const requestedPath = (requestUrl.searchParams.get("docPath") ?? "").trim();
+	const requestedSourceRaw = (requestUrl.searchParams.get("docSource") ?? "").trim();
+	const requestedLabel = (requestUrl.searchParams.get("docLabel") ?? "").trim();
+	const requestedDraftId = (requestUrl.searchParams.get("draftId") ?? "").trim();
+
+	if (requestedPath) {
+		const file = readStudioFile(requestedPath, studioCwd);
+		if (file.ok !== false) {
+			return {
+				text: file.text,
+				label: requestedLabel || file.label,
+				source: "file",
+				path: file.resolvedPath,
+			};
+		}
+	}
+
+	if (requestedSourceRaw === "last-response") {
+		return {
+			text: latestResponse?.markdown ?? (fallback?.source === "last-response" ? fallback.text : ""),
+			label: requestedLabel || "last model response",
+			source: "last-response",
+			draftId: requestedDraftId || undefined,
+		};
+	}
+
+	if (requestedSourceRaw || requestedLabel || requestedDraftId) {
+		return {
+			text: fallback?.source === "blank" ? fallback.text : "",
+			label: requestedLabel || requestedSourceRaw || "blank",
+			source: "blank",
+			draftId: requestedDraftId || undefined,
+		};
+	}
+
+	return fallback;
 }
 
 function formatModelLabel(model: { provider?: string; id?: string } | undefined): string {
@@ -5751,6 +5994,7 @@ function buildStudioHtml(
 	const initialSource = initialDocument?.source ?? "blank";
 	const initialLabel = escapeHtmlForInline(initialDocument?.label ?? "blank");
 	const initialPath = escapeHtmlForInline(initialDocument?.path ?? "");
+	const initialDraftId = escapeHtmlForInline(initialDocument?.draftId ?? "");
 	const initialModel = escapeHtmlForInline(initialModelLabel ?? "none");
 	const initialTerminal = escapeHtmlForInline(initialTerminalLabel ?? "unknown");
 	const initialContextTokens =
@@ -5819,7 +6063,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}">
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -5843,13 +6087,14 @@ ${cssVarsBlock}
         </div>
         <div class="section-header-actions">
           <button id="leftFocusBtn" class="pane-focus-btn" type="button" title="Show only the editor pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
-          <button id="scratchpadBtn" type="button" title="Open a local persistent scratchpad for quick notes. Scratchpad text is never run, critiqued, or exported unless you explicitly insert it into the editor.">Scratchpad</button>
+          <button id="reviewNotesBtn" type="button" title="Open local review notes for the current editor document or draft. Notes are anchored outside the document text and can later be converted into [an: ...] annotations.">Review notes</button>
+          <button id="scratchpadBtn" type="button" title="Open a local persistent scratchpad for the current editor document or draft. Scratchpad text is never run, critiqued, or exported unless you explicitly insert it into the editor.">Scratchpad</button>
         </div>
       </div>
       <div class="source-wrap">
         <div class="source-meta">
           <div class="badge-row">
-            <span id="sourceBadge" class="source-badge">Editor origin: ${initialLabel}</span>
+            <button id="sourceBadge" type="button" class="source-badge source-badge-button">Editor origin: ${initialLabel}</button>
             <button id="resourceDirBtn" type="button" class="resource-dir-btn" hidden title="Set working directory for resolving relative paths in preview">Set working dir</button>
             <span id="resourceDirLabel" class="source-badge resource-dir-label" hidden title="Click to change working directory"></span>
             <span id="resourceDirInputWrap" class="resource-dir-input-wrap">
@@ -5989,7 +6234,7 @@ ${cssVarsBlock}
       <div class="scratchpad-header">
         <div>
           <h2 id="scratchpadTitle">Scratchpad</h2>
-          <p class="scratchpad-description">Local persistent notes for thoughts you want to park while working. Closing the scratchpad does not clear it: notes persist locally until you edit or clear them. Scratchpad text is not run, critiqued, sent, or exported unless you explicitly insert it into the editor.</p>
+          <p class="scratchpad-description">Local persistent notes for thoughts you want to park while working on the current Studio document or draft. Closing the scratchpad does not clear it: notes persist locally for this document identity until you edit or clear them. File-backed documents reliably come back across Pi restarts; unsaved drafts stay with their own draft instance until you save them or discard them. Scratchpad text is not run, critiqued, sent, or exported unless you explicitly insert it into the editor.</p>
         </div>
         <button id="scratchpadCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Keep current scratchpad text and close scratchpad" title="Keep current scratchpad text and close scratchpad">✕</button>
       </div>
@@ -6003,6 +6248,27 @@ ${cssVarsBlock}
           <button id="scratchpadDoneBtn" type="button" title="Keep the current scratchpad text and close the scratchpad.">Keep and close</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="reviewNotesOverlay" class="scratchpad-overlay review-notes-overlay" hidden>
+    <div id="reviewNotesDialog" class="scratchpad-dialog review-notes-dialog" role="dialog" aria-modal="true" aria-labelledby="reviewNotesTitle">
+      <div class="scratchpad-header">
+        <div>
+          <h2 id="reviewNotesTitle">Review notes</h2>
+          <p class="scratchpad-description">Anchored local review notes for the current Studio document or draft. Notes stay out of the document text by default, persist locally for that document identity, and can be promoted into normal <code>[an: ...]</code> annotations when you want them to become part of the document workflow. File-backed documents reliably come back across Pi restarts; unsaved drafts stay with their own draft instance until you save them or discard them.</p>
+        </div>
+        <button id="reviewNotesCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Keep current review notes and close review notes" title="Keep current review notes and close review notes">✕</button>
+      </div>
+      <div class="review-notes-toolbar">
+        <span id="reviewNotesMeta" class="scratchpad-meta">No review notes</span>
+        <div class="scratchpad-actions">
+          <button id="reviewNotesAddBtn" type="button" title="Create a local review note from the current editor selection, or from the current line if nothing is selected.">Add note from selection</button>
+          <button id="reviewNotesDoneBtn" type="button" title="Keep the current review notes and close the review-notes panel.">Keep and close</button>
+        </div>
+      </div>
+      <div id="reviewNotesEmptyState" class="review-notes-empty">No review notes yet for this document. Select text (or just place the caret on a line) in <strong>Editor (Raw)</strong>, then choose <em>Add note from selection</em>.</div>
+      <div id="reviewNotesList" class="review-notes-list" aria-live="polite"></div>
     </div>
   </div>
 
@@ -7431,6 +7697,120 @@ export default function (pi: ExtensionAPI) {
 		res.end(prepared.pdf);
 	};
 
+	const handleScratchpadStateRequest = async (req: IncomingMessage, res: ServerResponse, requestUrl: URL) => {
+		const method = (req.method ?? "GET").toUpperCase();
+		if (method === "GET") {
+			const documentKey = (requestUrl.searchParams.get("documentKey") ?? "").trim();
+			if (!documentKey) {
+				respondJson(res, 400, { ok: false, error: "Missing documentKey query parameter." });
+				return;
+			}
+			respondJson(res, 200, { ok: true, text: await readPersistedStudioScratchpadText(documentKey) });
+			return;
+		}
+		if (method !== "POST") {
+			res.setHeader("Allow", "GET, POST");
+			respondJson(res, 405, { ok: false, error: "Method not allowed. Use GET or POST." });
+			return;
+		}
+
+		let rawBody = "";
+		try {
+			rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const status = message.includes("exceeds") ? 413 : 400;
+			respondJson(res, status, { ok: false, error: message });
+			return;
+		}
+
+		let parsedBody: unknown;
+		try {
+			parsedBody = rawBody ? JSON.parse(rawBody) : {};
+		} catch {
+			respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+			return;
+		}
+
+		const documentKey =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { documentKey?: unknown }).documentKey === "string"
+				? (parsedBody as { documentKey: string }).documentKey.trim()
+				: "";
+		if (!documentKey) {
+			respondJson(res, 400, { ok: false, error: "Missing documentKey in request body." });
+			return;
+		}
+
+		const text =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { text?: unknown }).text === "string"
+				? (parsedBody as { text: string }).text
+				: null;
+		if (text === null) {
+			respondJson(res, 400, { ok: false, error: "Missing scratchpad text in request body." });
+			return;
+		}
+
+		await writePersistedStudioScratchpadText(documentKey, text);
+		respondJson(res, 200, { ok: true });
+	};
+
+	const handleReviewNotesRequest = async (req: IncomingMessage, res: ServerResponse, requestUrl: URL) => {
+		const method = (req.method ?? "GET").toUpperCase();
+		if (method === "GET") {
+			const documentKey = (requestUrl.searchParams.get("documentKey") ?? "").trim();
+			if (!documentKey) {
+				respondJson(res, 400, { ok: false, error: "Missing documentKey query parameter." });
+				return;
+			}
+			respondJson(res, 200, { ok: true, notes: await readPersistedStudioReviewNotes(documentKey) });
+			return;
+		}
+		if (method !== "POST") {
+			res.setHeader("Allow", "GET, POST");
+			respondJson(res, 405, { ok: false, error: "Method not allowed. Use GET or POST." });
+			return;
+		}
+
+		let rawBody = "";
+		try {
+			rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const status = message.includes("exceeds") ? 413 : 400;
+			respondJson(res, status, { ok: false, error: message });
+			return;
+		}
+
+		let parsedBody: unknown;
+		try {
+			parsedBody = rawBody ? JSON.parse(rawBody) : {};
+		} catch {
+			respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+			return;
+		}
+
+		const documentKey =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { documentKey?: unknown }).documentKey === "string"
+				? (parsedBody as { documentKey: string }).documentKey.trim()
+				: "";
+		if (!documentKey) {
+			respondJson(res, 400, { ok: false, error: "Missing documentKey in request body." });
+			return;
+		}
+
+		const notes =
+			parsedBody && typeof parsedBody === "object" && Array.isArray((parsedBody as { notes?: unknown }).notes)
+				? (parsedBody as { notes: PersistedStudioReviewNote[] }).notes
+				: null;
+		if (!notes) {
+			respondJson(res, 400, { ok: false, error: "Missing notes array in request body." });
+			return;
+		}
+
+		await writePersistedStudioReviewNotes(documentKey, notes);
+		respondJson(res, 200, { ok: true });
+	};
+
 	const handleRenderPreviewRequest = async (req: IncomingMessage, res: ServerResponse) => {
 		let rawBody = "";
 		try {
@@ -7673,6 +8053,36 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/scratchpad-state") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+			void handleScratchpadStateRequest(req, res, requestUrl).catch((error) => {
+				respondJson(res, 500, {
+					ok: false,
+					error: `Scratchpad persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
+		if (requestUrl.pathname === "/review-notes") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+			void handleReviewNotesRequest(req, res, requestUrl).catch((error) => {
+				respondJson(res, 500, {
+					ok: false,
+					error: `Review-note persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
 		if (requestUrl.pathname === "/render-preview") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
@@ -7749,7 +8159,8 @@ export default function (pi: ExtensionAPI) {
 		});
 		refreshContextUsage();
 		const studioMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
-		res.end(buildStudioHtml(initialStudioDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, contextUsageSnapshot, studioMode));
+		const requestInitialDocument = resolveRequestedStudioDocumentFromUrl(requestUrl, initialStudioDocument, studioCwd, lastStudioResponse);
+		res.end(buildStudioHtml(requestInitialDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, contextUsageSnapshot, studioMode));
 	};
 
 	const ensureServer = async (): Promise<StudioServerState> => {
@@ -8229,12 +8640,14 @@ export default function (pi: ExtensionAPI) {
 					text: latestAssistant,
 					label: "last model response",
 					source: "last-response",
+					draftId: createStudioDraftId(),
 				};
 			}
 			return {
 				text: "",
 				label: "blank",
 				source: "blank",
+				draftId: createStudioDraftId(),
 			};
 		}
 
@@ -8243,6 +8656,7 @@ export default function (pi: ExtensionAPI) {
 				text: "",
 				label: "blank",
 				source: "blank",
+				draftId: createStudioDraftId(),
 			};
 		}
 
@@ -8253,12 +8667,14 @@ export default function (pi: ExtensionAPI) {
 					text: "",
 					label: "blank",
 					source: "blank",
+					draftId: createStudioDraftId(),
 				};
 			}
 			return {
 				text: latestAssistant,
 				label: "last model response",
 				source: "last-response",
+				draftId: createStudioDraftId(),
 			};
 		}
 
@@ -8331,7 +8747,7 @@ export default function (pi: ExtensionAPI) {
 		initialStudioDocument = selected;
 
 		const state = await ensureServer();
-		const url = buildStudioUrl(state.port, state.token, mode);
+		const url = buildStudioUrl(state.port, state.token, mode, selected);
 		const openedLabel = mode === "editor-only" ? "pi Studio editor-only view" : "pi Studio";
 
 		try {

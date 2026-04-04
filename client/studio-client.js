@@ -98,6 +98,7 @@
       const compactBtn = document.getElementById("compactBtn");
       const leftFocusBtn = document.getElementById("leftFocusBtn");
       const rightFocusBtn = document.getElementById("rightFocusBtn");
+      const reviewNotesBtn = document.getElementById("reviewNotesBtn");
       const scratchpadBtn = document.getElementById("scratchpadBtn");
       const scratchpadOverlayEl = document.getElementById("scratchpadOverlay");
       const scratchpadDialogEl = document.getElementById("scratchpadDialog");
@@ -108,16 +109,34 @@
       const scratchpadClearBtn = document.getElementById("scratchpadClearBtn");
       const scratchpadCloseBtn = document.getElementById("scratchpadCloseBtn");
       const scratchpadDoneBtn = document.getElementById("scratchpadDoneBtn");
+      const reviewNotesOverlayEl = document.getElementById("reviewNotesOverlay");
+      const reviewNotesDialogEl = document.getElementById("reviewNotesDialog");
+      const reviewNotesMetaEl = document.getElementById("reviewNotesMeta");
+      const reviewNotesListEl = document.getElementById("reviewNotesList");
+      const reviewNotesEmptyStateEl = document.getElementById("reviewNotesEmptyState");
+      const reviewNotesAddBtn = document.getElementById("reviewNotesAddBtn");
+      const reviewNotesCloseBtn = document.getElementById("reviewNotesCloseBtn");
+      const reviewNotesDoneBtn = document.getElementById("reviewNotesDoneBtn");
 
       const studioMode = (document.body && document.body.dataset && document.body.dataset.studioMode) === "editor-only"
         ? "editor-only"
         : "full";
       const isEditorOnlyMode = studioMode === "editor-only";
 
+      const initialQueryParams = new URLSearchParams(window.location.search || "");
+      const explicitDocumentIdentityFromUrl = initialQueryParams.has("docSource")
+        || initialQueryParams.has("docLabel")
+        || initialQueryParams.has("docPath")
+        || initialQueryParams.has("draftId");
       const initialSourceState = {
-        source: (document.body && document.body.dataset && document.body.dataset.initialSource) || "blank",
-        label: (document.body && document.body.dataset && document.body.dataset.initialLabel) || "blank",
-        path: (document.body && document.body.dataset && document.body.dataset.initialPath) || null,
+        source: initialQueryParams.get("docSource")
+          || ((document.body && document.body.dataset && document.body.dataset.initialSource) || "blank"),
+        label: initialQueryParams.get("docLabel")
+          || ((document.body && document.body.dataset && document.body.dataset.initialLabel) || "blank"),
+        path: initialQueryParams.get("docPath")
+          || ((document.body && document.body.dataset && document.body.dataset.initialPath) || null),
+        draftId: initialQueryParams.get("draftId")
+          || ((document.body && document.body.dataset && document.body.dataset.initialDraftId) || null),
       };
 
       let ws = null;
@@ -206,6 +225,7 @@
         source: initialSourceState.source,
         label: initialSourceState.label,
         path: initialSourceState.path,
+        draftId: initialSourceState.draftId,
       };
       let fileBackedBaselineText = null;
       let activePane = "left";
@@ -255,7 +275,6 @@
       const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
       const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
       const ANNOTATION_MODE_STORAGE_KEY = "piStudio.annotationsEnabled";
-      const SCRATCHPAD_STORAGE_KEY = "piStudio.scratchpad";
       const PREVIEW_INPUT_DEBOUNCE_MS = 0;
       const PREVIEW_PENDING_BADGE_DELAY_MS = 220;
       const previewPendingTimers = new WeakMap();
@@ -274,6 +293,13 @@
       let annotationsEnabled = true;
       let scratchpadText = "";
       let scratchpadReturnFocusEl = null;
+      let scratchpadPersistTimer = null;
+      let scratchpadLoadNonce = 0;
+      let reviewNotes = [];
+      let reviewNotesReturnFocusEl = null;
+      let reviewNotesPersistTimer = null;
+      let reviewNotesLoadNonce = 0;
+      let pendingReviewNoteFocusId = null;
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
       if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
@@ -935,6 +961,12 @@
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
         sourceBadgeEl.textContent = "Editor origin: " + label;
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        if (sourceBadgeEl) {
+          sourceBadgeEl.title = descriptor.fileBacked
+            ? ("Editor origin: " + label + "\nClick to reset origin and detach the current editor text into a new draft. The file on disk will not be changed.")
+            : ("Editor origin: " + label + "\nClick to reset origin and start a new independent draft while keeping the current text and local notes.");
+        }
         // Show "Set working dir" button when not file-backed
         var isFileBacked = hasRefreshableFilePath();
         if (isFileBacked) {
@@ -956,6 +988,26 @@
             if (resourceDirInputWrap) resourceDirInputWrap.classList.remove("visible");
           }
         }
+      }
+
+      function resetEditorOrigin() {
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        const message = descriptor.fileBacked
+          ? ("Reset editor origin and detach the current text from\n\n" + descriptor.label + "\n\ninto a new draft? The file on disk will not be changed, and the current scratchpad/review notes will carry into the new draft.")
+          : ("Reset editor origin and start a new independent draft? The current editor text, scratchpad, and review notes will carry into the new draft.");
+        if (!window.confirm(message)) {
+          return;
+        }
+        const nextLabel = String(sourceTextEl.value || "").trim() ? "draft" : "blank";
+        setSourceState({
+          source: "blank",
+          label: nextLabel,
+          path: null,
+          draftId: makeStudioDraftId(),
+        }, {
+          carryCurrentMetadataToNewDocument: true,
+        });
+        setStatus(descriptor.fileBacked ? "Detached editor from file origin into a new draft." : "Reset editor origin to a new draft.", "success");
       }
 
       function updatePaneFocusButtons() {
@@ -1059,6 +1111,12 @@
           && typeof scratchpadDialogEl.contains === "function"
           && scratchpadDialogEl.contains(event.target)
         );
+        const reviewNotesOwnsEvent = Boolean(
+          reviewNotesDialogEl
+          && event.target
+          && typeof reviewNotesDialogEl.contains === "function"
+          && reviewNotesDialogEl.contains(event.target)
+        );
 
         if (isScratchpadOpen() && plainEscape) {
           event.preventDefault();
@@ -1066,7 +1124,13 @@
           return;
         }
 
-        if (scratchpadOwnsEvent) {
+        if (isReviewNotesOpen() && plainEscape) {
+          event.preventDefault();
+          closeReviewNotes();
+          return;
+        }
+
+        if (scratchpadOwnsEvent || reviewNotesOwnsEvent) {
           return;
         }
 
@@ -2769,6 +2833,7 @@
         const canRefreshFromDisk = hasRefreshableFilePath();
 
         fileInput.disabled = uiBusy;
+        if (sourceBadgeEl) sourceBadgeEl.disabled = uiBusy;
         saveAsBtn.disabled = uiBusy;
         saveOverBtn.disabled = uiBusy || !canSaveOver;
         if (refreshFromDiskBtn) refreshFromDiskBtn.disabled = uiBusy || !canRefreshFromDisk;
@@ -2802,17 +2867,33 @@
         syncActionButtons();
       }
 
-      function setSourceState(next) {
+      function setSourceState(next, options) {
+        const previousDescriptor = getCurrentStudioDocumentDescriptor();
+        const nextPath = next && next.path ? next.path : null;
         sourceState = {
           source: next && next.source ? next.source : "blank",
           label: next && next.label ? next.label : "blank",
-          path: next && next.path ? next.path : null,
+          path: nextPath,
+          draftId: nextPath
+            ? null
+            : (next && next.draftId ? next.draftId : makeStudioDraftId()),
         };
         if (!sourceState.path) {
           clearFileBackedBaseline();
         }
+        updateStudioDocumentUrlState(sourceState);
         updateSourceBadge();
         syncActionButtons();
+        updateScratchpadUi();
+        updateReviewNotesUi();
+        loadScratchpadForCurrentDocument({
+          previousDescriptor: previousDescriptor,
+          carryCurrentMetadataToNewDocument: Boolean(options && options.carryCurrentMetadataToNewDocument),
+        });
+        void loadReviewNotesForCurrentDocument({
+          previousDescriptor: previousDescriptor,
+          carryCurrentMetadataToNewDocument: Boolean(options && options.carryCurrentMetadataToNewDocument),
+        });
       }
 
       function setEditorText(nextText, options) {
@@ -2888,6 +2969,7 @@
         if (!showPreview && lineNumbersEnabled) {
           scheduleEditorLineNumberRender();
         }
+        updateReviewNotesUi();
       }
 
       function setRightView(nextView) {
@@ -3022,11 +3104,87 @@
         return query.get("token") || hash.get("token") || "";
       }
 
+      function buildAuthedStudioUrl(pathname, extraParams) {
+        const token = getToken();
+        if (!token) {
+          throw new Error("Missing Studio token in URL.");
+        }
+        const params = new URLSearchParams(extraParams || {});
+        params.set("token", token);
+        return pathname + "?" + params.toString();
+      }
+
+      function updateStudioDocumentUrlState(state) {
+        try {
+          const currentUrl = new URL(window.location.href);
+          const params = currentUrl.searchParams;
+          const nextState = state && typeof state === "object" ? state : sourceState;
+          const nextSource = nextState && nextState.source ? String(nextState.source) : "blank";
+          const nextLabel = nextState && nextState.label ? String(nextState.label) : "blank";
+          const nextPath = nextState && nextState.path ? String(nextState.path) : "";
+          const nextDraftId = nextState && nextState.draftId ? String(nextState.draftId) : "";
+          if (nextSource) params.set("docSource", nextSource);
+          else params.delete("docSource");
+          if (nextLabel) params.set("docLabel", nextLabel);
+          else params.delete("docLabel");
+          if (nextPath) params.set("docPath", nextPath);
+          else params.delete("docPath");
+          if (nextDraftId) params.set("draftId", nextDraftId);
+          else params.delete("draftId");
+          window.history.replaceState(null, "", currentUrl.toString());
+        } catch {
+          // Ignore URL-state update failures.
+        }
+      }
+
+      async function fetchStudioJson(pathname, options) {
+        const init = options || {};
+        const headers = new Headers(init.headers || undefined);
+        const method = String(init.method || "GET").toUpperCase();
+        if (init.body != null && !headers.has("Content-Type")) {
+          headers.set("Content-Type", "application/json");
+        }
+        const response = await fetch(buildAuthedStudioUrl(pathname, init.query), {
+          method,
+          headers,
+          body: init.body,
+          cache: "no-store",
+        });
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+        if (!response.ok || !payload || payload.ok === false) {
+          const message = payload && typeof payload.error === "string"
+            ? payload.error
+            : (response.status + " " + response.statusText).trim();
+          throw new Error(message || (method + " " + pathname + " failed."));
+        }
+        return payload;
+      }
+
+      function trySendStudioJsonBeacon(pathname, payload, extraParams) {
+        try {
+          if (!navigator.sendBeacon || typeof navigator.sendBeacon !== "function") return false;
+          const body = JSON.stringify(payload || {});
+          const blob = new Blob([body], { type: "application/json" });
+          return navigator.sendBeacon(buildAuthedStudioUrl(pathname, extraParams), blob);
+        } catch {
+          return false;
+        }
+      }
+
       function makeRequestId() {
         if (window.crypto && typeof window.crypto.randomUUID === "function") {
           return window.crypto.randomUUID().replace(/[^a-zA-Z0-9_-]/g, "_");
         }
         return "req_" + Date.now() + "_" + Math.random().toString(36).slice(2, 10);
+      }
+
+      function makeStudioDraftId() {
+        return "draft_" + makeRequestId();
       }
 
       function escapeHtml(text) {
@@ -3625,51 +3783,621 @@
         persistStoredToggle(ANNOTATION_MODE_STORAGE_KEY, enabled);
       }
 
-      function readStoredText(storageKey) {
-        if (!window.localStorage) return null;
-        try {
-          const value = window.localStorage.getItem(storageKey);
-          return typeof value === "string" ? value : null;
-        } catch {
-          return null;
-        }
-      }
-
-      function persistStoredText(storageKey, value) {
-        if (!window.localStorage) return;
-        try {
-          window.localStorage.setItem(storageKey, String(value ?? ""));
-        } catch {
-          // ignore storage failures
-        }
-      }
-
       function isScratchpadOpen() {
         return Boolean(scratchpadOverlayEl && !scratchpadOverlayEl.hidden);
       }
 
-      function readStoredScratchpadText() {
-        return readStoredText(SCRATCHPAD_STORAGE_KEY);
+      function isReviewNotesOpen() {
+        return Boolean(reviewNotesOverlayEl && !reviewNotesOverlayEl.hidden);
+      }
+
+      function syncModalOpenState() {
+        const anyModalOpen = isScratchpadOpen() || isReviewNotesOpen();
+        document.body.classList.toggle("scratchpad-open", anyModalOpen);
+        document.body.classList.toggle("review-notes-open", isReviewNotesOpen());
+      }
+
+      function describeStudioDocument(state) {
+        const currentState = state && typeof state === "object" ? state : sourceState;
+        const source = currentState && currentState.source ? String(currentState.source) : "blank";
+        const label = currentState && currentState.label ? String(currentState.label) : "blank";
+        const path = currentState && currentState.path ? String(currentState.path) : "";
+        const draftId = currentState && currentState.draftId ? String(currentState.draftId) : "";
+        if (path) {
+          return {
+            key: "file:" + path,
+            label: path,
+            fileBacked: true,
+            draftBacked: false,
+          };
+        }
+        const normalizedLabel = label.trim().replace(/\s+/g, " ") || source;
+        if (draftId) {
+          return {
+            key: "draft:" + draftId,
+            label: normalizedLabel,
+            fileBacked: false,
+            draftBacked: true,
+          };
+        }
+        return {
+          key: "doc:" + source + ":" + normalizedLabel,
+          label: normalizedLabel,
+          fileBacked: false,
+          draftBacked: false,
+        };
+      }
+
+      function getCurrentStudioDocumentDescriptor() {
+        return describeStudioDocument(sourceState);
+      }
+
+      async function fetchScratchpadTextForDocumentKey(documentKey) {
+        const payload = await fetchStudioJson("/scratchpad-state", {
+          query: { documentKey: documentKey },
+        });
+        return payload && typeof payload.text === "string" ? payload.text : "";
+      }
+
+      function flushScratchpadPersistence(documentKeyOverride, textOverride) {
+        const descriptor = documentKeyOverride
+          ? { key: String(documentKeyOverride || "").trim() }
+          : getCurrentStudioDocumentDescriptor();
+        const key = String(descriptor && descriptor.key ? descriptor.key : "").trim();
+        if (!key) return;
+        if (scratchpadPersistTimer !== null) {
+          window.clearTimeout(scratchpadPersistTimer);
+          scratchpadPersistTimer = null;
+        }
+        const snapshot = String(arguments.length >= 2 ? textOverride : scratchpadText || "");
+        if (trySendStudioJsonBeacon("/scratchpad-state", { documentKey: key, text: snapshot })) {
+          return;
+        }
+        void fetchStudioJson("/scratchpad-state", {
+          method: "POST",
+          body: JSON.stringify({ documentKey: key, text: snapshot }),
+        }).catch(() => {
+          // Ignore scratchpad persistence failures for now.
+        });
+      }
+
+      function scheduleScratchpadPersistence(text, documentKey) {
+        if (scratchpadPersistTimer !== null) {
+          window.clearTimeout(scratchpadPersistTimer);
+        }
+        const snapshot = String(text || "");
+        const key = String(documentKey || "").trim();
+        if (!key) return;
+        scratchpadPersistTimer = window.setTimeout(() => {
+          scratchpadPersistTimer = null;
+          flushScratchpadPersistence(key, snapshot);
+        }, 180);
+      }
+
+      async function loadScratchpadForDocumentKey(documentKey) {
+        const key = String(documentKey || "").trim();
+        const loadNonce = ++scratchpadLoadNonce;
+        if (!key) {
+          setScratchpadText("", { persist: false });
+          return;
+        }
+        try {
+          const serverText = await fetchScratchpadTextForDocumentKey(key);
+          if (loadNonce !== scratchpadLoadNonce) return;
+          if (key !== getCurrentStudioDocumentDescriptor().key) return;
+          setScratchpadText(serverText, { persist: false });
+        } catch {
+          if (loadNonce !== scratchpadLoadNonce) return;
+          if (key !== getCurrentStudioDocumentDescriptor().key) return;
+          setScratchpadText("", { persist: false });
+        }
+      }
+
+      async function maybeCarryScratchpadToNewDocument(previousDescriptor, nextDescriptor) {
+        if (!previousDescriptor || !nextDescriptor || previousDescriptor.key === nextDescriptor.key) return;
+        const snapshot = String(scratchpadText || "");
+        if (!snapshot.trim()) return;
+        try {
+          const existing = await fetchScratchpadTextForDocumentKey(nextDescriptor.key);
+          if (String(existing || "").trim()) return;
+          await fetchStudioJson("/scratchpad-state", {
+            method: "POST",
+            body: JSON.stringify({ documentKey: nextDescriptor.key, text: snapshot }),
+          });
+        } catch {
+          // Ignore carry-over failures and just fall back to normal scope loading.
+        }
+      }
+
+      function loadScratchpadForCurrentDocument(options) {
+        const previousDescriptor = options && options.previousDescriptor ? options.previousDescriptor : null;
+        const shouldCarryToNewDocument = Boolean(options && options.carryCurrentMetadataToNewDocument);
+        const currentDescriptor = getCurrentStudioDocumentDescriptor();
+        void (async () => {
+          if (shouldCarryToNewDocument && previousDescriptor) {
+            await maybeCarryScratchpadToNewDocument(previousDescriptor, currentDescriptor);
+          }
+          await loadScratchpadForDocumentKey(currentDescriptor.key);
+        })();
       }
 
       function persistScratchpadText(value) {
-        persistStoredText(SCRATCHPAD_STORAGE_KEY, value);
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        scheduleScratchpadPersistence(value, descriptor.key);
+      }
+
+      function normalizeReviewNote(note) {
+        if (!note || typeof note !== "object") return null;
+        const id = typeof note.id === "string" && note.id.trim() ? note.id : makeRequestId();
+        const text = typeof note.text === "string" ? note.text : "";
+        const createdAt = typeof note.createdAt === "number" && Number.isFinite(note.createdAt)
+          ? note.createdAt
+          : Date.now();
+        const updatedAt = typeof note.updatedAt === "number" && Number.isFinite(note.updatedAt)
+          ? note.updatedAt
+          : createdAt;
+        const selectionStart = typeof note.selectionStart === "number" && Number.isFinite(note.selectionStart)
+          ? Math.max(0, Math.floor(note.selectionStart))
+          : 0;
+        const selectionEnd = typeof note.selectionEnd === "number" && Number.isFinite(note.selectionEnd)
+          ? Math.max(selectionStart, Math.floor(note.selectionEnd))
+          : selectionStart;
+        const lineStart = typeof note.lineStart === "number" && Number.isFinite(note.lineStart)
+          ? Math.max(1, Math.floor(note.lineStart))
+          : 1;
+        const lineEnd = typeof note.lineEnd === "number" && Number.isFinite(note.lineEnd)
+          ? Math.max(lineStart, Math.floor(note.lineEnd))
+          : lineStart;
+        return {
+          id,
+          text,
+          createdAt,
+          updatedAt,
+          selectionStart,
+          selectionEnd,
+          lineStart,
+          lineEnd,
+          selectedText: typeof note.selectedText === "string" ? note.selectedText : "",
+        };
+      }
+
+      function cloneReviewNotes(notes) {
+        return Array.isArray(notes)
+          ? notes
+              .map((note) => normalizeReviewNote(note))
+              .filter(Boolean)
+              .map((note) => ({ ...note }))
+          : [];
+      }
+
+      async function fetchReviewNotesForDocumentKey(documentKey) {
+        const payload = await fetchStudioJson("/review-notes", {
+          query: { documentKey: documentKey },
+        });
+        return cloneReviewNotes(payload && Array.isArray(payload.notes) ? payload.notes : []);
+      }
+
+      function flushReviewNotesPersistence(documentKeyOverride, notesOverride) {
+        const descriptor = documentKeyOverride
+          ? { key: String(documentKeyOverride || "").trim() }
+          : getCurrentStudioDocumentDescriptor();
+        const key = String(descriptor && descriptor.key ? descriptor.key : "").trim();
+        if (!key) return;
+        if (reviewNotesPersistTimer !== null) {
+          window.clearTimeout(reviewNotesPersistTimer);
+          reviewNotesPersistTimer = null;
+        }
+        const snapshot = cloneReviewNotes(arguments.length >= 2 ? notesOverride : reviewNotes);
+        if (trySendStudioJsonBeacon("/review-notes", { documentKey: key, notes: snapshot })) {
+          return;
+        }
+        void fetchStudioJson("/review-notes", {
+          method: "POST",
+          body: JSON.stringify({ documentKey: key, notes: snapshot }),
+        }).catch(() => {
+          // Ignore persistence failures; the in-memory notes list remains available for this session.
+        });
+      }
+
+      function scheduleReviewNotesPersistence() {
+        if (reviewNotesPersistTimer !== null) {
+          window.clearTimeout(reviewNotesPersistTimer);
+        }
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        const snapshot = cloneReviewNotes(reviewNotes);
+        reviewNotesPersistTimer = window.setTimeout(() => {
+          reviewNotesPersistTimer = null;
+          flushReviewNotesPersistence(descriptor.key, snapshot);
+        }, 180);
+      }
+
+      async function maybeCarryReviewNotesToNewDocument(previousDescriptor, nextDescriptor) {
+        if (!previousDescriptor || !nextDescriptor || previousDescriptor.key === nextDescriptor.key) return;
+        const snapshot = cloneReviewNotes(reviewNotes);
+        if (!snapshot.length) return;
+        try {
+          const existing = await fetchReviewNotesForDocumentKey(nextDescriptor.key);
+          if (existing.length > 0) return;
+          await fetchStudioJson("/review-notes", {
+            method: "POST",
+            body: JSON.stringify({ documentKey: nextDescriptor.key, notes: snapshot }),
+          });
+        } catch {
+          // Ignore carry-over failures and just fall back to normal scope loading.
+        }
+      }
+
+      async function loadReviewNotesForCurrentDocument(options) {
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        const previousDescriptor = options && options.previousDescriptor ? options.previousDescriptor : null;
+        const shouldCarryToNewDocument = Boolean(options && options.carryCurrentMetadataToNewDocument);
+        const loadNonce = ++reviewNotesLoadNonce;
+        try {
+          if (shouldCarryToNewDocument && previousDescriptor) {
+            await maybeCarryReviewNotesToNewDocument(previousDescriptor, descriptor);
+          }
+          const notes = await fetchReviewNotesForDocumentKey(descriptor.key);
+          if (loadNonce !== reviewNotesLoadNonce) return;
+          if (descriptor.key !== getCurrentStudioDocumentDescriptor().key) return;
+          reviewNotes = notes;
+        } catch {
+          if (loadNonce !== reviewNotesLoadNonce) return;
+          if (descriptor.key !== getCurrentStudioDocumentDescriptor().key) return;
+          reviewNotes = [];
+        }
+        updateReviewNotesUi();
+        renderReviewNotesList();
+      }
+
+      function formatReviewNoteTimestamp(timestamp) {
+        if (!Number.isFinite(timestamp)) return "Saved locally";
+        try {
+          return "Updated " + new Date(timestamp).toLocaleString();
+        } catch {
+          return "Saved locally";
+        }
+      }
+
+      function summarizeReviewNoteAnchor(note) {
+        const start = Math.max(1, Number(note && note.lineStart) || 1);
+        const end = Math.max(start, Number(note && note.lineEnd) || start);
+        return start === end ? "Line " + start : ("Lines " + start + "–" + end);
+      }
+
+      function summarizeReviewNoteQuote(note) {
+        const normalized = String(note && note.selectedText ? note.selectedText : "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!normalized) return "Anchor: current line / empty selection";
+        return normalized.length > 140 ? normalized.slice(0, 137) + "…" : normalized;
+      }
+
+      function getLineNumberAtOffset(text, offset) {
+        const source = String(text || "");
+        const safeOffset = Math.max(0, Math.min(Number(offset) || 0, source.length));
+        let line = 1;
+        for (let i = 0; i < safeOffset; i += 1) {
+          if (source[i] === "\n") line += 1;
+        }
+        return line;
+      }
+
+      function getLineRangeAtOffset(text, offset) {
+        const source = String(text || "");
+        const safeOffset = Math.max(0, Math.min(Number(offset) || 0, source.length));
+        let start = safeOffset;
+        while (start > 0 && source[start - 1] !== "\n") start -= 1;
+        let end = safeOffset;
+        while (end < source.length && source[end] !== "\n") end += 1;
+        return {
+          start,
+          end,
+          lineNumber: getLineNumberAtOffset(source, safeOffset),
+        };
+      }
+
+      function getLineRangeForNumbers(text, lineStart, lineEnd) {
+        const lines = String(text || "").split("\n");
+        const safeLineStart = Math.max(1, Math.min(Math.floor(lineStart || 1), Math.max(1, lines.length)));
+        const safeLineEnd = Math.max(safeLineStart, Math.min(Math.floor(lineEnd || safeLineStart), Math.max(1, lines.length)));
+        let start = 0;
+        for (let i = 0; i < safeLineStart - 1; i += 1) {
+          start += lines[i].length + 1;
+        }
+        let end = start;
+        for (let i = safeLineStart - 1; i < safeLineEnd; i += 1) {
+          end += lines[i].length;
+          if (i < safeLineEnd - 1) end += 1;
+        }
+        return { start, end };
+      }
+
+      function getEditorAnchorForReviewNote() {
+        const current = String(sourceTextEl.value || "");
+        const start = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : 0;
+        const end = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : start;
+        const safeStart = Math.max(0, Math.min(start, current.length));
+        const safeEnd = Math.max(safeStart, Math.min(end, current.length));
+        if (safeStart !== safeEnd) {
+          return {
+            selectionStart: safeStart,
+            selectionEnd: safeEnd,
+            lineStart: getLineNumberAtOffset(current, safeStart),
+            lineEnd: getLineNumberAtOffset(current, Math.max(safeStart, safeEnd - 1)),
+            selectedText: current.slice(safeStart, safeEnd),
+          };
+        }
+        const lineRange = getLineRangeAtOffset(current, safeStart);
+        return {
+          selectionStart: lineRange.start,
+          selectionEnd: lineRange.end,
+          lineStart: lineRange.lineNumber,
+          lineEnd: lineRange.lineNumber,
+          selectedText: current.slice(lineRange.start, lineRange.end),
+        };
+      }
+
+      function resolveReviewNoteRange(note, text) {
+        const source = String(text || "");
+        const safeStart = Math.max(0, Math.min(Number(note && note.selectionStart) || 0, source.length));
+        const safeEnd = Math.max(safeStart, Math.min(Number(note && note.selectionEnd) || safeStart, source.length));
+        const selectedText = String(note && note.selectedText ? note.selectedText : "");
+        if (selectedText && source.slice(safeStart, safeEnd) === selectedText) {
+          return { start: safeStart, end: safeEnd };
+        }
+        if (!selectedText && safeEnd >= safeStart) {
+          return { start: safeStart, end: safeEnd };
+        }
+        if (selectedText) {
+          const foundIndex = source.indexOf(selectedText);
+          if (foundIndex >= 0) {
+            return { start: foundIndex, end: foundIndex + selectedText.length };
+          }
+        }
+        return getLineRangeForNumbers(source, note && note.lineStart, note && note.lineEnd);
+      }
+
+      function escapeReviewNoteAnnotationText(text) {
+        return String(text || "")
+          .replace(/\\/g, "\\\\")
+          .replace(/\]/g, "\\]")
+          .trim();
+      }
+
+      function setReviewNotes(nextNotes, options) {
+        reviewNotes = cloneReviewNotes(nextNotes);
+        updateReviewNotesUi();
+        renderReviewNotesList();
+        if (!options || options.persist !== false) {
+          scheduleReviewNotesPersistence();
+        }
+      }
+
+      function updateReviewNotesUi() {
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        const count = reviewNotes.length;
+        const hasNotes = count > 0;
+        if (reviewNotesBtn) {
+          reviewNotesBtn.textContent = hasNotes ? "Review notes •" : "Review notes";
+          reviewNotesBtn.classList.toggle("has-content", hasNotes);
+          reviewNotesBtn.title = hasNotes
+            ? (count + " local review note" + (count === 1 ? "" : "s") + " for " + descriptor.label)
+            : "Open local review notes for the current editor document or draft. Notes are anchored outside the document text and can later be converted into [an: ...] annotations.";
+        }
+        if (reviewNotesMetaEl) {
+          const scopeLabel = descriptor.fileBacked
+            ? "file-backed"
+            : (descriptor.draftBacked ? "draft-backed" : "local buffer");
+          reviewNotesMetaEl.textContent = hasNotes
+            ? (count + " review note" + (count === 1 ? "" : "s") + " · " + scopeLabel + " · " + descriptor.label)
+            : ("No review notes yet · " + scopeLabel);
+        }
+        if (reviewNotesAddBtn) {
+          reviewNotesAddBtn.disabled = editorView !== "markdown";
+          reviewNotesAddBtn.title = editorView === "markdown"
+            ? "Create a local review note from the current editor selection, or from the current line if nothing is selected."
+            : "Switch to Editor (Raw) to anchor a note to the current selection or line.";
+        }
+        if (reviewNotesEmptyStateEl) {
+          reviewNotesEmptyStateEl.hidden = hasNotes;
+        }
+      }
+
+      function renderReviewNotesList() {
+        if (!reviewNotesListEl) return;
+        reviewNotesListEl.innerHTML = "";
+        for (const note of reviewNotes) {
+          const card = document.createElement("article");
+          card.className = "review-note-card";
+
+          const header = document.createElement("div");
+          header.className = "review-note-card-header";
+
+          const titleWrap = document.createElement("div");
+          titleWrap.className = "review-note-card-title";
+
+          const anchor = document.createElement("span");
+          anchor.className = "review-note-anchor";
+          anchor.textContent = summarizeReviewNoteAnchor(note);
+          titleWrap.appendChild(anchor);
+
+          const quote = document.createElement("div");
+          quote.className = "review-note-quote";
+          quote.textContent = summarizeReviewNoteQuote(note);
+          titleWrap.appendChild(quote);
+          header.appendChild(titleWrap);
+
+          const actions = document.createElement("div");
+          actions.className = "review-note-card-actions";
+
+          const jumpBtn = document.createElement("button");
+          jumpBtn.type = "button";
+          jumpBtn.textContent = "Jump";
+          jumpBtn.title = "Jump to this review note's anchored location in the editor.";
+          jumpBtn.addEventListener("click", () => {
+            jumpToReviewNote(note.id);
+          });
+          actions.appendChild(jumpBtn);
+
+          const convertBtn = document.createElement("button");
+          convertBtn.type = "button";
+          convertBtn.className = "review-note-convert-btn";
+          convertBtn.textContent = "Convert to annotation";
+          convertBtn.disabled = !String(note.text || "").trim() || uiBusy;
+          convertBtn.title = "Insert this note into the document as a normal [an: ...] annotation and remove the local review note.";
+          convertBtn.addEventListener("click", () => {
+            convertReviewNoteToAnnotation(note.id);
+          });
+          actions.appendChild(convertBtn);
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "review-note-delete-btn";
+          deleteBtn.textContent = "Delete";
+          deleteBtn.title = "Delete this local review note.";
+          deleteBtn.addEventListener("click", () => {
+            deleteReviewNote(note.id);
+          });
+          actions.appendChild(deleteBtn);
+
+          header.appendChild(actions);
+          card.appendChild(header);
+
+          const textarea = document.createElement("textarea");
+          textarea.value = String(note.text || "");
+          textarea.placeholder = "Write a local review note here…";
+          card.appendChild(textarea);
+
+          const footer = document.createElement("div");
+          footer.className = "review-note-card-footer";
+          const timestamp = document.createElement("span");
+          timestamp.className = "review-note-timestamp";
+          timestamp.textContent = formatReviewNoteTimestamp(note.updatedAt);
+          footer.appendChild(timestamp);
+          card.appendChild(footer);
+
+          textarea.addEventListener("input", () => {
+            note.text = textarea.value;
+            note.updatedAt = Date.now();
+            timestamp.textContent = formatReviewNoteTimestamp(note.updatedAt);
+            convertBtn.disabled = !String(note.text || "").trim() || uiBusy;
+            scheduleReviewNotesPersistence();
+            updateReviewNotesUi();
+          });
+
+          reviewNotesListEl.appendChild(card);
+
+          if (pendingReviewNoteFocusId && pendingReviewNoteFocusId === note.id) {
+            const schedule = typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame.bind(window)
+              : (cb) => window.setTimeout(cb, 16);
+            schedule(() => {
+              textarea.focus();
+              const end = textarea.value.length;
+              textarea.setSelectionRange(end, end);
+            });
+          }
+        }
+        pendingReviewNoteFocusId = null;
+      }
+
+      function addReviewNoteFromEditorSelection() {
+        if (editorView !== "markdown") {
+          setStatus("Switch to Editor (Raw) before adding an anchored review note.", "warning");
+          return;
+        }
+        const anchor = getEditorAnchorForReviewNote();
+        const note = normalizeReviewNote({
+          id: makeRequestId(),
+          text: "",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          selectionStart: anchor.selectionStart,
+          selectionEnd: anchor.selectionEnd,
+          lineStart: anchor.lineStart,
+          lineEnd: anchor.lineEnd,
+          selectedText: anchor.selectedText,
+        });
+        if (!note) return;
+        pendingReviewNoteFocusId = note.id;
+        setReviewNotes(reviewNotes.concat([note]));
+        if (!isReviewNotesOpen()) {
+          openReviewNotes();
+        }
+        setStatus("Added local review note.", "success");
+      }
+
+      function jumpToReviewNote(noteId) {
+        const note = reviewNotes.find((entry) => entry && entry.id === noteId);
+        if (!note) return;
+        const current = String(sourceTextEl.value || "");
+        const range = resolveReviewNoteRange(note, current);
+        if (!range) {
+          setStatus("Could not find the anchored location for this review note.", "warning");
+          return;
+        }
+        setEditorView("markdown");
+        setActivePane("left");
+        closeReviewNotes({ focusTarget: sourceTextEl });
+        sourceTextEl.focus();
+        sourceTextEl.setSelectionRange(range.start, range.end);
+      }
+
+      function deleteReviewNote(noteId) {
+        const note = reviewNotes.find((entry) => entry && entry.id === noteId);
+        if (!note) return;
+        const confirmed = window.confirm("Delete this local review note?");
+        if (!confirmed) return;
+        setReviewNotes(reviewNotes.filter((entry) => entry && entry.id !== noteId));
+        setStatus("Deleted local review note.", "success");
+      }
+
+      function convertReviewNoteToAnnotation(noteId) {
+        if (uiBusy) {
+          setStatus("Wait until the current Studio action finishes before converting a note to an annotation.", "warning");
+          return;
+        }
+        const note = reviewNotes.find((entry) => entry && entry.id === noteId);
+        if (!note) return;
+        const annotationBody = escapeReviewNoteAnnotationText(note.text);
+        if (!annotationBody) {
+          setStatus("Review note is empty. Add some text before converting it to an annotation.", "warning");
+          return;
+        }
+        const current = String(sourceTextEl.value || "");
+        const range = resolveReviewNoteRange(note, current);
+        if (!range) {
+          setStatus("Could not find the anchored location for this review note.", "warning");
+          return;
+        }
+        const insertion = (range.start === range.end ? "" : " ") + "[an: " + annotationBody + "]";
+        const next = current.slice(0, range.end) + insertion + current.slice(range.end);
+        setEditorView("markdown");
+        setEditorText(next, { preserveScroll: false, preserveSelection: false });
+        const caret = range.end + insertion.length;
+        sourceTextEl.focus();
+        sourceTextEl.setSelectionRange(caret, caret);
+        setActivePane("left");
+        setReviewNotes(reviewNotes.filter((entry) => entry && entry.id !== noteId));
+        closeReviewNotes({ focusTarget: sourceTextEl });
+        setStatus("Converted local review note to annotation.", "success");
       }
 
       function updateScratchpadUi() {
         const normalized = String(scratchpadText || "");
         const hasContent = Boolean(normalized.trim());
+        const descriptor = getCurrentStudioDocumentDescriptor();
         if (scratchpadBtn) {
           scratchpadBtn.textContent = hasContent ? "Scratchpad •" : "Scratchpad";
           scratchpadBtn.classList.toggle("has-content", hasContent);
           scratchpadBtn.title = hasContent
-            ? "Open your local persistent scratchpad. Current notes persist after closing until you edit or clear them."
-            : "Open a local persistent scratchpad for quick notes. Anything you type will persist after closing until you edit or clear it.";
+            ? ("Open the local persistent scratchpad for this document/draft. Scope: " + descriptor.label + ". File-backed docs come back across Pi restarts; unsaved drafts stay with this draft instance until saved or cleared.")
+            : ("Open a local persistent scratchpad for this document/draft. Scope: " + descriptor.label + ". File-backed docs come back across Pi restarts; unsaved drafts stay with this draft instance until saved or cleared.");
         }
         if (scratchpadMetaEl) {
           scratchpadMetaEl.textContent = hasContent
-            ? "Saved locally · persists after close · " + normalized.length + " chars"
-            : "Empty · local only";
+            ? ("Saved locally for this document/draft · " + normalized.length + " chars")
+            : "Empty · local to this document/draft";
         }
         if (scratchpadInsertBtn) scratchpadInsertBtn.disabled = !hasContent;
         if (scratchpadCopyBtn) scratchpadCopyBtn.disabled = !hasContent;
@@ -3690,7 +4418,7 @@
       function closeScratchpad(options) {
         if (!scratchpadOverlayEl || scratchpadOverlayEl.hidden) return;
         scratchpadOverlayEl.hidden = true;
-        document.body.classList.remove("scratchpad-open");
+        syncModalOpenState();
         const focusTarget = options && Object.prototype.hasOwnProperty.call(options, "focusTarget")
           ? options.focusTarget
           : (scratchpadReturnFocusEl || scratchpadBtn || sourceTextEl);
@@ -3705,11 +4433,14 @@
 
       function openScratchpad() {
         if (!scratchpadOverlayEl) return;
+        if (isReviewNotesOpen()) {
+          closeReviewNotes({ focusTarget: null });
+        }
         scratchpadReturnFocusEl = document.activeElement && document.activeElement !== document.body
           ? document.activeElement
           : sourceTextEl;
         scratchpadOverlayEl.hidden = false;
-        document.body.classList.add("scratchpad-open");
+        syncModalOpenState();
         if (scratchpadTextEl && typeof scratchpadTextEl.focus === "function") {
           const schedule = typeof window.requestAnimationFrame === "function"
             ? window.requestAnimationFrame.bind(window)
@@ -3722,6 +4453,36 @@
             }
           });
         }
+      }
+
+      function closeReviewNotes(options) {
+        if (!reviewNotesOverlayEl || reviewNotesOverlayEl.hidden) return;
+        reviewNotesOverlayEl.hidden = true;
+        syncModalOpenState();
+        const focusTarget = options && Object.prototype.hasOwnProperty.call(options, "focusTarget")
+          ? options.focusTarget
+          : (reviewNotesReturnFocusEl || reviewNotesBtn || sourceTextEl);
+        reviewNotesReturnFocusEl = null;
+        if (focusTarget && typeof focusTarget.focus === "function") {
+          const schedule = typeof window.requestAnimationFrame === "function"
+            ? window.requestAnimationFrame.bind(window)
+            : (cb) => window.setTimeout(cb, 16);
+          schedule(() => focusTarget.focus());
+        }
+      }
+
+      function openReviewNotes() {
+        if (!reviewNotesOverlayEl) return;
+        if (isScratchpadOpen()) {
+          closeScratchpad({ focusTarget: null });
+        }
+        reviewNotesReturnFocusEl = document.activeElement && document.activeElement !== document.body
+          ? document.activeElement
+          : sourceTextEl;
+        reviewNotesOverlayEl.hidden = false;
+        syncModalOpenState();
+        renderReviewNotesList();
+        updateReviewNotesUi();
       }
 
       function insertScratchpadIntoEditor() {
@@ -4107,6 +4868,7 @@
 
           let loadedInitialDocument = false;
           if (
+            !explicitDocumentIdentityFromUrl &&
             !initialDocumentApplied &&
             message.initialDocument &&
             typeof message.initialDocument.text === "string"
@@ -4118,6 +4880,9 @@
               source: message.initialDocument.source || "blank",
               label: message.initialDocument.label || "blank",
               path: message.initialDocument.path || null,
+              draftId: typeof message.initialDocument.draftId === "string" && message.initialDocument.draftId.trim()
+                ? message.initialDocument.draftId.trim()
+                : (initialSourceState.draftId || null),
             });
             if (message.initialDocument.path) {
               markFileBackedBaseline(message.initialDocument.text);
@@ -4330,6 +5095,8 @@
               source: "file",
               label: message.label || message.path,
               path: message.path,
+            }, {
+              carryCurrentMetadataToNewDocument: true,
             });
             markFileBackedBaseline(sourceTextEl.value);
           }
@@ -4400,7 +5167,12 @@
             : null;
 
           setEditorText(nextDoc.text, { preserveScroll: false, preserveSelection: false });
-          setSourceState({ source: nextSource, label: nextLabel, path: nextPath });
+          setSourceState({
+            source: nextSource,
+            label: nextLabel,
+            path: nextPath,
+            draftId: typeof nextDoc.draftId === "string" && nextDoc.draftId.trim() ? nextDoc.draftId.trim() : null,
+          });
           if (nextPath) {
             markFileBackedBaseline(nextDoc.text);
           }
@@ -4852,6 +5624,8 @@
       window.addEventListener("keydown", handlePaneShortcut);
       window.addEventListener("beforeunload", () => {
         stopFooterSpinner();
+        flushScratchpadPersistence();
+        flushReviewNotesPersistence();
       });
 
       editorViewSelect.addEventListener("change", () => {
@@ -5350,6 +6124,38 @@
         }
       });
 
+      if (reviewNotesBtn) {
+        reviewNotesBtn.addEventListener("click", () => {
+          openReviewNotes();
+        });
+      }
+
+      if (reviewNotesCloseBtn) {
+        reviewNotesCloseBtn.addEventListener("click", () => {
+          closeReviewNotes();
+        });
+      }
+
+      if (reviewNotesDoneBtn) {
+        reviewNotesDoneBtn.addEventListener("click", () => {
+          closeReviewNotes();
+        });
+      }
+
+      if (reviewNotesOverlayEl) {
+        reviewNotesOverlayEl.addEventListener("click", (event) => {
+          if (event.target === reviewNotesOverlayEl) {
+            closeReviewNotes();
+          }
+        });
+      }
+
+      if (reviewNotesAddBtn) {
+        reviewNotesAddBtn.addEventListener("click", () => {
+          addReviewNoteFromEditorSelection();
+        });
+      }
+
       if (scratchpadBtn) {
         scratchpadBtn.addEventListener("click", () => {
           openScratchpad();
@@ -5484,6 +6290,11 @@
         syncActionButtons();
         renderSourcePreview();
       }
+      if (sourceBadgeEl) {
+        sourceBadgeEl.addEventListener("click", () => {
+          resetEditorOrigin();
+        });
+      }
       if (resourceDirBtn) {
         resourceDirBtn.addEventListener("click", () => {
           showResourceDirState("input");
@@ -5565,7 +6376,6 @@
       refreshResponseUi();
       updateAnnotatedReplyHeaderButton();
       setActivePane("left");
-      setScratchpadText(readStoredScratchpadText() || "", { persist: false });
 
       const storedEditorHighlightEnabled = readStoredEditorHighlightEnabled();
       const initialHighlightEnabled = storedEditorHighlightEnabled ?? Boolean(highlightSelect && highlightSelect.value !== "off");

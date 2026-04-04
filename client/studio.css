@@ -225,7 +225,8 @@
       filter: brightness(0.95);
     }
 
-    #scratchpadBtn.has-content {
+    #scratchpadBtn.has-content,
+    #reviewNotesBtn.has-content {
       border-color: var(--accent);
       color: var(--accent);
       font-weight: 600;
@@ -336,6 +337,24 @@
       font-size: 12px;
       color: var(--muted);
       white-space: nowrap;
+    }
+
+    .source-badge-button {
+      cursor: pointer;
+      transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+    }
+
+    .source-badge-button:not(:disabled):hover,
+    .source-badge-button:not(:disabled):focus-visible {
+      border-color: var(--accent);
+      color: var(--text);
+      background: var(--accent-soft);
+      outline: none;
+    }
+
+    .source-badge-button:disabled {
+      cursor: default;
+      opacity: 0.75;
     }
 
     .sync-badge.sync {
@@ -1453,7 +1472,8 @@
       background: var(--panel);
     }
 
-    body.scratchpad-open {
+    body.scratchpad-open,
+    body.review-notes-open {
       overflow: hidden;
     }
 
@@ -1569,6 +1589,145 @@
     }
 
     #scratchpadDoneBtn:not(:disabled):hover {
+      filter: brightness(0.95);
+    }
+
+    .review-notes-dialog {
+      width: min(960px, 100%);
+    }
+
+    .review-notes-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border-muted);
+      background: var(--panel);
+    }
+
+    .review-notes-empty {
+      padding: 16px 18px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border-muted);
+      background: var(--panel);
+    }
+
+    .review-notes-empty[hidden] {
+      display: none !important;
+    }
+
+    .review-notes-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 18px 18px;
+      overflow: auto;
+      background: var(--panel);
+    }
+
+    .review-note-card {
+      border: 1px solid var(--border-muted);
+      border-radius: 12px;
+      background: var(--panel-2);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .review-note-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .review-note-card-title {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .review-note-anchor {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .review-note-quote {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .review-note-card-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .review-note-card textarea {
+      width: 100%;
+      min-height: 92px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      background: var(--panel);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.5;
+      resize: vertical;
+      outline: none;
+    }
+
+    .review-note-card textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-soft);
+    }
+
+    .review-note-card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .review-note-timestamp {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .review-note-convert-btn:not(:disabled) {
+      border-color: var(--ok-border);
+      color: var(--ok);
+      font-weight: 600;
+    }
+
+    .review-note-delete-btn:not(:disabled) {
+      border-color: var(--warn-border);
+      color: var(--warn);
+    }
+
+    #reviewNotesDoneBtn:not(:disabled) {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
+      font-weight: 600;
+    }
+
+    #reviewNotesDoneBtn:not(:disabled):hover {
       filter: brightness(0.95);
     }
 
