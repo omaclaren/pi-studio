@@ -4,13 +4,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.45] — 2026-04-05
+
 ### Added
-- Studio now has a lightweight local **Review notes** panel for anchored, non-document notes tied to the current editor document. Notes can be created from the current selection/line, browsed, jumped to, deleted, and promoted into normal `[an: ...]` annotations via **Convert to annotation**.
+- Studio now has local **Comments** for editor documents and drafts. Comments can be created from the current selection/line, shown in a docked side-by-side comments rail, jumped to, edited, deleted, and kept out of the document text by default.
+- **Editor (Raw)** now shows subtle comment gutter markers for lines with anchored comments, making it easier to spot commented regions and reopen the related comment from the editor surface.
+- Comments can now be toggled into inline `[an: ...]` annotations per comment or in bulk without deleting the underlying local comment.
 
 ### Changed
 - Studio scratchpad persistence is now backed by extension-side local state instead of browser-port-scoped storage alone, so scratchpad text follows the current document identity more coherently: file-backed documents reliably keep their own scratchpads across refreshes and Pi restarts, while unsaved/blank drafts get their own separate draft-scoped scratchpads instead of sharing one global blank scratchpad across Studio views.
-- Studio draft-scoped scratchpads/review-notes now survive same-tab browser refreshes more reliably, and the **Editor origin** badge is now clickable so you can **Reset origin** into a fresh draft while carrying the current local scratchpad/review notes forward.
+- Studio draft-scoped scratchpads/comments now survive same-tab browser refreshes more reliably, and the **Editor origin** badge is now clickable so you can **Reset origin** into a fresh draft while carrying the current local scratchpad/comments forward.
 - Studio browser-tab favicon experiments now use a simpler `π`-only state treatment again: idle uses the current theme text colour, running switches the `π` to warn/amber, completed/ready attention switches it to ok/green, connecting uses the accent colour, disconnected uses the error colour, and the title attention text keeps its leading `●` marker for clearer completion notification in the tab text.
+- Studio browser-tab activity titles now distinguish direct model generation (`Thinking…`) from reply/critique phases more clearly and fall back to `Working…` for generic busy states.
 
 ## [0.5.44] — 2026-04-03
 

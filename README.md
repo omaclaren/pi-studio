@@ -1,6 +1,6 @@
 # pi-studio
 
-Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace for working with prompts, responses, Markdown and LaTeX documents, code files, and other common text-based files side by side. Annotate responses and files, write, edit, and run prompts, browse prompt and response history, request critiques, and use live preview for code, Markdown, and LaTeX.
+Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace for working with prompts, responses, Markdown and LaTeX documents, code files, and other common text-based files side by side. Annotate responses and files, add local comments, write, edit, and run prompts, browse prompt and response history, request critiques, and use live preview for code, Markdown, and LaTeX.
 
 ## Screenshots
 
@@ -18,6 +18,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
+- Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with optional inline `[an: ...]` toggles when you want them in the document text
 - Browses response history (`Prev/Next/Last`) and loads either:
   - response text
   - critique notes/full critique
