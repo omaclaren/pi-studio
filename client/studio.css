@@ -226,10 +226,15 @@
     }
 
     #scratchpadBtn.has-content,
-    #reviewNotesBtn.has-content {
+    #reviewNotesBtn.has-content,
+    #reviewNotesBtn.is-active {
       border-color: var(--accent);
       color: var(--accent);
       font-weight: 600;
+    }
+
+    #reviewNotesBtn.is-active {
+      background: var(--accent-soft);
     }
 
     .section-header select {
@@ -312,6 +317,51 @@
       gap: 8px;
       flex: 1 1 auto;
       min-height: 0;
+    }
+
+    .source-body {
+      display: flex;
+      gap: 12px;
+      flex: 1 1 auto;
+      min-height: 0;
+      align-items: stretch;
+    }
+
+    .source-primary {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .review-notes-dock-wrap {
+      flex: 0 0 clamp(300px, 34%, 420px);
+      min-width: 280px;
+      min-height: 0;
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: var(--panel-shadow);
+      overflow: hidden;
+    }
+
+    .review-notes-dock-wrap[hidden] {
+      display: none !important;
+    }
+
+    .review-notes-dock {
+      width: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border: 0;
+      border-radius: 0;
+      overflow: hidden;
+      background: var(--panel);
+      box-shadow: none;
     }
 
     .source-meta {
@@ -436,6 +486,7 @@
     }
 
     .editor-highlight-wrap {
+      --editor-review-note-gutter-width: 0px;
       --editor-line-number-gutter-width: 0px;
       position: relative;
       display: flex;
@@ -449,16 +500,71 @@
       overscroll-behavior: none;
     }
 
+    .editor-review-note-gutter,
     .editor-line-number-gutter {
       position: absolute;
       inset: 0 auto 0 0;
-      width: var(--editor-line-number-gutter-width);
       overflow: hidden;
-      border-right: 1px solid var(--border-muted);
       background: var(--panel-2);
+      z-index: 0;
+    }
+
+    .editor-review-note-gutter {
+      width: var(--editor-review-note-gutter-width);
+      border-right: 1px solid var(--border-muted);
+      z-index: 2;
+    }
+
+    .editor-review-note-gutter-content {
+      min-height: 100%;
+      padding: 10px 4px;
+    }
+
+    .editor-review-note-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 1.45em;
+    }
+
+    .editor-review-note-marker {
+      width: 18px;
+      min-width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      line-height: 1;
+      font-weight: 700;
+      color: var(--accent);
+      background: var(--accent-soft);
+      cursor: pointer;
+    }
+
+    .editor-review-note-marker.has-multiple {
+      width: auto;
+      min-width: 18px;
+      padding: 0 4px;
+      border-color: var(--accent);
+    }
+
+    .editor-review-note-marker:hover,
+    .editor-review-note-marker:focus-visible {
+      border-color: var(--accent);
+      filter: brightness(0.96);
+      outline: none;
+    }
+
+    .editor-line-number-gutter {
+      left: var(--editor-review-note-gutter-width);
+      width: var(--editor-line-number-gutter-width);
+      border-right: 1px solid var(--border-muted);
       color: var(--muted);
       pointer-events: none;
-      z-index: 0;
     }
 
     .editor-line-number-gutter-content {
@@ -505,19 +611,26 @@
       margin: 0;
       border: 0;
       border-radius: 8px;
-      padding: 10px 10px 10px calc(10px + var(--editor-line-number-gutter-width));
+      padding: 10px 10px 10px calc(10px + var(--editor-review-note-gutter-width) + var(--editor-line-number-gutter-width));
       overflow: auto;
       pointer-events: none;
       white-space: pre-wrap;
       word-break: normal;
       overflow-wrap: break-word;
       overscroll-behavior: none;
+      scrollbar-width: none;
       font-family: var(--font-mono);
       font-size: 13px;
       line-height: 1.45;
       tab-size: 2;
       color: var(--text);
       background: transparent;
+    }
+
+    .editor-highlight::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+      display: none;
     }
 
     #sourceText {
@@ -532,7 +645,7 @@
       resize: none;
       outline: none;
       overscroll-behavior: none;
-      padding: 10px 10px 10px calc(10px + var(--editor-line-number-gutter-width));
+      padding: 10px 10px 10px calc(10px + var(--editor-review-note-gutter-width) + var(--editor-line-number-gutter-width));
     }
 
     #sourceText.highlight-active {
@@ -1472,8 +1585,7 @@
       background: var(--panel);
     }
 
-    body.scratchpad-open,
-    body.review-notes-open {
+    body.scratchpad-open {
       overflow: hidden;
     }
 
@@ -1592,8 +1704,25 @@
       filter: brightness(0.95);
     }
 
-    .review-notes-dialog {
-      width: min(960px, 100%);
+    .review-notes-dock .scratchpad-header {
+      padding: 12px 14px 10px;
+    }
+
+    .review-notes-dock .scratchpad-header h2 {
+      font-size: 15px;
+    }
+
+    .review-notes-dock .scratchpad-description {
+      font-size: 11px;
+      line-height: 1.4;
+      word-break: normal;
+      overflow-wrap: normal;
+    }
+
+    .review-notes-inline-token {
+      display: inline-block;
+      white-space: nowrap;
+      font-family: var(--font-mono);
     }
 
     .review-notes-toolbar {
@@ -1602,13 +1731,14 @@
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
-      padding: 12px 18px;
-      border-bottom: 1px solid var(--border-muted);
-      background: var(--panel);
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-2);
+      box-shadow: inset 0 -1px 0 var(--border-muted);
     }
 
     .review-notes-empty {
-      padding: 16px 18px;
+      padding: 14px;
       font-size: 13px;
       line-height: 1.5;
       color: var(--muted);
@@ -1622,11 +1752,27 @@
 
     .review-notes-list {
       display: flex;
+      flex: 1 1 auto;
+      min-height: 0;
       flex-direction: column;
       gap: 12px;
-      padding: 16px 18px 18px;
+      padding: 14px;
       overflow: auto;
       background: var(--panel);
+    }
+
+    .review-notes-dock-footer {
+      display: flex;
+      justify-content: flex-end;
+      padding: 10px 14px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--panel-2);
+      box-shadow: inset 0 1px 0 var(--border-muted);
+    }
+
+    .review-notes-dock-footer .scratchpad-actions {
+      width: 100%;
+      justify-content: space-between;
     }
 
     .review-note-card {
@@ -1680,7 +1826,7 @@
       width: 100%;
       min-height: 92px;
       border-radius: 8px;
-      border: 1px solid var(--border);
+      border: 0;
       padding: 10px 12px;
       background: var(--panel);
       color: var(--text);
@@ -1689,11 +1835,11 @@
       line-height: 1.5;
       resize: vertical;
       outline: none;
+      box-shadow: inset 0 0 0 1px var(--border-muted);
     }
 
     .review-note-card textarea:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 2px var(--accent-soft);
+      box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 2px var(--accent-soft);
     }
 
     .review-note-card-footer {
@@ -1709,10 +1855,15 @@
       color: var(--muted);
     }
 
-    .review-note-convert-btn:not(:disabled) {
-      border-color: var(--ok-border);
-      color: var(--ok);
+    #reviewNotesAddBtn:not(:disabled) {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
       font-weight: 600;
+    }
+
+    #reviewNotesAddBtn:not(:disabled):hover {
+      filter: brightness(0.95);
     }
 
     .review-note-delete-btn:not(:disabled) {
@@ -1720,20 +1871,21 @@
       color: var(--warn);
     }
 
-    #reviewNotesDoneBtn:not(:disabled) {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-contrast);
-      font-weight: 600;
-    }
-
-    #reviewNotesDoneBtn:not(:disabled):hover {
-      filter: brightness(0.95);
-    }
-
     #status.error { color: var(--error); }
     #status.warning { color: var(--warn); }
     #status.success { color: var(--ok); }
+
+    @media (max-width: 1200px) {
+      .source-body {
+        flex-direction: column;
+      }
+
+      .review-notes-dock-wrap {
+        flex: 0 0 auto;
+        min-width: 0;
+        max-height: min(42vh, 420px);
+      }
+    }
 
     @media (max-width: 980px) {
       footer {

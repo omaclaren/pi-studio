@@ -47,6 +47,8 @@
       const sourceEditorWrapEl = document.getElementById("sourceEditorWrap");
       const sourceTextEl = document.getElementById("sourceText");
       const sourceHighlightEl = document.getElementById("sourceHighlight");
+      const reviewNoteGutterEl = document.getElementById("reviewNoteGutter");
+      const reviewNoteGutterContentEl = document.getElementById("reviewNoteGutterContent");
       const lineNumberGutterEl = document.getElementById("lineNumberGutter");
       const lineNumberGutterContentEl = document.getElementById("lineNumberGutterContent");
       const lineNumberMeasureEl = document.getElementById("lineNumberMeasure");
@@ -115,6 +117,7 @@
       const reviewNotesListEl = document.getElementById("reviewNotesList");
       const reviewNotesEmptyStateEl = document.getElementById("reviewNotesEmptyState");
       const reviewNotesAddBtn = document.getElementById("reviewNotesAddBtn");
+      const reviewNotesInlineAllBtn = document.getElementById("reviewNotesInlineAllBtn");
       const reviewNotesCloseBtn = document.getElementById("reviewNotesCloseBtn");
       const reviewNotesDoneBtn = document.getElementById("reviewNotesDoneBtn");
 
@@ -300,6 +303,7 @@
       let reviewNotesPersistTimer = null;
       let reviewNotesLoadNonce = 0;
       let pendingReviewNoteFocusId = null;
+      let pendingReviewNoteInlineFocusId = null;
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
       if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
@@ -766,7 +770,8 @@
         if (terminalActivityPhase === "responding") {
           if (activeKind === "critique") return "Critiquing…";
           if (activeKind === "annotation") return "Replying…";
-          return "Responding…";
+          if (activeKind === "direct") return "Thinking…";
+          return "Working…";
         }
 
         if (activeKind) return getTitleActionMessage(activeKind);
@@ -2606,7 +2611,7 @@
         if (editorHighlightEnabled && editorView === "markdown") {
           scheduleEditorHighlightRender();
         }
-        if (lineNumbersEnabled && editorView === "markdown") {
+        if (editorView === "markdown") {
           scheduleEditorLineNumberRender();
         }
         if (rightView === "editor-preview") {
@@ -2926,7 +2931,7 @@
         schedule(() => {
           syncEditorHighlightScroll();
         });
-        if (lineNumbersEnabled && editorView === "markdown") {
+        if (editorView === "markdown") {
           scheduleEditorLineNumberRender();
         }
 
@@ -2966,7 +2971,7 @@
         updateEditorHighlightState();
         syncHighlightSelectUi();
         updateLineNumberGutterVisibility();
-        if (!showPreview && lineNumbersEnabled) {
+        if (!showPreview) {
           scheduleEditorLineNumberRender();
         }
         updateReviewNotesUi();
@@ -3000,27 +3005,53 @@
         );
       }
 
+      function reviewNoteGutterShouldBeVisible() {
+        return Boolean(
+          editorView === "markdown"
+          && sourceEditorWrapEl
+          && reviewNoteGutterEl
+          && reviewNoteGutterContentEl
+          && lineNumberMeasureEl
+          && Array.isArray(reviewNotes)
+          && reviewNotes.length > 0,
+        );
+      }
+
       function getEditorLineNumberGutterWidthCss(lineCount) {
         const digits = Math.max(2, String(Math.max(1, lineCount || 0)).length);
         return "calc(" + digits + "ch + 18px)";
       }
 
       function updateLineNumberGutterVisibility() {
-        const visible = lineNumbersShouldBeVisible();
+        const lineNumbersVisible = lineNumbersShouldBeVisible();
+        const reviewMarkersVisible = reviewNoteGutterShouldBeVisible();
+        const anyVisible = lineNumbersVisible || reviewMarkersVisible;
         if (sourceEditorWrapEl) {
-          sourceEditorWrapEl.classList.toggle("line-numbers-enabled", visible);
-          if (!visible) {
-            sourceEditorWrapEl.style.setProperty("--editor-line-number-gutter-width", "0px");
-          }
+          sourceEditorWrapEl.classList.toggle("line-numbers-enabled", lineNumbersVisible);
+          sourceEditorWrapEl.style.setProperty("--editor-review-note-gutter-width", reviewMarkersVisible ? "28px" : "0px");
+          sourceEditorWrapEl.style.setProperty(
+            "--editor-line-number-gutter-width",
+            lineNumbersVisible
+              ? getEditorLineNumberGutterWidthCss(Math.max(1, String(sourceTextEl.value || "").replace(/\r\n/g, "\n").split("\n").length))
+              : "0px",
+          );
+        }
+        if (reviewNoteGutterEl) {
+          reviewNoteGutterEl.hidden = !reviewMarkersVisible;
         }
         if (lineNumberGutterEl) {
-          lineNumberGutterEl.hidden = !visible;
+          lineNumberGutterEl.hidden = !lineNumbersVisible;
         }
-        if (!visible) {
-          if (lineNumberGutterContentEl) lineNumberGutterContentEl.innerHTML = "";
-          if (lineNumberMeasureEl) lineNumberMeasureEl.innerHTML = "";
+        if (!reviewMarkersVisible && reviewNoteGutterContentEl) {
+          reviewNoteGutterContentEl.innerHTML = "";
         }
-        return visible;
+        if (!lineNumbersVisible && lineNumberGutterContentEl) {
+          lineNumberGutterContentEl.innerHTML = "";
+        }
+        if (!anyVisible && lineNumberMeasureEl) {
+          lineNumberMeasureEl.innerHTML = "";
+        }
+        return anyVisible;
       }
 
       function renderEditorLineNumbersNow() {
@@ -3029,7 +3060,16 @@
         const text = String(sourceTextEl.value || "").replace(/\r\n/g, "\n");
         const lines = text.split("\n");
         const lineCount = Math.max(1, lines.length);
-        sourceEditorWrapEl.style.setProperty("--editor-line-number-gutter-width", getEditorLineNumberGutterWidthCss(lineCount));
+        const lineNumbersVisible = lineNumbersShouldBeVisible();
+        const reviewMarkersVisible = reviewNoteGutterShouldBeVisible();
+
+        if (sourceEditorWrapEl) {
+          sourceEditorWrapEl.style.setProperty("--editor-review-note-gutter-width", reviewMarkersVisible ? "28px" : "0px");
+          sourceEditorWrapEl.style.setProperty(
+            "--editor-line-number-gutter-width",
+            lineNumbersVisible ? getEditorLineNumberGutterWidthCss(lineCount) : "0px",
+          );
+        }
 
         const styles = window.getComputedStyle(sourceTextEl);
         const lineHeightPx = parseFloat(styles.lineHeight) || 18.85;
@@ -3039,22 +3079,105 @@
         const paddingLeft = parseFloat(styles.paddingLeft) || 0;
         const contentWidth = Math.max(1, sourceTextEl.clientWidth - paddingLeft - paddingRight);
 
-        lineNumberGutterContentEl.style.paddingTop = paddingTop + "px";
-        lineNumberGutterContentEl.style.paddingBottom = paddingBottom + "px";
+        if (lineNumberGutterContentEl) {
+          lineNumberGutterContentEl.style.paddingTop = paddingTop + "px";
+          lineNumberGutterContentEl.style.paddingBottom = paddingBottom + "px";
+        }
+        if (reviewNoteGutterContentEl) {
+          reviewNoteGutterContentEl.style.paddingTop = paddingTop + "px";
+          reviewNoteGutterContentEl.style.paddingBottom = paddingBottom + "px";
+        }
         lineNumberMeasureEl.style.width = contentWidth + "px";
         lineNumberMeasureEl.innerHTML = lines
           .map((line) => "<div class='editor-line-number-measure-line'>" + (line.length ? escapeHtml(line) : "&#8203;") + "</div>")
           .join("");
 
         const measureLines = Array.from(lineNumberMeasureEl.children);
-        lineNumberGutterContentEl.innerHTML = measureLines
-          .map((lineEl, index) => {
-            const height = Math.max(lineHeightPx, lineEl.getBoundingClientRect().height || 0);
-            return "<div class='editor-line-number-row' style='height:" + height.toFixed(2) + "px'>" + (index + 1) + "</div>";
-          })
-          .join("");
+        const reviewNoteLineMap = reviewMarkersVisible ? buildReviewNoteLineMap(text) : null;
+
+        if (lineNumbersVisible && lineNumberGutterContentEl) {
+          lineNumberGutterContentEl.innerHTML = measureLines
+            .map((lineEl, index) => {
+              const height = Math.max(lineHeightPx, lineEl.getBoundingClientRect().height || 0);
+              return "<div class='editor-line-number-row' style='height:" + height.toFixed(2) + "px'>" + (index + 1) + "</div>";
+            })
+            .join("");
+        } else if (lineNumberGutterContentEl) {
+          lineNumberGutterContentEl.innerHTML = "";
+        }
+
+        if (reviewMarkersVisible && reviewNoteGutterContentEl && reviewNoteLineMap) {
+          reviewNoteGutterContentEl.innerHTML = measureLines
+            .map((lineEl, index) => {
+              const height = Math.max(lineHeightPx, lineEl.getBoundingClientRect().height || 0);
+              const lineNumber = index + 1;
+              const notesForLine = reviewNoteLineMap.get(lineNumber) || [];
+              const count = notesForLine.length;
+              if (count <= 0) {
+                return "<div class='editor-review-note-row' style='height:" + height.toFixed(2) + "px'></div>";
+              }
+              const title = count === 1
+                ? ("1 local comment on line " + lineNumber + ". Open comments.")
+                : (count + " local comments on line " + lineNumber + ". Open comments.");
+              const markerLabel = count > 9 ? "9+" : (count > 1 ? String(count) : "•");
+              return "<div class='editor-review-note-row' style='height:" + height.toFixed(2) + "px'><button type='button' class='editor-review-note-marker"
+                + (count > 1 ? " has-multiple" : "")
+                + "' data-review-note-id='" + escapeHtml(notesForLine[0].id) + "' title='" + escapeHtml(title) + "' aria-label='" + escapeHtml(title) + "'>"
+                + escapeHtml(markerLabel)
+                + "</button></div>";
+            })
+            .join("");
+        } else if (reviewNoteGutterContentEl) {
+          reviewNoteGutterContentEl.innerHTML = "";
+        }
 
         syncEditorHighlightScroll();
+      }
+
+      function scrollEditorRangeIntoView(range) {
+        if (!range || editorView !== "markdown") return;
+        renderEditorLineNumbersNow();
+
+        const text = String(sourceTextEl.value || "");
+        const startLine = getLineNumberAtOffset(text, range.start);
+        const endLine = getLineNumberAtOffset(text, Math.max(range.start, range.end > range.start ? range.end - 1 : range.end));
+        const styles = window.getComputedStyle(sourceTextEl);
+        const lineHeightPx = parseFloat(styles.lineHeight) || 18.85;
+        const paddingTop = parseFloat(styles.paddingTop) || 0;
+        const paddingBottom = parseFloat(styles.paddingBottom) || 0;
+        const measureLines = lineNumberMeasureEl ? Array.from(lineNumberMeasureEl.children) : [];
+
+        function getLineTop(lineNumber) {
+          let top = paddingTop;
+          for (let i = 0; i < lineNumber - 1; i += 1) {
+            const lineEl = measureLines[i];
+            top += Math.max(lineHeightPx, lineEl ? lineEl.getBoundingClientRect().height || 0 : 0);
+          }
+          return top;
+        }
+
+        function getLineBottom(lineNumber) {
+          const lineEl = measureLines[Math.max(0, lineNumber - 1)];
+          return getLineTop(lineNumber) + Math.max(lineHeightPx, lineEl ? lineEl.getBoundingClientRect().height || 0 : 0);
+        }
+
+        const rangeTop = getLineTop(startLine);
+        const rangeBottom = getLineBottom(endLine);
+        const viewportTop = sourceTextEl.scrollTop;
+        const viewportBottom = viewportTop + sourceTextEl.clientHeight;
+        const margin = Math.max(18, Math.round(sourceTextEl.clientHeight * 0.12));
+
+        let nextScrollTop = viewportTop;
+        if (rangeTop - margin < viewportTop) {
+          nextScrollTop = Math.max(0, rangeTop - margin);
+        } else if (rangeBottom + margin > viewportBottom) {
+          nextScrollTop = Math.max(0, rangeBottom - sourceTextEl.clientHeight + margin + paddingBottom);
+        }
+
+        if (Math.abs(nextScrollTop - viewportTop) > 1) {
+          sourceTextEl.scrollTop = nextScrollTop;
+          syncEditorHighlightScroll();
+        }
       }
 
       function scheduleEditorLineNumberRender() {
@@ -3704,6 +3827,9 @@
           sourceHighlightEl.scrollTop = sourceTextEl.scrollTop;
           sourceHighlightEl.scrollLeft = sourceTextEl.scrollLeft;
         }
+        if (reviewNoteGutterEl) {
+          reviewNoteGutterEl.scrollTop = sourceTextEl.scrollTop;
+        }
         if (lineNumberGutterEl) {
           lineNumberGutterEl.scrollTop = sourceTextEl.scrollTop;
         }
@@ -3792,9 +3918,7 @@
       }
 
       function syncModalOpenState() {
-        const anyModalOpen = isScratchpadOpen() || isReviewNotesOpen();
-        document.body.classList.toggle("scratchpad-open", anyModalOpen);
-        document.body.classList.toggle("review-notes-open", isReviewNotesOpen());
+        document.body.classList.toggle("scratchpad-open", isScratchpadOpen());
       }
 
       function describeStudioDocument(state) {
@@ -4047,6 +4171,9 @@
         }
         updateReviewNotesUi();
         renderReviewNotesList();
+        if (editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
       }
 
       function formatReviewNoteTimestamp(timestamp) {
@@ -4157,6 +4284,64 @@
         return getLineRangeForNumbers(source, note && note.lineStart, note && note.lineEnd);
       }
 
+      function getResolvedReviewNoteLineBounds(note, text) {
+        const source = String(text || "");
+        const range = resolveReviewNoteRange(note, source);
+        if (!range) return null;
+        const startLine = getLineNumberAtOffset(source, range.start);
+        const endLookupOffset = range.end > range.start ? range.end - 1 : range.start;
+        const endLine = getLineNumberAtOffset(source, endLookupOffset);
+        return {
+          start: range.start,
+          end: range.end,
+          lineStart: startLine,
+          lineEnd: Math.max(startLine, endLine),
+        };
+      }
+
+      function buildReviewNoteLineMap(text) {
+        const source = String(text || "");
+        const lineMap = new Map();
+        for (const note of reviewNotes) {
+          const bounds = getResolvedReviewNoteLineBounds(note, source);
+          if (!bounds) continue;
+          for (let line = bounds.lineStart; line <= bounds.lineEnd; line += 1) {
+            const notesForLine = lineMap.get(line) || [];
+            notesForLine.push(note);
+            lineMap.set(line, notesForLine);
+          }
+        }
+        return lineMap;
+      }
+
+      function getDisplayReviewNotes() {
+        const source = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
+        return reviewNotes.slice().sort((left, right) => {
+          const leftBounds = getResolvedReviewNoteLineBounds(left, source);
+          const rightBounds = getResolvedReviewNoteLineBounds(right, source);
+          const leftLine = leftBounds ? leftBounds.lineStart : Math.max(1, Number(left && left.lineStart) || 1);
+          const rightLine = rightBounds ? rightBounds.lineStart : Math.max(1, Number(right && right.lineStart) || 1);
+          if (leftLine !== rightLine) return leftLine - rightLine;
+
+          const leftStart = leftBounds ? leftBounds.start : Math.max(0, Number(left && left.selectionStart) || 0);
+          const rightStart = rightBounds ? rightBounds.start : Math.max(0, Number(right && right.selectionStart) || 0);
+          if (leftStart !== rightStart) return leftStart - rightStart;
+
+          const leftCreated = Number(left && left.createdAt) || 0;
+          const rightCreated = Number(right && right.createdAt) || 0;
+          if (leftCreated !== rightCreated) return leftCreated - rightCreated;
+
+          return String(left && left.id ? left.id : "").localeCompare(String(right && right.id ? right.id : ""));
+        });
+      }
+
+      function focusReviewNoteInPanel(noteId) {
+        const note = reviewNotes.find((entry) => entry && entry.id === noteId);
+        if (!note) return;
+        pendingReviewNoteFocusId = note.id;
+        openReviewNotes();
+      }
+
       function escapeReviewNoteAnnotationText(text) {
         return String(text || "")
           .replace(/\\/g, "\\\\")
@@ -4164,10 +4349,46 @@
           .trim();
       }
 
+      function getReviewNoteInlineState(note, text) {
+        const source = String(text || "");
+        const annotationBody = escapeReviewNoteAnnotationText(note && note.text);
+        if (!annotationBody) {
+          return {
+            annotationBody: "",
+            range: null,
+            markerText: "",
+            exists: false,
+            canToggle: false,
+          };
+        }
+        const range = resolveReviewNoteRange(note, source);
+        if (!range) {
+          return {
+            annotationBody,
+            range: null,
+            markerText: "",
+            exists: false,
+            canToggle: false,
+          };
+        }
+        const markerText = (range.start === range.end ? "" : " ") + "[an: " + annotationBody + "]";
+        const exists = source.slice(range.end, range.end + markerText.length) === markerText;
+        return {
+          annotationBody,
+          range,
+          markerText,
+          exists,
+          canToggle: true,
+        };
+      }
+
       function setReviewNotes(nextNotes, options) {
         reviewNotes = cloneReviewNotes(nextNotes);
         updateReviewNotesUi();
         renderReviewNotesList();
+        if (editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
         if (!options || options.persist !== false) {
           scheduleReviewNotesPersistence();
         }
@@ -4177,26 +4398,45 @@
         const descriptor = getCurrentStudioDocumentDescriptor();
         const count = reviewNotes.length;
         const hasNotes = count > 0;
+        const isOpen = isReviewNotesOpen();
         if (reviewNotesBtn) {
-          reviewNotesBtn.textContent = hasNotes ? "Review notes •" : "Review notes";
+          reviewNotesBtn.textContent = hasNotes ? "Comments •" : "Comments";
           reviewNotesBtn.classList.toggle("has-content", hasNotes);
-          reviewNotesBtn.title = hasNotes
-            ? (count + " local review note" + (count === 1 ? "" : "s") + " for " + descriptor.label)
-            : "Open local review notes for the current editor document or draft. Notes are anchored outside the document text and can later be converted into [an: ...] annotations.";
+          reviewNotesBtn.classList.toggle("is-active", isOpen);
+          reviewNotesBtn.setAttribute("aria-pressed", isOpen ? "true" : "false");
+          reviewNotesBtn.title = isOpen
+            ? "Hide local comments."
+            : (hasNotes
+              ? (count + " local comment" + (count === 1 ? "" : "s") + " for " + descriptor.label + ". Open the side-by-side comments rail.")
+              : "Open local comments beside the current editor document or draft. Comments stay outside the document text and can later be converted into [an: ...] annotations.");
         }
         if (reviewNotesMetaEl) {
           const scopeLabel = descriptor.fileBacked
             ? "file-backed"
             : (descriptor.draftBacked ? "draft-backed" : "local buffer");
           reviewNotesMetaEl.textContent = hasNotes
-            ? (count + " review note" + (count === 1 ? "" : "s") + " · " + scopeLabel + " · " + descriptor.label)
-            : ("No review notes yet · " + scopeLabel);
+            ? (count + " comment" + (count === 1 ? "" : "s") + " · " + scopeLabel + " · " + descriptor.label)
+            : ("No comments yet · " + scopeLabel);
         }
         if (reviewNotesAddBtn) {
           reviewNotesAddBtn.disabled = editorView !== "markdown";
           reviewNotesAddBtn.title = editorView === "markdown"
-            ? "Create a local review note from the current editor selection, or from the current line if nothing is selected."
-            : "Switch to Editor (Raw) to anchor a note to the current selection or line.";
+            ? "Create a new local comment from the current editor selection, or from the current line if nothing is selected."
+            : "Switch to Editor (Raw) to anchor a comment to the current selection or line.";
+        }
+        if (reviewNotesInlineAllBtn) {
+          const currentText = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
+          const toggleCandidates = getDisplayReviewNotes().filter((note) => getReviewNoteInlineState(note, currentText).canToggle);
+          const allInline = toggleCandidates.length > 0 && toggleCandidates.every((note) => getReviewNoteInlineState(note, currentText).exists);
+          reviewNotesInlineAllBtn.disabled = uiBusy || toggleCandidates.length === 0;
+          reviewNotesInlineAllBtn.textContent = allInline ? "All inline: On" : "All inline: Off";
+          reviewNotesInlineAllBtn.setAttribute("aria-pressed", allInline ? "true" : "false");
+          reviewNotesInlineAllBtn.title = allInline
+            ? "Inline annotations derived from all non-empty comments are currently on. Click to remove them."
+            : "Inline annotations derived from all non-empty comments are currently off. Click to add them.";
+        }
+        if (reviewNotesDoneBtn) {
+          reviewNotesDoneBtn.disabled = !isOpen;
         }
         if (reviewNotesEmptyStateEl) {
           reviewNotesEmptyStateEl.hidden = hasNotes;
@@ -4206,7 +4446,7 @@
       function renderReviewNotesList() {
         if (!reviewNotesListEl) return;
         reviewNotesListEl.innerHTML = "";
-        for (const note of reviewNotes) {
+        for (const note of getDisplayReviewNotes()) {
           const card = document.createElement("article");
           card.className = "review-note-card";
 
@@ -4227,24 +4467,43 @@
           titleWrap.appendChild(quote);
           header.appendChild(titleWrap);
 
+          card.appendChild(header);
+
+          const textarea = document.createElement("textarea");
+          textarea.value = String(note.text || "");
+          textarea.placeholder = "Write a local comment here…";
+          textarea.title = "Write a local comment. Press Enter to finish editing, or Shift+Enter for a new line.";
+          card.appendChild(textarea);
+
+          const footer = document.createElement("div");
+          footer.className = "review-note-card-footer";
+
+          const timestamp = document.createElement("span");
+          timestamp.className = "review-note-timestamp";
+          timestamp.textContent = formatReviewNoteTimestamp(note.updatedAt);
+
           const actions = document.createElement("div");
           actions.className = "review-note-card-actions";
 
           const jumpBtn = document.createElement("button");
           jumpBtn.type = "button";
           jumpBtn.textContent = "Jump";
-          jumpBtn.title = "Jump to this review note's anchored location in the editor.";
+          jumpBtn.title = "Jump to this comment's anchored location in the editor.";
           jumpBtn.addEventListener("click", () => {
             jumpToReviewNote(note.id);
           });
           actions.appendChild(jumpBtn);
 
+          const inlineState = getReviewNoteInlineState(note, sourceTextEl.value || "");
           const convertBtn = document.createElement("button");
           convertBtn.type = "button";
-          convertBtn.className = "review-note-convert-btn";
-          convertBtn.textContent = "Convert to annotation";
-          convertBtn.disabled = !String(note.text || "").trim() || uiBusy;
-          convertBtn.title = "Insert this note into the document as a normal [an: ...] annotation and remove the local review note.";
+          convertBtn.className = "review-note-inline-btn";
+          convertBtn.textContent = inlineState.exists ? "Inline: On" : "Inline: Off";
+          convertBtn.setAttribute("aria-pressed", inlineState.exists ? "true" : "false");
+          convertBtn.disabled = !inlineState.canToggle || uiBusy;
+          convertBtn.title = inlineState.exists
+            ? "This comment currently has an inline [an: ...] annotation in the editor. Click to remove it."
+            : "This comment is currently not inline in the editor. Click to add it as an inline [an: ...] annotation.";
           convertBtn.addEventListener("click", () => {
             convertReviewNoteToAnnotation(note.id);
           });
@@ -4254,44 +4513,63 @@
           deleteBtn.type = "button";
           deleteBtn.className = "review-note-delete-btn";
           deleteBtn.textContent = "Delete";
-          deleteBtn.title = "Delete this local review note.";
+          deleteBtn.title = "Delete this local comment.";
           deleteBtn.addEventListener("click", () => {
             deleteReviewNote(note.id);
           });
           actions.appendChild(deleteBtn);
 
-          header.appendChild(actions);
-          card.appendChild(header);
-
-          const textarea = document.createElement("textarea");
-          textarea.value = String(note.text || "");
-          textarea.placeholder = "Write a local review note here…";
-          card.appendChild(textarea);
-
-          const footer = document.createElement("div");
-          footer.className = "review-note-card-footer";
-          const timestamp = document.createElement("span");
-          timestamp.className = "review-note-timestamp";
-          timestamp.textContent = formatReviewNoteTimestamp(note.updatedAt);
           footer.appendChild(timestamp);
+          footer.appendChild(actions);
           card.appendChild(footer);
 
           textarea.addEventListener("input", () => {
             note.text = textarea.value;
             note.updatedAt = Date.now();
             timestamp.textContent = formatReviewNoteTimestamp(note.updatedAt);
-            convertBtn.disabled = !String(note.text || "").trim() || uiBusy;
+            const nextInlineState = getReviewNoteInlineState(note, sourceTextEl.value || "");
+            convertBtn.disabled = !nextInlineState.canToggle || uiBusy;
+            convertBtn.textContent = nextInlineState.exists ? "Inline: On" : "Inline: Off";
+            convertBtn.setAttribute("aria-pressed", nextInlineState.exists ? "true" : "false");
+            convertBtn.title = nextInlineState.exists
+              ? "This comment currently has an inline [an: ...] annotation in the editor. Click to remove it."
+              : "This comment is currently not inline in the editor. Click to add it as an inline [an: ...] annotation.";
             scheduleReviewNotesPersistence();
             updateReviewNotesUi();
           });
 
+          textarea.addEventListener("keydown", (event) => {
+            if (
+              event.key === "Enter"
+              && !event.shiftKey
+              && !event.altKey
+              && !event.ctrlKey
+              && !event.metaKey
+            ) {
+              event.preventDefault();
+              textarea.blur();
+              if (!convertBtn.disabled) {
+                convertBtn.focus();
+              }
+            }
+          });
+
           reviewNotesListEl.appendChild(card);
 
-          if (pendingReviewNoteFocusId && pendingReviewNoteFocusId === note.id) {
+          if (pendingReviewNoteInlineFocusId && pendingReviewNoteInlineFocusId === note.id && isReviewNotesOpen()) {
             const schedule = typeof window.requestAnimationFrame === "function"
               ? window.requestAnimationFrame.bind(window)
               : (cb) => window.setTimeout(cb, 16);
             schedule(() => {
+              card.scrollIntoView({ block: "nearest" });
+              if (!convertBtn.disabled) convertBtn.focus();
+            });
+          } else if (pendingReviewNoteFocusId && pendingReviewNoteFocusId === note.id && isReviewNotesOpen()) {
+            const schedule = typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame.bind(window)
+              : (cb) => window.setTimeout(cb, 16);
+            schedule(() => {
+              card.scrollIntoView({ block: "nearest" });
               textarea.focus();
               const end = textarea.value.length;
               textarea.setSelectionRange(end, end);
@@ -4299,11 +4577,12 @@
           }
         }
         pendingReviewNoteFocusId = null;
+        pendingReviewNoteInlineFocusId = null;
       }
 
       function addReviewNoteFromEditorSelection() {
         if (editorView !== "markdown") {
-          setStatus("Switch to Editor (Raw) before adding an anchored review note.", "warning");
+          setStatus("Switch to Editor (Raw) before adding an anchored comment.", "warning");
           return;
         }
         const anchor = getEditorAnchorForReviewNote();
@@ -4324,7 +4603,7 @@
         if (!isReviewNotesOpen()) {
           openReviewNotes();
         }
-        setStatus("Added local review note.", "success");
+        setStatus("Added local comment.", "success");
       }
 
       function jumpToReviewNote(noteId) {
@@ -4333,54 +4612,103 @@
         const current = String(sourceTextEl.value || "");
         const range = resolveReviewNoteRange(note, current);
         if (!range) {
-          setStatus("Could not find the anchored location for this review note.", "warning");
+          setStatus("Could not find the anchored location for this comment.", "warning");
           return;
         }
         setEditorView("markdown");
         setActivePane("left");
-        closeReviewNotes({ focusTarget: sourceTextEl });
         sourceTextEl.focus();
         sourceTextEl.setSelectionRange(range.start, range.end);
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+        schedule(() => {
+          scrollEditorRangeIntoView(range);
+        });
       }
 
       function deleteReviewNote(noteId) {
         const note = reviewNotes.find((entry) => entry && entry.id === noteId);
         if (!note) return;
-        const confirmed = window.confirm("Delete this local review note?");
+        const confirmed = window.confirm("Delete this local comment?");
         if (!confirmed) return;
         setReviewNotes(reviewNotes.filter((entry) => entry && entry.id !== noteId));
-        setStatus("Deleted local review note.", "success");
+        setStatus("Deleted local comment.", "success");
       }
 
       function convertReviewNoteToAnnotation(noteId) {
         if (uiBusy) {
-          setStatus("Wait until the current Studio action finishes before converting a note to an annotation.", "warning");
+          setStatus("Wait until the current Studio action finishes before toggling inline annotation state.", "warning");
           return;
         }
         const note = reviewNotes.find((entry) => entry && entry.id === noteId);
         if (!note) return;
-        const annotationBody = escapeReviewNoteAnnotationText(note.text);
-        if (!annotationBody) {
-          setStatus("Review note is empty. Add some text before converting it to an annotation.", "warning");
-          return;
-        }
         const current = String(sourceTextEl.value || "");
-        const range = resolveReviewNoteRange(note, current);
-        if (!range) {
-          setStatus("Could not find the anchored location for this review note.", "warning");
+        const inlineState = getReviewNoteInlineState(note, current);
+        if (!inlineState.annotationBody) {
+          setStatus("Comment is empty. Add some text before toggling inline annotation state.", "warning");
           return;
         }
-        const insertion = (range.start === range.end ? "" : " ") + "[an: " + annotationBody + "]";
-        const next = current.slice(0, range.end) + insertion + current.slice(range.end);
+        if (!inlineState.range || !inlineState.canToggle) {
+          setStatus("Could not find the anchored location for this comment.", "warning");
+          return;
+        }
+        const next = inlineState.exists
+          ? current.slice(0, inlineState.range.end) + current.slice(inlineState.range.end + inlineState.markerText.length)
+          : current.slice(0, inlineState.range.end) + inlineState.markerText + current.slice(inlineState.range.end);
         setEditorView("markdown");
-        setEditorText(next, { preserveScroll: false, preserveSelection: false });
-        const caret = range.end + insertion.length;
-        sourceTextEl.focus();
-        sourceTextEl.setSelectionRange(caret, caret);
-        setActivePane("left");
-        setReviewNotes(reviewNotes.filter((entry) => entry && entry.id !== noteId));
-        closeReviewNotes({ focusTarget: sourceTextEl });
-        setStatus("Converted local review note to annotation.", "success");
+        setEditorText(next, { preserveScroll: true, preserveSelection: true });
+        pendingReviewNoteInlineFocusId = note.id;
+        renderReviewNotesList();
+        updateReviewNotesUi();
+        setStatus(inlineState.exists ? "Removed inline annotation from local comment." : "Added inline annotation from local comment.", "success");
+      }
+
+      function toggleAllReviewNotesInlineAnnotations() {
+        if (uiBusy) {
+          setStatus("Wait until the current Studio action finishes before toggling inline annotations.", "warning");
+          return;
+        }
+        const candidates = getDisplayReviewNotes().filter((note) => getReviewNoteInlineState(note, sourceTextEl.value || "").canToggle);
+        if (candidates.length === 0) {
+          setStatus("No non-empty comments are ready to toggle inline.", "warning");
+          return;
+        }
+        let currentText = String(sourceTextEl.value || "");
+        const shouldRemoveAll = candidates.every((note) => getReviewNoteInlineState(note, currentText).exists);
+        const ordered = candidates
+          .map((note) => ({ note, state: getReviewNoteInlineState(note, currentText) }))
+          .filter((entry) => entry.state.range)
+          .sort((left, right) => (right.state.range ? right.state.range.end : 0) - (left.state.range ? left.state.range.end : 0));
+
+        let changed = false;
+        for (const entry of ordered) {
+          const liveState = getReviewNoteInlineState(entry.note, currentText);
+          if (!liveState.range || !liveState.canToggle) continue;
+          if (shouldRemoveAll) {
+            if (!liveState.exists) continue;
+            currentText = currentText.slice(0, liveState.range.end) + currentText.slice(liveState.range.end + liveState.markerText.length);
+            changed = true;
+          } else {
+            if (liveState.exists) continue;
+            currentText = currentText.slice(0, liveState.range.end) + liveState.markerText + currentText.slice(liveState.range.end);
+            changed = true;
+          }
+        }
+
+        if (!changed) {
+          setStatus(shouldRemoveAll ? "No inline annotations were removed." : "No inline annotations were added.", "warning");
+          return;
+        }
+
+        setEditorView("markdown");
+        setEditorText(currentText, { preserveScroll: true, preserveSelection: true });
+        renderReviewNotesList();
+        updateReviewNotesUi();
+        if (reviewNotesInlineAllBtn && typeof reviewNotesInlineAllBtn.focus === "function") {
+          reviewNotesInlineAllBtn.focus();
+        }
+        setStatus(shouldRemoveAll ? "Removed inline annotations from all comments." : "Added inline annotations from all comments.", "success");
       }
 
       function updateScratchpadUi() {
@@ -4458,7 +4786,10 @@
       function closeReviewNotes(options) {
         if (!reviewNotesOverlayEl || reviewNotesOverlayEl.hidden) return;
         reviewNotesOverlayEl.hidden = true;
-        syncModalOpenState();
+        updateReviewNotesUi();
+        if (editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
         const focusTarget = options && Object.prototype.hasOwnProperty.call(options, "focusTarget")
           ? options.focusTarget
           : (reviewNotesReturnFocusEl || reviewNotesBtn || sourceTextEl);
@@ -4480,9 +4811,19 @@
           ? document.activeElement
           : sourceTextEl;
         reviewNotesOverlayEl.hidden = false;
-        syncModalOpenState();
         renderReviewNotesList();
         updateReviewNotesUi();
+        if (editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
+      }
+
+      function toggleReviewNotes() {
+        if (isReviewNotesOpen()) {
+          closeReviewNotes({ focusTarget: reviewNotesBtn || sourceTextEl });
+        } else {
+          openReviewNotes();
+        }
       }
 
       function insertScratchpadIntoEditor() {
@@ -4690,8 +5031,8 @@
         if (annotationModeSelect) {
           annotationModeSelect.value = annotationsEnabled ? "on" : "off";
           annotationModeSelect.title = annotationsEnabled
-            ? "Annotations On: keep and send [an: ...] markers."
-            : "Annotations Hidden: keep markers in editor, hide in preview, and strip before Run/Critique.";
+            ? "Inline annotations On: keep and send [an: ...] markers."
+            : "Inline annotations Hide: keep markers in the editor, hide them in preview, and strip before Run/Critique.";
         }
 
         syncRunAndCritiqueButtons();
@@ -5777,6 +6118,10 @@
       sourceTextEl.addEventListener("input", () => {
         renderSourcePreview({ previewDelayMs: PREVIEW_INPUT_DEBOUNCE_MS });
         scheduleEditorMetaUpdate();
+        if (isReviewNotesOpen() && reviewNotes.length > 0) {
+          renderReviewNotesList();
+          updateReviewNotesUi();
+        }
       });
 
       sourceTextEl.addEventListener("scroll", () => {
@@ -5797,9 +6142,7 @@
       window.addEventListener("resize", () => {
         if (editorView !== "markdown") return;
         syncEditorHighlightScroll();
-        if (lineNumbersEnabled) {
-          scheduleEditorLineNumberRender();
-        }
+        scheduleEditorLineNumberRender();
       });
 
       insertHeaderBtn.addEventListener("click", () => {
@@ -6126,7 +6469,7 @@
 
       if (reviewNotesBtn) {
         reviewNotesBtn.addEventListener("click", () => {
-          openReviewNotes();
+          toggleReviewNotes();
         });
       }
 
@@ -6142,17 +6485,26 @@
         });
       }
 
-      if (reviewNotesOverlayEl) {
-        reviewNotesOverlayEl.addEventListener("click", (event) => {
-          if (event.target === reviewNotesOverlayEl) {
-            closeReviewNotes();
-          }
-        });
-      }
-
       if (reviewNotesAddBtn) {
         reviewNotesAddBtn.addEventListener("click", () => {
           addReviewNoteFromEditorSelection();
+        });
+      }
+
+      if (reviewNotesInlineAllBtn) {
+        reviewNotesInlineAllBtn.addEventListener("click", () => {
+          toggleAllReviewNotesInlineAnnotations();
+        });
+      }
+
+      if (reviewNoteGutterContentEl) {
+        reviewNoteGutterContentEl.addEventListener("click", (event) => {
+          const target = event.target;
+          const markerBtn = target instanceof Element ? target.closest(".editor-review-note-marker") : null;
+          if (!markerBtn) return;
+          const noteId = markerBtn.getAttribute("data-review-note-id") || "";
+          if (!noteId) return;
+          focusReviewNoteInPanel(noteId);
         });
       }
 
@@ -6366,7 +6718,7 @@
 
       if (sourceEditorWrapEl && typeof ResizeObserver === "function") {
         const editorResizeObserver = new ResizeObserver(() => {
-          if (editorView !== "markdown" || !lineNumbersEnabled) return;
+          if (editorView !== "markdown") return;
           scheduleEditorLineNumberRender();
         });
         editorResizeObserver.observe(sourceEditorWrapEl);

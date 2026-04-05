@@ -6087,7 +6087,7 @@ ${cssVarsBlock}
         </div>
         <div class="section-header-actions">
           <button id="leftFocusBtn" class="pane-focus-btn" type="button" title="Show only the editor pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
-          <button id="reviewNotesBtn" type="button" title="Open local review notes for the current editor document or draft. Notes are anchored outside the document text and can later be converted into [an: ...] annotations.">Review notes</button>
+          <button id="reviewNotesBtn" type="button" title="Toggle local comments beside the current editor document or draft. Comments stay outside the document text and can later be converted into [an: ...] annotations.">Comments</button>
           <button id="scratchpadBtn" type="button" title="Open a local persistent scratchpad for the current editor document or draft. Scratchpad text is never run, critiqued, or exported unless you explicitly insert it into the editor.">Scratchpad</button>
         </div>
       </div>
@@ -6112,9 +6112,9 @@ ${cssVarsBlock}
             </div>
             <div class="source-actions-row">
               <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).">Annotation header</button>
-              <select id="annotationModeSelect" aria-label="Annotation visibility mode" title="On: keep and send [an: ...] markers. Hidden: keep markers in editor, hide in preview, and strip before Run/Critique.">
-                <option value="on" selected>Annotations: On</option>
-                <option value="off">Annotations: Hidden</option>
+              <select id="annotationModeSelect" aria-label="Inline annotation visibility mode" title="On: keep and send [an: ...] markers. Hide: keep markers in the editor, hide them in preview, and strip before Run/Critique.">
+                <option value="on" selected>Inline annotations: On</option>
+                <option value="off">Inline annotations: Hide</option>
               </select>
               <button id="stripAnnotationsBtn" type="button" title="Destructively remove all [an: ...] markers from editor text.">Strip annotations…</button>
               <button id="saveAnnotatedBtn" type="button" title="Save full editor content (including [an: ...] markers) as a .annotated.md file.">Save .annotated.md</button>
@@ -6155,21 +6155,51 @@ ${cssVarsBlock}
                 <option value="yaml">Syntax highlight: YAML</option>
               </select>
               <select id="lineNumbersSelect" aria-label="Editor line numbers">
-                <option value="off" selected>Line numbers: Off</option>
-                <option value="on">Line numbers: On</option>
+                <option value="off">Line numbers: Off</option>
+                <option value="on" selected>Line numbers: On</option>
               </select>
             </div>
           </div>
         </div>
-        <div id="sourceEditorWrap" class="editor-highlight-wrap">
-          <div id="lineNumberGutter" class="editor-line-number-gutter" hidden aria-hidden="true">
-            <div id="lineNumberGutterContent" class="editor-line-number-gutter-content"></div>
+        <div class="source-body">
+          <div class="source-primary">
+            <div id="sourceEditorWrap" class="editor-highlight-wrap">
+              <div id="reviewNoteGutter" class="editor-review-note-gutter" hidden aria-hidden="true">
+                <div id="reviewNoteGutterContent" class="editor-review-note-gutter-content"></div>
+              </div>
+              <div id="lineNumberGutter" class="editor-line-number-gutter" hidden aria-hidden="true">
+                <div id="lineNumberGutterContent" class="editor-line-number-gutter-content"></div>
+              </div>
+              <div id="lineNumberMeasure" class="editor-line-number-measure" aria-hidden="true"></div>
+              <pre id="sourceHighlight" class="editor-highlight" aria-hidden="true"></pre>
+              <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
+            </div>
+            <div id="sourcePreview" class="panel-scroll rendered-markdown" hidden><pre class="plain-markdown"></pre></div>
           </div>
-          <div id="lineNumberMeasure" class="editor-line-number-measure" aria-hidden="true"></div>
-          <pre id="sourceHighlight" class="editor-highlight" aria-hidden="true"></pre>
-          <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
+          <aside id="reviewNotesOverlay" class="review-notes-dock-wrap" hidden>
+            <div id="reviewNotesDialog" class="review-notes-dock" role="complementary" aria-labelledby="reviewNotesTitle">
+              <div class="scratchpad-header">
+                <div>
+                  <h2 id="reviewNotesTitle">Comments</h2>
+                  <p class="scratchpad-description">Local comments for editor text. Stay out of the text, anchored to selections or lines, and can be converted into inline <span class="review-notes-inline-token">[an: ...]</span> annotations.</p>
+                </div>
+                <button id="reviewNotesCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Hide comments" title="Hide comments">✕</button>
+              </div>
+              <div class="review-notes-toolbar">
+                <span id="reviewNotesMeta" class="scratchpad-meta">No comments</span>
+              </div>
+              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text (or just place the caret on a line) in <strong>Editor (Raw)</strong>, then choose <em>New comment from selection</em>.</div>
+              <div id="reviewNotesList" class="review-notes-list" aria-live="polite"></div>
+              <div class="review-notes-dock-footer">
+                <div class="scratchpad-actions">
+                  <button id="reviewNotesAddBtn" type="button" title="Create a new local comment from the current editor selection, or from the current line if nothing is selected.">New comment from selection</button>
+                  <button id="reviewNotesInlineAllBtn" type="button" title="Toggle inline annotations for all non-empty comments.">All inline: Off</button>
+                  <button id="reviewNotesDoneBtn" type="button" title="Hide the comments rail.">Hide</button>
+                </div>
+              </div>
+            </div>
+          </aside>
         </div>
-        <div id="sourcePreview" class="panel-scroll rendered-markdown" hidden><pre class="plain-markdown"></pre></div>
       </div>
     </section>
 
@@ -6248,27 +6278,6 @@ ${cssVarsBlock}
           <button id="scratchpadDoneBtn" type="button" title="Keep the current scratchpad text and close the scratchpad.">Keep and close</button>
         </div>
       </div>
-    </div>
-  </div>
-
-  <div id="reviewNotesOverlay" class="scratchpad-overlay review-notes-overlay" hidden>
-    <div id="reviewNotesDialog" class="scratchpad-dialog review-notes-dialog" role="dialog" aria-modal="true" aria-labelledby="reviewNotesTitle">
-      <div class="scratchpad-header">
-        <div>
-          <h2 id="reviewNotesTitle">Review notes</h2>
-          <p class="scratchpad-description">Anchored local review notes for the current Studio document or draft. Notes stay out of the document text by default, persist locally for that document identity, and can be promoted into normal <code>[an: ...]</code> annotations when you want them to become part of the document workflow. File-backed documents reliably come back across Pi restarts; unsaved drafts stay with their own draft instance until you save them or discard them.</p>
-        </div>
-        <button id="reviewNotesCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Keep current review notes and close review notes" title="Keep current review notes and close review notes">✕</button>
-      </div>
-      <div class="review-notes-toolbar">
-        <span id="reviewNotesMeta" class="scratchpad-meta">No review notes</span>
-        <div class="scratchpad-actions">
-          <button id="reviewNotesAddBtn" type="button" title="Create a local review note from the current editor selection, or from the current line if nothing is selected.">Add note from selection</button>
-          <button id="reviewNotesDoneBtn" type="button" title="Keep the current review notes and close the review-notes panel.">Keep and close</button>
-        </div>
-      </div>
-      <div id="reviewNotesEmptyState" class="review-notes-empty">No review notes yet for this document. Select text (or just place the caret on a line) in <strong>Editor (Raw)</strong>, then choose <em>Add note from selection</em>.</div>
-      <div id="reviewNotesList" class="review-notes-list" aria-live="polite"></div>
     </div>
   </div>
 
