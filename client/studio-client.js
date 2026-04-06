@@ -4618,21 +4618,18 @@
         blockEl.classList.toggle("has-comments", hasNotes);
 
         if (summaryBtn) {
-          const countLabel = hasNotes ? (notes.length > 9 ? "9+" : String(notes.length)) : "";
-          summaryBtn.hidden = !hasNotes;
-          summaryBtn.textContent = countLabel;
-          summaryBtn.setAttribute("aria-label", hasNotes
-            ? (notes.length + " local comment" + (notes.length === 1 ? "" : "s") + " on this " + blockKindLabel + ". Open comments.")
-            : "No local comments on this block.");
-          summaryBtn.title = hasNotes
-            ? (notes.length + " local comment" + (notes.length === 1 ? "" : "s") + " on " + lineLabel + ". Open comments.")
-            : "";
-          summaryBtn.dataset.reviewNoteId = hasNotes && notes[0] ? String(notes[0].id || "") : "";
+          summaryBtn.hidden = true;
+          summaryBtn.textContent = "";
+          summaryBtn.dataset.reviewNoteId = "";
         }
 
         if (addBtn) {
+          addBtn.textContent = hasNotes
+            ? (notes.length === 1 ? "Comment" : "Comments")
+            : "Comment";
+          addBtn.dataset.previewCommentMode = hasNotes ? "open" : "add";
           addBtn.title = hasNotes
-            ? ("Add another local comment on this " + blockKindLabel + " (" + lineLabel + ").")
+            ? (notes.length + " local comment" + (notes.length === 1 ? "" : "s") + " on this " + blockKindLabel + " (" + lineLabel + "). Open comments.")
             : ("Add a local comment on this " + blockKindLabel + " (" + lineLabel + ").");
           addBtn.setAttribute("aria-label", addBtn.title);
         }
@@ -6948,13 +6945,14 @@
 
       function handlePreviewCommentActionClick(event) {
         const target = event.target;
-        const actionBtn = target instanceof Element ? target.closest(".preview-comment-summary, .preview-comment-add") : null;
+        const actionBtn = target instanceof Element ? target.closest(".preview-comment-add, .preview-comment-summary") : null;
         if (!actionBtn) return;
         const blockEl = actionBtn.closest(".preview-comment-block");
         if (!blockEl) return;
         event.preventDefault();
         event.stopPropagation();
-        if (actionBtn.classList.contains("preview-comment-summary")) {
+        const mode = String(actionBtn.dataset && actionBtn.dataset.previewCommentMode ? actionBtn.dataset.previewCommentMode : "");
+        if (mode === "open" || actionBtn.classList.contains("preview-comment-summary")) {
           focusReviewNotesForPreviewBlock(blockEl);
           return;
         }

@@ -886,37 +886,19 @@
       transform: translateY(-0.38rem);
     }
 
-    .preview-comment-summary,
+    .preview-comment-summary {
+      display: none !important;
+    }
+
     .preview-comment-add {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       min-height: 24px;
       border-radius: 999px;
+      padding: 0 10px;
       font-size: 12px;
       line-height: 1;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    }
-
-    .preview-comment-summary {
-      min-width: 24px;
-      padding: 0 8px;
-      font-weight: 700;
-      font-variant-numeric: tabular-nums;
-      background: var(--accent-soft);
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-
-    .preview-comment-summary:hover,
-    .preview-comment-summary:focus-visible {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-contrast);
-    }
-
-    .preview-comment-add {
-      padding: 0 10px;
       opacity: 0;
       pointer-events: none;
       transform: translateY(-2px);
@@ -924,14 +906,23 @@
       background: var(--panel);
       border-color: var(--border-muted);
       color: var(--muted);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
     }
 
     .preview-comment-block:hover .preview-comment-add,
-    .preview-comment-block:focus-within .preview-comment-add,
+    .preview-comment-block:focus-within .preview-comment-add {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
     .preview-comment-block.has-comments .preview-comment-add {
       opacity: 1;
       pointer-events: auto;
       transform: translateY(0);
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
     }
 
     .preview-comment-add:hover,
@@ -939,6 +930,12 @@
       border-color: var(--accent);
       color: var(--accent);
       background: var(--accent-soft);
+    }
+
+    .preview-comment-block.has-comments .preview-comment-add:hover,
+    .preview-comment-block.has-comments .preview-comment-add:focus-visible {
+      background: var(--accent);
+      color: var(--accent-contrast);
     }
 
     .preview-comment-block.has-comments > .preview-comment-block-content {
