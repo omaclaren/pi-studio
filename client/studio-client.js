@@ -4618,8 +4618,9 @@
         blockEl.classList.toggle("has-comments", hasNotes);
 
         if (summaryBtn) {
+          const countLabel = hasNotes ? (notes.length > 9 ? "9+" : String(notes.length)) : "";
           summaryBtn.hidden = !hasNotes;
-          summaryBtn.textContent = hasNotes ? String(notes.length) : "";
+          summaryBtn.textContent = countLabel;
           summaryBtn.setAttribute("aria-label", hasNotes
             ? (notes.length + " local comment" + (notes.length === 1 ? "" : "s") + " on this " + blockKindLabel + ". Open comments.")
             : "No local comments on this block.");

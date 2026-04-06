@@ -882,7 +882,7 @@
       z-index: 4;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       transform: translateY(-0.38rem);
     }
 
@@ -891,32 +891,36 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      min-height: 24px;
       border-radius: 999px;
-      padding: 2px 8px;
-      font-size: 11px;
-      line-height: 1.3;
+      font-size: 12px;
+      line-height: 1;
       box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
     }
 
     .preview-comment-summary {
       min-width: 24px;
-      justify-content: center;
+      padding: 0 8px;
       font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .preview-comment-summary:hover,
+    .preview-comment-summary:focus-visible {
       background: var(--accent);
       border-color: var(--accent);
       color: var(--accent-contrast);
     }
 
-    .preview-comment-summary:hover,
-    .preview-comment-summary:focus-visible {
-      filter: brightness(0.96);
-    }
-
     .preview-comment-add {
+      padding: 0 10px;
       opacity: 0;
       pointer-events: none;
       transform: translateY(-2px);
-      transition: opacity 120ms ease, transform 120ms ease, color 120ms ease, border-color 120ms ease;
+      transition: opacity 120ms ease, transform 120ms ease, color 120ms ease, border-color 120ms ease, background-color 120ms ease;
       background: var(--panel);
       border-color: var(--border-muted);
       color: var(--muted);
@@ -934,12 +938,12 @@
     .preview-comment-add:focus-visible {
       border-color: var(--accent);
       color: var(--accent);
-      background: var(--panel);
+      background: var(--accent-soft);
     }
 
     .preview-comment-block.has-comments > .preview-comment-block-content {
-      box-shadow: inset 3px 0 0 var(--accent-soft);
       border-radius: 10px;
+      background: linear-gradient(to right, var(--accent-soft) 0, var(--accent-soft) 3px, transparent 3px, transparent 100%);
     }
 
     .rendered-markdown li::marker {
