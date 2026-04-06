@@ -6188,7 +6188,7 @@ ${cssVarsBlock}
               <div class="review-notes-toolbar">
                 <span id="reviewNotesMeta" class="scratchpad-meta">No comments</span>
               </div>
-              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text (or just place the caret on a line) in <strong>Editor (Raw)</strong>, then choose <em>New comment from selection</em>.</div>
+              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text (or just place the caret on a line) in <strong>Editor (Raw)</strong>, or use <em>Comment</em> on a block in <strong>Editor (Preview)</strong>.</div>
               <div id="reviewNotesList" class="review-notes-list" aria-live="polite"></div>
               <div class="review-notes-dock-footer">
                 <div class="scratchpad-actions">

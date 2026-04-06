@@ -867,6 +867,81 @@
       margin-bottom: 1em;
     }
 
+    .preview-comment-block {
+      position: relative;
+    }
+
+    .preview-comment-block-content {
+      scroll-margin-top: 24px;
+    }
+
+    .preview-comment-controls {
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 4;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transform: translateY(-0.38rem);
+    }
+
+    .preview-comment-summary,
+    .preview-comment-add {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      line-height: 1.3;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    }
+
+    .preview-comment-summary {
+      min-width: 24px;
+      justify-content: center;
+      font-weight: 700;
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
+    }
+
+    .preview-comment-summary:hover,
+    .preview-comment-summary:focus-visible {
+      filter: brightness(0.96);
+    }
+
+    .preview-comment-add {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-2px);
+      transition: opacity 120ms ease, transform 120ms ease, color 120ms ease, border-color 120ms ease;
+      background: var(--panel);
+      border-color: var(--border-muted);
+      color: var(--muted);
+    }
+
+    .preview-comment-block:hover .preview-comment-add,
+    .preview-comment-block:focus-within .preview-comment-add,
+    .preview-comment-block.has-comments .preview-comment-add {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .preview-comment-add:hover,
+    .preview-comment-add:focus-visible {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--panel);
+    }
+
+    .preview-comment-block.has-comments > .preview-comment-block-content {
+      box-shadow: inset 3px 0 0 var(--accent-soft);
+      border-radius: 10px;
+    }
+
     .rendered-markdown li::marker {
       color: var(--md-list-bullet);
     }
