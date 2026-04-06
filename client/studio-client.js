@@ -306,6 +306,7 @@
       let pendingReviewNoteFocusId = null;
       let pendingReviewNoteInlineFocusId = null;
       let activePreviewCommentSelection = null;
+      let suppressEditorSelectionComment = false;
       const previewJumpHighlightState = new WeakMap();
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
@@ -5407,7 +5408,8 @@
       function updateEditorSelectionCommentUi() {
         if (!editorSelectionCommentBtn) return;
         const hasSelection = Boolean(
-          editorView === "markdown"
+          !suppressEditorSelectionComment
+          && editorView === "markdown"
           && document.activeElement === sourceTextEl
           && typeof sourceTextEl.selectionStart === "number"
           && typeof sourceTextEl.selectionEnd === "number"
@@ -5418,6 +5420,12 @@
           editorSelectionCommentBtn.title = "Create a new local comment from the current editor selection.";
           editorSelectionCommentBtn.setAttribute("aria-label", editorSelectionCommentBtn.title);
         }
+      }
+
+      function clearSuppressedEditorSelectionComment() {
+        if (!suppressEditorSelectionComment) return;
+        suppressEditorSelectionComment = false;
+        updateEditorSelectionCommentUi();
       }
 
       function updateReviewNotesUi() {
@@ -5713,6 +5721,8 @@
           setStatus("Could not find the anchored location for this comment.", "warning");
           return;
         }
+        suppressEditorSelectionComment = true;
+        updateEditorSelectionCommentUi();
         setEditorView("markdown");
         setActivePane("left");
         sourceTextEl.focus();
@@ -5723,6 +5733,7 @@
         schedule(() => {
           scrollEditorRangeIntoView(range);
           revealReviewNoteInPreview(note);
+          updateEditorSelectionCommentUi();
         });
       }
 
@@ -7218,6 +7229,7 @@
         if (activePreviewCommentSelection) {
           clearPreviewCommentSelection();
         }
+        clearSuppressedEditorSelectionComment();
         renderSourcePreview({ previewDelayMs: PREVIEW_INPUT_DEBOUNCE_MS });
         scheduleEditorMetaUpdate();
         updateEditorSelectionCommentUi();
@@ -7225,6 +7237,14 @@
           renderReviewNotesList();
           updateReviewNotesUi();
         }
+      });
+
+      sourceTextEl.addEventListener("mousedown", () => {
+        clearSuppressedEditorSelectionComment();
+      });
+
+      sourceTextEl.addEventListener("keydown", () => {
+        clearSuppressedEditorSelectionComment();
       });
 
       sourceTextEl.addEventListener("select", () => {
