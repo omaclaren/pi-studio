@@ -917,8 +917,8 @@
 
     .preview-comment-add:hover,
     .preview-comment-add:focus-visible {
-      background: var(--accent);
-      color: var(--accent-contrast);
+      background: var(--accent-soft-strong);
+      color: var(--accent);
       border-color: var(--accent);
     }
 
