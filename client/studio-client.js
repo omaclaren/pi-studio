@@ -4926,20 +4926,16 @@
 
       function updatePreviewCommentBlockState(blockEl, sourceText, displayNotes) {
         if (!blockEl || !blockEl.dataset) return;
-        const start = Math.max(0, Number(blockEl.dataset.reviewNoteStart) || 0);
-        const end = Math.max(start, Number(blockEl.dataset.reviewNoteEnd) || start);
         const lineStart = Math.max(1, Number(blockEl.dataset.reviewNoteLineStart) || 1);
         const lineEnd = Math.max(lineStart, Number(blockEl.dataset.reviewNoteLineEnd) || lineStart);
-        const notes = getPreviewCommentNotesForRange(start, end, sourceText, displayNotes);
         const summaryBtn = blockEl.querySelector(".preview-comment-summary");
         const addBtn = blockEl.querySelector(".preview-comment-add");
         const lineLabel = summarizeReviewNoteAnchor({ lineStart: lineStart, lineEnd: lineEnd }).toLowerCase();
         const blockKindLabel = getPreviewCommentBlockKindLabel(blockEl.dataset.previewCommentKind || "paragraph");
         const blockKey = getPreviewCommentBlockKey(blockEl);
-        const hasNotes = notes.length > 0;
         const hasSelection = Boolean(activePreviewCommentSelection && activePreviewCommentSelection.blockKey === blockKey);
 
-        blockEl.classList.toggle("has-comments", hasNotes);
+        blockEl.classList.remove("has-comments");
         blockEl.classList.toggle("has-selection", hasSelection);
 
         if (summaryBtn) {
@@ -4949,29 +4945,21 @@
         }
 
         if (addBtn) {
-          if (hasSelection) {
-            addBtn.textContent = "Comment selection";
-            addBtn.dataset.previewCommentMode = "selection";
-            addBtn.title = "Add a local comment from the current preview selection on this " + blockKindLabel + " (" + lineLabel + ").";
-          } else if (hasNotes) {
-            addBtn.textContent = "Comment";
-            addBtn.dataset.previewCommentMode = "open";
-            addBtn.title = notes.length + " local comment" + (notes.length === 1 ? "" : "s") + " on this " + blockKindLabel + " (" + lineLabel + "). Open comments.";
-          } else {
-            addBtn.textContent = "Comment";
-            addBtn.dataset.previewCommentMode = "add";
-            addBtn.title = "Add a local comment on this " + blockKindLabel + " (" + lineLabel + ").";
-          }
-          addBtn.setAttribute("aria-label", addBtn.title);
+          addBtn.hidden = !hasSelection;
+          addBtn.textContent = "Comment";
+          addBtn.dataset.previewCommentMode = hasSelection ? "selection" : "";
+          addBtn.title = hasSelection
+            ? ("Add a local comment from the current preview selection on this " + blockKindLabel + " (" + lineLabel + ").")
+            : "";
+          addBtn.setAttribute("aria-label", addBtn.title || "Comment");
         }
       }
 
       function updatePreviewCommentBlocksForElement(targetEl) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
         const sourceText = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
-        const displayNotes = getDisplayReviewNotes();
         Array.from(targetEl.querySelectorAll(".preview-comment-block")).forEach((blockEl) => {
-          updatePreviewCommentBlockState(blockEl, sourceText, displayNotes);
+          updatePreviewCommentBlockState(blockEl, sourceText);
         });
       }
 
@@ -5245,7 +5233,7 @@
           reviewNotesAddBtn.title = editorView === "markdown"
             ? "Create a new local comment from the current editor selection, or from the current line if nothing is selected."
             : (supportsPreviewCommentsForCurrentEditor()
-              ? "Use Comment on a preview block, or select preview text and use Comment selection for a more specific anchor."
+              ? "Select preview text and use Comment for a local preview-anchored comment."
               : "Switch to Editor (Raw) to anchor a comment to the current selection or line.");
         }
         if (reviewNotesInlineAllBtn) {
@@ -7402,15 +7390,8 @@
         event.preventDefault();
         event.stopPropagation();
         const mode = String(actionBtn.dataset && actionBtn.dataset.previewCommentMode ? actionBtn.dataset.previewCommentMode : "");
-        if (mode === "selection") {
-          addReviewNoteFromPreviewSelection(blockEl);
-          return;
-        }
-        if (mode === "open" || actionBtn.classList.contains("preview-comment-summary")) {
-          focusReviewNotesForPreviewBlock(blockEl);
-          return;
-        }
-        addReviewNoteFromPreviewBlock(blockEl);
+        if (mode !== "selection") return;
+        addReviewNoteFromPreviewSelection(blockEl);
       }
 
       if (leftPaneEl) {

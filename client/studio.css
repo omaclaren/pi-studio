@@ -903,48 +903,23 @@
       pointer-events: none;
       transform: translateY(-2px);
       transition: opacity 120ms ease, transform 120ms ease, color 120ms ease, border-color 120ms ease, background-color 120ms ease;
-      background: var(--panel);
-      border-color: var(--border-muted);
-      color: var(--muted);
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    }
-
-    .preview-comment-block:hover .preview-comment-add,
-    .preview-comment-block:focus-within .preview-comment-add,
-    .preview-comment-block.has-selection .preview-comment-add {
-      opacity: 1;
-      pointer-events: auto;
-      transform: translateY(0);
-    }
-
-    .preview-comment-block.has-comments .preview-comment-add,
-    .preview-comment-block.has-selection .preview-comment-add {
-      opacity: 1;
-      pointer-events: auto;
-      transform: translateY(0);
       background: var(--accent-soft);
       border-color: var(--accent);
       color: var(--accent);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    }
+
+    .preview-comment-block.has-selection .preview-comment-add {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
     }
 
     .preview-comment-add:hover,
     .preview-comment-add:focus-visible {
-      border-color: var(--accent);
-      color: var(--accent);
-      background: var(--accent-soft);
-    }
-
-    .preview-comment-block.has-comments .preview-comment-add:hover,
-    .preview-comment-block.has-comments .preview-comment-add:focus-visible,
-    .preview-comment-block.has-selection .preview-comment-add:hover,
-    .preview-comment-block.has-selection .preview-comment-add:focus-visible {
       background: var(--accent);
       color: var(--accent-contrast);
-    }
-
-    .preview-comment-block.has-comments > .preview-comment-block-content {
-      border-radius: 10px;
-      background: linear-gradient(to right, var(--accent-soft) 0, var(--accent-soft) 3px, transparent 3px, transparent 100%);
+      border-color: var(--accent);
     }
 
     .rendered-markdown li::marker {
