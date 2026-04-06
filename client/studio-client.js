@@ -304,6 +304,7 @@
       let reviewNotesLoadNonce = 0;
       let pendingReviewNoteFocusId = null;
       let pendingReviewNoteInlineFocusId = null;
+      let activePreviewCommentSelection = null;
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
       if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
@@ -2914,6 +2915,9 @@
         const value = String(nextText || "");
         const preserveScroll = Boolean(options && options.preserveScroll);
         const preserveSelection = Boolean(options && options.preserveSelection);
+        if (activePreviewCommentSelection) {
+          clearPreviewCommentSelection();
+        }
         const previousScrollTop = sourceTextEl.scrollTop;
         const previousScrollLeft = sourceTextEl.scrollLeft;
         const previousSelectionStart = sourceTextEl.selectionStart;
@@ -4091,6 +4095,7 @@
           lineStart,
           lineEnd,
           selectedText: typeof note.selectedText === "string" ? note.selectedText : "",
+          selectedDisplayText: typeof note.selectedDisplayText === "string" ? note.selectedDisplayText : "",
         };
       }
 
@@ -4202,7 +4207,7 @@
       }
 
       function summarizeReviewNoteQuote(note) {
-        const normalized = String(note && note.selectedText ? note.selectedText : "")
+        const normalized = String(note && (note.selectedDisplayText || note.selectedText) ? (note.selectedDisplayText || note.selectedText) : "")
           .replace(/\s+/g, " ")
           .trim();
         if (!normalized) return "Anchor: current line / empty selection";
@@ -4262,6 +4267,7 @@
             lineStart: getLineNumberAtOffset(current, safeStart),
             lineEnd: getLineNumberAtOffset(current, Math.max(safeStart, safeEnd - 1)),
             selectedText: current.slice(safeStart, safeEnd),
+            selectedDisplayText: current.slice(safeStart, safeEnd),
           };
         }
         const lineRange = getLineRangeAtOffset(current, safeStart);
@@ -4271,6 +4277,7 @@
           lineStart: lineRange.lineNumber,
           lineEnd: lineRange.lineNumber,
           selectedText: current.slice(lineRange.start, lineRange.end),
+          selectedDisplayText: current.slice(lineRange.start, lineRange.end),
         };
       }
 
@@ -4335,6 +4342,253 @@
         if (kind === "code") return "code block";
         if (kind === "table") return "table";
         return "paragraph";
+      }
+
+      function supportsPreviewSelectionCommentsForBlockKind(kind) {
+        return kind === "paragraph" || kind === "heading" || kind === "blockquote" || kind === "list";
+      }
+
+      function normalizeVisiblePreviewText(text) {
+        return String(text || "").replace(/\s+/g, " ").trim();
+      }
+
+      function appendMappedPreviewSlice(chars, rawOffsets, lineText, lineBaseOffset, start, end) {
+        const safeStart = Math.max(0, Math.min(start, lineText.length));
+        const safeEnd = Math.max(safeStart, Math.min(end, lineText.length));
+        for (let i = safeStart; i < safeEnd; i += 1) {
+          chars.push(lineText[i]);
+          rawOffsets.push(lineBaseOffset + i);
+        }
+      }
+
+      function buildPreviewSelectionSourceBody(blockText, kind) {
+        const source = String(blockText || "");
+        const lines = source.split("\n");
+        const lineOffsets = [];
+        let runningOffset = 0;
+        for (const line of lines) {
+          lineOffsets.push(runningOffset);
+          runningOffset += line.length + 1;
+        }
+
+        const chars = [];
+        const rawOffsets = [];
+
+        function appendLineWithStart(lineIndex, start, end) {
+          const line = lineIndex >= 0 && lineIndex < lines.length ? lines[lineIndex] : "";
+          appendMappedPreviewSlice(chars, rawOffsets, line, lineOffsets[lineIndex] || 0, start, end);
+          if (lineIndex < lines.length - 1) {
+            chars.push("\n");
+            rawOffsets.push((lineOffsets[lineIndex] || 0) + line.length);
+          }
+        }
+
+        if (kind === "heading") {
+          const firstLine = lines[0] || "";
+          const atxMatch = firstLine.match(/^ {0,3}#{1,6}(?:[ \t]+|$)/);
+          if (atxMatch) {
+            const start = atxMatch[0].length;
+            let end = firstLine.length;
+            const closingMatch = firstLine.slice(start).match(/[ \t]+#+[ \t]*$/);
+            if (closingMatch) {
+              end -= closingMatch[0].length;
+            }
+            appendMappedPreviewSlice(chars, rawOffsets, firstLine, lineOffsets[0] || 0, start, end);
+            return { text: chars.join(""), rawOffsets };
+          }
+          if (lines.length >= 2 && /^ {0,3}(?:={3,}|-{3,})\s*$/.test(lines[1] || "")) {
+            appendMappedPreviewSlice(chars, rawOffsets, firstLine, lineOffsets[0] || 0, 0, firstLine.length);
+            return { text: chars.join(""), rawOffsets };
+          }
+        }
+
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = lines[lineIndex] || "";
+          if (kind === "blockquote") {
+            const prefixMatch = line.match(/^ {0,3}> ?/);
+            appendLineWithStart(lineIndex, prefixMatch ? prefixMatch[0].length : 0, line.length);
+            continue;
+          }
+          if (kind === "list") {
+            if (!line.trim()) {
+              appendLineWithStart(lineIndex, 0, 0);
+              continue;
+            }
+            const itemMatch = line.match(/^ {0,3}(?:[*+-]|\d+[.)])(?:[ \t]+|$)/);
+            if (itemMatch) {
+              appendLineWithStart(lineIndex, itemMatch[0].length, line.length);
+              continue;
+            }
+            const continuationMatch = line.match(/^(?: {1,4}|\t)/);
+            appendLineWithStart(lineIndex, continuationMatch ? continuationMatch[0].length : 0, line.length);
+            continue;
+          }
+          appendLineWithStart(lineIndex, 0, line.length);
+        }
+
+        return { text: chars.join(""), rawOffsets };
+      }
+
+      function buildPreviewInlineDisplayMap(text, rawOffsets) {
+        const source = String(text || "");
+        const rawMap = Array.isArray(rawOffsets) ? rawOffsets : [];
+        const displayChars = [];
+        const charStarts = [];
+        const charEnds = [];
+
+        function appendChar(character, rawStart, rawEnd) {
+          displayChars.push(character);
+          charStarts.push(rawStart);
+          charEnds.push(rawEnd);
+        }
+
+        function appendNestedRange(startIndex, endIndex) {
+          const nested = buildPreviewInlineDisplayMap(
+            source.slice(startIndex, endIndex),
+            rawMap.slice(startIndex, endIndex),
+          );
+          for (let i = 0; i < nested.text.length; i += 1) {
+            appendChar(nested.text[i], nested.charStarts[i], nested.charEnds[i]);
+          }
+        }
+
+        let index = 0;
+        while (index < source.length) {
+          const remaining = source.slice(index);
+          const linkMatch = remaining.match(/^!?\[([^\]]*)\]\(([^)]*)\)/);
+          if (linkMatch) {
+            const labelStart = index + (remaining[0] === "!" ? 2 : 1);
+            const labelEnd = labelStart + String(linkMatch[1] || "").length;
+            appendNestedRange(labelStart, labelEnd);
+            index += linkMatch[0].length;
+            continue;
+          }
+
+          if (source[index] === "`") {
+            let tickCount = 1;
+            while (source[index + tickCount] === "`") tickCount += 1;
+            const fence = "`".repeat(tickCount);
+            const closeIndex = source.indexOf(fence, index + tickCount);
+            if (closeIndex >= 0) {
+              for (let i = index + tickCount; i < closeIndex; i += 1) {
+                appendChar(source[i], rawMap[i], rawMap[i] + 1);
+              }
+              index = closeIndex + tickCount;
+              continue;
+            }
+          }
+
+          if (source[index] === "\\" && index + 1 < source.length) {
+            appendChar(source[index + 1], rawMap[index], rawMap[index + 1] + 1);
+            index += 2;
+            continue;
+          }
+
+          const htmlTagMatch = remaining.match(/^<\/?[A-Za-z][^>]*>/);
+          if (htmlTagMatch) {
+            index += htmlTagMatch[0].length;
+            continue;
+          }
+
+          const emphasisMatch = remaining.match(/^(?:\*\*\*|\*\*|\*|___|__|_|~~)/);
+          if (emphasisMatch) {
+            index += emphasisMatch[0].length;
+            continue;
+          }
+
+          appendChar(source[index], rawMap[index], rawMap[index] + 1);
+          index += 1;
+        }
+
+        return {
+          text: displayChars.join(""),
+          charStarts,
+          charEnds,
+        };
+      }
+
+      function buildNormalizedPreviewDisplayMap(displayText, charStarts, charEnds) {
+        const source = String(displayText || "");
+        const outChars = [];
+        const outStarts = [];
+        const outEnds = [];
+        let pendingWhitespaceStart = null;
+        let pendingWhitespaceEnd = null;
+
+        for (let i = 0; i < source.length; i += 1) {
+          const character = source[i];
+          if (/\s/.test(character)) {
+            if (outChars.length === 0) continue;
+            if (pendingWhitespaceStart == null) {
+              pendingWhitespaceStart = charStarts[i];
+            }
+            pendingWhitespaceEnd = charEnds[i];
+            continue;
+          }
+
+          if (pendingWhitespaceStart != null && pendingWhitespaceEnd != null) {
+            outChars.push(" ");
+            outStarts.push(pendingWhitespaceStart);
+            outEnds.push(pendingWhitespaceEnd);
+            pendingWhitespaceStart = null;
+            pendingWhitespaceEnd = null;
+          }
+
+          outChars.push(character);
+          outStarts.push(charStarts[i]);
+          outEnds.push(charEnds[i]);
+        }
+
+        return {
+          text: outChars.join(""),
+          charStarts: outStarts,
+          charEnds: outEnds,
+        };
+      }
+
+      function buildPreviewSelectionDisplayMap(blockText, kind) {
+        const body = buildPreviewSelectionSourceBody(blockText, kind);
+        const inlineMap = buildPreviewInlineDisplayMap(body.text, body.rawOffsets);
+        return buildNormalizedPreviewDisplayMap(inlineMap.text, inlineMap.charStarts, inlineMap.charEnds);
+      }
+
+      function getPreviewCommentBlockKey(blockEl) {
+        if (!blockEl || !blockEl.dataset) return "";
+        return [
+          String(blockEl.dataset.reviewNoteStart || ""),
+          String(blockEl.dataset.reviewNoteEnd || ""),
+          String(blockEl.dataset.previewCommentKind || ""),
+        ].join(":");
+      }
+
+      function getPreviewCommentSelectionKey(selection) {
+        if (!selection) return "";
+        return [
+          String(selection.blockKey || ""),
+          String(selection.selectionStart || 0),
+          String(selection.selectionEnd || 0),
+          String(selection.selectedDisplayText || ""),
+        ].join(":");
+      }
+
+      function setActivePreviewCommentSelection(nextSelection) {
+        const currentKey = getPreviewCommentSelectionKey(activePreviewCommentSelection);
+        const nextKey = getPreviewCommentSelectionKey(nextSelection);
+        if (currentKey === nextKey) return;
+        activePreviewCommentSelection = nextSelection || null;
+        refreshRenderedEditorPreviewComments();
+      }
+
+      function clearPreviewCommentSelection() {
+        setActivePreviewCommentSelection(null);
+      }
+
+      function findPreviewCommentBlockFromNode(node) {
+        if (!node) return null;
+        const element = node instanceof Element ? node : node.parentElement;
+        return element && typeof element.closest === "function"
+          ? element.closest(".preview-comment-block")
+          : null;
       }
 
       function rangesOverlap(startA, endA, startB, endB) {
@@ -4613,9 +4867,12 @@
         const addBtn = blockEl.querySelector(".preview-comment-add");
         const lineLabel = summarizeReviewNoteAnchor({ lineStart: lineStart, lineEnd: lineEnd }).toLowerCase();
         const blockKindLabel = getPreviewCommentBlockKindLabel(blockEl.dataset.previewCommentKind || "paragraph");
+        const blockKey = getPreviewCommentBlockKey(blockEl);
         const hasNotes = notes.length > 0;
+        const hasSelection = Boolean(activePreviewCommentSelection && activePreviewCommentSelection.blockKey === blockKey);
 
         blockEl.classList.toggle("has-comments", hasNotes);
+        blockEl.classList.toggle("has-selection", hasSelection);
 
         if (summaryBtn) {
           summaryBtn.hidden = true;
@@ -4624,13 +4881,19 @@
         }
 
         if (addBtn) {
-          addBtn.textContent = hasNotes
-            ? (notes.length === 1 ? "Comment" : "Comments")
-            : "Comment";
-          addBtn.dataset.previewCommentMode = hasNotes ? "open" : "add";
-          addBtn.title = hasNotes
-            ? (notes.length + " local comment" + (notes.length === 1 ? "" : "s") + " on this " + blockKindLabel + " (" + lineLabel + "). Open comments.")
-            : ("Add a local comment on this " + blockKindLabel + " (" + lineLabel + ").");
+          if (hasSelection) {
+            addBtn.textContent = "Comment selection";
+            addBtn.dataset.previewCommentMode = "selection";
+            addBtn.title = "Add a local comment from the current preview selection on this " + blockKindLabel + " (" + lineLabel + ").";
+          } else if (hasNotes) {
+            addBtn.textContent = "Comment";
+            addBtn.dataset.previewCommentMode = "open";
+            addBtn.title = notes.length + " local comment" + (notes.length === 1 ? "" : "s") + " on this " + blockKindLabel + " (" + lineLabel + "). Open comments.";
+          } else {
+            addBtn.textContent = "Comment";
+            addBtn.dataset.previewCommentMode = "add";
+            addBtn.title = "Add a local comment on this " + blockKindLabel + " (" + lineLabel + ").";
+          }
           addBtn.setAttribute("aria-label", addBtn.title);
         }
       }
@@ -4716,7 +4979,94 @@
           lineStart,
           lineEnd,
           selectedText: source.slice(selectionStart, selectionEnd),
+          selectedDisplayText: source.slice(selectionStart, selectionEnd),
         };
+      }
+
+      function buildReviewNoteAnchorFromPreviewSelection(blockEl, contentEl, range) {
+        if (!blockEl || !blockEl.dataset || !contentEl || !range) return null;
+        const kind = String(blockEl.dataset.previewCommentKind || "");
+        if (!supportsPreviewSelectionCommentsForBlockKind(kind)) return null;
+        if (!contentEl.contains(range.startContainer) || !contentEl.contains(range.endContainer)) return null;
+
+        const source = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
+        const blockStart = Math.max(0, Math.min(Number(blockEl.dataset.reviewNoteStart) || 0, source.length));
+        const blockEnd = Math.max(blockStart, Math.min(Number(blockEl.dataset.reviewNoteEnd) || blockStart, source.length));
+        if (blockEnd <= blockStart) return null;
+
+        const sourceBlockText = source.slice(blockStart, blockEnd);
+        const displayMap = buildPreviewSelectionDisplayMap(sourceBlockText, kind);
+        if (!displayMap.text || !displayMap.charStarts.length || !displayMap.charEnds.length) return null;
+
+        const prefixRange = document.createRange();
+        prefixRange.selectNodeContents(contentEl);
+        prefixRange.setEnd(range.startContainer, range.startOffset);
+        const prefixText = normalizeVisiblePreviewText(prefixRange.toString());
+        const selectedDisplayText = normalizeVisiblePreviewText(range.toString());
+        if (!selectedDisplayText) return null;
+
+        let bestIndex = -1;
+        let bestScore = Number.POSITIVE_INFINITY;
+        const desiredStart = Math.max(0, Math.min(prefixText.length, displayMap.text.length));
+        for (let matchIndex = displayMap.text.indexOf(selectedDisplayText); matchIndex >= 0; matchIndex = displayMap.text.indexOf(selectedDisplayText, matchIndex + 1)) {
+          const score = Math.abs(matchIndex - desiredStart);
+          if (score < bestScore) {
+            bestScore = score;
+            bestIndex = matchIndex;
+          }
+        }
+        if (bestIndex < 0) return null;
+
+        const endIndex = bestIndex + selectedDisplayText.length - 1;
+        const rawStartRel = displayMap.charStarts[bestIndex];
+        const rawEndRel = displayMap.charEnds[endIndex];
+        if (!Number.isFinite(rawStartRel) || !Number.isFinite(rawEndRel) || rawEndRel <= rawStartRel) {
+          return null;
+        }
+
+        const selectionStart = blockStart + rawStartRel;
+        const selectionEnd = blockStart + rawEndRel;
+        return {
+          selectionStart,
+          selectionEnd,
+          lineStart: getLineNumberAtOffset(source, selectionStart),
+          lineEnd: getLineNumberAtOffset(source, Math.max(selectionStart, selectionEnd - 1)),
+          selectedText: source.slice(selectionStart, selectionEnd),
+          selectedDisplayText,
+        };
+      }
+
+      function updateActivePreviewCommentSelectionFromDom() {
+        const selection = typeof window.getSelection === "function" ? window.getSelection() : null;
+        if (!selection || selection.rangeCount <= 0 || selection.isCollapsed) {
+          clearPreviewCommentSelection();
+          return;
+        }
+
+        const range = selection.getRangeAt(0);
+        const startBlock = findPreviewCommentBlockFromNode(range.startContainer);
+        const endBlock = findPreviewCommentBlockFromNode(range.endContainer);
+        if (!startBlock || !endBlock || startBlock !== endBlock) {
+          clearPreviewCommentSelection();
+          return;
+        }
+
+        const contentEl = startBlock.querySelector(".preview-comment-block-content");
+        if (!contentEl || !contentEl.contains(range.startContainer) || !contentEl.contains(range.endContainer)) {
+          clearPreviewCommentSelection();
+          return;
+        }
+
+        const anchor = buildReviewNoteAnchorFromPreviewSelection(startBlock, contentEl, range);
+        if (!anchor) {
+          clearPreviewCommentSelection();
+          return;
+        }
+
+        setActivePreviewCommentSelection({
+          ...anchor,
+          blockKey: getPreviewCommentBlockKey(startBlock),
+        });
       }
 
       function getDisplayReviewNotes() {
@@ -4829,7 +5179,7 @@
           reviewNotesAddBtn.title = editorView === "markdown"
             ? "Create a new local comment from the current editor selection, or from the current line if nothing is selected."
             : (supportsPreviewCommentsForCurrentEditor()
-              ? "Use the Comment buttons on preview blocks, or switch to Editor (Raw) to anchor a comment to the current selection or line."
+              ? "Use Comment on a preview block, or select preview text and use Comment selection for a more specific anchor."
               : "Switch to Editor (Raw) to anchor a comment to the current selection or line.");
         }
         if (reviewNotesInlineAllBtn) {
@@ -5006,6 +5356,29 @@
         });
       }
 
+      function addReviewNoteFromPreviewSelection(blockEl) {
+        if (!blockEl) return null;
+        const blockKey = getPreviewCommentBlockKey(blockEl);
+        const anchor = activePreviewCommentSelection && activePreviewCommentSelection.blockKey === blockKey
+          ? activePreviewCommentSelection
+          : null;
+        if (!anchor) {
+          setStatus("Select some preview text within a single block first.", "warning");
+          return null;
+        }
+        const note = addReviewNoteFromAnchor(anchor, {
+          statusMessage: "Added local comment from preview selection.",
+        });
+        if (note) {
+          const selection = typeof window.getSelection === "function" ? window.getSelection() : null;
+          if (selection && typeof selection.removeAllRanges === "function") {
+            selection.removeAllRanges();
+          }
+          clearPreviewCommentSelection();
+        }
+        return note;
+      }
+
       function addReviewNoteFromAnchor(anchor, options) {
         if (!anchor || typeof anchor !== "object") return null;
         const note = normalizeReviewNote({
@@ -5018,6 +5391,7 @@
           lineStart: anchor.lineStart,
           lineEnd: anchor.lineEnd,
           selectedText: anchor.selectedText,
+          selectedDisplayText: typeof anchor.selectedDisplayText === "string" ? anchor.selectedDisplayText : (typeof anchor.selectedText === "string" ? anchor.selectedText : ""),
         });
         if (!note) return null;
         pendingReviewNoteFocusId = note.id;
@@ -6551,6 +6925,9 @@
       });
 
       sourceTextEl.addEventListener("input", () => {
+        if (activePreviewCommentSelection) {
+          clearPreviewCommentSelection();
+        }
         renderSourcePreview({ previewDelayMs: PREVIEW_INPUT_DEBOUNCE_MS });
         scheduleEditorMetaUpdate();
         if (isReviewNotesOpen() && reviewNotes.length > 0) {
@@ -6943,6 +7320,13 @@
         });
       }
 
+      function handlePreviewCommentActionMouseDown(event) {
+        const target = event.target;
+        const actionBtn = target instanceof Element ? target.closest(".preview-comment-add, .preview-comment-summary") : null;
+        if (!actionBtn) return;
+        event.preventDefault();
+      }
+
       function handlePreviewCommentActionClick(event) {
         const target = event.target;
         const actionBtn = target instanceof Element ? target.closest(".preview-comment-add, .preview-comment-summary") : null;
@@ -6952,6 +7336,10 @@
         event.preventDefault();
         event.stopPropagation();
         const mode = String(actionBtn.dataset && actionBtn.dataset.previewCommentMode ? actionBtn.dataset.previewCommentMode : "");
+        if (mode === "selection") {
+          addReviewNoteFromPreviewSelection(blockEl);
+          return;
+        }
         if (mode === "open" || actionBtn.classList.contains("preview-comment-summary")) {
           focusReviewNotesForPreviewBlock(blockEl);
           return;
@@ -6960,11 +7348,19 @@
       }
 
       if (leftPaneEl) {
+        leftPaneEl.addEventListener("mousedown", handlePreviewCommentActionMouseDown);
         leftPaneEl.addEventListener("click", handlePreviewCommentActionClick);
       }
 
       if (rightPaneEl) {
+        rightPaneEl.addEventListener("mousedown", handlePreviewCommentActionMouseDown);
         rightPaneEl.addEventListener("click", handlePreviewCommentActionClick);
+      }
+
+      if (typeof document.addEventListener === "function") {
+        document.addEventListener("selectionchange", () => {
+          updateActivePreviewCommentSelectionFromDom();
+        });
       }
 
       if (scratchpadBtn) {

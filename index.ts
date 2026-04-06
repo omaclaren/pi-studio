@@ -121,6 +121,7 @@ interface PersistedStudioReviewNote {
 	lineStart: number;
 	lineEnd: number;
 	selectedText: string;
+	selectedDisplayText?: string;
 }
 
 interface StudioPersistentState {
@@ -285,6 +286,7 @@ function normalizePersistedStudioReviewNote(value: unknown): PersistedStudioRevi
 		lineStart,
 		lineEnd,
 		selectedText: typeof candidate.selectedText === "string" ? candidate.selectedText : "",
+		selectedDisplayText: typeof candidate.selectedDisplayText === "string" ? candidate.selectedDisplayText : "",
 	};
 }
 

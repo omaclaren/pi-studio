@@ -910,13 +910,15 @@
     }
 
     .preview-comment-block:hover .preview-comment-add,
-    .preview-comment-block:focus-within .preview-comment-add {
+    .preview-comment-block:focus-within .preview-comment-add,
+    .preview-comment-block.has-selection .preview-comment-add {
       opacity: 1;
       pointer-events: auto;
       transform: translateY(0);
     }
 
-    .preview-comment-block.has-comments .preview-comment-add {
+    .preview-comment-block.has-comments .preview-comment-add,
+    .preview-comment-block.has-selection .preview-comment-add {
       opacity: 1;
       pointer-events: auto;
       transform: translateY(0);
@@ -933,7 +935,9 @@
     }
 
     .preview-comment-block.has-comments .preview-comment-add:hover,
-    .preview-comment-block.has-comments .preview-comment-add:focus-visible {
+    .preview-comment-block.has-comments .preview-comment-add:focus-visible,
+    .preview-comment-block.has-selection .preview-comment-add:hover,
+    .preview-comment-block.has-selection .preview-comment-add:focus-visible {
       background: var(--accent);
       color: var(--accent-contrast);
     }
