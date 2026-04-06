@@ -4,6 +4,17 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.46] — 2026-04-07
+
+### Added
+- Studio comments can now be created directly from selected text in both **Editor (Raw)** and **Editor (Preview)** via a lightweight contextual **Comment** action, so commenting feels more consistent across editing and reading surfaces.
+
+### Changed
+- Preview-side commenting is now selection-only: the transient **Comment** action appears only for active preview text selections, instead of leaving persistent preview comment markers in the right pane.
+- The dock footer comment fallback in **Editor (Raw)** is now de-emphasised and renamed to **Line comment**, making the main comment model selection-first while still keeping a quick current-line option.
+- Comment **Jump** now also reveals and briefly highlights the matching location in the right pane when it is showing **Editor (Preview)**.
+- Preview comment anchoring is now more robust for rendered Markdown with thematic breaks and later blocks in longer documents.
+
 ## [0.5.45] — 2026-04-05
 
 ### Added
