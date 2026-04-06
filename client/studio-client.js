@@ -4847,6 +4847,65 @@
         }));
       }
 
+      function getNormalizedPreviewCommentSourceBlockText(sourceText, sourceBlock) {
+        if (!sourceBlock) return "";
+        const blockText = String(sourceText || "").slice(sourceBlock.start, sourceBlock.end);
+        if (supportsPreviewSelectionCommentsForBlockKind(sourceBlock.kind)) {
+          return normalizeVisiblePreviewText(buildPreviewSelectionDisplayMap(blockText, sourceBlock.kind).text);
+        }
+        if (sourceBlock.kind === "code") {
+          return normalizeVisiblePreviewText(
+            blockText
+              .replace(/^ {0,3}(`{3,}|~{3,}).*$/gm, "")
+              .replace(/^ {0,3}$/gm, ""),
+          );
+        }
+        if (sourceBlock.kind === "table") {
+          return normalizeVisiblePreviewText(
+            blockText
+              .replace(/^\s*\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*)?\|?\s*$/gm, "")
+              .replace(/\|/g, " "),
+          );
+        }
+        return normalizeVisiblePreviewText(blockText);
+      }
+
+      function getNormalizedPreviewCommentTargetText(targetEntry) {
+        if (!targetEntry) return "";
+        if (typeof targetEntry.normalizedText === "string") return targetEntry.normalizedText;
+        targetEntry.normalizedText = normalizeVisiblePreviewText(
+          targetEntry.element && typeof targetEntry.element.textContent === "string"
+            ? targetEntry.element.textContent
+            : "",
+        );
+        return targetEntry.normalizedText;
+      }
+
+      function findMatchingPreviewCommentTargetIndex(sourceText, sourceBlock, targetBlocks, startIndex) {
+        const desiredKind = sourceBlock ? sourceBlock.kind : "";
+        const desiredText = getNormalizedPreviewCommentSourceBlockText(sourceText, sourceBlock);
+        let fallbackIndex = -1;
+        let containsIndex = -1;
+
+        for (let i = Math.max(0, startIndex || 0); i < targetBlocks.length; i += 1) {
+          const targetEntry = targetBlocks[i];
+          if (!targetEntry || targetEntry.kind !== desiredKind) continue;
+          if (fallbackIndex < 0) fallbackIndex = i;
+          const targetText = getNormalizedPreviewCommentTargetText(targetEntry);
+          if (desiredText && targetText) {
+            if (targetText === desiredText) {
+              return i;
+            }
+            if (containsIndex < 0 && (targetText.includes(desiredText) || desiredText.includes(targetText))) {
+              containsIndex = i;
+            }
+          }
+        }
+
+        if (containsIndex >= 0) return containsIndex;
+        return fallbackIndex;
+      }
+
       function getPreviewCommentNotesForRange(start, end, sourceText, displayNotes) {
         const source = String(sourceText || "");
         const notes = Array.isArray(displayNotes) ? displayNotes : getDisplayReviewNotes();
@@ -4915,14 +4974,12 @@
 
         let targetIndex = 0;
         for (const sourceBlock of sourceBlocks) {
-          while (targetIndex < targetBlocks.length && targetBlocks[targetIndex].kind !== sourceBlock.kind) {
-            targetIndex += 1;
-          }
-          if (targetIndex >= targetBlocks.length) break;
+          const matchedTargetIndex = findMatchingPreviewCommentTargetIndex(sourceText, sourceBlock, targetBlocks, targetIndex);
+          if (matchedTargetIndex < 0) continue;
 
-          const targetEntry = targetBlocks[targetIndex];
-          targetIndex += 1;
-          const originalElement = targetEntry.element;
+          const targetEntry = targetBlocks[matchedTargetIndex];
+          targetIndex = matchedTargetIndex + 1;
+          const originalElement = targetEntry && targetEntry.element ? targetEntry.element : null;
           if (!originalElement || !originalElement.parentNode) continue;
 
           const wrapper = document.createElement("div");
