@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.47] — 2026-04-07
+
+### Changed
+- Raw-editor and editor-preview commenting now feel more unified: both surfaces use a contextual **Comment** action for selected text, while the dock footer keeps a de-emphasised **Line comment** fallback for current-line comments in **Editor (Raw)**.
+- Preview-side **Comment** affordances now focus the new comment textarea more reliably after creation, including when the comments rail has to open.
+- Clicking comment **Jump** now suppresses the raw-editor selection **Comment** pill for that programmatic selection, so jump-to-highlight does not look like a fresh comment prompt.
+
 ## [0.5.46] — 2026-04-07
 
 ### Added
