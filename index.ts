@@ -6194,7 +6194,7 @@ ${cssVarsBlock}
               <div id="reviewNotesList" class="review-notes-list" aria-live="polite"></div>
               <div class="review-notes-dock-footer">
                 <div class="scratchpad-actions">
-                  <button id="reviewNotesAddBtn" type="button" title="Create a new local comment from the current editor selection, or from the current line if nothing is selected.">New comment from selection</button>
+                  <button id="reviewNotesAddBtn" type="button" title="Create a new local comment from the current editor selection, or from the current line if nothing is selected.">Comment</button>
                   <button id="reviewNotesInlineAllBtn" type="button" title="Toggle inline annotations for all non-empty comments.">All inline: Off</button>
                   <button id="reviewNotesDoneBtn" type="button" title="Hide the comments rail.">Hide</button>
                 </div>
