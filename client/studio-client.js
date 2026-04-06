@@ -53,6 +53,7 @@
       const lineNumberGutterContentEl = document.getElementById("lineNumberGutterContent");
       const lineNumberMeasureEl = document.getElementById("lineNumberMeasure");
       const sourcePreviewEl = document.getElementById("sourcePreview");
+      const editorSelectionCommentBtn = document.getElementById("editorSelectionCommentBtn");
       const leftPaneEl = document.getElementById("leftPane");
       const rightPaneEl = document.getElementById("rightPane");
       const sourceBadgeEl = document.getElementById("sourceBadge");
@@ -2959,6 +2960,7 @@
         if (!options || options.updateMeta !== false) {
           scheduleEditorMetaUpdate();
         }
+        updateEditorSelectionCommentUi();
       }
 
       function setEditorView(nextView) {
@@ -2992,6 +2994,7 @@
           scheduleEditorLineNumberRender();
         }
         updateReviewNotesUi();
+        updateEditorSelectionCommentUi();
       }
 
       function setRightView(nextView) {
@@ -4288,6 +4291,22 @@
         };
       }
 
+      function getEditorLineAnchorForReviewNote() {
+        const current = String(sourceTextEl.value || "");
+        const caret = typeof sourceTextEl.selectionStart === "number"
+          ? sourceTextEl.selectionStart
+          : 0;
+        const lineRange = getLineRangeAtOffset(current, Math.max(0, Math.min(caret, current.length)));
+        return {
+          selectionStart: lineRange.start,
+          selectionEnd: lineRange.end,
+          lineStart: lineRange.lineNumber,
+          lineEnd: lineRange.lineNumber,
+          selectedText: current.slice(lineRange.start, lineRange.end),
+          selectedDisplayText: current.slice(lineRange.start, lineRange.end),
+        };
+      }
+
       function resolveReviewNoteRange(note, text) {
         const source = String(text || "");
         const safeStart = Math.max(0, Math.min(Number(note && note.selectionStart) || 0, source.length));
@@ -5385,6 +5404,22 @@
         }
       }
 
+      function updateEditorSelectionCommentUi() {
+        if (!editorSelectionCommentBtn) return;
+        const hasSelection = Boolean(
+          editorView === "markdown"
+          && document.activeElement === sourceTextEl
+          && typeof sourceTextEl.selectionStart === "number"
+          && typeof sourceTextEl.selectionEnd === "number"
+          && sourceTextEl.selectionEnd > sourceTextEl.selectionStart
+        );
+        editorSelectionCommentBtn.hidden = !hasSelection;
+        if (hasSelection) {
+          editorSelectionCommentBtn.title = "Create a new local comment from the current editor selection.";
+          editorSelectionCommentBtn.setAttribute("aria-label", editorSelectionCommentBtn.title);
+        }
+      }
+
       function updateReviewNotesUi() {
         const descriptor = getCurrentStudioDocumentDescriptor();
         const count = reviewNotes.length;
@@ -5412,10 +5447,10 @@
         if (reviewNotesAddBtn) {
           reviewNotesAddBtn.disabled = editorView !== "markdown";
           reviewNotesAddBtn.title = editorView === "markdown"
-            ? "Create a new local comment from the current editor selection, or from the current line if nothing is selected."
+            ? "Create a new local comment on the current editor line."
             : (supportsPreviewCommentsForCurrentEditor()
               ? "Select preview text and use Comment for a local preview-anchored comment."
-              : "Switch to Editor (Raw) to anchor a comment to the current selection or line.");
+              : "Switch to Editor (Raw) to comment on the current line.");
         }
         if (reviewNotesInlineAllBtn) {
           const currentText = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
@@ -5629,11 +5664,20 @@
           selectedDisplayText: typeof anchor.selectedDisplayText === "string" ? anchor.selectedDisplayText : (typeof anchor.selectedText === "string" ? anchor.selectedText : ""),
         });
         if (!note) return null;
+        if (editorSelectionCommentBtn) {
+          editorSelectionCommentBtn.hidden = true;
+        }
         pendingReviewNoteFocusId = note.id;
         setReviewNotes(reviewNotes.concat([note]));
         if (!isReviewNotesOpen()) {
           openReviewNotes();
         }
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+        schedule(() => {
+          updateEditorSelectionCommentUi();
+        });
         if (!options || options.status !== false) {
           setStatus((options && options.statusMessage) || "Added local comment.", "success");
         }
@@ -5647,6 +5691,16 @@
         }
         addReviewNoteFromAnchor(getEditorAnchorForReviewNote(), {
           statusMessage: "Added local comment.",
+        });
+      }
+
+      function addReviewNoteFromEditorLine() {
+        if (editorView !== "markdown") {
+          setStatus("Switch to Editor (Raw) before adding a line comment.", "warning");
+          return;
+        }
+        addReviewNoteFromAnchor(getEditorLineAnchorForReviewNote(), {
+          statusMessage: "Added local line comment.",
         });
       }
 
@@ -7166,10 +7220,36 @@
         }
         renderSourcePreview({ previewDelayMs: PREVIEW_INPUT_DEBOUNCE_MS });
         scheduleEditorMetaUpdate();
+        updateEditorSelectionCommentUi();
         if (isReviewNotesOpen() && reviewNotes.length > 0) {
           renderReviewNotesList();
           updateReviewNotesUi();
         }
+      });
+
+      sourceTextEl.addEventListener("select", () => {
+        updateEditorSelectionCommentUi();
+      });
+
+      sourceTextEl.addEventListener("keyup", () => {
+        updateEditorSelectionCommentUi();
+      });
+
+      sourceTextEl.addEventListener("mouseup", () => {
+        updateEditorSelectionCommentUi();
+      });
+
+      sourceTextEl.addEventListener("focus", () => {
+        updateEditorSelectionCommentUi();
+      });
+
+      sourceTextEl.addEventListener("blur", () => {
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+        schedule(() => {
+          updateEditorSelectionCommentUi();
+        });
       });
 
       sourceTextEl.addEventListener("scroll", () => {
@@ -7535,6 +7615,15 @@
 
       if (reviewNotesAddBtn) {
         reviewNotesAddBtn.addEventListener("click", () => {
+          addReviewNoteFromEditorLine();
+        });
+      }
+
+      if (editorSelectionCommentBtn) {
+        editorSelectionCommentBtn.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+        });
+        editorSelectionCommentBtn.addEventListener("click", () => {
           addReviewNoteFromEditorSelection();
         });
       }

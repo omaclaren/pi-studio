@@ -6175,6 +6175,7 @@ ${cssVarsBlock}
               <div id="lineNumberMeasure" class="editor-line-number-measure" aria-hidden="true"></div>
               <pre id="sourceHighlight" class="editor-highlight" aria-hidden="true"></pre>
               <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
+              <button id="editorSelectionCommentBtn" type="button" class="editor-selection-comment-btn" hidden title="Create a new local comment from the current editor selection.">Comment</button>
             </div>
             <div id="sourcePreview" class="panel-scroll rendered-markdown" hidden><pre class="plain-markdown"></pre></div>
           </div>
@@ -6190,11 +6191,11 @@ ${cssVarsBlock}
               <div class="review-notes-toolbar">
                 <span id="reviewNotesMeta" class="scratchpad-meta">No comments</span>
               </div>
-              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text (or just place the caret on a line) in <strong>Editor (Raw)</strong>, or select text in <strong>Editor (Preview)</strong> and use <em>Comment</em>.</div>
+              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text in <strong>Editor (Raw)</strong> or <strong>Editor (Preview)</strong> and use <em>Comment</em>, or use <em>Comment on line</em> in <strong>Editor (Raw)</strong>.</div>
               <div id="reviewNotesList" class="review-notes-list" aria-live="polite"></div>
               <div class="review-notes-dock-footer">
                 <div class="scratchpad-actions">
-                  <button id="reviewNotesAddBtn" type="button" title="Create a new local comment from the current editor selection, or from the current line if nothing is selected.">Comment</button>
+                  <button id="reviewNotesAddBtn" type="button" title="Create a new local comment on the current editor line.">Comment on line</button>
                   <button id="reviewNotesInlineAllBtn" type="button" title="Toggle inline annotations for all non-empty comments.">All inline: Off</button>
                   <button id="reviewNotesDoneBtn" type="button" title="Hide the comments rail.">Hide</button>
                 </div>
