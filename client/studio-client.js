@@ -307,6 +307,8 @@
       let pendingReviewNoteInlineFocusId = null;
       let activePreviewCommentSelection = null;
       let suppressEditorSelectionComment = false;
+      let suppressedEditorSelectionStart = null;
+      let suppressedEditorSelectionEnd = null;
       const previewJumpHighlightState = new WeakMap();
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
@@ -5425,6 +5427,8 @@
       function clearSuppressedEditorSelectionComment() {
         if (!suppressEditorSelectionComment) return;
         suppressEditorSelectionComment = false;
+        suppressedEditorSelectionStart = null;
+        suppressedEditorSelectionEnd = null;
         updateEditorSelectionCommentUi();
       }
 
@@ -5675,9 +5679,11 @@
         if (editorSelectionCommentBtn) {
           editorSelectionCommentBtn.hidden = true;
         }
+        const shouldOpenReviewNotes = !isReviewNotesOpen();
         pendingReviewNoteFocusId = note.id;
         setReviewNotes(reviewNotes.concat([note]));
-        if (!isReviewNotesOpen()) {
+        if (shouldOpenReviewNotes) {
+          pendingReviewNoteFocusId = note.id;
           openReviewNotes();
         }
         const schedule = typeof window.requestAnimationFrame === "function"
@@ -5722,6 +5728,8 @@
           return;
         }
         suppressEditorSelectionComment = true;
+        suppressedEditorSelectionStart = range.start;
+        suppressedEditorSelectionEnd = range.end;
         updateEditorSelectionCommentUi();
         setEditorView("markdown");
         setActivePane("left");
@@ -7239,15 +7247,15 @@
         }
       });
 
-      sourceTextEl.addEventListener("mousedown", () => {
-        clearSuppressedEditorSelectionComment();
-      });
-
-      sourceTextEl.addEventListener("keydown", () => {
-        clearSuppressedEditorSelectionComment();
-      });
-
       sourceTextEl.addEventListener("select", () => {
+        if (suppressEditorSelectionComment) {
+          const selectionStart = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : 0;
+          const selectionEnd = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : selectionStart;
+          const matchesSuppressedSelection = selectionStart === suppressedEditorSelectionStart && selectionEnd === suppressedEditorSelectionEnd;
+          if (!matchesSuppressedSelection && selectionEnd > selectionStart) {
+            clearSuppressedEditorSelectionComment();
+          }
+        }
         updateEditorSelectionCommentUi();
       });
 
