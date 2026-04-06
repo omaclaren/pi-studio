@@ -6191,11 +6191,11 @@ ${cssVarsBlock}
               <div class="review-notes-toolbar">
                 <span id="reviewNotesMeta" class="scratchpad-meta">No comments</span>
               </div>
-              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text in <strong>Editor (Raw)</strong> or <strong>Editor (Preview)</strong> and use <em>Comment</em>, or use <em>Comment on line</em> in <strong>Editor (Raw)</strong>.</div>
+              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text in <strong>Editor (Raw)</strong> or <strong>Editor (Preview)</strong> and use <em>Comment</em>, or use <em>Line comment</em> in <strong>Editor (Raw)</strong>.</div>
               <div id="reviewNotesList" class="review-notes-list" aria-live="polite"></div>
               <div class="review-notes-dock-footer">
                 <div class="scratchpad-actions">
-                  <button id="reviewNotesAddBtn" type="button" title="Create a new local comment on the current editor line.">Comment on line</button>
+                  <button id="reviewNotesAddBtn" type="button" title="Create a new local comment on the current editor line.">Line comment</button>
                   <button id="reviewNotesInlineAllBtn" type="button" title="Toggle inline annotations for all non-empty comments.">All inline: Off</button>
                   <button id="reviewNotesDoneBtn" type="button" title="Hide the comments rail.">Hide</button>
                 </div>
