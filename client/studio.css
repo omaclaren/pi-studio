@@ -922,6 +922,20 @@
       border-color: var(--accent);
     }
 
+    .preview-jump-highlight {
+      border-radius: 10px;
+      background: linear-gradient(to right, var(--accent-soft-strong) 0, var(--accent-soft) 3px, transparent 3px, transparent 100%);
+      box-shadow: 0 0 0 1px var(--accent-soft);
+    }
+
+    .preview-comment-inline-highlight {
+      background: var(--accent-soft-strong);
+      color: inherit;
+      border-radius: 4px;
+      padding: 0 0.08em;
+      box-shadow: 0 0 0 1px var(--accent-soft);
+    }
+
     .rendered-markdown li::marker {
       color: var(--md-list-bullet);
     }

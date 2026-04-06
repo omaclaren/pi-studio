@@ -305,6 +305,7 @@
       let pendingReviewNoteFocusId = null;
       let pendingReviewNoteInlineFocusId = null;
       let activePreviewCommentSelection = null;
+      const previewJumpHighlightState = new WeakMap();
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
       if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
@@ -2529,6 +2530,7 @@
             if (nonce !== responsePreviewRenderNonce || (rightView !== "preview" && rightView !== "editor-preview")) return;
           }
 
+          clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
           applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
@@ -2572,6 +2574,7 @@
           }
 
           const detail = error && error.message ? error.message : String(error || "unknown error");
+          clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
           targetEl.innerHTML = buildPreviewErrorHtml("Preview renderer unavailable (" + detail + "). Showing plain markdown.", markdown);
           if (pane === "response") {
@@ -2974,6 +2977,7 @@
         }
 
         if (!showPreview) {
+          clearPreviewJumpHighlight(sourcePreviewEl);
           finishPreviewRender(sourcePreviewEl);
         }
 
@@ -3001,6 +3005,9 @@
         if (rightView !== "editor-preview" && responseEditorPreviewTimer) {
           window.clearTimeout(responseEditorPreviewTimer);
           responseEditorPreviewTimer = null;
+        }
+        if (rightView !== "editor-preview") {
+          clearPreviewJumpHighlight(critiqueViewEl);
         }
 
         refreshResponseUi();
@@ -4546,6 +4553,45 @@
         };
       }
 
+      function buildNormalizedDomTextMap(rootEl) {
+        if (!rootEl || typeof document.createTreeWalker !== "function") {
+          return { text: "", charStarts: [], charEnds: [] };
+        }
+        const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
+        const chars = [];
+        const starts = [];
+        const ends = [];
+        let node = walker.nextNode();
+        while (node) {
+          const textNode = node;
+          const value = typeof textNode.nodeValue === "string" ? textNode.nodeValue : "";
+          for (let i = 0; i < value.length; i += 1) {
+            chars.push(value[i]);
+            starts.push({ node: textNode, offset: i });
+            ends.push({ node: textNode, offset: i + 1 });
+          }
+          node = walker.nextNode();
+        }
+        return buildNormalizedPreviewDisplayMap(chars.join(""), starts, ends);
+      }
+
+      function findPreferredNormalizedTextMatch(haystack, needle, preferredIndex) {
+        const source = String(haystack || "");
+        const query = String(needle || "");
+        if (!source || !query) return -1;
+        let bestIndex = -1;
+        let bestScore = Number.POSITIVE_INFINITY;
+        const desiredIndex = Number.isFinite(preferredIndex) ? Math.max(0, preferredIndex) : 0;
+        for (let matchIndex = source.indexOf(query); matchIndex >= 0; matchIndex = source.indexOf(query, matchIndex + 1)) {
+          const score = Math.abs(matchIndex - desiredIndex);
+          if (score < bestScore) {
+            bestScore = score;
+            bestIndex = matchIndex;
+          }
+        }
+        return bestIndex;
+      }
+
       function buildPreviewSelectionDisplayMap(blockText, kind) {
         const body = buildPreviewSelectionSourceBody(blockText, kind);
         const inlineMap = buildPreviewInlineDisplayMap(body.text, body.rawOffsets);
@@ -4589,6 +4635,50 @@
         return element && typeof element.closest === "function"
           ? element.closest(".preview-comment-block")
           : null;
+      }
+
+      function unwrapPreviewJumpHighlightElement(element) {
+        if (!element || !element.parentNode) return;
+        const parent = element.parentNode;
+        while (element.firstChild) {
+          parent.insertBefore(element.firstChild, element);
+        }
+        parent.removeChild(element);
+        if (typeof parent.normalize === "function") {
+          parent.normalize();
+        }
+      }
+
+      function clearPreviewJumpHighlight(targetEl) {
+        if (!targetEl) return;
+        const state = previewJumpHighlightState.get(targetEl);
+        if (!state) return;
+        if (state.timer != null) {
+          window.clearTimeout(state.timer);
+        }
+        if (state.inlineHighlightEl) {
+          unwrapPreviewJumpHighlightElement(state.inlineHighlightEl);
+        }
+        if (state.contentEl && state.contentEl.classList) {
+          state.contentEl.classList.remove("preview-jump-highlight");
+        }
+        previewJumpHighlightState.delete(targetEl);
+      }
+
+      function setPreviewJumpHighlight(targetEl, contentEl, inlineHighlightEl) {
+        if (!targetEl || !contentEl) return;
+        clearPreviewJumpHighlight(targetEl);
+        if (contentEl.classList) {
+          contentEl.classList.add("preview-jump-highlight");
+        }
+        const timer = window.setTimeout(() => {
+          clearPreviewJumpHighlight(targetEl);
+        }, 1800);
+        previewJumpHighlightState.set(targetEl, {
+          contentEl,
+          inlineHighlightEl: inlineHighlightEl || null,
+          timer,
+        });
       }
 
       function rangesOverlap(startA, endA, startB, endB) {
@@ -5059,16 +5149,8 @@
         const selectedDisplayText = normalizeVisiblePreviewText(range.toString());
         if (!selectedDisplayText) return null;
 
-        let bestIndex = -1;
-        let bestScore = Number.POSITIVE_INFINITY;
         const desiredStart = Math.max(0, Math.min(prefixText.length, displayMap.text.length));
-        for (let matchIndex = displayMap.text.indexOf(selectedDisplayText); matchIndex >= 0; matchIndex = displayMap.text.indexOf(selectedDisplayText, matchIndex + 1)) {
-          const score = Math.abs(matchIndex - desiredStart);
-          if (score < bestScore) {
-            bestScore = score;
-            bestIndex = matchIndex;
-          }
-        }
+        const bestIndex = findPreferredNormalizedTextMatch(displayMap.text, selectedDisplayText, desiredStart);
         if (bestIndex < 0) return null;
 
         const endIndex = bestIndex + selectedDisplayText.length - 1;
@@ -5088,6 +5170,105 @@
           selectedText: source.slice(selectionStart, selectionEnd),
           selectedDisplayText,
         };
+      }
+
+      function getPreviewJumpNormalizedSelectionStart(note, blockEl, range) {
+        if (!note || !blockEl || !blockEl.dataset || !range) return 0;
+        const kind = String(blockEl.dataset.previewCommentKind || "");
+        const source = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
+        const blockStart = Math.max(0, Math.min(Number(blockEl.dataset.reviewNoteStart) || 0, source.length));
+        const blockEnd = Math.max(blockStart, Math.min(Number(blockEl.dataset.reviewNoteEnd) || blockStart, source.length));
+        const displayMap = buildPreviewSelectionDisplayMap(source.slice(blockStart, blockEnd), kind);
+        if (!displayMap || !displayMap.charStarts || displayMap.charStarts.length === 0) return 0;
+        const relativeStart = Math.max(0, range.start - blockStart);
+        for (let i = 0; i < displayMap.charStarts.length; i += 1) {
+          const charStart = Number(displayMap.charStarts[i]);
+          const charEnd = Number(displayMap.charEnds[i]);
+          if (charEnd > relativeStart && charStart <= relativeStart) {
+            return i;
+          }
+          if (charStart >= relativeStart) {
+            return i;
+          }
+        }
+        return Math.max(0, displayMap.text.length - 1);
+      }
+
+      function createPreviewJumpInlineHighlight(contentEl, blockEl, note, range) {
+        if (!contentEl || !note || !range) return null;
+        const selectedDisplayText = normalizeVisiblePreviewText(note.selectedDisplayText || note.selectedText || "");
+        if (!selectedDisplayText) return null;
+        const domMap = buildNormalizedDomTextMap(contentEl);
+        if (!domMap.text || !domMap.charStarts.length || !domMap.charEnds.length) return null;
+        const preferredStart = getPreviewJumpNormalizedSelectionStart(note, blockEl, range);
+        const matchIndex = findPreferredNormalizedTextMatch(domMap.text, selectedDisplayText, preferredStart);
+        if (matchIndex < 0) return null;
+        const endIndex = matchIndex + selectedDisplayText.length - 1;
+        const startRef = domMap.charStarts[matchIndex];
+        const endRef = domMap.charEnds[endIndex];
+        if (!startRef || !endRef || !startRef.node || !endRef.node) return null;
+
+        const domRange = document.createRange();
+        domRange.setStart(startRef.node, startRef.offset);
+        domRange.setEnd(endRef.node, endRef.offset);
+
+        const highlightEl = document.createElement("span");
+        highlightEl.className = "preview-comment-inline-highlight";
+        try {
+          domRange.surroundContents(highlightEl);
+        } catch {
+          const fragment = domRange.extractContents();
+          highlightEl.appendChild(fragment);
+          domRange.insertNode(highlightEl);
+        }
+        return highlightEl;
+      }
+
+      function findPreviewCommentBlockForRange(targetEl, range) {
+        if (!targetEl || !range || typeof targetEl.querySelectorAll !== "function") return null;
+        let bestBlock = null;
+        let bestScore = Number.NEGATIVE_INFINITY;
+        Array.from(targetEl.querySelectorAll(".preview-comment-block")).forEach((blockEl) => {
+          const blockStart = Math.max(0, Number(blockEl.dataset && blockEl.dataset.reviewNoteStart) || 0);
+          const blockEnd = Math.max(blockStart, Number(blockEl.dataset && blockEl.dataset.reviewNoteEnd) || blockStart);
+          const overlapStart = Math.max(blockStart, range.start);
+          const overlapEnd = Math.min(blockEnd, range.end);
+          const overlap = Math.max(0, overlapEnd - overlapStart);
+          const contains = range.start >= blockStart && range.end <= blockEnd;
+          const distance = contains
+            ? 0
+            : Math.min(Math.abs(range.start - blockEnd), Math.abs(range.end - blockStart));
+          const score = contains
+            ? (1000000 - (blockEnd - blockStart))
+            : (overlap > 0 ? overlap : -distance);
+          if (score > bestScore) {
+            bestScore = score;
+            bestBlock = blockEl;
+          }
+        });
+        return bestBlock;
+      }
+
+      function revealReviewNoteInPreviewElement(targetEl, note) {
+        if (!targetEl || !note) return false;
+        const source = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
+        const range = resolveReviewNoteRange(note, source);
+        if (!range) return false;
+        const blockEl = findPreviewCommentBlockForRange(targetEl, range);
+        if (!blockEl) return false;
+        const contentEl = blockEl.querySelector(".preview-comment-block-content") || blockEl;
+        const inlineHighlightEl = createPreviewJumpInlineHighlight(contentEl, blockEl, note, range);
+        if (typeof blockEl.scrollIntoView === "function") {
+          blockEl.scrollIntoView({ block: "center", inline: "nearest" });
+        }
+        setPreviewJumpHighlight(targetEl, contentEl, inlineHighlightEl);
+        return true;
+      }
+
+      function revealReviewNoteInPreview(note) {
+        if (rightView === "editor-preview" && critiqueViewEl && critiqueViewEl.isConnected) {
+          revealReviewNoteInPreviewElement(critiqueViewEl, note);
+        }
       }
 
       function updateActivePreviewCommentSelectionFromDom() {
@@ -5487,6 +5668,7 @@
           : (cb) => window.setTimeout(cb, 16);
         schedule(() => {
           scrollEditorRangeIntoView(range);
+          revealReviewNoteInPreview(note);
         });
       }
 
