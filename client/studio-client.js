@@ -4629,6 +4629,10 @@
           return /^ {0,3}(?:={3,}|-{3,})\s*$/.test(getLine(index));
         }
 
+        function isThematicBreakLine(index) {
+          return /^ {0,3}(?:(?:-\s*){3,}|(?:_\s*){3,}|(?:\*\s*){3,})$/.test(getLine(index));
+        }
+
         function isBlockquoteLine(index) {
           return /^ {0,3}> ?/.test(getLine(index));
         }
@@ -4692,6 +4696,11 @@
               endComment += 1;
             }
             index = Math.min(lines.length, endComment + 1);
+            continue;
+          }
+
+          if (isThematicBreakLine(index)) {
+            index += 1;
             continue;
           }
 
