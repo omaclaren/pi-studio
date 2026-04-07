@@ -898,6 +898,24 @@
       scroll-margin-top: 24px;
     }
 
+    .preview-comment-line-block {
+      min-height: 1.5em;
+    }
+
+    .preview-code-lines {
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .preview-code-line-content {
+      display: block;
+      min-height: 1.5em;
+      white-space: inherit;
+      word-break: inherit;
+      overflow-wrap: inherit;
+    }
+
     .preview-comment-controls {
       position: absolute;
       top: 0;

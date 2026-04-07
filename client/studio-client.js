@@ -2605,9 +2605,8 @@
       function renderSourcePreviewNow() {
         if (editorView !== "preview") return;
         const text = prepareEditorTextForPreview(sourceTextEl.value || "");
-        if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
-          finishPreviewRender(sourcePreviewEl);
-          sourcePreviewEl.innerHTML = "<div class='response-markdown-highlight'>" + highlightCode(text, editorLanguage, "preview") + "</div>";
+        if (supportsCodePreviewCommentsForCurrentEditor()) {
+          renderCodePreviewWithCommentBlocks(sourcePreviewEl, text, "source");
           return;
         }
         const nonce = ++sourcePreviewRenderNonce;
@@ -2674,10 +2673,8 @@
             scheduleResponsePaneRepaintNudge();
             return;
           }
-          if (editorLanguage && editorLanguage !== "markdown" && editorLanguage !== "latex") {
-            finishPreviewRender(critiqueViewEl);
-            critiqueViewEl.innerHTML = "<div class='response-markdown-highlight'>" + highlightCode(editorText, editorLanguage, "preview") + "</div>";
-            scheduleResponsePaneRepaintNudge();
+          if (supportsCodePreviewCommentsForCurrentEditor()) {
+            renderCodePreviewWithCommentBlocks(critiqueViewEl, editorText, "response");
             return;
           }
           const nonce = ++responsePreviewRenderNonce;
@@ -3812,6 +3809,68 @@
         return out.join("<br>");
       }
 
+      function supportsCodePreviewCommentsForCurrentEditor() {
+        return Boolean(editorLanguage) && editorLanguage !== "markdown" && editorLanguage !== "latex";
+      }
+
+      function getCodePreviewCommentKind(language) {
+        const lang = normalizeFenceLanguage(language || "");
+        if (lang === "diff") return "diff-line";
+        if (lang === "text") return "text-line";
+        return "code-line";
+      }
+
+      function buildCodePreviewHtmlWithCommentBlocks(text, language) {
+        const source = String(text || "").replace(/\r\n/g, "\n");
+        const lines = source.split("\n");
+        const lang = normalizeFenceLanguage(language || "");
+        const kind = getCodePreviewCommentKind(lang);
+        const html = [];
+        let offset = 0;
+
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = String(lines[lineIndex] || "");
+          const start = offset;
+          const end = start + line.length;
+          const lineNumber = lineIndex + 1;
+          const lineHtml = line.length === 0
+            ? "<span class='hl-code'>" + EMPTY_OVERLAY_LINE + "</span>"
+            : (lang ? highlightCodeLine(line, lang, "preview") : escapeHtml(line));
+
+          html.push(
+            "<div class='preview-comment-block preview-comment-line-block'"
+              + " data-review-note-start='" + String(start) + "'"
+              + " data-review-note-end='" + String(end) + "'"
+              + " data-review-note-line-start='" + String(lineNumber) + "'"
+              + " data-review-note-line-end='" + String(lineNumber) + "'"
+              + " data-preview-comment-kind='" + escapeHtml(kind) + "'"
+              + ">"
+              + "<div class='preview-comment-controls'>"
+              + "<button type='button' class='preview-comment-summary' hidden></button>"
+              + "<button type='button' class='preview-comment-add'>Comment</button>"
+              + "</div>"
+              + "<div class='preview-comment-block-content preview-code-line-content'>" + lineHtml + "</div>"
+              + "</div>",
+          );
+
+          offset = end + 1;
+        }
+
+        return "<div class='response-markdown-highlight preview-code-lines'>" + html.join("") + "</div>";
+      }
+
+      function renderCodePreviewWithCommentBlocks(targetEl, text, pane) {
+        if (!targetEl) return;
+        clearPreviewJumpHighlight(targetEl);
+        finishPreviewRender(targetEl);
+        targetEl.innerHTML = buildCodePreviewHtmlWithCommentBlocks(text, editorLanguage || "");
+        updatePreviewCommentBlocksForElement(targetEl);
+        if (pane === "response") {
+          applyPendingResponseScrollReset();
+          scheduleResponsePaneRepaintNudge();
+        }
+      }
+
       function detectLanguageFromName(name) {
         if (!name) return "";
         var dot = name.lastIndexOf(".");
@@ -4375,7 +4434,10 @@
       }
 
       function supportsPreviewCommentsForCurrentEditor() {
-        return editorLanguage === "markdown";
+        // LaTeX preview comments are intentionally disabled for now.
+        // The initial client-side source/block heuristics were too unreliable on complex real documents.
+        // Keep the independent LaTeX rendering fixes, but only enable preview comments where mapping is robust.
+        return editorLanguage === "markdown" || supportsCodePreviewCommentsForCurrentEditor();
       }
 
       function getPreviewCommentBlockKindLabel(kind) {
@@ -4384,11 +4446,20 @@
         if (kind === "list") return "list";
         if (kind === "code") return "code block";
         if (kind === "table") return "table";
+        if (kind === "code-line") return "code line";
+        if (kind === "diff-line") return "diff line";
+        if (kind === "text-line") return "text line";
         return "paragraph";
       }
 
       function supportsPreviewSelectionCommentsForBlockKind(kind) {
-        return kind === "paragraph" || kind === "heading" || kind === "blockquote" || kind === "list";
+        return kind === "paragraph"
+          || kind === "heading"
+          || kind === "blockquote"
+          || kind === "list"
+          || kind === "code-line"
+          || kind === "diff-line"
+          || kind === "text-line";
       }
 
       function normalizeVisiblePreviewText(text) {
@@ -4723,6 +4794,11 @@
         const safeEndA = Math.max(safeStartA + 1, Number(endA) || safeStartA);
         const safeEndB = Math.max(safeStartB + 1, Number(endB) || safeStartB);
         return safeStartA < safeEndB && safeStartB < safeEndA;
+      }
+
+      function scanSourcePreviewCommentBlocks(markdown) {
+        if (editorLanguage !== "markdown") return [];
+        return scanMarkdownPreviewCommentBlocks(markdown);
       }
 
       function scanMarkdownPreviewCommentBlocks(markdown) {
@@ -5091,7 +5167,7 @@
 
       function decorateRenderedEditorPreviewComments(targetEl, sourceText) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
-        const sourceBlocks = scanMarkdownPreviewCommentBlocks(sourceText);
+        const sourceBlocks = scanSourcePreviewCommentBlocks(sourceText);
         const targetBlocks = collectPreviewCommentTargetElements(targetEl);
         if (sourceBlocks.length === 0 || targetBlocks.length === 0) return;
 
@@ -5285,12 +5361,43 @@
         return bestBlock;
       }
 
+      function getPreviewNoteNormalizedSelectionText(note) {
+        const direct = normalizeVisiblePreviewText(note && (note.selectedDisplayText || note.selectedText) ? (note.selectedDisplayText || note.selectedText) : "");
+        if (direct) return direct;
+        return "";
+      }
+
+      function findPreviewCommentBlockForNoteText(targetEl, note) {
+        if (!targetEl || !note || typeof targetEl.querySelectorAll !== "function") return null;
+        const selectionText = getPreviewNoteNormalizedSelectionText(note);
+        if (!selectionText) return null;
+
+        let bestBlock = null;
+        let bestScore = Number.NEGATIVE_INFINITY;
+        Array.from(targetEl.querySelectorAll(".preview-comment-block")).forEach((blockEl) => {
+          const contentEl = blockEl.querySelector(".preview-comment-block-content") || blockEl;
+          const blockText = normalizeVisiblePreviewText(buildNormalizedDomTextMap(contentEl).text);
+          if (!blockText) return;
+          const matchIndex = blockText.indexOf(selectionText);
+          if (matchIndex < 0) return;
+          const lineStart = Math.max(1, Number(blockEl.dataset && blockEl.dataset.reviewNoteLineStart) || 1);
+          const desiredLine = Math.max(1, Number(note && note.lineStart) || 1);
+          const proximityPenalty = Math.abs(lineStart - desiredLine);
+          const score = 1000000 - (matchIndex * 4) - proximityPenalty - Math.max(0, blockText.length - selectionText.length);
+          if (score > bestScore) {
+            bestScore = score;
+            bestBlock = blockEl;
+          }
+        });
+        return bestBlock;
+      }
+
       function revealReviewNoteInPreviewElement(targetEl, note) {
         if (!targetEl || !note) return false;
         const source = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
         const range = resolveReviewNoteRange(note, source);
         if (!range) return false;
-        const blockEl = findPreviewCommentBlockForRange(targetEl, range);
+        const blockEl = findPreviewCommentBlockForRange(targetEl, range) || findPreviewCommentBlockForNoteText(targetEl, note);
         if (!blockEl) return false;
         const contentEl = blockEl.querySelector(".preview-comment-block-content") || blockEl;
         const inlineHighlightEl = createPreviewJumpInlineHighlight(contentEl, blockEl, note, range);
@@ -5302,6 +5409,7 @@
       }
 
       function revealReviewNoteInPreview(note) {
+        if (!supportsPreviewCommentsForCurrentEditor()) return;
         if (rightView === "editor-preview" && critiqueViewEl && critiqueViewEl.isConnected) {
           revealReviewNoteInPreviewElement(critiqueViewEl, note);
         }
@@ -7703,7 +7811,7 @@
         event.preventDefault();
         event.stopPropagation();
         const mode = String(actionBtn.dataset && actionBtn.dataset.previewCommentMode ? actionBtn.dataset.previewCommentMode : "");
-        if (mode !== "selection") return;
+        if (!mode || !mode.startsWith("selection")) return;
         addReviewNoteFromPreviewSelection(blockEl);
       }
 
