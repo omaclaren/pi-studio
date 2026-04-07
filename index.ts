@@ -10,6 +10,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path
 import { URL, pathToFileURL } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import {
+	advancePastStudioInlineBacktickSpan,
 	collectStudioInlineAnnotationMarkers,
 	hasStudioMarkdownAnnotationMarkers,
 	isStudioAnnotationWordChar,
@@ -3263,6 +3264,26 @@ function inferStudioPdfLanguage(markdown: string, editorLanguage?: string): stri
 	return undefined;
 }
 
+function stripStudioMarkdownInlineCodeSpans(markdown: string): string {
+	const source = String(markdown ?? "");
+	let out = "";
+	let index = 0;
+	while (index < source.length) {
+		if (source[index] === "`") {
+			index = advancePastStudioInlineBacktickSpan(source, index);
+			continue;
+		}
+		out += source[index];
+		index += 1;
+	}
+	return out;
+}
+
+function isLikelyStandaloneLatexPreview(markdown: string): boolean {
+	const outsideFences = transformStudioMarkdownOutsideFences(markdown, (segment: string) => stripStudioMarkdownInlineCodeSpans(segment));
+	return /\\documentclass\b|\\begin\{document\}/.test(outsideFences);
+}
+
 function escapeStudioPdfLatexText(text: string): string {
 	const normalized = String(text ?? "")
 		.replace(/\r\n/g, "\n")
@@ -4043,9 +4064,15 @@ function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLan
 }
 
 function stripMathMlAnnotationTags(html: string): string {
-	return html
-		.replace(/<annotation-xml\b[\s\S]*?<\/annotation-xml>/gi, "")
-		.replace(/<annotation\b[\s\S]*?<\/annotation>/gi, "");
+	return String(html ?? "").replace(/<math\b([^>]*)>([\s\S]*?)<\/math>/gi, (_match, attrs, inner) => {
+		const texAnnotationMatch = String(inner ?? "").match(/<annotation\b[^>]*encoding="application\/x-tex"[^>]*>([\s\S]*?)<\/annotation>/i);
+		const texSource = texAnnotationMatch ? String(texAnnotationMatch[1] ?? "").trim() : "";
+		const cleanedInner = String(inner ?? "")
+			.replace(/<annotation-xml\b[\s\S]*?<\/annotation-xml>/gi, "")
+			.replace(/<annotation\b[\s\S]*?<\/annotation>/gi, "");
+		const texAttr = texSource ? ` data-tex-source="${escapeStudioHtmlText(texSource)}"` : "";
+		return `<math${attrs}${texAttr}>${cleanedInner}</math>`;
+	});
 }
 
 function normalizeObsidianImages(markdown: string): string {
@@ -7869,8 +7896,17 @@ export default function (pi: ExtensionAPI) {
 				parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { resourceDir?: unknown }).resourceDir === "string"
 					? (parsedBody as { resourceDir: string }).resourceDir
 					: "";
+			const requestedEditorLanguage =
+				parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { editorLanguage?: unknown }).editorLanguage === "string"
+					? (parsedBody as { editorLanguage: string }).editorLanguage
+					: "";
 			const resourcePath = resolveStudioBaseDir(sourcePath || undefined, userResourceDir || undefined, studioCwd);
-			const isLatex = /\\documentclass\b|\\begin\{document\}/.test(markdown);
+			const editorPreviewLanguage = normalizeStudioEditorLanguage(requestedEditorLanguage);
+			const isLatex = editorPreviewLanguage === "latex"
+				|| (
+					(editorPreviewLanguage === undefined || editorPreviewLanguage === "markdown")
+					&& isLikelyStandaloneLatexPreview(markdown)
+				);
 			const html = await renderStudioMarkdownWithPandoc(markdown, isLatex, resourcePath, sourcePath || undefined);
 			respondJson(res, 200, { ok: true, html, renderer: "pandoc" });
 		} catch (error) {

@@ -1534,19 +1534,25 @@
 
       function sanitizeRenderedHtml(html, markdown) {
         const rawHtml = typeof html === "string" ? html : "";
-        const mathAnnotationStripped = rawHtml
-          .replace(/<annotation-xml\b[\s\S]*?<\/annotation-xml>/gi, "")
-          .replace(/<annotation\b[\s\S]*?<\/annotation>/gi, "");
+        const mathAnnotationPreserved = rawHtml.replace(/<math\b([^>]*)>([\s\S]*?)<\/math>/gi, (match, attrs, inner) => {
+          const texAnnotationMatch = String(inner || "").match(/<annotation\b[^>]*encoding="application\/x-tex"[^>]*>([\s\S]*?)<\/annotation>/i);
+          const texSource = texAnnotationMatch ? String(texAnnotationMatch[1] || "").trim() : "";
+          const cleanedInner = String(inner || "")
+            .replace(/<annotation-xml\b[\s\S]*?<\/annotation-xml>/gi, "")
+            .replace(/<annotation\b[\s\S]*?<\/annotation>/gi, "");
+          const texAttr = texSource ? (" data-tex-source=\"" + escapeHtml(texSource) + "\"") : "";
+          return "<math" + attrs + texAttr + ">" + cleanedInner + "</math>";
+        });
 
         if (window.DOMPurify && typeof window.DOMPurify.sanitize === "function") {
-          return window.DOMPurify.sanitize(mathAnnotationStripped, {
+          return window.DOMPurify.sanitize(mathAnnotationPreserved, {
             USE_PROFILES: {
               html: true,
               mathMl: true,
               svg: true,
             },
             ADD_TAGS: ["embed"],
-            ADD_ATTR: ["src", "type", "title", "width", "height", "style", "data-fig-align"],
+            ADD_ATTR: ["src", "type", "title", "width", "height", "style", "data-fig-align", "data-tex-source"],
             ADD_DATA_URI_TAGS: ["embed"],
           });
         }
@@ -2275,7 +2281,7 @@
         }
       }
 
-      async function renderMarkdownWithPandoc(markdown) {
+      async function renderMarkdownWithPandoc(markdown, options) {
         const token = getToken();
         if (!token) {
           throw new Error("Missing Studio token in URL.");
@@ -2288,20 +2294,26 @@
         const controller = typeof AbortController === "function" ? new AbortController() : null;
         const timeoutId = controller ? window.setTimeout(() => controller.abort(), 8000) : null;
 
+        const previewOptions = options && typeof options === "object" ? options : {};
+
         let response;
         try {
           const effectivePath = getEffectiveSavePath();
           const sourcePath = effectivePath || sourceState.path || "";
+          const payload = {
+            markdown: String(markdown || ""),
+            sourcePath: sourcePath,
+            resourceDir: (!sourcePath && resourceDirInput) ? resourceDirInput.value.trim() : "",
+          };
+          if (previewOptions.includeEditorLanguage) {
+            payload.editorLanguage = String(editorLanguage || "");
+          }
           response = await fetch("/render-preview?token=" + encodeURIComponent(token), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-              markdown: String(markdown || ""),
-              sourcePath: sourcePath,
-              resourceDir: (!sourcePath && resourceDirInput) ? resourceDirInput.value.trim() : "",
-            }),
+            body: JSON.stringify(payload),
             signal: controller ? controller.signal : undefined,
           });
         } catch (error) {
@@ -2526,7 +2538,9 @@
           : { markdown: stripAnnotationMarkers(String(markdown || "")), placeholders: [] };
 
         try {
-          const renderedHtml = await renderMarkdownWithPandoc(previewPrepared.markdown);
+          const renderedHtml = await renderMarkdownWithPandoc(previewPrepared.markdown, {
+            includeEditorLanguage: pane === "source" || rightView === "editor-preview",
+          });
 
           if (pane === "source") {
             if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
