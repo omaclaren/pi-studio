@@ -18,7 +18,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
-- Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with **Comment** actions from raw-editor and editor-preview selections plus optional inline `[an: ...]` toggles when you want them in the document text
+- Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with **Comment** actions from raw-editor selections plus editor-preview selections for Markdown and code/text/diff previews, alongside optional inline `[an: ...]` toggles when you want comments reflected in the document text
 - Browses response history (`Prev/Next/Last`) and loads either:
   - response text
   - critique notes/full critique

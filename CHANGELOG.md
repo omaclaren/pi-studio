@@ -4,6 +4,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.48] — 2026-04-07
+
+### Added
+- Editor-preview comments now also work for code, plain-text, and diff files using line-based preview selection anchors, so code/text review can use the same local comments workflow as Markdown preview.
+
+### Fixed
+- LaTeX editor preview now correctly treats `.tex`/LaTeX editor content as LaTeX in preview even when the document is only a fragment rather than a full `\documentclass` wrapper.
+- Ordinary response preview no longer flips into LaTeX mode just because quoted LaTeX commands like `` `\\documentclass` `` or `` `\\begin{document}` `` appear in a normal response.
+
+### Changed
+- LaTeX preview comments remain disabled for now; the earlier heuristic preview-side mapping attempts were removed in favor of keeping the rendering fixes and waiting for a more pipeline-grounded LaTeX comment design.
+
 ## [0.5.47] — 2026-04-07
 
 ### Changed
