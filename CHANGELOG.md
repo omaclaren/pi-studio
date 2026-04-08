@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.49] — 2026-04-09
+
+### Fixed
+- Markdown editor-preview comments are now substantially more robust on real pandoc-rendered documents, including smart punctuation and ellipsis normalization, mixed prose plus display-math sections, standalone display equations treated as whole units, MathJax fallback display math, standalone page-break commands, and raw-TeX commands that disappear from preview output.
+- Preview comment block matching now avoids unsafe tiny substring fallbacks, so extra blank-line splits that create short paragraphs like `or` no longer derail later Markdown comment targets.
+- Markdown HTML comments like `<!-- ... -->` are now stripped more consistently across both the main pandoc preview path and plain-markdown fallback rendering, including edge cases after unmatched inline backticks at line breaks.
+
 ## [0.5.48] — 2026-04-07
 
 ### Added
