@@ -510,6 +510,71 @@
     });
   }
 
+  function stripMarkdownHtmlCommentsInSegment(markdown) {
+    const source = String(markdown || "");
+    let out = "";
+    let index = 0;
+    let codeSpanFenceLength = 0;
+    let inHtmlComment = false;
+
+    while (index < source.length) {
+      if (inHtmlComment) {
+        if (source.startsWith("-->", index)) {
+          inHtmlComment = false;
+          index += 3;
+          continue;
+        }
+        const ch = source[index];
+        if (ch === "\n" || ch === "\r") out += ch;
+        index += 1;
+        continue;
+      }
+
+      if (codeSpanFenceLength > 0) {
+        const fence = "`".repeat(codeSpanFenceLength);
+        if (source.startsWith(fence, index)) {
+          out += fence;
+          index += codeSpanFenceLength;
+          codeSpanFenceLength = 0;
+          continue;
+        }
+        const ch = source[index];
+        out += ch;
+        index += 1;
+        if (ch === "\n" || ch === "\r") {
+          codeSpanFenceLength = 0;
+        }
+        continue;
+      }
+
+      const backtickMatch = source.slice(index).match(/^`+/);
+      if (backtickMatch) {
+        const fence = backtickMatch[0] || "`";
+        codeSpanFenceLength = fence.length;
+        out += fence;
+        index += fence.length;
+        continue;
+      }
+
+      if (source.startsWith("<!--", index)) {
+        inHtmlComment = true;
+        index += 4;
+        continue;
+      }
+
+      out += source[index];
+      index += 1;
+    }
+
+    return out;
+  }
+
+  function stripMarkdownHtmlComments(text) {
+    return transformMarkdownOutsideFences(text, function(segment) {
+      return stripMarkdownHtmlCommentsInSegment(segment);
+    });
+  }
+
   function prepareMarkdownForPandocPreview(markdown, placeholderPrefix) {
     const placeholders = [];
     const prefix = typeof placeholderPrefix === "string" && placeholderPrefix
@@ -536,6 +601,7 @@
     renderPreviewAnnotationHtml: renderPreviewAnnotationHtml,
     replaceInlineAnnotationMarkers: replaceInlineAnnotationMarkers,
     stripAnnotationMarkers: stripAnnotationMarkers,
+    stripMarkdownHtmlComments: stripMarkdownHtmlComments,
     transformMarkdownOutsideFences: transformMarkdownOutsideFences,
   });
 

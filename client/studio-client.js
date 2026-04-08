@@ -1461,6 +1461,13 @@
         return annotationHelpers.stripAnnotationMarkers(text);
       }
 
+      function stripMarkdownHtmlComments(text) {
+        if (annotationHelpers && typeof annotationHelpers.stripMarkdownHtmlComments === "function") {
+          return annotationHelpers.stripMarkdownHtmlComments(text);
+        }
+        return String(text || "");
+      }
+
       function prepareEditorTextForSend(text) {
         const raw = String(text || "");
         return annotationsEnabled ? raw : stripAnnotationMarkers(raw);
@@ -1524,15 +1531,17 @@
         syncBadgeEl.classList.remove("sync");
       }
 
-      function buildPlainMarkdownHtml(markdown) {
-        return "<pre class='plain-markdown'>" + escapeHtml(String(markdown || "")) + "</pre>";
+      function buildPlainMarkdownHtml(markdown, options) {
+        const shouldStripHtmlComments = Boolean(options && options.stripMarkdownHtmlComments);
+        const source = shouldStripHtmlComments ? stripMarkdownHtmlComments(markdown) : String(markdown || "");
+        return "<pre class='plain-markdown'>" + escapeHtml(source) + "</pre>";
       }
 
-      function buildPreviewErrorHtml(message, markdown) {
-        return "<div class='preview-error'>" + escapeHtml(String(message || "Preview rendering failed.")) + "</div>" + buildPlainMarkdownHtml(markdown);
+      function buildPreviewErrorHtml(message, markdown, options) {
+        return "<div class='preview-error'>" + escapeHtml(String(message || "Preview rendering failed.")) + "</div>" + buildPlainMarkdownHtml(markdown, options);
       }
 
-      function sanitizeRenderedHtml(html, markdown) {
+      function sanitizeRenderedHtml(html, markdown, options) {
         const rawHtml = typeof html === "string" ? html : "";
         const mathAnnotationPreserved = rawHtml.replace(/<math\b([^>]*)>([\s\S]*?)<\/math>/gi, (match, attrs, inner) => {
           const texAnnotationMatch = String(inner || "").match(/<annotation\b[^>]*encoding="application\/x-tex"[^>]*>([\s\S]*?)<\/annotation>/i);
@@ -1556,7 +1565,7 @@
             ADD_DATA_URI_TAGS: ["embed"],
           });
         }
-        return buildPreviewErrorHtml("Preview sanitizer unavailable. Showing plain markdown.", markdown);
+        return buildPreviewErrorHtml("Preview sanitizer unavailable. Showing plain markdown.", markdown, options);
       }
 
       function isPdfPreviewSource(src) {
@@ -2536,6 +2545,10 @@
         const previewPrepared = annotationsEnabled
           ? prepareMarkdownForPandocPreview(markdown)
           : { markdown: stripAnnotationMarkers(String(markdown || "")), placeholders: [] };
+        const previewingEditorText = pane === "source" || rightView === "editor-preview";
+        const previewFallbackOptions = {
+          stripMarkdownHtmlComments: !previewingEditorText || editorLanguage !== "latex",
+        };
 
         try {
           const renderedHtml = await renderMarkdownWithPandoc(previewPrepared.markdown, {
@@ -2550,7 +2563,7 @@
 
           clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
-          targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown);
+          targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown, previewFallbackOptions);
           applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
           await renderAnnotationMathInElement(targetEl);
           decoratePdfEmbeds(targetEl);
@@ -2594,7 +2607,7 @@
           const detail = error && error.message ? error.message : String(error || "unknown error");
           clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
-          targetEl.innerHTML = buildPreviewErrorHtml("Preview renderer unavailable (" + detail + "). Showing plain markdown.", markdown);
+          targetEl.innerHTML = buildPreviewErrorHtml("Preview renderer unavailable (" + detail + "). Showing plain markdown.", markdown, previewFallbackOptions);
           if (pane === "response") {
             applyPendingResponseScrollReset();
             scheduleResponsePaneRepaintNudge();
@@ -4444,6 +4457,8 @@
         if (kind === "heading") return "heading";
         if (kind === "blockquote") return "quote block";
         if (kind === "list") return "list";
+        if (kind === "math") return "equation";
+        if (kind === "page-break") return "page break";
         if (kind === "code") return "code block";
         if (kind === "table") return "table";
         if (kind === "code-line") return "code line";
@@ -4457,13 +4472,304 @@
           || kind === "heading"
           || kind === "blockquote"
           || kind === "list"
+          || kind === "math"
           || kind === "code-line"
           || kind === "diff-line"
           || kind === "text-line";
       }
 
+      const DISPLAY_MATH_ENV_NAMES = new Set([
+        "displaymath",
+        "equation",
+        "equation*",
+        "align",
+        "align*",
+        "aligned",
+        "gather",
+        "gather*",
+        "multline",
+        "multline*",
+        "eqnarray",
+        "eqnarray*",
+        "split",
+      ]);
+
+      function isEscapedAt(text, index) {
+        let slashCount = 0;
+        for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) {
+          slashCount += 1;
+        }
+        return (slashCount % 2) === 1;
+      }
+
+      function readBalancedLatexGroup(source, startIndex, openChar, closeChar) {
+        if (!source || source[startIndex] !== openChar) return null;
+        let depth = 0;
+        for (let index = startIndex; index < source.length; index += 1) {
+          const ch = source[index];
+          if (ch === "\\") {
+            index += 1;
+            continue;
+          }
+          if (ch === openChar) {
+            depth += 1;
+            continue;
+          }
+          if (ch === closeChar) {
+            depth -= 1;
+            if (depth === 0) {
+              return {
+                start: startIndex,
+                contentStart: startIndex + 1,
+                contentEnd: index,
+                end: index + 1,
+              };
+            }
+          }
+        }
+        return null;
+      }
+
+      const DROPPED_MARKDOWN_RAW_TEX_GROUP_COMMANDS = new Set([
+        "textbf",
+        "textit",
+        "emph",
+        "underline",
+        "texttt",
+        "textrm",
+        "textsf",
+        "textsc",
+        "mbox",
+        "makebox",
+        "framebox",
+        "fbox",
+        "url",
+        "path",
+        "nolinkurl",
+      ]);
+      const DROPPED_MARKDOWN_RAW_TEX_DOUBLE_GROUP_COMMANDS = new Set([
+        "href",
+        "hyperref",
+      ]);
+      const DROPPED_MARKDOWN_RAW_TEX_STANDALONE_COMMANDS = new Set([
+        "latex",
+        "tex",
+        "newpage",
+        "pagebreak",
+        "clearpage",
+      ]);
+
+      function skipLatexWhitespace(source, startIndex) {
+        let index = startIndex;
+        while (index < source.length && /\s/.test(source[index])) index += 1;
+        return index;
+      }
+
+      function parseLatexCommandAt(source, startIndex) {
+        if (!source || source[startIndex] !== "\\") return null;
+        let index = startIndex + 1;
+        if (index >= source.length) {
+          return { name: "", end: index };
+        }
+        if (/[A-Za-z@]/.test(source[index])) {
+          const nameStart = index;
+          while (index < source.length && /[A-Za-z@]/.test(source[index])) index += 1;
+          if (source[index] === "*") index += 1;
+          return {
+            name: source.slice(nameStart, index),
+            end: index,
+          };
+        }
+        return {
+          name: source[index],
+          end: index + 1,
+        };
+      }
+
+      function collectDisplayMathRanges(text) {
+        const source = String(text || "");
+        const ranges = [];
+        let index = 0;
+
+        while (index < source.length) {
+          if (source[index] === "%" && !isEscapedAt(source, index)) {
+            while (index < source.length && source[index] !== "\n") index += 1;
+            continue;
+          }
+          if (source.startsWith("$$", index)) {
+            const close = source.indexOf("$$", index + 2);
+            if (close >= 0) {
+              ranges.push({
+                start: index,
+                end: close + 2,
+                bodyStart: index + 2,
+                bodyEnd: close,
+                bodyText: source.slice(index + 2, close),
+              });
+              index = close + 2;
+              continue;
+            }
+          }
+          if (source.startsWith("\\[", index)) {
+            const close = source.indexOf("\\]", index + 2);
+            if (close >= 0) {
+              ranges.push({
+                start: index,
+                end: close + 2,
+                bodyStart: index + 2,
+                bodyEnd: close,
+                bodyText: source.slice(index + 2, close),
+              });
+              index = close + 2;
+              continue;
+            }
+          }
+          if (source.startsWith("\\begin{", index)) {
+            const envGroup = readBalancedLatexGroup(source, index + 6, "{", "}");
+            const envName = envGroup ? source.slice(envGroup.contentStart, envGroup.contentEnd).trim() : "";
+            if (envName && DISPLAY_MATH_ENV_NAMES.has(envName)) {
+              const closeToken = "\\end{" + envName + "}";
+              const close = source.indexOf(closeToken, envGroup.end);
+              if (close >= 0) {
+                ranges.push({
+                  start: index,
+                  end: close + closeToken.length,
+                  bodyStart: envGroup.end,
+                  bodyEnd: close,
+                  bodyText: source.slice(envGroup.end, close),
+                });
+                index = close + closeToken.length;
+                continue;
+              }
+            }
+          }
+          index += 1;
+        }
+
+        return ranges;
+      }
+
+      function getStandaloneDisplayMathRange(text) {
+        const source = String(text || "");
+        const leadingMatch = source.match(/^\s*/);
+        const trailingMatch = source.match(/\s*$/);
+        const leadingLength = leadingMatch ? leadingMatch[0].length : 0;
+        const trailingLength = trailingMatch ? trailingMatch[0].length : 0;
+        const trimmedEnd = Math.max(leadingLength, source.length - trailingLength);
+        const trimmed = source.slice(leadingLength, trimmedEnd);
+        if (!trimmed) return null;
+        const ranges = collectDisplayMathRanges(trimmed);
+        if (ranges.length !== 1) return null;
+        const range = ranges[0];
+        if (!range || range.start !== 0 || range.end !== trimmed.length) return null;
+        return {
+          start: leadingLength + range.start,
+          end: leadingLength + range.end,
+          bodyStart: leadingLength + range.bodyStart,
+          bodyEnd: leadingLength + range.bodyEnd,
+          bodyText: String(range.bodyText || ""),
+        };
+      }
+      function normalizePreviewComparableCharacter(character) {
+        switch (String(character || "")) {
+          case "\u2018":
+          case "\u2019":
+          case "\u201A":
+          case "\u201B":
+            return "'";
+          case "\u201C":
+          case "\u201D":
+          case "\u201E":
+          case "\u201F":
+            return '"';
+          case "\u2013":
+          case "\u2014":
+          case "\u2212":
+            return "-";
+          case "\u2026":
+            return "…";
+          default:
+            return String(character || "");
+        }
+      }
+
       function normalizeVisiblePreviewText(text) {
-        return String(text || "").replace(/\s+/g, " ").trim();
+        const source = String(text || "");
+        let normalized = "";
+        let pendingWhitespace = false;
+        for (let i = 0; i < source.length; i += 1) {
+          let character = source[i] === "." && source.slice(i, i + 3) === "..."
+            ? "…"
+            : normalizePreviewComparableCharacter(source[i]);
+          if (character === "…" && source[i] === "." && source.slice(i, i + 3) === "...") {
+            i += 2;
+          }
+          if (/\s/.test(character)) {
+            if (normalized) {
+              pendingWhitespace = true;
+            }
+            continue;
+          }
+          if (pendingWhitespace && normalized) {
+            normalized += " ";
+            pendingWhitespace = false;
+          }
+          normalized += character;
+        }
+        return normalized.trim();
+      }
+
+      function splitSourcePreviewCommentBlockByDisplayMath(sourceText, block) {
+        if (!block || block.kind !== "paragraph") {
+          return block ? [block] : [];
+        }
+        const source = String(sourceText || "");
+        const blockStart = Math.max(0, Math.min(Number(block.start) || 0, source.length));
+        const blockEnd = Math.max(blockStart, Math.min(Number(block.end) || blockStart, source.length));
+        const blockText = source.slice(blockStart, blockEnd);
+        const mathRanges = collectDisplayMathRanges(blockText);
+        if (mathRanges.length === 0) {
+          return [block];
+        }
+
+        const segments = [];
+        function pushSegment(kind, relativeStart, relativeEnd) {
+          const safeRelativeStart = Math.max(0, Math.min(relativeStart, blockText.length));
+          const safeRelativeEnd = Math.max(safeRelativeStart, Math.min(relativeEnd, blockText.length));
+          if (safeRelativeEnd <= safeRelativeStart) return;
+          const absoluteStart = blockStart + safeRelativeStart;
+          const absoluteEnd = blockStart + safeRelativeEnd;
+          const segmentText = source.slice(absoluteStart, absoluteEnd);
+          if (kind === "paragraph" && !normalizeVisiblePreviewText(segmentText)) {
+            return;
+          }
+          segments.push({
+            kind,
+            start: absoluteStart,
+            end: absoluteEnd,
+            lineStart: getLineNumberAtOffset(source, absoluteStart),
+            lineEnd: getLineNumberAtOffset(source, Math.max(absoluteStart, absoluteEnd - 1)),
+          });
+        }
+
+        let cursor = 0;
+        mathRanges.forEach((mathRange) => {
+          if (!mathRange) return;
+          pushSegment("paragraph", cursor, mathRange.start);
+          pushSegment("math", mathRange.start, mathRange.end);
+          cursor = mathRange.end;
+        });
+        pushSegment("paragraph", cursor, blockText.length);
+
+        return segments.length > 0 ? segments : [block];
+      }
+
+      function expandSourcePreviewCommentBlocksByDisplayMath(sourceText, blocks) {
+        const expanded = [];
+        (Array.isArray(blocks) ? blocks : []).forEach((block) => {
+          expanded.push(...splitSourcePreviewCommentBlockByDisplayMath(sourceText, block));
+        });
+        return expanded;
       }
 
       function appendMappedPreviewSlice(chars, rawOffsets, lineText, lineBaseOffset, start, end) {
@@ -4516,6 +4822,14 @@
           }
         }
 
+        if (kind === "math") {
+          const mathRange = getStandaloneDisplayMathRange(source);
+          if (mathRange) {
+            appendMappedPreviewSlice(chars, rawOffsets, source, 0, mathRange.bodyStart, mathRange.bodyEnd);
+            return { text: chars.join(""), rawOffsets };
+          }
+        }
+
         for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
           const line = lines[lineIndex] || "";
           if (kind === "blockquote") {
@@ -4543,6 +4857,26 @@
         return { text: chars.join(""), rawOffsets };
       }
 
+      function findClosingUnescapedSequence(source, startIndex, sequence) {
+        const text = String(source || "");
+        const needle = String(sequence || "");
+        if (!text || !needle) return -1;
+        let searchIndex = Math.max(0, Number(startIndex) || 0);
+        while (searchIndex <= text.length) {
+          const matchIndex = text.indexOf(needle, searchIndex);
+          if (matchIndex < 0) return -1;
+          let backslashCount = 0;
+          for (let i = matchIndex - 1; i >= 0 && text[i] === "\\"; i -= 1) {
+            backslashCount += 1;
+          }
+          if (backslashCount % 2 === 0) {
+            return matchIndex;
+          }
+          searchIndex = matchIndex + needle.length;
+        }
+        return -1;
+      }
+
       function buildPreviewInlineDisplayMap(text, rawOffsets) {
         const source = String(text || "");
         const rawMap = Array.isArray(rawOffsets) ? rawOffsets : [];
@@ -4554,6 +4888,12 @@
           displayChars.push(character);
           charStarts.push(rawStart);
           charEnds.push(rawEnd);
+        }
+
+        function appendRawRange(startIndex, endIndex) {
+          for (let i = startIndex; i < endIndex; i += 1) {
+            appendChar(source[i], rawMap[i], rawMap[i] + 1);
+          }
         }
 
         function appendNestedRange(startIndex, endIndex) {
@@ -4584,15 +4924,86 @@
             const fence = "`".repeat(tickCount);
             const closeIndex = source.indexOf(fence, index + tickCount);
             if (closeIndex >= 0) {
-              for (let i = index + tickCount; i < closeIndex; i += 1) {
-                appendChar(source[i], rawMap[i], rawMap[i] + 1);
-              }
+              appendRawRange(index + tickCount, closeIndex);
               index = closeIndex + tickCount;
               continue;
             }
           }
 
+          if (remaining.startsWith("\\(")) {
+            const closeIndex = source.indexOf("\\)", index + 2);
+            if (closeIndex >= 0) {
+              appendRawRange(index + 2, closeIndex);
+              index = closeIndex + 2;
+              continue;
+            }
+          }
+
+          if (remaining.startsWith("\\[")) {
+            const closeIndex = source.indexOf("\\]", index + 2);
+            if (closeIndex >= 0) {
+              appendRawRange(index + 2, closeIndex);
+              index = closeIndex + 2;
+              continue;
+            }
+          }
+
+          if (remaining.startsWith("$$")) {
+            const closeIndex = findClosingUnescapedSequence(source, index + 2, "$$");
+            if (closeIndex >= 0) {
+              appendRawRange(index + 2, closeIndex);
+              index = closeIndex + 2;
+              continue;
+            }
+          }
+
+          if (source[index] === "$") {
+            const closeIndex = findClosingUnescapedSequence(source, index + 1, "$");
+            if (closeIndex >= 0) {
+              appendRawRange(index + 1, closeIndex);
+              index = closeIndex + 1;
+              continue;
+            }
+          }
+
           if (source[index] === "\\" && index + 1 < source.length) {
+            const latexCommand = parseLatexCommandAt(source, index);
+            const normalizedCommandName = latexCommand && latexCommand.name
+              ? String(latexCommand.name || "").replace(/\*$/, "").toLowerCase()
+              : "";
+            const isDroppedLatexCommand = Boolean(
+              normalizedCommandName
+              && (
+                DROPPED_MARKDOWN_RAW_TEX_GROUP_COMMANDS.has(normalizedCommandName)
+                || DROPPED_MARKDOWN_RAW_TEX_DOUBLE_GROUP_COMMANDS.has(normalizedCommandName)
+                || DROPPED_MARKDOWN_RAW_TEX_STANDALONE_COMMANDS.has(normalizedCommandName)
+              )
+            );
+            if (latexCommand && isDroppedLatexCommand) {
+              let nextIndex = skipLatexWhitespace(source, latexCommand.end);
+              if (source[nextIndex] === "[") {
+                const optionalGroup = readBalancedLatexGroup(source, nextIndex, "[", "]");
+                if (optionalGroup) {
+                  nextIndex = skipLatexWhitespace(source, optionalGroup.end);
+                }
+              }
+              if (DROPPED_MARKDOWN_RAW_TEX_GROUP_COMMANDS.has(normalizedCommandName) || DROPPED_MARKDOWN_RAW_TEX_DOUBLE_GROUP_COMMANDS.has(normalizedCommandName)) {
+                if (source[nextIndex] === "{") {
+                  const firstGroup = readBalancedLatexGroup(source, nextIndex, "{", "}");
+                  if (firstGroup) {
+                    nextIndex = skipLatexWhitespace(source, firstGroup.end);
+                  }
+                }
+              }
+              if (DROPPED_MARKDOWN_RAW_TEX_DOUBLE_GROUP_COMMANDS.has(normalizedCommandName) && source[nextIndex] === "{") {
+                const secondGroup = readBalancedLatexGroup(source, nextIndex, "{", "}");
+                if (secondGroup) {
+                  nextIndex = skipLatexWhitespace(source, secondGroup.end);
+                }
+              }
+              index = Math.max(index + 1, nextIndex);
+              continue;
+            }
             appendChar(source[index + 1], rawMap[index], rawMap[index + 1] + 1);
             index += 2;
             continue;
@@ -4630,13 +5041,20 @@
         let pendingWhitespaceEnd = null;
 
         for (let i = 0; i < source.length; i += 1) {
-          const character = source[i];
+          let character = normalizePreviewComparableCharacter(source[i]);
+          let startRef = charStarts[i];
+          let endRef = charEnds[i];
+          if (source[i] === "." && source.slice(i, i + 3) === "...") {
+            character = "…";
+            endRef = charEnds[Math.min(i + 2, charEnds.length - 1)];
+            i += 2;
+          }
           if (/\s/.test(character)) {
             if (outChars.length === 0) continue;
             if (pendingWhitespaceStart == null) {
-              pendingWhitespaceStart = charStarts[i];
+              pendingWhitespaceStart = startRef;
             }
-            pendingWhitespaceEnd = charEnds[i];
+            pendingWhitespaceEnd = endRef;
             continue;
           }
 
@@ -4649,8 +5067,8 @@
           }
 
           outChars.push(character);
-          outStarts.push(charStarts[i]);
-          outEnds.push(charEnds[i]);
+          outStarts.push(startRef);
+          outEnds.push(endRef);
         }
 
         return {
@@ -4680,6 +5098,68 @@
           node = walker.nextNode();
         }
         return buildNormalizedPreviewDisplayMap(chars.join(""), starts, ends);
+      }
+
+      function getPreviewMathSearchText(element) {
+        if (!element || !(element instanceof Element)) return null;
+        const tag = element.tagName ? element.tagName.toUpperCase() : "";
+        if (tag === "MATH") {
+          const texSource = element.getAttribute("data-tex-source");
+          if (texSource && texSource.trim()) {
+            return texSource;
+          }
+          return typeof element.textContent === "string" ? element.textContent : "";
+        }
+        if (element.classList && element.classList.contains("math") && (element.classList.contains("inline") || element.classList.contains("display"))) {
+          return extractMathFallbackTex(
+            typeof element.textContent === "string" ? element.textContent : "",
+            element.classList.contains("display"),
+          );
+        }
+        return null;
+      }
+
+      function buildNormalizedPreviewSearchText(rootNode) {
+        if (!rootNode) return "";
+        const parts = [];
+
+        function visit(node) {
+          if (!node) return;
+          if (node.nodeType === Node.TEXT_NODE) {
+            parts.push(typeof node.nodeValue === "string" ? node.nodeValue : "");
+            return;
+          }
+          if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) {
+            return;
+          }
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            const element = node;
+            const mathText = getPreviewMathSearchText(element);
+            if (mathText != null) {
+              parts.push(mathText);
+              return;
+            }
+            if (element.tagName === "BR") {
+              parts.push("\n");
+              return;
+            }
+          }
+          Array.from(node.childNodes || []).forEach(visit);
+        }
+
+        visit(rootNode);
+        return normalizeVisiblePreviewText(parts.join(""));
+      }
+
+      function buildNormalizedPreviewRangeText(range) {
+        if (!range || typeof range.cloneContents !== "function") {
+          return "";
+        }
+        try {
+          return buildNormalizedPreviewSearchText(range.cloneContents());
+        } catch {
+          return normalizeVisiblePreviewText(range.toString());
+        }
       }
 
       function findPreferredNormalizedTextMatch(haystack, needle, preferredIndex) {
@@ -4860,6 +5340,10 @@
           return /^\s*<!--/.test(getLine(index));
         }
 
+        function isPageBreakLine(index) {
+          return /^\\(?:newpage|pagebreak|clearpage)(?:\s*\[[^\]]*\])?\s*$/i.test(getLine(index));
+        }
+
         function makeBlock(kind, startLineIndex, endLineIndex) {
           const safeStartLine = Math.max(0, Math.min(startLineIndex, Math.max(0, lines.length - 1)));
           const safeEndLine = Math.max(safeStartLine, Math.min(endLineIndex, Math.max(0, lines.length - 1)));
@@ -4902,6 +5386,12 @@
           }
 
           if (isThematicBreakLine(index)) {
+            index += 1;
+            continue;
+          }
+
+          if (isPageBreakLine(index)) {
+            blocks.push(makeBlock("page-break", index, index));
             index += 1;
             continue;
           }
@@ -5004,11 +5494,83 @@
           index = endParagraph + 1;
         }
 
-        return blocks;
+        return expandSourcePreviewCommentBlocksByDisplayMath(source, blocks);
+      }
+
+      function isPreviewDisplayMathElement(element) {
+        return Boolean(element && element instanceof Element && element.matches && element.matches("math[display='block'], .studio-mathjax-fallback-display"));
+      }
+
+      function previewNodesHaveVisibleContent(nodes) {
+        return (Array.isArray(nodes) ? nodes : []).some((node) => {
+          if (!node) return false;
+          if (node.nodeType === Node.TEXT_NODE) {
+            return Boolean(normalizeVisiblePreviewText(node.nodeValue || ""));
+          }
+          return node instanceof Element && Boolean(buildNormalizedPreviewSearchText(node));
+        });
+      }
+
+      function splitMixedPreviewParagraphsAroundDisplayMath(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
+        Array.from(targetEl.querySelectorAll("p")).forEach((paragraphEl) => {
+          if (!(paragraphEl instanceof Element) || !paragraphEl.parentNode) return;
+          if (paragraphEl.closest && paragraphEl.closest(".preview-comment-block")) return;
+          let ancestor = paragraphEl.parentElement;
+          while (ancestor && ancestor !== targetEl) {
+            if (getPreviewCommentTargetKind(ancestor)) return;
+            ancestor = ancestor.parentElement;
+          }
+          const childNodes = Array.from(paragraphEl.childNodes || []);
+          if (!childNodes.some((node) => isPreviewDisplayMathElement(node))) return;
+
+          const fragment = document.createDocumentFragment();
+          let proseNodes = [];
+          let segmentCount = 0;
+
+          function flushProse() {
+            if (proseNodes.length === 0) return;
+            if (!previewNodesHaveVisibleContent(proseNodes)) {
+              proseNodes = [];
+              return;
+            }
+            const proseEl = paragraphEl.cloneNode(false);
+            if (proseEl instanceof Element) {
+              proseEl.removeAttribute("id");
+            }
+            proseNodes.forEach((node) => {
+              proseEl.appendChild(node);
+            });
+            fragment.appendChild(proseEl);
+            proseNodes = [];
+            segmentCount += 1;
+          }
+
+          childNodes.forEach((node) => {
+            if (isPreviewDisplayMathElement(node)) {
+              flushProse();
+              fragment.appendChild(node);
+              segmentCount += 1;
+              return;
+            }
+            proseNodes.push(node);
+          });
+          flushProse();
+
+          if (segmentCount > 0) {
+            paragraphEl.replaceWith(fragment);
+          }
+        });
       }
 
       function getPreviewCommentTargetKind(element) {
         if (!element || !(element instanceof Element)) return "";
+        if (element.classList && element.classList.contains("studio-mathjax-fallback-display")) {
+          return "math";
+        }
+        if (element.classList && element.classList.contains("studio-page-break")) {
+          return "page-break";
+        }
         const tag = element.tagName ? element.tagName.toUpperCase() : "";
         if (/^H[1-6]$/.test(tag)) return "heading";
         if (tag === "P") return "paragraph";
@@ -5016,6 +5578,9 @@
         if (tag === "UL" || tag === "OL") return "list";
         if (tag === "TABLE") return "table";
         if (tag === "PRE") return "code";
+        if (tag === "MATH") {
+          return String(element.getAttribute("display") || "").toLowerCase() === "block" ? "math" : "";
+        }
         if (element.classList) {
           if (
             element.classList.contains("sourceCode")
@@ -5042,7 +5607,7 @@
 
       function collectPreviewCommentTargetElements(targetEl) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return [];
-        const selector = "h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, table, div.sourceCode, pre, .callout-note, .callout-tip, .callout-warning, .callout-important, .callout-caution, .mermaid-container";
+        const selector = "h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, table, div.sourceCode, pre, math[display='block'], .studio-mathjax-fallback-display, .studio-page-break, .callout-note, .callout-tip, .callout-warning, .callout-important, .callout-caution, .mermaid-container";
         return Array.from(targetEl.querySelectorAll(selector)).filter((element) => {
           if (!isPreviewCommentTargetElement(element)) return false;
           let ancestor = element.parentElement;
@@ -5061,6 +5626,10 @@
       function getNormalizedPreviewCommentSourceBlockText(sourceText, sourceBlock) {
         if (!sourceBlock) return "";
         const blockText = String(sourceText || "").slice(sourceBlock.start, sourceBlock.end);
+        if (sourceBlock.kind === "page-break") {
+          const match = blockText.trim().match(/^\\(newpage|pagebreak|clearpage)/i);
+          return match ? String(match[1] || "").toLowerCase() : "page-break";
+        }
         if (supportsPreviewSelectionCommentsForBlockKind(sourceBlock.kind)) {
           return normalizeVisiblePreviewText(buildPreviewSelectionDisplayMap(blockText, sourceBlock.kind).text);
         }
@@ -5084,12 +5653,24 @@
       function getNormalizedPreviewCommentTargetText(targetEntry) {
         if (!targetEntry) return "";
         if (typeof targetEntry.normalizedText === "string") return targetEntry.normalizedText;
-        targetEntry.normalizedText = normalizeVisiblePreviewText(
-          targetEntry.element && typeof targetEntry.element.textContent === "string"
-            ? targetEntry.element.textContent
-            : "",
-        );
+        if (targetEntry.kind === "page-break") {
+          const element = targetEntry.element;
+          targetEntry.normalizedText = String(element && element.getAttribute ? (element.getAttribute("data-page-break-kind") || "page-break") : "page-break").toLowerCase();
+          return targetEntry.normalizedText;
+        }
+        targetEntry.normalizedText = buildNormalizedPreviewSearchText(targetEntry.element);
         return targetEntry.normalizedText;
+      }
+
+      function isHighConfidencePreviewTextContainmentMatch(leftText, rightText) {
+        const left = String(leftText || "");
+        const right = String(rightText || "");
+        if (!left || !right || left === right) return false;
+        const shorter = left.length <= right.length ? left : right;
+        const longer = left.length <= right.length ? right : left;
+        if (shorter.length < 12) return false;
+        if (!/\s/.test(shorter)) return false;
+        return longer.includes(shorter);
       }
 
       function findMatchingPreviewCommentTargetIndex(sourceText, sourceBlock, targetBlocks, startIndex) {
@@ -5107,7 +5688,7 @@
             if (targetText === desiredText) {
               return i;
             }
-            if (containsIndex < 0 && (targetText.includes(desiredText) || desiredText.includes(targetText))) {
+            if (containsIndex < 0 && isHighConfidencePreviewTextContainmentMatch(targetText, desiredText)) {
               containsIndex = i;
             }
           }
@@ -5167,6 +5748,7 @@
 
       function decorateRenderedEditorPreviewComments(targetEl, sourceText) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
+        splitMixedPreviewParagraphsAroundDisplayMath(targetEl);
         const sourceBlocks = scanSourcePreviewCommentBlocks(sourceText);
         const targetBlocks = collectPreviewCommentTargetElements(targetEl);
         if (sourceBlocks.length === 0 || targetBlocks.length === 0) return;
@@ -5250,6 +5832,19 @@
         const blockEnd = Math.max(blockStart, Math.min(Number(blockEl.dataset.reviewNoteEnd) || blockStart, source.length));
         if (blockEnd <= blockStart) return null;
 
+        if (kind === "math") {
+          const selectedDisplayText = normalizeVisiblePreviewText(getPreviewMathSearchText(contentEl) || buildNormalizedPreviewSearchText(contentEl));
+          if (!selectedDisplayText) return null;
+          return {
+            selectionStart: blockStart,
+            selectionEnd: blockEnd,
+            lineStart: getLineNumberAtOffset(source, blockStart),
+            lineEnd: getLineNumberAtOffset(source, Math.max(blockStart, blockEnd - 1)),
+            selectedText: source.slice(blockStart, blockEnd),
+            selectedDisplayText,
+          };
+        }
+
         const sourceBlockText = source.slice(blockStart, blockEnd);
         const displayMap = buildPreviewSelectionDisplayMap(sourceBlockText, kind);
         if (!displayMap.text || !displayMap.charStarts.length || !displayMap.charEnds.length) return null;
@@ -5257,8 +5852,8 @@
         const prefixRange = document.createRange();
         prefixRange.selectNodeContents(contentEl);
         prefixRange.setEnd(range.startContainer, range.startOffset);
-        const prefixText = normalizeVisiblePreviewText(prefixRange.toString());
-        const selectedDisplayText = normalizeVisiblePreviewText(range.toString());
+        const prefixText = buildNormalizedPreviewRangeText(prefixRange);
+        const selectedDisplayText = buildNormalizedPreviewRangeText(range);
         if (!selectedDisplayText) return null;
 
         const desiredStart = Math.max(0, Math.min(prefixText.length, displayMap.text.length));
@@ -5376,7 +5971,7 @@
         let bestScore = Number.NEGATIVE_INFINITY;
         Array.from(targetEl.querySelectorAll(".preview-comment-block")).forEach((blockEl) => {
           const contentEl = blockEl.querySelector(".preview-comment-block-content") || blockEl;
-          const blockText = normalizeVisiblePreviewText(buildNormalizedDomTextMap(contentEl).text);
+          const blockText = buildNormalizedPreviewSearchText(contentEl);
           if (!blockText) return;
           const matchIndex = blockText.indexOf(selectionText);
           if (matchIndex < 0) return;
@@ -5400,6 +5995,13 @@
         const blockEl = findPreviewCommentBlockForRange(targetEl, range) || findPreviewCommentBlockForNoteText(targetEl, note);
         if (!blockEl) return false;
         const contentEl = blockEl.querySelector(".preview-comment-block-content") || blockEl;
+        if (String(blockEl.dataset && blockEl.dataset.previewCommentKind || "") === "math") {
+          if (typeof contentEl.scrollIntoView === "function") {
+            contentEl.scrollIntoView({ block: "center", inline: "nearest" });
+          }
+          setPreviewJumpHighlight(targetEl, contentEl, null);
+          return true;
+        }
         const inlineHighlightEl = createPreviewJumpInlineHighlight(contentEl, blockEl, note, range);
         if (typeof blockEl.scrollIntoView === "function") {
           blockEl.scrollIntoView({ block: "center", inline: "nearest" });
