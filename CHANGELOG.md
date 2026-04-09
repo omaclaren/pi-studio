@@ -4,6 +4,19 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.51] — 2026-04-09
+
+### Added
+- Raw-editor selection actions now also include a transient **Jump** control beside **Comment** when the right pane is showing **Editor (Preview)**, so editor selections can reveal the corresponding preview location without creating a local comment first.
+
+### Changed
+- Selection-time **Comment** / **Jump** affordances are now more consistent across raw editor and preview: preview-side actions use a fixed top-right action area while remaining transient and selection-only.
+- Standalone selection **Jump** actions now use the same preview highlight/reveal treatment as comment-card jumps, making it easier to stay oriented after jumping in either direction.
+
+### Fixed
+- Preview-side selection actions are once again hidden unless an appropriate preview text selection is active.
+- Code/text/diff preview selection mapping now preserves literal underscores in identifiers such as `add_subplot`, avoiding comment/jump failures caused by markdown-style underscore stripping.
+
 ## [0.5.50] — 2026-04-09
 
 ### Added
