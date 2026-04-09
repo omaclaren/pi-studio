@@ -7365,22 +7365,26 @@
           setStatus("Select some preview text within a single block first.", "warning");
           return false;
         }
-        const jumped = jumpToReviewAnchor(anchor, {
+        const previewNote = normalizeReviewNote(anchor);
+        const jumped = jumpToReviewAnchor(previewNote, {
           statusMessage: "Jumped to preview selection in the raw editor.",
           afterJump: () => {
             const paneEl = getPreviewSelectionPaneElement(paneId);
-            if (paneEl) {
-              revealReviewNoteInPreviewElement(paneEl, anchor);
+            if (paneEl && previewNote) {
+              revealReviewNoteInPreviewElement(paneEl, previewNote);
             }
+            const schedule = typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame.bind(window)
+              : (cb) => window.setTimeout(cb, 16);
+            schedule(() => {
+              const selection = typeof window.getSelection === "function" ? window.getSelection() : null;
+              if (selection && typeof selection.removeAllRanges === "function") {
+                selection.removeAllRanges();
+              }
+              clearPreviewCommentSelection();
+            });
           },
         });
-        if (jumped) {
-          const selection = typeof window.getSelection === "function" ? window.getSelection() : null;
-          if (selection && typeof selection.removeAllRanges === "function") {
-            selection.removeAllRanges();
-          }
-          clearPreviewCommentSelection();
-        }
         return jumped;
       }
 
