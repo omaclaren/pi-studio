@@ -6095,7 +6095,10 @@ ${cssVarsBlock}
               <div id="lineNumberMeasure" class="editor-line-number-measure" aria-hidden="true"></div>
               <pre id="sourceHighlight" class="editor-highlight" aria-hidden="true"></pre>
               <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
-              <button id="editorSelectionCommentBtn" type="button" class="editor-selection-comment-btn" hidden title="Create a new local comment from the current editor selection.">Comment</button>
+              <div id="editorSelectionActions" class="editor-selection-actions" hidden>
+                <button id="editorSelectionCommentBtn" type="button" class="editor-selection-action-btn" hidden title="Create a new local comment from the current editor selection.">Comment</button>
+                <button id="editorSelectionJumpBtn" type="button" class="editor-selection-action-btn" hidden title="Jump to the current editor selection in the preview.">Jump</button>
+              </div>
             </div>
             <div id="sourcePreview" class="panel-scroll rendered-markdown" hidden><pre class="plain-markdown"></pre></div>
           </div>
