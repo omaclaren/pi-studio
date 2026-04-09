@@ -4,6 +4,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.52] — 2026-04-09
+
+### Added
+- Studio now includes a docked **Outline** rail for the current editor text, with clickable structure entries that jump in the raw editor and, when possible, reveal the matching preview location.
+
+### Changed
+- Outline scanning now provides initial structure support for Markdown headings, LaTeX sectioning commands and references, Python classes/functions, JavaScript/TypeScript classes and functions, Julia modules/structs/functions/macros, Bash functions, and diff file/hunk structure.
+- Standalone preview-to-editor jumps now keep the raw-editor selection focused more reliably, so the left-side highlight persists more like comment-card jumps.
+
+### Fixed
+- The **Outline** button now only shows its active styling while the outline rail is actually open.
+
 ## [0.5.51] — 2026-04-09
 
 ### Added
