@@ -931,7 +931,8 @@
       display: none !important;
     }
 
-    .preview-comment-add {
+    .preview-comment-add,
+    .preview-comment-jump {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -950,14 +951,17 @@
       box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
     }
 
-    .preview-comment-block.has-selection .preview-comment-add {
+    .preview-comment-block.has-selection .preview-comment-add,
+    .preview-comment-block.has-selection .preview-comment-jump {
       opacity: 1;
       pointer-events: auto;
       transform: translateY(0);
     }
 
     .preview-comment-add:hover,
-    .preview-comment-add:focus-visible {
+    .preview-comment-add:focus-visible,
+    .preview-comment-jump:hover,
+    .preview-comment-jump:focus-visible {
       background: var(--accent-soft-strong);
       color: var(--accent);
       border-color: var(--accent);

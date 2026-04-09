@@ -3861,7 +3861,8 @@
               + ">"
               + "<div class='preview-comment-controls'>"
               + "<button type='button' class='preview-comment-summary' hidden></button>"
-              + "<button type='button' class='preview-comment-add'>Comment</button>"
+              + "<button type='button' class='preview-comment-add' data-preview-comment-action='comment'>Comment</button>"
+              + "<button type='button' class='preview-comment-jump' data-preview-comment-action='jump'>Jump</button>"
               + "</div>"
               + "<div class='preview-comment-block-content preview-code-line-content'>" + lineHtml + "</div>"
               + "</div>",
@@ -6452,6 +6453,7 @@
         const lineEnd = Math.max(lineStart, Number(blockEl.dataset.reviewNoteLineEnd) || lineStart);
         const summaryBtn = blockEl.querySelector(".preview-comment-summary");
         const addBtn = blockEl.querySelector(".preview-comment-add");
+        const jumpBtn = blockEl.querySelector(".preview-comment-jump");
         const lineLabel = summarizeReviewNoteAnchor({ lineStart: lineStart, lineEnd: lineEnd }).toLowerCase();
         const blockKindLabel = getPreviewCommentBlockKindLabel(blockEl.dataset.previewCommentKind || "paragraph");
         const blockKey = getPreviewCommentBlockKey(blockEl);
@@ -6474,6 +6476,16 @@
             ? ("Add a local comment from the current preview selection on this " + blockKindLabel + " (" + lineLabel + ").")
             : "";
           addBtn.setAttribute("aria-label", addBtn.title || "Comment");
+        }
+
+        if (jumpBtn) {
+          jumpBtn.hidden = !hasSelection;
+          jumpBtn.textContent = "Jump";
+          jumpBtn.dataset.previewCommentMode = hasSelection ? "selection" : "";
+          jumpBtn.title = hasSelection
+            ? ("Jump to the current preview selection on this " + blockKindLabel + " in the raw editor (" + lineLabel + ").")
+            : "";
+          jumpBtn.setAttribute("aria-label", jumpBtn.title || "Jump");
         }
       }
 
@@ -6522,8 +6534,16 @@
           const addBtn = document.createElement("button");
           addBtn.type = "button";
           addBtn.className = "preview-comment-add";
+          addBtn.dataset.previewCommentAction = "comment";
           addBtn.textContent = "Comment";
           controls.appendChild(addBtn);
+
+          const jumpBtn = document.createElement("button");
+          jumpBtn.type = "button";
+          jumpBtn.className = "preview-comment-jump";
+          jumpBtn.dataset.previewCommentAction = "jump";
+          jumpBtn.textContent = "Jump";
+          controls.appendChild(jumpBtn);
 
           originalElement.replaceWith(wrapper);
           wrapper.appendChild(controls);
@@ -7123,12 +7143,17 @@
         });
       }
 
-      function addReviewNoteFromPreviewSelection(blockEl) {
+      function getActivePreviewSelectionAnchorForBlock(blockEl) {
         if (!blockEl) return null;
         const blockKey = getPreviewCommentBlockKey(blockEl);
-        const anchor = activePreviewCommentSelection && activePreviewCommentSelection.blockKey === blockKey
+        return activePreviewCommentSelection && activePreviewCommentSelection.blockKey === blockKey
           ? activePreviewCommentSelection
           : null;
+      }
+
+      function addReviewNoteFromPreviewSelection(blockEl) {
+        if (!blockEl) return null;
+        const anchor = getActivePreviewSelectionAnchorForBlock(blockEl);
         if (!anchor) {
           setStatus("Select some preview text within a single block first.", "warning");
           return null;
@@ -7203,14 +7228,13 @@
         });
       }
 
-      function jumpToReviewNote(noteId) {
-        const note = reviewNotes.find((entry) => entry && entry.id === noteId);
-        if (!note) return;
+      function jumpToReviewAnchor(anchor, options) {
+        if (!anchor) return false;
         const current = String(sourceTextEl.value || "");
-        const range = resolveReviewNoteRange(note, current);
+        const range = resolveReviewNoteRange(anchor, current);
         if (!range) {
-          setStatus("Could not find the anchored location for this comment.", "warning");
-          return;
+          setStatus((options && options.notFoundStatusMessage) || "Could not find the anchored location.", "warning");
+          return false;
         }
         suppressEditorSelectionComment = true;
         suppressedEditorSelectionStart = range.start;
@@ -7225,8 +7249,46 @@
           : (cb) => window.setTimeout(cb, 16);
         schedule(() => {
           scrollEditorRangeIntoView(range);
-          revealReviewNoteInPreview(note);
+          if (options && typeof options.afterJump === "function") {
+            options.afterJump(range);
+          }
           updateEditorSelectionCommentUi();
+        });
+        if (!options || options.status !== false) {
+          setStatus((options && options.statusMessage) || "Jumped to anchored location in the editor.", "success");
+        }
+        return true;
+      }
+
+      function jumpToPreviewSelection(blockEl) {
+        if (!blockEl) return false;
+        const anchor = getActivePreviewSelectionAnchorForBlock(blockEl);
+        if (!anchor) {
+          setStatus("Select some preview text within a single block first.", "warning");
+          return false;
+        }
+        const jumped = jumpToReviewAnchor(anchor, {
+          statusMessage: "Jumped to preview selection in the raw editor.",
+        });
+        if (jumped) {
+          const selection = typeof window.getSelection === "function" ? window.getSelection() : null;
+          if (selection && typeof selection.removeAllRanges === "function") {
+            selection.removeAllRanges();
+          }
+          clearPreviewCommentSelection();
+        }
+        return jumped;
+      }
+
+      function jumpToReviewNote(noteId) {
+        const note = reviewNotes.find((entry) => entry && entry.id === noteId);
+        if (!note) return;
+        jumpToReviewAnchor(note, {
+          status: false,
+          notFoundStatusMessage: "Could not find the anchored location for this comment.",
+          afterJump: () => {
+            revealReviewNoteInPreview(note);
+          },
         });
       }
 
@@ -9160,14 +9222,14 @@
 
       function handlePreviewCommentActionMouseDown(event) {
         const target = event.target;
-        const actionBtn = target instanceof Element ? target.closest(".preview-comment-add, .preview-comment-summary") : null;
+        const actionBtn = target instanceof Element ? target.closest(".preview-comment-add, .preview-comment-jump, .preview-comment-summary") : null;
         if (!actionBtn) return;
         event.preventDefault();
       }
 
       function handlePreviewCommentActionClick(event) {
         const target = event.target;
-        const actionBtn = target instanceof Element ? target.closest(".preview-comment-add, .preview-comment-summary") : null;
+        const actionBtn = target instanceof Element ? target.closest(".preview-comment-add, .preview-comment-jump, .preview-comment-summary") : null;
         if (!actionBtn) return;
         const blockEl = actionBtn.closest(".preview-comment-block");
         if (!blockEl) return;
@@ -9175,6 +9237,11 @@
         event.stopPropagation();
         const mode = String(actionBtn.dataset && actionBtn.dataset.previewCommentMode ? actionBtn.dataset.previewCommentMode : "");
         if (!mode || !mode.startsWith("selection")) return;
+        const action = String(actionBtn.dataset && actionBtn.dataset.previewCommentAction ? actionBtn.dataset.previewCommentAction : "comment");
+        if (action === "jump") {
+          jumpToPreviewSelection(blockEl);
+          return;
+        }
         addReviewNoteFromPreviewSelection(blockEl);
       }
 
