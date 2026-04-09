@@ -5573,8 +5573,23 @@
         return bestIndex;
       }
 
+      function buildLiteralPreviewDisplayMap(text, rawOffsets) {
+        const source = String(text || "");
+        const rawMap = Array.isArray(rawOffsets) ? rawOffsets : [];
+        const charStarts = [];
+        const charEnds = [];
+        for (let i = 0; i < source.length; i += 1) {
+          charStarts.push(rawMap[i]);
+          charEnds.push(rawMap[i] + 1);
+        }
+        return buildNormalizedPreviewDisplayMap(source, charStarts, charEnds);
+      }
+
       function buildPreviewSelectionDisplayMap(blockText, kind) {
         const body = buildPreviewSelectionSourceBody(blockText, kind);
+        if (kind === "code-line" || kind === "diff-line" || kind === "text-line") {
+          return buildLiteralPreviewDisplayMap(body.text, body.rawOffsets);
+        }
         const inlineMap = buildPreviewInlineDisplayMap(body.text, body.rawOffsets);
         return buildNormalizedPreviewDisplayMap(inlineMap.text, inlineMap.charStarts, inlineMap.charEnds);
       }

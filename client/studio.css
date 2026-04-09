@@ -690,6 +690,15 @@
       border-color: var(--accent);
     }
 
+    .editor-selection-actions[hidden],
+    .editor-selection-action-btn[hidden],
+    .preview-selection-actions[hidden],
+    .preview-comment-add[hidden],
+    .preview-comment-jump[hidden],
+    .preview-comment-summary[hidden] {
+      display: none !important;
+    }
+
     .hl-heading {
       color: var(--md-heading);
       font-weight: 700;
