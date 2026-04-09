@@ -227,13 +227,16 @@
 
     #scratchpadBtn.has-content,
     #reviewNotesBtn.has-content,
-    #reviewNotesBtn.is-active {
+    #reviewNotesBtn.is-active,
+    #outlineBtn.has-content,
+    #outlineBtn.is-active {
       border-color: var(--accent);
       color: var(--accent);
       font-weight: 600;
     }
 
-    #reviewNotesBtn.is-active {
+    #reviewNotesBtn.is-active,
+    #outlineBtn.is-active {
       background: var(--accent-soft);
     }
 
@@ -336,7 +339,8 @@
       gap: 8px;
     }
 
-    .review-notes-dock-wrap {
+    .review-notes-dock-wrap,
+    .outline-dock-wrap {
       flex: 0 0 clamp(300px, 34%, 420px);
       min-width: 280px;
       min-height: 0;
@@ -348,11 +352,13 @@
       overflow: hidden;
     }
 
-    .review-notes-dock-wrap[hidden] {
+    .review-notes-dock-wrap[hidden],
+    .outline-dock-wrap[hidden] {
       display: none !important;
     }
 
-    .review-notes-dock {
+    .review-notes-dock,
+    .outline-dock {
       width: 100%;
       min-height: 0;
       display: flex;
@@ -1824,15 +1830,18 @@
       filter: brightness(0.95);
     }
 
-    .review-notes-dock .scratchpad-header {
+    .review-notes-dock .scratchpad-header,
+    .outline-dock .scratchpad-header {
       padding: 12px 14px 10px;
     }
 
-    .review-notes-dock .scratchpad-header h2 {
+    .review-notes-dock .scratchpad-header h2,
+    .outline-dock .scratchpad-header h2 {
       font-size: 15px;
     }
 
-    .review-notes-dock .scratchpad-description {
+    .review-notes-dock .scratchpad-description,
+    .outline-dock .scratchpad-description {
       font-size: 11px;
       line-height: 1.4;
       word-break: normal;
@@ -1893,6 +1902,60 @@
     .review-notes-dock-footer .scratchpad-actions {
       width: 100%;
       justify-content: space-between;
+    }
+
+    .outline-list {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 0;
+      flex-direction: column;
+      gap: 6px;
+      padding: 14px;
+      overflow: auto;
+      background: var(--panel);
+    }
+
+    .outline-entry {
+      width: 100%;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: baseline;
+      gap: 8px;
+      text-align: left;
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: var(--panel-2);
+      border: 1px solid var(--border-muted);
+    }
+
+    .outline-entry:hover,
+    .outline-entry:focus-visible {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .outline-entry-kind {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+
+    .outline-entry-title {
+      min-width: 0;
+      font-size: 13px;
+      line-height: 1.35;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+
+    .outline-entry-meta {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }
 
     .review-note-card {
@@ -2002,7 +2065,8 @@
         flex-direction: column;
       }
 
-      .review-notes-dock-wrap {
+      .review-notes-dock-wrap,
+      .outline-dock-wrap {
         flex: 0 0 auto;
         min-width: 0;
         max-height: min(42vh, 420px);

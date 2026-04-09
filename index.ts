@@ -6010,6 +6010,7 @@ ${cssVarsBlock}
         <div class="section-header-actions">
           <button id="leftFocusBtn" class="pane-focus-btn" type="button" title="Show only the editor pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
           <button id="reviewNotesBtn" type="button" title="Toggle local comments beside the current editor document or draft. Comments stay outside the document text and can later be converted into [an: ...] annotations.">Comments</button>
+          <button id="outlineBtn" type="button" title="Toggle document outline for the current editor text. Outline entries can jump between raw editor and preview.">Outline</button>
           <button id="scratchpadBtn" type="button" title="Open a local persistent scratchpad for the current editor document or draft. Scratchpad text is never run, critiqued, or exported unless you explicitly insert it into the editor.">Scratchpad</button>
         </div>
       </div>
@@ -6102,6 +6103,27 @@ ${cssVarsBlock}
             </div>
             <div id="sourcePreview" class="panel-scroll rendered-markdown" hidden><pre class="plain-markdown"></pre></div>
           </div>
+          <aside id="outlineOverlay" class="outline-dock-wrap" hidden>
+            <div id="outlineDialog" class="outline-dock" role="complementary" aria-labelledby="outlineTitle">
+              <div class="scratchpad-header">
+                <div>
+                  <h2 id="outlineTitle">Outline</h2>
+                  <p class="scratchpad-description">Document structure for the current editor text. Click an entry to jump in the raw editor and, when available, reveal the matching preview location.</p>
+                </div>
+                <button id="outlineCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Hide outline" title="Hide outline">✕</button>
+              </div>
+              <div class="review-notes-toolbar">
+                <span id="outlineMeta" class="scratchpad-meta">No outline entries</span>
+              </div>
+              <div id="outlineEmptyState" class="review-notes-empty">No outline available yet for this document or syntax mode.</div>
+              <div id="outlineList" class="outline-list" aria-live="polite"></div>
+              <div class="review-notes-dock-footer">
+                <div class="scratchpad-actions">
+                  <button id="outlineDoneBtn" type="button" title="Hide the outline rail.">Hide</button>
+                </div>
+              </div>
+            </div>
+          </aside>
           <aside id="reviewNotesOverlay" class="review-notes-dock-wrap" hidden>
             <div id="reviewNotesDialog" class="review-notes-dock" role="complementary" aria-labelledby="reviewNotesTitle">
               <div class="scratchpad-header">

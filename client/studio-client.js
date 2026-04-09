@@ -104,6 +104,7 @@
       const leftFocusBtn = document.getElementById("leftFocusBtn");
       const rightFocusBtn = document.getElementById("rightFocusBtn");
       const reviewNotesBtn = document.getElementById("reviewNotesBtn");
+      const outlineBtn = document.getElementById("outlineBtn");
       const scratchpadBtn = document.getElementById("scratchpadBtn");
       const scratchpadOverlayEl = document.getElementById("scratchpadOverlay");
       const scratchpadDialogEl = document.getElementById("scratchpadDialog");
@@ -114,6 +115,13 @@
       const scratchpadClearBtn = document.getElementById("scratchpadClearBtn");
       const scratchpadCloseBtn = document.getElementById("scratchpadCloseBtn");
       const scratchpadDoneBtn = document.getElementById("scratchpadDoneBtn");
+      const outlineOverlayEl = document.getElementById("outlineOverlay");
+      const outlineDialogEl = document.getElementById("outlineDialog");
+      const outlineMetaEl = document.getElementById("outlineMeta");
+      const outlineListEl = document.getElementById("outlineList");
+      const outlineEmptyStateEl = document.getElementById("outlineEmptyState");
+      const outlineCloseBtn = document.getElementById("outlineCloseBtn");
+      const outlineDoneBtn = document.getElementById("outlineDoneBtn");
       const reviewNotesOverlayEl = document.getElementById("reviewNotesOverlay");
       const reviewNotesDialogEl = document.getElementById("reviewNotesDialog");
       const reviewNotesMetaEl = document.getElementById("reviewNotesMeta");
@@ -305,6 +313,8 @@
       let reviewNotesReturnFocusEl = null;
       let reviewNotesPersistTimer = null;
       let reviewNotesLoadNonce = 0;
+      let outlineEntries = [];
+      let outlineReturnFocusEl = null;
       let pendingReviewNoteFocusId = null;
       let pendingReviewNoteInlineFocusId = null;
       let activePreviewCommentSelection = null;
@@ -1130,6 +1140,12 @@
           && typeof reviewNotesDialogEl.contains === "function"
           && reviewNotesDialogEl.contains(event.target)
         );
+        const outlineOwnsEvent = Boolean(
+          outlineDialogEl
+          && event.target
+          && typeof outlineDialogEl.contains === "function"
+          && outlineDialogEl.contains(event.target)
+        );
 
         if (isScratchpadOpen() && plainEscape) {
           event.preventDefault();
@@ -1143,7 +1159,13 @@
           return;
         }
 
-        if (scratchpadOwnsEvent || reviewNotesOwnsEvent) {
+        if (isOutlineOpen() && plainEscape) {
+          event.preventDefault();
+          closeOutline();
+          return;
+        }
+
+        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent) {
           return;
         }
 
@@ -2991,6 +3013,7 @@
           scheduleEditorMetaUpdate();
         }
         updateEditorSelectionCommentUi();
+        updateOutlineUi();
       }
 
       function setEditorView(nextView) {
@@ -3025,6 +3048,7 @@
         }
         updateReviewNotesUi();
         updateEditorSelectionCommentUi();
+        updateOutlineUi();
       }
 
       function setRightView(nextView) {
@@ -4025,6 +4049,10 @@
         return Boolean(scratchpadOverlayEl && !scratchpadOverlayEl.hidden);
       }
 
+      function isOutlineOpen() {
+        return Boolean(outlineOverlayEl && !outlineOverlayEl.hidden);
+      }
+
       function isReviewNotesOpen() {
         return Boolean(reviewNotesOverlayEl && !reviewNotesOverlayEl.hidden);
       }
@@ -4196,6 +4224,400 @@
           selectedText: typeof note.selectedText === "string" ? note.selectedText : "",
           selectedDisplayText: typeof note.selectedDisplayText === "string" ? note.selectedDisplayText : "",
         };
+      }
+
+      function buildOutlineLineIndex(text) {
+        const source = String(text || "").replace(/\r\n/g, "\n");
+        const lines = source.split("\n");
+        const lineOffsets = [];
+        let runningOffset = 0;
+        for (const line of lines) {
+          lineOffsets.push(runningOffset);
+          runningOffset += line.length + 1;
+        }
+        return { source, lines, lineOffsets };
+      }
+
+      function makeOutlineEntry(options) {
+        const entry = options && typeof options === "object" ? options : {};
+        const label = typeof entry.label === "string" ? entry.label.trim() : "";
+        if (!label) return null;
+        const selectionStart = Math.max(0, Math.floor(Number(entry.selectionStart) || 0));
+        const selectionEnd = Math.max(selectionStart, Math.floor(Number(entry.selectionEnd) || selectionStart));
+        return {
+          id: typeof entry.id === "string" && entry.id ? entry.id : makeRequestId(),
+          kind: typeof entry.kind === "string" && entry.kind ? entry.kind : "section",
+          depth: Math.max(1, Math.floor(Number(entry.depth) || 1)),
+          label,
+          lineStart: Math.max(1, Math.floor(Number(entry.lineStart) || 1)),
+          lineEnd: Math.max(Math.max(1, Math.floor(Number(entry.lineStart) || 1)), Math.floor(Number(entry.lineEnd) || Math.max(1, Math.floor(Number(entry.lineStart) || 1)))),
+          selectionStart,
+          selectionEnd,
+          selectedText: typeof entry.selectedText === "string" ? entry.selectedText : "",
+          selectedDisplayText: typeof entry.selectedDisplayText === "string" && entry.selectedDisplayText ? entry.selectedDisplayText : label,
+        };
+      }
+
+      function getOutlineKindLabel(kind) {
+        switch (String(kind || "")) {
+          case "heading": return "Heading";
+          case "section": return "Section";
+          case "subsection": return "Subsection";
+          case "subsubsection": return "Subsubsection";
+          case "paragraph": return "Paragraph";
+          case "subparagraph": return "Subparagraph";
+          case "class": return "Class";
+          case "function": return "Function";
+          case "interface": return "Interface";
+          case "enum": return "Enum";
+          case "type": return "Type";
+          case "struct": return "Struct";
+          case "module": return "Module";
+          case "macro": return "Macro";
+          case "file": return "File";
+          case "hunk": return "Hunk";
+          default: return "Item";
+        }
+      }
+
+      function getOutlineKindBadge(kind) {
+        switch (String(kind || "")) {
+          case "section": return "§";
+          case "subsection": return "§§";
+          case "subsubsection": return "§3";
+          case "paragraph": return "¶";
+          case "subparagraph": return "¶2";
+          case "class": return "class";
+          case "function": return "def";
+          case "interface": return "iface";
+          case "enum": return "enum";
+          case "type": return "type";
+          case "struct": return "struct";
+          case "module": return "mod";
+          case "macro": return "macro";
+          case "file": return "file";
+          case "hunk": return "@@";
+          default: return "#";
+        }
+      }
+
+      function scanMarkdownOutlineEntries(text) {
+        const { source, lines, lineOffsets } = buildOutlineLineIndex(text);
+        const entries = [];
+        let activeFence = null;
+
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = String(lines[lineIndex] || "");
+          const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})/);
+          if (fenceMatch) {
+            if (!activeFence) {
+              activeFence = fenceMatch[1];
+            } else if (fenceMatch[1][0] === activeFence[0] && fenceMatch[1].length >= activeFence.length) {
+              activeFence = null;
+            }
+            continue;
+          }
+          if (activeFence) continue;
+
+          const atxMatch = line.match(/^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/);
+          if (atxMatch) {
+            const label = normalizeVisiblePreviewText(atxMatch[2] || "");
+            const entry = makeOutlineEntry({
+              kind: atxMatch[1].length === 1 ? "section" : atxMatch[1].length === 2 ? "subsection" : atxMatch[1].length === 3 ? "subsubsection" : "heading",
+              depth: atxMatch[1].length,
+              label,
+              lineStart: lineIndex + 1,
+              lineEnd: lineIndex + 1,
+              selectionStart: lineOffsets[lineIndex] || 0,
+              selectionEnd: (lineOffsets[lineIndex] || 0) + line.length,
+              selectedText: line,
+              selectedDisplayText: label,
+            });
+            if (entry) entries.push(entry);
+            continue;
+          }
+
+          const nextLine = lineIndex + 1 < lines.length ? String(lines[lineIndex + 1] || "") : "";
+          const setextMatch = nextLine.match(/^ {0,3}(=+|-+)\s*$/);
+          if (setextMatch && normalizeVisiblePreviewText(line)) {
+            const depth = setextMatch[1][0] === "=" ? 1 : 2;
+            const label = normalizeVisiblePreviewText(line);
+            const entry = makeOutlineEntry({
+              kind: depth === 1 ? "section" : "subsection",
+              depth,
+              label,
+              lineStart: lineIndex + 1,
+              lineEnd: lineIndex + 1,
+              selectionStart: lineOffsets[lineIndex] || 0,
+              selectionEnd: (lineOffsets[lineIndex] || 0) + line.length,
+              selectedText: line,
+              selectedDisplayText: label,
+            });
+            if (entry) entries.push(entry);
+            lineIndex += 1;
+          }
+        }
+
+        return entries;
+      }
+
+      const LATEX_OUTLINE_LEVEL_BY_COMMAND = {
+        part: 1,
+        chapter: 1,
+        section: 1,
+        subsection: 2,
+        subsubsection: 3,
+        paragraph: 4,
+        subparagraph: 5,
+      };
+
+      function scanLatexOutlineEntries(text) {
+        const source = String(text || "").replace(/\r\n/g, "\n");
+        const bodyRange = findLatexDocumentBodyRange(source);
+        const bodyStart = Math.max(0, Math.min(bodyRange.start, source.length));
+        const bodyEnd = Math.max(bodyStart, Math.min(bodyRange.end, source.length));
+        const bodyText = source.slice(bodyStart, bodyEnd);
+        const { lines, lineOffsets } = buildOutlineLineIndex(bodyText);
+        const entries = [];
+
+        function getLine(index) {
+          return index >= 0 && index < lines.length ? String(lines[index] || "") : "";
+        }
+
+        function getStrippedLine(index) {
+          return stripLatexPreviewComments(getLine(index)).trim();
+        }
+
+        function isBibliographyCommandLine(index) {
+          return /^\\(?:bibliographystyle|bibliography|printbibliography)\b/i.test(getStrippedLine(index));
+        }
+
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          let chunk = getLine(lineIndex);
+          let endLineIndex = lineIndex;
+          let heading = readLatexHeadingChunk(chunk);
+          if (/^\s*\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\b/.test(chunk)) {
+            while (!heading && endLineIndex + 1 < lines.length && endLineIndex < lineIndex + 5) {
+              endLineIndex += 1;
+              chunk += "\n" + getLine(endLineIndex);
+              heading = readLatexHeadingChunk(chunk);
+            }
+          }
+          if (heading) {
+            const label = extractLatexPreviewVisibleText(heading.titleText || "");
+            const kind = String(heading.commandName || "section").replace(/\*$/, "").toLowerCase();
+            const entry = makeOutlineEntry({
+              kind,
+              depth: LATEX_OUTLINE_LEVEL_BY_COMMAND[kind] || 1,
+              label,
+              lineStart: lineIndex + 1,
+              lineEnd: endLineIndex + 1,
+              selectionStart: bodyStart + (lineOffsets[lineIndex] || 0),
+              selectionEnd: bodyStart + (lineOffsets[endLineIndex] || 0) + getLine(endLineIndex).length,
+              selectedText: source.slice(bodyStart + (lineOffsets[lineIndex] || 0), bodyStart + (lineOffsets[endLineIndex] || 0) + getLine(endLineIndex).length),
+              selectedDisplayText: label,
+            });
+            if (entry) entries.push(entry);
+            lineIndex = endLineIndex;
+            continue;
+          }
+
+          if (isBibliographyCommandLine(lineIndex)) {
+            let endLine = lineIndex;
+            while (endLine + 1 < lines.length && isBibliographyCommandLine(endLine + 1)) {
+              endLine += 1;
+            }
+            const entry = makeOutlineEntry({
+              kind: "section",
+              depth: 1,
+              label: "References",
+              lineStart: lineIndex + 1,
+              lineEnd: endLine + 1,
+              selectionStart: bodyStart + (lineOffsets[lineIndex] || 0),
+              selectionEnd: bodyStart + (lineOffsets[endLine] || 0) + getLine(endLine).length,
+              selectedText: source.slice(bodyStart + (lineOffsets[lineIndex] || 0), bodyStart + (lineOffsets[endLine] || 0) + getLine(endLine).length),
+              selectedDisplayText: "References",
+            });
+            if (entry) entries.push(entry);
+            lineIndex = endLine;
+          }
+        }
+
+        return entries;
+      }
+
+      function scanPythonOutlineEntries(text) {
+        const { lines, lineOffsets } = buildOutlineLineIndex(text);
+        const entries = [];
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = String(lines[lineIndex] || "");
+          const classMatch = line.match(/^(\s*)class\s+([A-Za-z_][A-Za-z0-9_]*)\b/);
+          const defMatch = line.match(/^(\s*)(?:async\s+def|def)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+          const match = classMatch || defMatch;
+          if (!match) continue;
+          const indent = String(match[1] || "").replace(/\t/g, "    ").length;
+          const label = String(match[2] || "");
+          const kind = classMatch ? "class" : "function";
+          const entry = makeOutlineEntry({
+            kind,
+            depth: Math.max(1, Math.floor(indent / 4) + 1),
+            label,
+            lineStart: lineIndex + 1,
+            lineEnd: lineIndex + 1,
+            selectionStart: lineOffsets[lineIndex] || 0,
+            selectionEnd: (lineOffsets[lineIndex] || 0) + line.length,
+            selectedText: line,
+            selectedDisplayText: label,
+          });
+          if (entry) entries.push(entry);
+        }
+        return entries;
+      }
+
+      function scanJsLikeOutlineEntries(text) {
+        const { lines, lineOffsets } = buildOutlineLineIndex(text);
+        const entries = [];
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = String(lines[lineIndex] || "");
+          const patterns = [
+            { kind: "class", match: line.match(/^(\s*)(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/) },
+            { kind: "function", match: line.match(/^(\s*)(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/) },
+            { kind: "function", match: line.match(/^(\s*)(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>/) },
+            { kind: "interface", match: line.match(/^(\s*)(?:export\s+)?interface\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/) },
+            { kind: "enum", match: line.match(/^(\s*)(?:export\s+)?enum\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/) },
+            { kind: "type", match: line.match(/^(\s*)(?:export\s+)?type\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/) },
+          ];
+          const found = patterns.find((entry) => entry.match);
+          if (!found || !found.match) continue;
+          const indent = String(found.match[1] || "").replace(/\t/g, "  ").length;
+          const label = String(found.match[2] || "");
+          const entry = makeOutlineEntry({
+            kind: found.kind,
+            depth: Math.max(1, Math.floor(indent / 2) + 1),
+            label,
+            lineStart: lineIndex + 1,
+            lineEnd: lineIndex + 1,
+            selectionStart: lineOffsets[lineIndex] || 0,
+            selectionEnd: (lineOffsets[lineIndex] || 0) + line.length,
+            selectedText: line,
+            selectedDisplayText: label,
+          });
+          if (entry) entries.push(entry);
+        }
+        return entries;
+      }
+
+      function scanJuliaOutlineEntries(text) {
+        const { lines, lineOffsets } = buildOutlineLineIndex(text);
+        const entries = [];
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = String(lines[lineIndex] || "");
+          const patterns = [
+            { kind: "module", match: line.match(/^(\s*)module\s+([A-Za-z_][A-Za-z0-9_]*)\b/) },
+            { kind: "struct", match: line.match(/^(\s*)(?:mutable\s+)?struct\s+([A-Za-z_][A-Za-z0-9_]*)\b/) },
+            { kind: "function", match: line.match(/^(\s*)function\s+([A-Za-z_][A-Za-z0-9_!]*)\s*\(/) },
+            { kind: "macro", match: line.match(/^(\s*)macro\s+([A-Za-z_][A-Za-z0-9_!]*)\b/) },
+          ];
+          const found = patterns.find((entry) => entry.match);
+          if (!found || !found.match) continue;
+          const indent = String(found.match[1] || "").replace(/\t/g, "  ").length;
+          const label = String(found.match[2] || "");
+          const entry = makeOutlineEntry({
+            kind: found.kind,
+            depth: Math.max(1, Math.floor(indent / 2) + 1),
+            label,
+            lineStart: lineIndex + 1,
+            lineEnd: lineIndex + 1,
+            selectionStart: lineOffsets[lineIndex] || 0,
+            selectionEnd: (lineOffsets[lineIndex] || 0) + line.length,
+            selectedText: line,
+            selectedDisplayText: label,
+          });
+          if (entry) entries.push(entry);
+        }
+        return entries;
+      }
+
+      function scanBashOutlineEntries(text) {
+        const { lines, lineOffsets } = buildOutlineLineIndex(text);
+        const entries = [];
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = String(lines[lineIndex] || "");
+          const match = line.match(/^(\s*)(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{/);
+          if (!match) continue;
+          const indent = String(match[1] || "").replace(/\t/g, "  ").length;
+          const label = String(match[2] || "");
+          const entry = makeOutlineEntry({
+            kind: "function",
+            depth: Math.max(1, Math.floor(indent / 2) + 1),
+            label,
+            lineStart: lineIndex + 1,
+            lineEnd: lineIndex + 1,
+            selectionStart: lineOffsets[lineIndex] || 0,
+            selectionEnd: (lineOffsets[lineIndex] || 0) + line.length,
+            selectedText: line,
+            selectedDisplayText: label,
+          });
+          if (entry) entries.push(entry);
+        }
+        return entries;
+      }
+
+      function scanDiffOutlineEntries(text) {
+        const { lines, lineOffsets } = buildOutlineLineIndex(text);
+        const entries = [];
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const line = String(lines[lineIndex] || "");
+          let kind = "";
+          let label = "";
+          let depth = 1;
+          const fileMatch = line.match(/^diff\s+--git\s+a\/([^\s]+)\s+b\/([^\s]+)/);
+          if (fileMatch) {
+            kind = "file";
+            label = String(fileMatch[2] || fileMatch[1] || "");
+            depth = 1;
+          } else if (/^@@/.test(line)) {
+            kind = "hunk";
+            label = line.replace(/^@@\s*|\s*@@.*$/g, "").trim() || line.trim();
+            depth = 2;
+          }
+          if (!kind || !label) continue;
+          const entry = makeOutlineEntry({
+            kind,
+            depth,
+            label,
+            lineStart: lineIndex + 1,
+            lineEnd: lineIndex + 1,
+            selectionStart: lineOffsets[lineIndex] || 0,
+            selectionEnd: (lineOffsets[lineIndex] || 0) + line.length,
+            selectedText: line,
+            selectedDisplayText: label,
+          });
+          if (entry) entries.push(entry);
+        }
+        return entries;
+      }
+
+      function scanOutlineEntries(text, language) {
+        switch (String(language || "").toLowerCase()) {
+          case "markdown":
+            return scanMarkdownOutlineEntries(text);
+          case "latex":
+            return scanLatexOutlineEntries(text);
+          case "python":
+            return scanPythonOutlineEntries(text);
+          case "javascript":
+          case "typescript":
+            return scanJsLikeOutlineEntries(text);
+          case "julia":
+            return scanJuliaOutlineEntries(text);
+          case "bash":
+            return scanBashOutlineEntries(text);
+          case "diff":
+            return scanDiffOutlineEntries(text);
+          default:
+            return [];
+        }
       }
 
       function cloneReviewNotes(notes) {
@@ -7011,6 +7433,138 @@
         updateEditorSelectionCommentUi();
       }
 
+      function getOutlineEntriesForCurrentEditor() {
+        return scanOutlineEntries(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "", editorLanguage || "markdown");
+      }
+
+      function updateOutlineUi() {
+        outlineEntries = getOutlineEntriesForCurrentEditor();
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        const count = outlineEntries.length;
+        const hasEntries = count > 0;
+        const isOpen = isOutlineOpen();
+        if (outlineBtn) {
+          outlineBtn.textContent = hasEntries ? "Outline •" : "Outline";
+          outlineBtn.classList.toggle("has-content", hasEntries);
+          outlineBtn.classList.toggle("is-active", isOpen);
+          outlineBtn.setAttribute("aria-pressed", isOpen ? "true" : "false");
+          outlineBtn.title = isOpen
+            ? "Hide document outline."
+            : (hasEntries
+              ? (count + " outline entr" + (count === 1 ? "y" : "ies") + " for " + descriptor.label + ". Open the outline rail.")
+              : "Open document outline for the current editor text.");
+        }
+        if (outlineMetaEl) {
+          outlineMetaEl.textContent = hasEntries
+            ? (count + " entr" + (count === 1 ? "y" : "ies") + " · " + (editorLanguage || "text") + " · " + descriptor.label)
+            : ("No outline entries · " + (editorLanguage || "text"));
+        }
+        if (outlineDoneBtn) {
+          outlineDoneBtn.disabled = !isOpen;
+        }
+        if (outlineEmptyStateEl) {
+          outlineEmptyStateEl.hidden = hasEntries;
+        }
+        renderOutlineList();
+      }
+
+      function renderOutlineList() {
+        if (!outlineListEl) return;
+        outlineListEl.innerHTML = "";
+        for (const entry of outlineEntries) {
+          const itemBtn = document.createElement("button");
+          itemBtn.type = "button";
+          itemBtn.className = "outline-entry";
+          itemBtn.dataset.outlineId = String(entry.id || "");
+          itemBtn.style.paddingLeft = (10 + Math.max(0, (entry.depth || 1) - 1) * 14) + "px";
+          itemBtn.title = getOutlineKindLabel(entry.kind) + " · line " + String(entry.lineStart || 1) + "\n" + String(entry.label || "");
+
+          const kindEl = document.createElement("span");
+          kindEl.className = "outline-entry-kind";
+          kindEl.textContent = getOutlineKindBadge(entry.kind);
+          itemBtn.appendChild(kindEl);
+
+          const titleEl = document.createElement("span");
+          titleEl.className = "outline-entry-title";
+          titleEl.textContent = String(entry.label || "");
+          itemBtn.appendChild(titleEl);
+
+          const metaEl = document.createElement("span");
+          metaEl.className = "outline-entry-meta";
+          metaEl.textContent = "L" + String(entry.lineStart || 1);
+          itemBtn.appendChild(metaEl);
+
+          outlineListEl.appendChild(itemBtn);
+        }
+      }
+
+      function buildOutlineEntryAnchor(entry) {
+        if (!entry) return null;
+        return normalizeReviewNote({
+          selectionStart: entry.selectionStart,
+          selectionEnd: entry.selectionEnd,
+          lineStart: entry.lineStart,
+          lineEnd: entry.lineEnd,
+          selectedText: entry.selectedText,
+          selectedDisplayText: entry.selectedDisplayText || entry.label,
+        });
+      }
+
+      function jumpToOutlineEntry(entryId) {
+        const entry = outlineEntries.find((candidate) => candidate && String(candidate.id || "") === String(entryId || ""));
+        if (!entry) return false;
+        const anchor = buildOutlineEntryAnchor(entry);
+        if (!anchor) return false;
+        return jumpToReviewAnchor(anchor, {
+          statusMessage: "Jumped to outline entry.",
+          afterJump: () => {
+            revealReviewNoteInPreview(anchor);
+          },
+        });
+      }
+
+      function closeOutline(options) {
+        if (!outlineOverlayEl || outlineOverlayEl.hidden) return;
+        outlineOverlayEl.hidden = true;
+        updateOutlineUi();
+        if (editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
+        const focusTarget = options && Object.prototype.hasOwnProperty.call(options, "focusTarget")
+          ? options.focusTarget
+          : (outlineReturnFocusEl || outlineBtn || sourceTextEl);
+        outlineReturnFocusEl = null;
+        if (focusTarget && typeof focusTarget.focus === "function") {
+          const schedule = typeof window.requestAnimationFrame === "function"
+            ? window.requestAnimationFrame.bind(window)
+            : (cb) => window.setTimeout(cb, 16);
+          schedule(() => focusTarget.focus());
+        }
+      }
+
+      function openOutline() {
+        if (!outlineOverlayEl) return;
+        if (isReviewNotesOpen()) {
+          closeReviewNotes({ focusTarget: null });
+        }
+        outlineReturnFocusEl = document.activeElement && document.activeElement !== document.body
+          ? document.activeElement
+          : sourceTextEl;
+        outlineOverlayEl.hidden = false;
+        updateOutlineUi();
+        if (editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
+      }
+
+      function toggleOutline() {
+        if (isOutlineOpen()) {
+          closeOutline({ focusTarget: outlineBtn || sourceTextEl });
+        } else {
+          openOutline();
+        }
+      }
+
       function updateReviewNotesUi() {
         const descriptor = getCurrentStudioDocumentDescriptor();
         const count = reviewNotes.length;
@@ -7537,6 +8091,9 @@
         if (isReviewNotesOpen()) {
           closeReviewNotes({ focusTarget: null });
         }
+        if (isOutlineOpen()) {
+          closeOutline({ focusTarget: null });
+        }
         scratchpadReturnFocusEl = document.activeElement && document.activeElement !== document.body
           ? document.activeElement
           : sourceTextEl;
@@ -7579,6 +8136,9 @@
         if (!reviewNotesOverlayEl) return;
         if (isScratchpadOpen()) {
           closeScratchpad({ focusTarget: null });
+        }
+        if (isOutlineOpen()) {
+          closeOutline({ focusTarget: null });
         }
         reviewNotesReturnFocusEl = document.activeElement && document.activeElement !== document.body
           ? document.activeElement
@@ -7697,6 +8257,7 @@
         if (editorView === "preview") {
           scheduleSourcePreviewRender(0);
         }
+        updateOutlineUi();
       }
 
       function setEditorHighlightMode(mode) {
@@ -8896,6 +9457,7 @@
         renderSourcePreview({ previewDelayMs: PREVIEW_INPUT_DEBOUNCE_MS });
         scheduleEditorMetaUpdate();
         updateEditorSelectionCommentUi();
+        updateOutlineUi();
         if (isReviewNotesOpen() && reviewNotes.length > 0) {
           renderReviewNotesList();
           updateReviewNotesUi();
@@ -9281,6 +9843,35 @@
       if (reviewNotesBtn) {
         reviewNotesBtn.addEventListener("click", () => {
           toggleReviewNotes();
+        });
+      }
+
+      if (outlineBtn) {
+        outlineBtn.addEventListener("click", () => {
+          toggleOutline();
+        });
+      }
+
+      if (outlineCloseBtn) {
+        outlineCloseBtn.addEventListener("click", () => {
+          closeOutline();
+        });
+      }
+
+      if (outlineDoneBtn) {
+        outlineDoneBtn.addEventListener("click", () => {
+          closeOutline();
+        });
+      }
+
+      if (outlineListEl) {
+        outlineListEl.addEventListener("click", (event) => {
+          const target = event.target;
+          const entryBtn = target instanceof Element ? target.closest(".outline-entry") : null;
+          if (!entryBtn) return;
+          const outlineId = entryBtn.getAttribute("data-outline-id") || "";
+          if (!outlineId) return;
+          jumpToOutlineEntry(outlineId);
         });
       }
 
