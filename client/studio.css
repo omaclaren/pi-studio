@@ -920,11 +920,11 @@
       position: absolute;
       top: 0;
       right: 0;
-      z-index: 4;
+      z-index: 6;
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      transform: translateY(-0.38rem);
+      transform: translateY(-0.46rem);
     }
 
     .preview-comment-summary {

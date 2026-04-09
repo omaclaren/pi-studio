@@ -4458,6 +4458,8 @@
         if (kind === "blockquote") return "quote block";
         if (kind === "list") return "list";
         if (kind === "math") return "equation";
+        if (kind === "figure") return "figure";
+        if (kind === "algorithm") return "algorithm block";
         if (kind === "page-break") return "page break";
         if (kind === "code") return "code block";
         if (kind === "table") return "table";
@@ -4728,12 +4730,11 @@
         "marginpar",
         "index",
         "includegraphics",
-        "bibliography",
-        "bibliographystyle",
         "addbibresource",
       ]);
       const LATEX_PREVIEW_SKIPPED_ENV_NAMES = new Set([
         "document",
+        "thebibliography",
         "itemize",
         "enumerate",
         "description",
@@ -4757,6 +4758,14 @@
         "algorithm",
         "algorithm*",
         "algorithmic",
+      ]);
+      const LATEX_PREVIEW_STRUCTURAL_ENV_KIND_BY_NAME = new Map([
+        ["figure", "figure"],
+        ["figure*", "figure"],
+        ["table", "table"],
+        ["table*", "table"],
+        ["algorithm", "algorithm"],
+        ["algorithm*", "algorithm"],
       ]);
 
       function stripLatexPreviewComments(text) {
@@ -5015,6 +5024,9 @@
 
       function normalizeLatexPreviewBlockText(blockText, kind) {
         const source = String(blockText || "");
+        if (/\\(?:bibliography|printbibliography)\b/i.test(source)) {
+          return kind === "heading" ? "References" : "references";
+        }
         if (kind === "math") {
           const mathRange = getStandaloneDisplayMathRange(stripLatexPreviewComments(source));
           return mathRange ? normalizeVisiblePreviewText(mathRange.bodyText) : normalizeVisiblePreviewText(source);
@@ -5489,6 +5501,16 @@
             element.classList.contains("display"),
           );
         }
+        if (
+          element.classList
+          && (element.classList.contains("studio-display-equation") || element.classList.contains("studio-display-equation-body"))
+          && typeof element.querySelector === "function"
+        ) {
+          const innerMathEl = element.querySelector("[data-tex-source], math[display='block'], .studio-mathjax-fallback-display");
+          if (innerMathEl && innerMathEl !== element) {
+            return getPreviewMathSearchText(innerMathEl);
+          }
+        }
         return null;
       }
 
@@ -5898,6 +5920,10 @@
           return !getStrippedLine(index);
         }
 
+        function isBibliographyCommandLine(index) {
+          return /^\\(?:bibliographystyle|bibliography|printbibliography)\b/i.test(getStrippedLine(index));
+        }
+
         function makeBlock(kind, startLineIndex, endLineIndex) {
           const safeStartLine = Math.max(0, Math.min(startLineIndex, Math.max(0, lines.length - 1)));
           const safeEndLine = Math.max(safeStartLine, Math.min(endLineIndex, Math.max(0, lines.length - 1)));
@@ -5942,6 +5968,15 @@
 
         function isHeadingLine(index) {
           return Boolean(readLatexHeadingChunk(getLine(index)));
+        }
+
+        function findBibliographyCommandEndLine(startLineIndex) {
+          let endLineIndex = startLineIndex;
+          for (let lineIndex = startLineIndex + 1; lineIndex < lines.length; lineIndex += 1) {
+            if (!isBibliographyCommandLine(lineIndex)) break;
+            endLineIndex = lineIndex;
+          }
+          return endLineIndex;
         }
 
         function isMathStartLine(index) {
@@ -5989,6 +6024,21 @@
             continue;
           }
 
+          if (envName && LATEX_PREVIEW_STRUCTURAL_ENV_KIND_BY_NAME.has(envName)) {
+            const endLineIndex = findEnvironmentEndLine(lineIndex, envName);
+            blocks.push(makeBlock(LATEX_PREVIEW_STRUCTURAL_ENV_KIND_BY_NAME.get(envName) || "paragraph", lineIndex, endLineIndex));
+            lineIndex = endLineIndex + 1;
+            continue;
+          }
+
+          if (isBibliographyCommandLine(lineIndex)) {
+            const endLineIndex = findBibliographyCommandEndLine(lineIndex);
+            blocks.push(makeBlock("heading", lineIndex, endLineIndex));
+            blocks.push(makeBlock("paragraph", lineIndex, endLineIndex));
+            lineIndex = endLineIndex + 1;
+            continue;
+          }
+
           if (envName && LATEX_PREVIEW_SKIPPED_ENV_NAMES.has(envName) && !DISPLAY_MATH_ENV_NAMES.has(envName)) {
             lineIndex = findEnvironmentEndLine(lineIndex, envName) + 1;
             continue;
@@ -6030,7 +6080,12 @@
       }
 
       function isPreviewDisplayMathElement(element) {
-        return Boolean(element && element instanceof Element && element.matches && element.matches("math[display='block'], .studio-mathjax-fallback-display"));
+        return Boolean(
+          element
+          && element instanceof Element
+          && element.matches
+          && element.matches("math[display='block'], .studio-mathjax-fallback-display, .studio-display-equation, .studio-display-equation-body")
+        );
       }
 
       function previewNodesHaveVisibleContent(nodes) {
@@ -6043,8 +6098,63 @@
         });
       }
 
+      function wrapLoosePreviewInlineRunsAsParagraphs(targetEl) {
+        if (!targetEl || !targetEl.childNodes || typeof document.createElement !== "function") return;
+        const childNodes = Array.from(targetEl.childNodes || []);
+        if (childNodes.length === 0) return;
+
+        function isDirectBlockChild(node) {
+          if (!(node instanceof Element) || node.parentElement !== targetEl) return false;
+          const tag = node.tagName ? node.tagName.toUpperCase() : "";
+          if (/^H[1-6]$/.test(tag)) return true;
+          if (tag === "P" || tag === "BLOCKQUOTE" || tag === "UL" || tag === "OL" || tag === "TABLE" || tag === "PRE" || tag === "HEADER" || tag === "FIGURE") {
+            return true;
+          }
+          if (tag === "MATH") {
+            return String(node.getAttribute("display") || "").toLowerCase() === "block";
+          }
+          if (tag === "DIV") return true;
+          return false;
+        }
+
+        let runNodes = [];
+
+        function flushRun(referenceNode) {
+          if (runNodes.length === 0) return;
+          if (!previewNodesHaveVisibleContent(runNodes)) {
+            runNodes.forEach((node) => {
+              if (node && node.parentNode === targetEl) {
+                targetEl.removeChild(node);
+              }
+            });
+            runNodes = [];
+            return;
+          }
+          const paragraphEl = document.createElement("p");
+          runNodes.forEach((node) => {
+            paragraphEl.appendChild(node);
+          });
+          targetEl.insertBefore(paragraphEl, referenceNode || null);
+          runNodes = [];
+        }
+
+        childNodes.forEach((node) => {
+          if (node instanceof Element && isDirectBlockChild(node)) {
+            flushRun(node);
+            return;
+          }
+          if (node.parentNode === targetEl) {
+            runNodes.push(node);
+          }
+        });
+        flushRun(null);
+      }
+
       function splitMixedPreviewParagraphsAroundDisplayMath(targetEl) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
+        if (editorLanguage === "latex") {
+          wrapLoosePreviewInlineRunsAsParagraphs(targetEl);
+        }
         Array.from(targetEl.querySelectorAll("p")).forEach((paragraphEl) => {
           if (!(paragraphEl instanceof Element) || !paragraphEl.parentNode) return;
           if (paragraphEl.closest && paragraphEl.closest(".preview-comment-block")) return;
@@ -6106,8 +6216,17 @@
         const tag = element.tagName ? element.tagName.toUpperCase() : "";
         if (/^H[1-6]$/.test(tag)) return "heading";
         if (tag === "P") return "paragraph";
+        if (tag === "FIGURE") {
+          if (element.classList && element.classList.contains("studio-algorithm-block")) {
+            return "algorithm";
+          }
+          return editorLanguage === "latex" ? "figure" : "";
+        }
         if (tag === "DIV" && element.classList) {
-          if (element.classList.contains("abstract") || element.classList.contains("keywords")) {
+          if (element.classList.contains("studio-display-equation")) {
+            return "math";
+          }
+          if (element.classList.contains("abstract") || element.classList.contains("keywords") || element.classList.contains("references")) {
             return "paragraph";
           }
         }
@@ -6145,7 +6264,7 @@
       function isLatexPreviewCommentTargetElement(element, targetEl) {
         if (!element || !(element instanceof Element) || !targetEl) return false;
         const kind = getPreviewCommentTargetKind(element);
-        if (kind === "heading" || kind === "paragraph") {
+        if (kind === "heading" || kind === "paragraph" || kind === "figure" || kind === "algorithm" || kind === "table") {
           if (element.parentElement === targetEl) return true;
           if (
             kind === "paragraph"
@@ -6179,7 +6298,7 @@
 
       function collectPreviewCommentTargetElements(targetEl) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return [];
-        const selector = "h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, table, div.sourceCode, pre, math[display='block'], .studio-mathjax-fallback-display, .studio-page-break, .abstract, .keywords, .callout-note, .callout-tip, .callout-warning, .callout-important, .callout-caution, .mermaid-container";
+        const selector = "h1, h2, h3, h4, h5, h6, p, figure, blockquote, ul, ol, table, div.sourceCode, pre, math[display='block'], .studio-display-equation, .studio-mathjax-fallback-display, .studio-page-break, .abstract, .keywords, .references, .callout-note, .callout-tip, .callout-warning, .callout-important, .callout-caution, .mermaid-container";
         return Array.from(targetEl.querySelectorAll(selector)).filter((element) => {
           if (!isPreviewCommentTargetElement(element)) return false;
           if (editorLanguage === "latex" && !isLatexPreviewCommentTargetElement(element, targetEl)) {
@@ -6251,13 +6370,46 @@
         return longer.includes(shorter);
       }
 
+      function tokenizePreviewComparableText(text) {
+        return normalizeVisiblePreviewText(text)
+          .toLowerCase()
+          .split(/\s+/)
+          .map((token) => token.replace(/^[^0-9A-Za-z\u00C0-\uFFFF]+|[^0-9A-Za-z\u00C0-\uFFFF]+$/g, ""))
+          .filter((token) => token && (token.length >= 4 || /[A-Za-z\u00C0-\uFFFF]/.test(token)));
+      }
+
+      function getHighConfidenceLatexOrderedTokenMatchScore(targetText, desiredText) {
+        if (editorLanguage !== "latex") return -1;
+        const targetTokens = tokenizePreviewComparableText(targetText);
+        const desiredTokens = tokenizePreviewComparableText(desiredText);
+        if (targetTokens.length === 0 || desiredTokens.length < 5) return -1;
+
+        let targetTokenIndex = 0;
+        let matchedCount = 0;
+        for (const token of desiredTokens) {
+          while (targetTokenIndex < targetTokens.length && targetTokens[targetTokenIndex] !== token) {
+            targetTokenIndex += 1;
+          }
+          if (targetTokenIndex >= targetTokens.length) break;
+          matchedCount += 1;
+          targetTokenIndex += 1;
+        }
+
+        const matchRatio = matchedCount / desiredTokens.length;
+        if (matchedCount < 5 || matchRatio < 0.6) return -1;
+        return matchedCount * 1000 + Math.round(matchRatio * 100);
+      }
+
       function findMatchingPreviewCommentTargetIndex(sourceText, sourceBlock, targetBlocks, startIndex) {
         const desiredKind = sourceBlock ? sourceBlock.kind : "";
         const desiredText = getNormalizedPreviewCommentSourceBlockText(sourceText, sourceBlock);
+        const preferredStartIndex = Math.max(0, startIndex || 0);
         let fallbackIndex = -1;
         let containsIndex = -1;
+        let orderedTokenIndex = -1;
+        let orderedTokenScore = Number.NEGATIVE_INFINITY;
 
-        for (let i = Math.max(0, startIndex || 0); i < targetBlocks.length; i += 1) {
+        for (let i = preferredStartIndex; i < targetBlocks.length; i += 1) {
           const targetEntry = targetBlocks[i];
           if (!targetEntry || targetEntry.kind !== desiredKind) continue;
           if (fallbackIndex < 0) fallbackIndex = i;
@@ -6269,10 +6421,19 @@
             if (containsIndex < 0 && isHighConfidencePreviewTextContainmentMatch(targetText, desiredText)) {
               containsIndex = i;
             }
+            const latexTokenScore = getHighConfidenceLatexOrderedTokenMatchScore(targetText, desiredText);
+            if (latexTokenScore >= 0) {
+              const score = latexTokenScore - (Math.abs(i - preferredStartIndex) * 4);
+              if (score > orderedTokenScore) {
+                orderedTokenScore = score;
+                orderedTokenIndex = i;
+              }
+            }
           }
         }
 
         if (containsIndex >= 0) return containsIndex;
+        if (orderedTokenIndex >= 0) return orderedTokenIndex;
         return fallbackIndex;
       }
 
@@ -6583,7 +6744,16 @@
         const source = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
         const range = resolveReviewNoteRange(note, source);
         if (!range) return false;
-        const blockEl = findPreviewCommentBlockForRange(targetEl, range) || findPreviewCommentBlockForNoteText(targetEl, note);
+        const rangeBlock = findPreviewCommentBlockForRange(targetEl, range);
+        const selectionText = getPreviewNoteNormalizedSelectionText(note);
+        let blockEl = rangeBlock;
+        if (selectionText) {
+          const rangeContentEl = rangeBlock ? (rangeBlock.querySelector(".preview-comment-block-content") || rangeBlock) : null;
+          const rangeText = rangeContentEl ? buildNormalizedPreviewSearchText(rangeContentEl) : "";
+          if (!rangeText || !rangeText.includes(selectionText)) {
+            blockEl = findPreviewCommentBlockForNoteText(targetEl, note) || rangeBlock;
+          }
+        }
         if (!blockEl) return false;
         const contentEl = blockEl.querySelector(".preview-comment-block-content") || blockEl;
         if (String(blockEl.dataset && blockEl.dataset.previewCommentKind || "") === "math") {
