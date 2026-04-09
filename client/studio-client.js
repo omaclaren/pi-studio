@@ -1904,6 +1904,7 @@
 
         fallbackTargets.forEach((entry) => {
           entry.renderTarget.classList.add("studio-mathjax-fallback");
+          entry.renderTarget.setAttribute("data-tex-source", entry.tex);
           if (entry.displayMode) {
             entry.renderTarget.classList.add("studio-mathjax-fallback-display");
             entry.renderTarget.textContent = "\\[\n" + entry.tex + "\n\\]";
@@ -4447,10 +4448,9 @@
       }
 
       function supportsPreviewCommentsForCurrentEditor() {
-        // LaTeX preview comments are intentionally disabled for now.
-        // The initial client-side source/block heuristics were too unreliable on complex real documents.
-        // Keep the independent LaTeX rendering fixes, but only enable preview comments where mapping is robust.
-        return editorLanguage === "markdown" || supportsCodePreviewCommentsForCurrentEditor();
+        return editorLanguage === "markdown"
+          || editorLanguage === "latex"
+          || supportsCodePreviewCommentsForCurrentEditor();
       }
 
       function getPreviewCommentBlockKindLabel(kind) {
@@ -4670,6 +4670,379 @@
           bodyText: String(range.bodyText || ""),
         };
       }
+
+      const LATEX_PREVIEW_HEADING_COMMANDS = new Set([
+        "part",
+        "chapter",
+        "section",
+        "subsection",
+        "subsubsection",
+        "paragraph",
+        "subparagraph",
+      ]);
+      const LATEX_PREVIEW_VISIBLE_GROUP_COMMANDS = new Set([
+        "part",
+        "chapter",
+        "section",
+        "subsection",
+        "subsubsection",
+        "paragraph",
+        "subparagraph",
+        "title",
+        "author",
+        "caption",
+        "text",
+        "textbf",
+        "textit",
+        "emph",
+        "underline",
+        "texttt",
+        "textrm",
+        "textsf",
+        "textsc",
+        "mbox",
+        "makebox",
+        "framebox",
+        "fbox",
+        "url",
+        "path",
+        "nolinkurl",
+      ]);
+      const LATEX_PREVIEW_SECOND_ARG_VISIBLE_COMMANDS = new Set([
+        "href",
+        "hyperref",
+      ]);
+      const LATEX_PREVIEW_HIDDEN_COMMANDS = new Set([
+        "label",
+        "ref",
+        "eqref",
+        "autoref",
+        "pageref",
+        "cite",
+        "citet",
+        "citep",
+        "citealt",
+        "citeauthor",
+        "nocite",
+        "footnote",
+        "marginpar",
+        "index",
+        "includegraphics",
+        "bibliography",
+        "bibliographystyle",
+        "addbibresource",
+      ]);
+      const LATEX_PREVIEW_SKIPPED_ENV_NAMES = new Set([
+        "document",
+        "itemize",
+        "enumerate",
+        "description",
+        "figure",
+        "figure*",
+        "table",
+        "table*",
+        "tabular",
+        "tabular*",
+        "theorem",
+        "lemma",
+        "proposition",
+        "corollary",
+        "definition",
+        "proof",
+        "remark",
+        "example",
+        "verbatim",
+        "lstlisting",
+        "minted",
+        "algorithm",
+        "algorithm*",
+        "algorithmic",
+      ]);
+
+      function stripLatexPreviewComments(text) {
+        const source = String(text || "");
+        let out = "";
+        for (let index = 0; index < source.length; index += 1) {
+          const ch = source[index];
+          if (ch === "%" && !isEscapedAt(source, index)) {
+            while (index < source.length && source[index] !== "\n") index += 1;
+            if (index < source.length && source[index] === "\n") {
+              out += "\n";
+            }
+            continue;
+          }
+          out += ch;
+        }
+        return out;
+      }
+
+      function skipLatexPreviewCommentSpace(source, startIndex) {
+        let index = Math.max(0, Number(startIndex) || 0);
+        while (index < source.length) {
+          const ch = source[index];
+          if (/\s/.test(ch)) {
+            index += 1;
+            continue;
+          }
+          if (ch === "%" && !isEscapedAt(source, index)) {
+            while (index < source.length && source[index] !== "\n") index += 1;
+            continue;
+          }
+          break;
+        }
+        return index;
+      }
+
+      function readLatexHeadingChunk(chunkText) {
+        const source = String(chunkText || "");
+        let index = skipLatexPreviewCommentSpace(source, 0);
+        const command = parseLatexCommandAt(source, index);
+        const commandName = command && command.name
+          ? String(command.name || "").replace(/\*$/, "").toLowerCase()
+          : "";
+        if (!command || !LATEX_PREVIEW_HEADING_COMMANDS.has(commandName)) return null;
+        index = skipLatexPreviewCommentSpace(source, command.end);
+        if (source[index] === "[") {
+          const optionalGroup = readBalancedLatexGroup(source, index, "[", "]");
+          if (optionalGroup) {
+            index = skipLatexPreviewCommentSpace(source, optionalGroup.end);
+          }
+        }
+        if (source[index] !== "{") return null;
+        const titleGroup = readBalancedLatexGroup(source, index, "{", "}");
+        if (!titleGroup) return null;
+        index = skipLatexPreviewCommentSpace(source, titleGroup.end);
+        while (index < source.length) {
+          const trailingCommand = parseLatexCommandAt(source, index);
+          const trailingName = trailingCommand && trailingCommand.name
+            ? String(trailingCommand.name || "").replace(/\*$/, "").toLowerCase()
+            : "";
+          if (!trailingCommand || !LATEX_PREVIEW_HIDDEN_COMMANDS.has(trailingName)) {
+            break;
+          }
+          let nextIndex = skipLatexPreviewCommentSpace(source, trailingCommand.end);
+          if (source[nextIndex] === "[") {
+            const optionalGroup = readBalancedLatexGroup(source, nextIndex, "[", "]");
+            if (optionalGroup) {
+              nextIndex = skipLatexPreviewCommentSpace(source, optionalGroup.end);
+            }
+          }
+          if (source[nextIndex] === "{") {
+            const argGroup = readBalancedLatexGroup(source, nextIndex, "{", "}");
+            if (argGroup) {
+              nextIndex = skipLatexPreviewCommentSpace(source, argGroup.end);
+            }
+          }
+          index = nextIndex;
+        }
+        if (skipLatexPreviewCommentSpace(source, index) < source.length) return null;
+        return {
+          commandName,
+          titleText: source.slice(titleGroup.contentStart, titleGroup.contentEnd),
+        };
+      }
+
+      function extractLatexPreviewVisibleText(text) {
+        const source = String(text || "");
+        let out = "";
+        let index = 0;
+
+        while (index < source.length) {
+          const ch = source[index];
+          if (ch === "%" && !isEscapedAt(source, index)) {
+            while (index < source.length && source[index] !== "\n") index += 1;
+            continue;
+          }
+          if (source.startsWith("$$", index)) {
+            const close = source.indexOf("$$", index + 2);
+            if (close >= 0) {
+              out += " " + source.slice(index + 2, close) + " ";
+              index = close + 2;
+              continue;
+            }
+          }
+          if (ch === "$" && !isEscapedAt(source, index)) {
+            const close = findClosingUnescapedSequence(source, index + 1, "$", true);
+            if (close >= 0) {
+              out += " " + source.slice(index + 1, close) + " ";
+              index = close + 1;
+              continue;
+            }
+          }
+          if (source.startsWith("\\(", index)) {
+            const close = source.indexOf("\\)", index + 2);
+            if (close >= 0) {
+              out += " " + source.slice(index + 2, close) + " ";
+              index = close + 2;
+              continue;
+            }
+          }
+          if (source.startsWith("\\[", index)) {
+            const close = source.indexOf("\\]", index + 2);
+            if (close >= 0) {
+              out += " " + source.slice(index + 2, close) + " ";
+              index = close + 2;
+              continue;
+            }
+          }
+          if (source.startsWith("\\begin{", index)) {
+            const envGroup = readBalancedLatexGroup(source, index + 6, "{", "}");
+            const envName = envGroup ? source.slice(envGroup.contentStart, envGroup.contentEnd).trim() : "";
+            if (envName && DISPLAY_MATH_ENV_NAMES.has(envName)) {
+              const closeToken = "\\end{" + envName + "}";
+              const close = source.indexOf(closeToken, envGroup.end);
+              if (close >= 0) {
+                out += " " + source.slice(envGroup.end, close) + " ";
+                index = close + closeToken.length;
+                continue;
+              }
+            }
+          }
+          if (source.startsWith("\\end{", index)) {
+            const envGroup = readBalancedLatexGroup(source, index + 4, "{", "}");
+            if (envGroup) {
+              index = envGroup.end;
+              continue;
+            }
+          }
+          if (ch === "\\") {
+            const command = parseLatexCommandAt(source, index);
+            const commandName = command && command.name
+              ? String(command.name || "").replace(/\*$/, "").toLowerCase()
+              : "";
+            if (!command) {
+              index += 1;
+              continue;
+            }
+            if (commandName === "begin" || commandName === "end") {
+              let nextIndex = skipLatexWhitespace(source, command.end);
+              if (source[nextIndex] === "{") {
+                const group = readBalancedLatexGroup(source, nextIndex, "{", "}");
+                if (group) {
+                  index = group.end;
+                  continue;
+                }
+              }
+            }
+            if (commandName === "latex") {
+              out += "LaTeX";
+              index = command.end;
+              continue;
+            }
+            if (commandName === "tex") {
+              out += "TeX";
+              index = command.end;
+              continue;
+            }
+            if (commandName === "item") {
+              out += " ";
+              index = command.end;
+              continue;
+            }
+            let nextIndex = skipLatexWhitespace(source, command.end);
+            if (source[nextIndex] === "[") {
+              const optionalGroup = readBalancedLatexGroup(source, nextIndex, "[", "]");
+              if (optionalGroup) {
+                nextIndex = skipLatexWhitespace(source, optionalGroup.end);
+              }
+            }
+            if (LATEX_PREVIEW_VISIBLE_GROUP_COMMANDS.has(commandName) && source[nextIndex] === "{") {
+              const group = readBalancedLatexGroup(source, nextIndex, "{", "}");
+              if (group) {
+                out += " " + extractLatexPreviewVisibleText(source.slice(group.contentStart, group.contentEnd)) + " ";
+                index = group.end;
+                continue;
+              }
+            }
+            if (LATEX_PREVIEW_SECOND_ARG_VISIBLE_COMMANDS.has(commandName) && source[nextIndex] === "{") {
+              const firstGroup = readBalancedLatexGroup(source, nextIndex, "{", "}");
+              if (firstGroup) {
+                let secondIndex = skipLatexWhitespace(source, firstGroup.end);
+                if (source[secondIndex] === "{") {
+                  const secondGroup = readBalancedLatexGroup(source, secondIndex, "{", "}");
+                  if (secondGroup) {
+                    out += " " + extractLatexPreviewVisibleText(source.slice(secondGroup.contentStart, secondGroup.contentEnd)) + " ";
+                    index = secondGroup.end;
+                    continue;
+                  }
+                }
+              }
+            }
+            if (LATEX_PREVIEW_HIDDEN_COMMANDS.has(commandName)) {
+              index = nextIndex;
+              if (source[index] === "{") {
+                const group = readBalancedLatexGroup(source, index, "{", "}");
+                if (group) {
+                  index = group.end;
+                  continue;
+                }
+              }
+              index = command.end;
+              continue;
+            }
+            index = command.end;
+            continue;
+          }
+          if (ch === "{" || ch === "}") {
+            index += 1;
+            continue;
+          }
+          if (ch === "~") {
+            out += " ";
+            index += 1;
+            continue;
+          }
+          out += ch;
+          index += 1;
+        }
+
+        return normalizeVisiblePreviewText(out);
+      }
+
+      function findLatexDocumentBodyRange(text) {
+        const source = String(text || "");
+        const beginMatch = source.match(/\\begin\{document\}/);
+        if (!beginMatch || beginMatch.index == null) {
+          return { start: 0, end: source.length };
+        }
+        const start = beginMatch.index + beginMatch[0].length;
+        const endMatch = source.slice(start).match(/\\end\{document\}/);
+        return {
+          start,
+          end: endMatch && endMatch.index != null ? (start + endMatch.index) : source.length,
+        };
+      }
+
+      function normalizeLatexPreviewBlockText(blockText, kind) {
+        const source = String(blockText || "");
+        if (kind === "math") {
+          const mathRange = getStandaloneDisplayMathRange(stripLatexPreviewComments(source));
+          return mathRange ? normalizeVisiblePreviewText(mathRange.bodyText) : normalizeVisiblePreviewText(source);
+        }
+        if (kind === "heading") {
+          const heading = readLatexHeadingChunk(stripLatexPreviewComments(source));
+          return heading ? extractLatexPreviewVisibleText(heading.titleText) : extractLatexPreviewVisibleText(source);
+        }
+        return extractLatexPreviewVisibleText(source);
+      }
+
+      function isLatexPreviewSkippableChunk(chunkText) {
+        const source = stripLatexPreviewComments(chunkText).trim();
+        if (!source) return true;
+        const command = parseLatexCommandAt(source, 0);
+        const commandName = command && command.name
+          ? String(command.name || "").replace(/\*$/, "").toLowerCase()
+          : "";
+        if (command && LATEX_PREVIEW_HIDDEN_COMMANDS.has(commandName)) return true;
+        if (command && /^(?:documentclass|usepackage|newtheorem|title|author|date|maketitle|tableofcontents)$/i.test(commandName)) return true;
+        if (source.startsWith("\\begin{")) {
+          const envGroup = readBalancedLatexGroup(source, 6, "{", "}");
+          const envName = envGroup ? source.slice(envGroup.contentStart, envGroup.contentEnd).trim().toLowerCase() : "";
+          if (envName && LATEX_PREVIEW_SKIPPED_ENV_NAMES.has(envName)) return true;
+        }
+        return false;
+      }
+
       function normalizePreviewComparableCharacter(character) {
         switch (String(character || "")) {
           case "\u2018":
@@ -5102,12 +5475,12 @@
 
       function getPreviewMathSearchText(element) {
         if (!element || !(element instanceof Element)) return null;
+        const texSourceAttr = element.getAttribute("data-tex-source");
+        if (texSourceAttr && texSourceAttr.trim()) {
+          return texSourceAttr;
+        }
         const tag = element.tagName ? element.tagName.toUpperCase() : "";
         if (tag === "MATH") {
-          const texSource = element.getAttribute("data-tex-source");
-          if (texSource && texSource.trim()) {
-            return texSource;
-          }
           return typeof element.textContent === "string" ? element.textContent : "";
         }
         if (element.classList && element.classList.contains("math") && (element.classList.contains("inline") || element.classList.contains("display"))) {
@@ -5277,8 +5650,9 @@
       }
 
       function scanSourcePreviewCommentBlocks(markdown) {
-        if (editorLanguage !== "markdown") return [];
-        return scanMarkdownPreviewCommentBlocks(markdown);
+        if (editorLanguage === "markdown") return scanMarkdownPreviewCommentBlocks(markdown);
+        if (editorLanguage === "latex") return scanLatexPreviewCommentBlocks(markdown);
+        return [];
       }
 
       function scanMarkdownPreviewCommentBlocks(markdown) {
@@ -5497,6 +5871,164 @@
         return expandSourcePreviewCommentBlocksByDisplayMath(source, blocks);
       }
 
+      function scanLatexPreviewCommentBlocks(markdown) {
+        const source = String(markdown || "").replace(/\r\n/g, "\n");
+        if (!source) return [];
+        const bodyRange = findLatexDocumentBodyRange(source);
+        const bodyStart = Math.max(0, Math.min(bodyRange.start, source.length));
+        const bodyEnd = Math.max(bodyStart, Math.min(bodyRange.end, source.length));
+        const bodyText = source.slice(bodyStart, bodyEnd);
+        const lines = bodyText.split("\n");
+        const lineOffsets = [];
+        let runningOffset = 0;
+        for (const line of lines) {
+          lineOffsets.push(runningOffset);
+          runningOffset += line.length + 1;
+        }
+
+        function getLine(index) {
+          return index >= 0 && index < lines.length ? String(lines[index] || "") : "";
+        }
+
+        function getStrippedLine(index) {
+          return stripLatexPreviewComments(getLine(index)).trim();
+        }
+
+        function isBlankLine(index) {
+          return !getStrippedLine(index);
+        }
+
+        function makeBlock(kind, startLineIndex, endLineIndex) {
+          const safeStartLine = Math.max(0, Math.min(startLineIndex, Math.max(0, lines.length - 1)));
+          const safeEndLine = Math.max(safeStartLine, Math.min(endLineIndex, Math.max(0, lines.length - 1)));
+          const start = bodyStart + (lineOffsets[safeStartLine] || 0);
+          const end = bodyStart + (lineOffsets[safeEndLine] || 0) + getLine(safeEndLine).length;
+          return {
+            kind,
+            start,
+            end,
+            lineStart: getLineNumberAtOffset(source, start),
+            lineEnd: getLineNumberAtOffset(source, Math.max(start, end - 1)),
+          };
+        }
+
+        function getChunkText(startLineIndex, endLineIndex) {
+          return bodyText.slice(
+            lineOffsets[startLineIndex] || 0,
+            (lineOffsets[endLineIndex] || 0) + getLine(endLineIndex).length,
+          );
+        }
+
+        function getEnvironmentStartName(index) {
+          const line = getStrippedLine(index);
+          const match = line.match(/^\\begin\{([^}]+)\}/);
+          return match ? String(match[1] || "").trim().toLowerCase() : "";
+        }
+
+        function findEnvironmentEndLine(startLineIndex, envName) {
+          const openToken = "\\begin{" + envName + "}";
+          const closeToken = "\\end{" + envName + "}";
+          let depth = 0;
+          for (let lineIndex = startLineIndex; lineIndex < lines.length; lineIndex += 1) {
+            const line = getStrippedLine(lineIndex);
+            if (line.includes(openToken)) depth += 1;
+            if (line.includes(closeToken)) {
+              depth -= 1;
+              if (depth <= 0) return lineIndex;
+            }
+          }
+          return startLineIndex;
+        }
+
+        function isHeadingLine(index) {
+          return Boolean(readLatexHeadingChunk(getLine(index)));
+        }
+
+        function isMathStartLine(index) {
+          const line = getStrippedLine(index);
+          if (!line) return false;
+          if (line.startsWith("$$") || line.startsWith("\\[")) return true;
+          const envName = getEnvironmentStartName(index);
+          return Boolean(envName && DISPLAY_MATH_ENV_NAMES.has(envName));
+        }
+
+        function findMathEndLine(startLineIndex) {
+          for (let endLineIndex = startLineIndex; endLineIndex < lines.length; endLineIndex += 1) {
+            const chunkText = getChunkText(startLineIndex, endLineIndex);
+            if (getStandaloneDisplayMathRange(stripLatexPreviewComments(chunkText))) {
+              return endLineIndex;
+            }
+          }
+          return startLineIndex;
+        }
+
+        const blocks = [];
+        let lineIndex = 0;
+        while (lineIndex < lines.length) {
+          if (isBlankLine(lineIndex)) {
+            lineIndex += 1;
+            continue;
+          }
+
+          const strippedLine = getStrippedLine(lineIndex);
+          const envName = getEnvironmentStartName(lineIndex);
+
+          if (isHeadingLine(lineIndex)) {
+            blocks.push(makeBlock("heading", lineIndex, lineIndex));
+            lineIndex += 1;
+            continue;
+          }
+
+          if (envName === "abstract" || envName === "keywords") {
+            const endLineIndex = findEnvironmentEndLine(lineIndex, envName);
+            const chunkText = getChunkText(lineIndex, endLineIndex);
+            if (normalizeLatexPreviewBlockText(chunkText, "paragraph")) {
+              blocks.push(makeBlock("paragraph", lineIndex, endLineIndex));
+            }
+            lineIndex = endLineIndex + 1;
+            continue;
+          }
+
+          if (envName && LATEX_PREVIEW_SKIPPED_ENV_NAMES.has(envName) && !DISPLAY_MATH_ENV_NAMES.has(envName)) {
+            lineIndex = findEnvironmentEndLine(lineIndex, envName) + 1;
+            continue;
+          }
+
+          if (isMathStartLine(lineIndex)) {
+            const endLineIndex = findMathEndLine(lineIndex);
+            blocks.push(makeBlock("math", lineIndex, endLineIndex));
+            lineIndex = endLineIndex + 1;
+            continue;
+          }
+
+          if (isLatexPreviewSkippableChunk(strippedLine)) {
+            lineIndex += 1;
+            continue;
+          }
+
+          const paragraphStartLine = lineIndex;
+          let paragraphEndLine = lineIndex;
+          for (let nextLineIndex = lineIndex + 1; nextLineIndex < lines.length; nextLineIndex += 1) {
+            if (isBlankLine(nextLineIndex) || isHeadingLine(nextLineIndex) || isMathStartLine(nextLineIndex)) {
+              break;
+            }
+            const nextEnvName = getEnvironmentStartName(nextLineIndex);
+            if (nextEnvName) {
+              break;
+            }
+            paragraphEndLine = nextLineIndex;
+          }
+
+          const chunkText = getChunkText(paragraphStartLine, paragraphEndLine);
+          if (normalizeLatexPreviewBlockText(chunkText, "paragraph") && !isLatexPreviewSkippableChunk(chunkText)) {
+            blocks.push(makeBlock("paragraph", paragraphStartLine, paragraphEndLine));
+          }
+          lineIndex = paragraphEndLine + 1;
+        }
+
+        return blocks;
+      }
+
       function isPreviewDisplayMathElement(element) {
         return Boolean(element && element instanceof Element && element.matches && element.matches("math[display='block'], .studio-mathjax-fallback-display"));
       }
@@ -5574,6 +6106,11 @@
         const tag = element.tagName ? element.tagName.toUpperCase() : "";
         if (/^H[1-6]$/.test(tag)) return "heading";
         if (tag === "P") return "paragraph";
+        if (tag === "DIV" && element.classList) {
+          if (element.classList.contains("abstract") || element.classList.contains("keywords")) {
+            return "paragraph";
+          }
+        }
         if (tag === "BLOCKQUOTE") return "blockquote";
         if (tag === "UL" || tag === "OL") return "list";
         if (tag === "TABLE") return "table";
@@ -5605,11 +6142,49 @@
         return Boolean(getPreviewCommentTargetKind(element));
       }
 
+      function isLatexPreviewCommentTargetElement(element, targetEl) {
+        if (!element || !(element instanceof Element) || !targetEl) return false;
+        const kind = getPreviewCommentTargetKind(element);
+        if (kind === "heading" || kind === "paragraph") {
+          if (element.parentElement === targetEl) return true;
+          if (
+            kind === "paragraph"
+            && element.classList
+            && element.classList.contains("abstract")
+            && element.parentElement
+            && element.parentElement.tagName === "HEADER"
+            && element.parentElement.id === "title-block-header"
+            && element.parentElement.parentElement === targetEl
+          ) {
+            return true;
+          }
+          return false;
+        }
+        if (kind === "math") {
+          if (element.parentElement === targetEl) return true;
+          const bodyEl = element.parentElement;
+          const frameEl = bodyEl && bodyEl.parentElement;
+          return Boolean(
+            bodyEl
+            && bodyEl.classList
+            && bodyEl.classList.contains("studio-display-equation-body")
+            && frameEl
+            && frameEl.classList
+            && frameEl.classList.contains("studio-display-equation")
+            && frameEl.parentElement === targetEl
+          );
+        }
+        return false;
+      }
+
       function collectPreviewCommentTargetElements(targetEl) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return [];
-        const selector = "h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, table, div.sourceCode, pre, math[display='block'], .studio-mathjax-fallback-display, .studio-page-break, .callout-note, .callout-tip, .callout-warning, .callout-important, .callout-caution, .mermaid-container";
+        const selector = "h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, table, div.sourceCode, pre, math[display='block'], .studio-mathjax-fallback-display, .studio-page-break, .abstract, .keywords, .callout-note, .callout-tip, .callout-warning, .callout-important, .callout-caution, .mermaid-container";
         return Array.from(targetEl.querySelectorAll(selector)).filter((element) => {
           if (!isPreviewCommentTargetElement(element)) return false;
+          if (editorLanguage === "latex" && !isLatexPreviewCommentTargetElement(element, targetEl)) {
+            return false;
+          }
           let ancestor = element.parentElement;
           while (ancestor && ancestor !== targetEl) {
             if (ancestor.classList && ancestor.classList.contains("preview-comment-block")) return false;
@@ -5626,6 +6201,9 @@
       function getNormalizedPreviewCommentSourceBlockText(sourceText, sourceBlock) {
         if (!sourceBlock) return "";
         const blockText = String(sourceText || "").slice(sourceBlock.start, sourceBlock.end);
+        if (editorLanguage === "latex") {
+          return normalizeLatexPreviewBlockText(blockText, sourceBlock.kind);
+        }
         if (sourceBlock.kind === "page-break") {
           const match = blockText.trim().match(/^\\(newpage|pagebreak|clearpage)/i);
           return match ? String(match[1] || "").toLowerCase() : "page-break";
@@ -5834,6 +6412,19 @@
 
         if (kind === "math") {
           const selectedDisplayText = normalizeVisiblePreviewText(getPreviewMathSearchText(contentEl) || buildNormalizedPreviewSearchText(contentEl));
+          if (!selectedDisplayText) return null;
+          return {
+            selectionStart: blockStart,
+            selectionEnd: blockEnd,
+            lineStart: getLineNumberAtOffset(source, blockStart),
+            lineEnd: getLineNumberAtOffset(source, Math.max(blockStart, blockEnd - 1)),
+            selectedText: source.slice(blockStart, blockEnd),
+            selectedDisplayText,
+          };
+        }
+
+        if (editorLanguage === "latex") {
+          const selectedDisplayText = buildNormalizedPreviewRangeText(range);
           if (!selectedDisplayText) return null;
           return {
             selectionStart: blockStart,
