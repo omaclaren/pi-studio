@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.50] — 2026-04-09
+
+### Added
+- Editor-preview comments now also work for minimal structured LaTeX preview content, including headings, prose paragraphs, references sections, and whole display equations.
+- Preview-side selection affordances now include a transient **Jump** action alongside **Comment**, so you can reveal the corresponding raw-editor span without creating a local comment first.
+
+### Fixed
+- LaTeX preview comment mapping now follows Studio's rendered structure more closely, including title-block abstracts, loose prose after decorated display equations, bibliography/reference sections, and paragraph alignment around figures and rendered citation/reference text.
+- Preview comment controls for display equations now anchor to the outer rendered equation frame, improving visibility and making preview jump targeting more reliable.
+
 ## [0.5.49] — 2026-04-09
 
 ### Fixed
