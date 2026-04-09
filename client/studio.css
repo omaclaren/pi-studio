@@ -228,7 +228,6 @@
     #scratchpadBtn.has-content,
     #reviewNotesBtn.has-content,
     #reviewNotesBtn.is-active,
-    #outlineBtn.has-content,
     #outlineBtn.is-active {
       border-color: var(--accent);
       color: var(--accent);

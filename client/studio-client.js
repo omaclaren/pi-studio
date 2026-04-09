@@ -7444,8 +7444,8 @@
         const hasEntries = count > 0;
         const isOpen = isOutlineOpen();
         if (outlineBtn) {
-          outlineBtn.textContent = hasEntries ? "Outline •" : "Outline";
-          outlineBtn.classList.toggle("has-content", hasEntries);
+          outlineBtn.textContent = "Outline";
+          outlineBtn.classList.remove("has-content");
           outlineBtn.classList.toggle("is-active", isOpen);
           outlineBtn.setAttribute("aria-pressed", isOpen ? "true" : "false");
           outlineBtn.title = isOpen
