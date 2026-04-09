@@ -6847,10 +6847,11 @@
       }
 
       function revealReviewNoteInPreview(note) {
-        if (!supportsPreviewCommentsForCurrentEditor()) return;
+        if (!supportsPreviewCommentsForCurrentEditor()) return false;
         if (rightView === "editor-preview" && critiqueViewEl && critiqueViewEl.isConnected) {
-          revealReviewNoteInPreviewElement(critiqueViewEl, note);
+          return revealReviewNoteInPreviewElement(critiqueViewEl, note);
         }
+        return false;
       }
 
       function updateActivePreviewCommentSelectionFromDom() {
@@ -7366,6 +7367,12 @@
         }
         const jumped = jumpToReviewAnchor(anchor, {
           statusMessage: "Jumped to preview selection in the raw editor.",
+          afterJump: () => {
+            const paneEl = getPreviewSelectionPaneElement(paneId);
+            if (paneEl) {
+              revealReviewNoteInPreviewElement(paneEl, anchor);
+            }
+          },
         });
         if (jumped) {
           const selection = typeof window.getSelection === "function" ? window.getSelection() : null;
