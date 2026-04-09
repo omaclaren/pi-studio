@@ -7936,6 +7936,18 @@
                 selection.removeAllRanges();
               }
               clearPreviewCommentSelection();
+              const current = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
+              const range = resolveReviewNoteRange(previewNote, current);
+              if (range && sourceTextEl) {
+                try {
+                  sourceTextEl.focus({ preventScroll: true });
+                } catch {
+                  sourceTextEl.focus();
+                }
+                if (typeof sourceTextEl.setSelectionRange === "function") {
+                  sourceTextEl.setSelectionRange(range.start, range.end);
+                }
+              }
             });
           },
         });
