@@ -6265,7 +6265,6 @@ ${cssVarsBlock}
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
-            <option value="thinking">Thinking (Raw)</option>
             <option value="trace">Working</option>
           </select>
         </div>

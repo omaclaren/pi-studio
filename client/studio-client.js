@@ -184,6 +184,7 @@
       let responseHistory = [];
       let responseHistoryIndex = -1;
       let traceState = null;
+      let traceFilter = "all";
       let traceAutoScroll = true;
       let traceRenderRaf = null;
       let studioRunChainActive = false;
@@ -383,6 +384,106 @@
           state.status = normalizeTraceStatus(message.status);
         }
         renderTraceViewIfActive();
+      }
+
+      function normalizeTraceFilter(filter) {
+        return filter === "thinking" || filter === "tools" ? filter : "all";
+      }
+
+      function setTraceFilter(nextFilter) {
+        const normalized = normalizeTraceFilter(nextFilter);
+        if (traceFilter === normalized) return;
+        traceFilter = normalized;
+        traceAutoScroll = true;
+        renderTraceViewIfActive();
+      }
+
+      function getTraceEntriesForFilter(filterOverride) {
+        const state = traceState || createEmptyTraceState();
+        const filter = normalizeTraceFilter(filterOverride || traceFilter);
+        const entries = Array.isArray(state.entries) ? state.entries : [];
+        if (filter === "tools") {
+          return entries.filter((entry) => entry.type === "tool");
+        }
+        if (filter === "thinking") {
+          return entries.filter((entry) => entry.type === "assistant" && String(entry.thinking || "").trim());
+        }
+        return entries.filter((entry) => {
+          if (entry.type === "assistant") {
+            return Boolean(String(entry.thinking || "").trim() || String(entry.text || "").trim());
+          }
+          return true;
+        });
+      }
+
+      function buildVisibleWorkingText(filterOverride) {
+        const filter = normalizeTraceFilter(filterOverride || traceFilter);
+        const entries = getTraceEntriesForFilter(filter);
+        if (!entries.length) return "";
+
+        if (filter === "thinking") {
+          return entries
+            .map((entry) => entry && entry.type === "assistant" ? String(entry.thinking || "").trim() : "")
+            .filter(Boolean)
+            .join("\n\n");
+        }
+
+        return entries.map((entry) => {
+          if (entry.type === "assistant") {
+            const parts = [];
+            if (String(entry.thinking || "").trim()) {
+              parts.push("[Thinking]\n" + String(entry.thinking || "").trim());
+            }
+            if (filter === "all" && String(entry.text || "").trim()) {
+              parts.push("[Response]\n" + String(entry.text || "").trim());
+            }
+            return ["Assistant", ...parts].join("\n\n").trim();
+          }
+
+          const header = entry.label && entry.label !== entry.toolName
+            ? ("Tool: " + String(entry.toolName || "tool") + " — " + entry.label)
+            : ("Tool: " + String(entry.toolName || "tool"));
+          const parts = [header];
+          if (String(entry.argsSummary || "").trim()) {
+            parts.push("Input:\n" + String(entry.argsSummary || "").trim());
+          }
+          if (String(entry.output || "").trim()) {
+            parts.push("Output:\n" + String(entry.output || "").trim());
+          }
+          return parts.join("\n\n").trim();
+        }).filter(Boolean).join("\n\n---\n\n");
+      }
+
+      function getWorkingDocumentLabel(filterOverride) {
+        const filter = normalizeTraceFilter(filterOverride || traceFilter);
+        if (filter === "thinking") return "working (thinking)";
+        if (filter === "tools") return "working (tools)";
+        return "working";
+      }
+
+      async function copyVisibleWorkingToClipboard() {
+        const content = buildVisibleWorkingText();
+        if (!content.trim()) {
+          setStatus("No visible working details to copy yet.", "warning");
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(content);
+          setStatus("Copied visible working text.", "success");
+        } catch {
+          setStatus("Clipboard write failed.", "warning");
+        }
+      }
+
+      function loadVisibleWorkingIntoEditor() {
+        const content = buildVisibleWorkingText();
+        if (!content.trim()) {
+          setStatus("No visible working details to load yet.", "warning");
+          return;
+        }
+        setEditorText(content, { preserveScroll: false, preserveSelection: false });
+        setSourceState({ source: "blank", label: getWorkingDocumentLabel(), path: null });
+        setStatus("Loaded visible working into editor.", "success");
       }
 
       function renderTraceViewIfActive() {
@@ -1595,19 +1696,14 @@
 
         if (rightView === "trace") {
           const state = traceState || createEmptyTraceState();
-          const entryCount = Array.isArray(state.entries) ? state.entries.length : 0;
+          const entryCount = getTraceEntriesForFilter(traceFilter).length;
           const time = formatReferenceTime(state.startedAt || state.updatedAt);
-          const kindLabel = state.requestKind === "critique"
-            ? "critique"
-            : (state.requestKind === "direct"
-              ? "run"
-              : (state.requestKind ? state.requestKind : "activity"));
           if (state.status === "idle") {
             referenceBadgeEl.textContent = "Working: no active run yet";
             return;
           }
           const statusLabel = state.status === "running" ? "live" : "complete";
-          referenceBadgeEl.textContent = "Working: " + kindLabel + " · " + statusLabel
+          referenceBadgeEl.textContent = "Working: " + statusLabel
             + (entryCount ? (" · " + entryCount + " entr" + (entryCount === 1 ? "y" : "ies")) : "")
             + (time ? (" · " + time) : "");
           return;
@@ -2910,34 +3006,50 @@
 
       function buildTracePanelHtml() {
         const state = traceState || createEmptyTraceState();
-        const entries = Array.isArray(state.entries) ? state.entries : [];
+        const filter = normalizeTraceFilter(traceFilter);
+        const entries = getTraceEntriesForFilter(filter);
+        const visibleWorking = buildVisibleWorkingText(filter);
+        const hasVisibleContent = Boolean(visibleWorking.trim());
         const started = formatReferenceTime(state.startedAt || state.updatedAt);
-        const kindLabel = state.requestKind === "critique"
-          ? "Critique"
-          : (state.requestKind === "direct"
-            ? "Run"
-            : (state.requestKind ? String(state.requestKind) : "Session"));
         const statusLabel = state.status === "running"
           ? "Live"
           : (state.status === "complete" ? "Complete" : "Idle");
-        const summary = "<div class='trace-summary'>"
-          + "<span class='trace-summary-badge'>" + escapeHtml(kindLabel + " working") + "</span>"
+        const filterMeta = filter === "thinking"
+          ? "Thinking only"
+          : (filter === "tools" ? "Tools only" : null);
+        const toolbar = "<div class='trace-toolbar'>"
+          + "<div class='trace-summary'>"
+          + "<span class='trace-summary-badge'>Working</span>"
           + "<span class='trace-summary-status trace-status-" + escapeHtml(String(state.status || "idle")) + "'>" + escapeHtml(statusLabel) + "</span>"
           + (started ? ("<span class='trace-summary-meta'>Started " + escapeHtml(started) + "</span>") : "")
-          + (state.requestId ? ("<span class='trace-summary-meta'>Request " + escapeHtml(state.requestId.slice(0, 8)) + "</span>") : "")
+          + (filterMeta ? ("<span class='trace-summary-meta'>" + escapeHtml(filterMeta) + "</span>") : "")
+          + "</div>"
+          + "<div class='trace-controls'>"
+          + "<div class='trace-filter-group' role='tablist' aria-label='Working components'>"
+          + "<button type='button' class='trace-filter-btn" + (filter === "all" ? " is-active" : "") + "' data-trace-filter='all' aria-pressed='" + (filter === "all" ? "true" : "false") + "'>All</button>"
+          + "<button type='button' class='trace-filter-btn" + (filter === "thinking" ? " is-active" : "") + "' data-trace-filter='thinking' aria-pressed='" + (filter === "thinking" ? "true" : "false") + "'>Thinking</button>"
+          + "<button type='button' class='trace-filter-btn" + (filter === "tools" ? " is-active" : "") + "' data-trace-filter='tools' aria-pressed='" + (filter === "tools" ? "true" : "false") + "'>Tools</button>"
+          + "</div>"
+          + "<button type='button' class='trace-action-btn' data-trace-action='load'" + (hasVisibleContent ? "" : " disabled") + ">Load visible into editor</button>"
+          + "<button type='button' class='trace-action-btn' data-trace-action='copy'" + (hasVisibleContent ? "" : " disabled") + ">Copy visible</button>"
+          + "</div>"
           + "</div>";
 
         if (!entries.length) {
-          const emptyMessage = state.status === "running"
-            ? "Waiting for the first model or tool update…"
-            : "No live working view yet. Start a run or critique to watch working details here.";
-          return "<div class='trace-panel'>" + summary + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
+          const emptyMessage = filter === "thinking"
+            ? "No thinking steps in this working view yet."
+            : (filter === "tools"
+              ? "No tool steps in this working view yet."
+              : (state.status === "running"
+                ? "Waiting for the first model or tool update…"
+                : "No live working view yet. Start a run or critique to watch working details here."));
+          return "<div class='trace-panel'>" + toolbar + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
         }
 
         const cards = entries.map((entry) => {
           if (entry.type === "assistant") {
             const sections = [];
-            if (entry.thinking) {
+            if (String(entry.thinking || "").trim()) {
               sections.push(
                 "<div class='trace-section'>"
                 + "<div class='trace-section-label'>Thinking</div>"
@@ -2945,7 +3057,7 @@
                 + "</div>"
               );
             }
-            if (entry.text) {
+            if (filter === "all" && String(entry.text || "").trim()) {
               sections.push(
                 "<div class='trace-section'>"
                 + "<div class='trace-section-label'>Response</div>"
@@ -2958,9 +3070,9 @@
             }
             return "<article class='trace-card trace-card-assistant'>"
               + "<div class='trace-card-header'>"
-              + "<span class='trace-kind-badge'>Assistant</span>"
+              + "<span class='trace-kind-badge'>" + escapeHtml(filter === "thinking" ? "Thinking" : "Assistant") + "</span>"
               + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
-              + "<span class='trace-entry-status trace-entry-status-" + escapeHtml(entry.status) + "'>" + escapeHtml(entry.status) + "</span>"
+              + "<span class='trace-entry-status trace-entry-status-" + escapeHtml(entry.status) + "'>" + escapeHtml(entry.status === "streaming" ? "Live" : "Complete") + "</span>"
               + (entry.stopReason ? ("<span class='trace-card-meta'>stop: " + escapeHtml(entry.stopReason) + "</span>") : "")
               + "</div>"
               + sections.join("")
@@ -2974,19 +3086,22 @@
           const output = entry.output
             ? "<div class='trace-section'><div class='trace-section-label'>Output</div><pre class='plain-markdown trace-output'>" + escapeHtml(entry.output) + "</pre></div>"
             : "<div class='trace-empty-inline'>No output yet.</div>";
+          const toolStatusLabel = entry.isError
+            ? "Error"
+            : (entry.status === "streaming" || entry.status === "pending" ? "Live" : "Complete");
           return "<article class='trace-card trace-card-tool'>"
             + "<div class='trace-card-header'>"
             + "<span class='trace-kind-badge'>" + escapeHtml(entry.toolName || "tool") + "</span>"
             + "<span class='trace-card-title'>" + escapeHtml(title) + "</span>"
             + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
-            + "<span class='trace-entry-status trace-entry-status-" + escapeHtml(entry.status) + "'>" + escapeHtml(entry.isError ? "error" : entry.status) + "</span>"
+            + "<span class='trace-entry-status trace-entry-status-" + escapeHtml(entry.status) + "'>" + escapeHtml(toolStatusLabel) + "</span>"
             + "</div>"
             + argsSummary
             + output
             + "</article>";
         }).join("");
 
-        return "<div class='trace-panel'>" + summary + "<div class='trace-list'>" + cards + "</div></div>";
+        return "<div class='trace-panel'>" + toolbar + "<div class='trace-list'>" + cards + "</div></div>";
       }
 
       function renderTraceView() {
@@ -3083,14 +3198,11 @@
 
       function updateResultActionButtons(normalizedEditorText) {
         const hasResponse = latestResponseHasContent;
-        const hasThinking = Boolean(latestResponseThinking && latestResponseThinking.trim());
         const normalizedEditor = typeof normalizedEditorText === "string"
           ? normalizedEditorText
           : normalizeForCompare(sourceTextEl.value);
         const responseLoaded = hasResponse && normalizedEditor === latestResponseNormalized;
-        const thinkingLoaded = hasThinking && normalizedEditor === latestResponseThinkingNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
-        const showingThinking = rightView === "thinking";
         const showingTrace = rightView === "trace";
 
         if (responseWrapEl) {
@@ -3100,35 +3212,21 @@
         const critiqueNotes = isCritiqueResponse ? latestCritiqueNotes : "";
         const critiqueNotesLoaded = Boolean(critiqueNotes) && normalizedEditor === latestCritiqueNotesNormalized;
 
-        if (showingThinking) {
-          loadResponseBtn.hidden = false;
-          loadCritiqueNotesBtn.hidden = true;
-          loadCritiqueFullBtn.hidden = true;
+        loadResponseBtn.hidden = isCritiqueResponse;
+        loadCritiqueNotesBtn.hidden = !isCritiqueResponse;
+        loadCritiqueFullBtn.hidden = !isCritiqueResponse;
 
-          loadResponseBtn.disabled = uiBusy || !hasThinking || thinkingLoaded;
-          loadResponseBtn.textContent = !hasThinking
-            ? "Thinking unavailable"
-            : (thinkingLoaded ? "Thinking already in editor" : "Load thinking into editor");
+        loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse;
+        loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
 
-          copyResponseBtn.disabled = uiBusy || !hasThinking;
-          copyResponseBtn.textContent = "Copy thinking text";
-        } else {
-          loadResponseBtn.hidden = isCritiqueResponse;
-          loadCritiqueNotesBtn.hidden = !isCritiqueResponse;
-          loadCritiqueFullBtn.hidden = !isCritiqueResponse;
+        loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
+        loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
 
-          loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse;
-          loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
+        loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded;
+        loadCritiqueFullBtn.textContent = responseLoaded ? "Full critique already in editor" : "Load full critique into editor";
 
-          loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
-          loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
-
-          loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded;
-          loadCritiqueFullBtn.textContent = responseLoaded ? "Full critique already in editor" : "Load full critique into editor";
-
-          copyResponseBtn.disabled = uiBusy || !hasResponse;
-          copyResponseBtn.textContent = "Copy response text";
-        }
+        copyResponseBtn.disabled = uiBusy || !hasResponse;
+        copyResponseBtn.textContent = "Copy response text";
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         const exportText = rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown;
@@ -3137,8 +3235,6 @@
           exportPdfBtn.disabled = uiBusy || pdfExportInProgress || !canExportPdf;
           if (rightView === "trace") {
             exportPdfBtn.title = "Working view does not support PDF export.";
-          } else if (rightView === "thinking") {
-            exportPdfBtn.title = "Thinking view does not support PDF export yet.";
           } else if (rightView === "markdown") {
             exportPdfBtn.title = "Switch right pane to Response (Preview) or Editor (Preview) to export PDF.";
           } else if (!canExportPdf) {
@@ -3372,9 +3468,7 @@
           ? "preview"
           : (nextView === "editor-preview"
             ? "editor-preview"
-            : (nextView === "thinking"
-              ? "thinking"
-              : (nextView === "trace" ? "trace" : "markdown")));
+            : ((nextView === "trace" || nextView === "thinking") ? "trace" : "markdown"));
         rightViewSelect.value = rightView;
         if (rightView === "trace" && previousView !== "trace") {
           traceAutoScroll = true;
@@ -9673,6 +9767,28 @@
           if (rightView !== "trace") return;
           traceAutoScroll = shouldStickTraceToBottom();
         });
+        critiqueViewEl.addEventListener("click", async (event) => {
+          if (rightView !== "trace") return;
+          const target = event.target;
+          const filterBtn = target instanceof Element ? target.closest("[data-trace-filter]") : null;
+          if (filterBtn) {
+            event.preventDefault();
+            const nextFilter = filterBtn.getAttribute("data-trace-filter") || "all";
+            setTraceFilter(nextFilter);
+            return;
+          }
+          const actionBtn = target instanceof Element ? target.closest("[data-trace-action]") : null;
+          if (!actionBtn) return;
+          event.preventDefault();
+          const action = actionBtn.getAttribute("data-trace-action") || "";
+          if (action === "copy") {
+            await copyVisibleWorkingToClipboard();
+            return;
+          }
+          if (action === "load") {
+            loadVisibleWorkingIntoEditor();
+          }
+        });
       }
 
       followSelect.addEventListener("change", () => {
@@ -9917,17 +10033,6 @@
       });
 
       loadResponseBtn.addEventListener("click", () => {
-        if (rightView === "thinking") {
-          if (!latestResponseThinking.trim()) {
-            setStatus("No thinking available for the selected response.", "warning");
-            return;
-          }
-          setEditorText(latestResponseThinking, { preserveScroll: false, preserveSelection: false });
-          setSourceState({ source: "blank", label: "assistant thinking", path: null });
-          setStatus("Loaded thinking into editor.", "success");
-          return;
-        }
-
         if (!latestResponseMarkdown.trim()) {
           setStatus("No response available yet.", "warning");
           return;
@@ -9966,15 +10071,15 @@
       });
 
       copyResponseBtn.addEventListener("click", async () => {
-        const content = rightView === "thinking" ? latestResponseThinking : latestResponseMarkdown;
+        const content = latestResponseMarkdown;
         if (!content.trim()) {
-          setStatus(rightView === "thinking" ? "No thinking available yet." : "No response available yet.", "warning");
+          setStatus("No response available yet.", "warning");
           return;
         }
 
         try {
           await navigator.clipboard.writeText(content);
-          setStatus(rightView === "thinking" ? "Copied thinking text." : "Copied response text.", "success");
+          setStatus("Copied response text.", "success");
         } catch (error) {
           setStatus("Clipboard write failed.", "warning");
         }

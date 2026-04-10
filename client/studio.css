@@ -1608,12 +1608,50 @@
       gap: 10px;
     }
 
+    .trace-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
     .trace-summary {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       gap: 8px;
+      min-width: 0;
       padding-bottom: 2px;
+    }
+
+    .trace-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .trace-filter-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .trace-filter-btn,
+    .trace-action-btn {
+      padding: 0.34rem 0.68rem;
+      font-size: 12px;
+      border-radius: 999px;
+    }
+
+    .trace-filter-btn.is-active {
+      border-color: var(--accent-soft-strong);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
     }
 
     .trace-summary-badge,
@@ -1623,24 +1661,28 @@
       display: inline-flex;
       align-items: center;
       border-radius: 999px;
-      padding: 0.18rem 0.55rem;
+      padding: 0.16rem 0.52rem;
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.01em;
-      border: 1px solid var(--border-muted);
-      background: var(--panel-2);
+      border: 1px solid var(--border);
+      background: transparent;
       color: var(--muted);
     }
 
-    .trace-summary-badge,
+    .trace-summary-badge {
+      color: var(--text);
+      background: var(--panel);
+    }
+
     .trace-kind-badge {
-      color: var(--accent);
-      border-color: var(--accent-soft-strong);
-      background: var(--accent-soft);
+      color: var(--muted);
+      background: var(--panel);
     }
 
     .trace-summary-status.trace-status-running,
-    .trace-entry-status.trace-entry-status-streaming {
+    .trace-entry-status.trace-entry-status-streaming,
+    .trace-entry-status.trace-entry-status-pending {
       color: var(--accent);
       border-color: var(--accent-soft-strong);
       background: var(--accent-soft);
@@ -1650,13 +1692,13 @@
     .trace-entry-status.trace-entry-status-complete {
       color: var(--ok);
       border-color: var(--ok-border);
-      background: color-mix(in srgb, var(--ok) 10%, transparent);
+      background: rgba(115, 209, 61, 0.08);
     }
 
     .trace-entry-status.trace-entry-status-error {
       color: var(--error);
       border-color: var(--error);
-      background: color-mix(in srgb, var(--error) 10%, transparent);
+      background: rgba(255, 107, 107, 0.08);
     }
 
     .trace-summary-meta,
