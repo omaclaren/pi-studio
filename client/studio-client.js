@@ -1722,26 +1722,6 @@
         }
 
         const hasResponse = Boolean(latestResponseMarkdown && latestResponseMarkdown.trim());
-        const hasThinking = Boolean(latestResponseThinking && latestResponseThinking.trim());
-        if (rightView === "thinking") {
-          if (!hasResponse && !hasThinking) {
-            referenceBadgeEl.textContent = "Thinking: none";
-            return;
-          }
-
-          const time = formatReferenceTime(latestResponseTimestamp);
-          const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
-          const selected = total > 0 && responseHistoryIndex >= 0 && responseHistoryIndex < total
-            ? responseHistoryIndex + 1
-            : 0;
-          const historyPrefix = total > 0 ? "Response history " + selected + "/" + total + " · " : "";
-          const thinkingLabel = hasThinking ? "assistant thinking" : "assistant thinking unavailable";
-          referenceBadgeEl.textContent = time
-            ? historyPrefix + thinkingLabel + " · " + time
-            : historyPrefix + thinkingLabel;
-          return;
-        }
-
         if (!hasResponse) {
           referenceBadgeEl.textContent = "Latest response: none";
           return;
@@ -1823,14 +1803,9 @@
           return;
         }
 
-        const showingThinking = rightView === "thinking";
-        const hasComparableContent = showingThinking
-          ? Boolean(latestResponseThinking && latestResponseThinking.trim())
-          : latestResponseHasContent;
-
-        if (!hasComparableContent) {
+        if (!latestResponseHasContent) {
           syncBadgeEl.hidden = true;
-          syncBadgeEl.textContent = showingThinking ? "In sync with thinking" : "In sync with response";
+          syncBadgeEl.textContent = "In sync with response";
           syncBadgeEl.classList.remove("sync");
           return;
         }
@@ -1838,10 +1813,9 @@
         const normalizedEditor = typeof normalizedEditorText === "string"
           ? normalizedEditorText
           : normalizeForCompare(sourceTextEl.value);
-        const targetNormalized = showingThinking ? latestResponseThinkingNormalized : latestResponseNormalized;
-        const inSync = normalizedEditor === targetNormalized;
+        const inSync = normalizedEditor === latestResponseNormalized;
         syncBadgeEl.hidden = !inSync;
-        syncBadgeEl.textContent = showingThinking ? "In sync with thinking" : "In sync with response";
+        syncBadgeEl.textContent = "In sync with response";
 
         if (inSync) {
           syncBadgeEl.classList.add("sync");
@@ -3176,17 +3150,6 @@
           const nonce = ++responsePreviewRenderNonce;
           beginPreviewRender(critiqueViewEl);
           void applyRenderedMarkdown(critiqueViewEl, editorText, "response", nonce);
-          return;
-        }
-
-        if (rightView === "thinking") {
-          const thinking = latestResponseThinking;
-          finishPreviewRender(critiqueViewEl);
-          critiqueViewEl.innerHTML = thinking && thinking.trim()
-            ? buildPlainMarkdownHtml(thinking)
-            : "<pre class='plain-markdown'>No thinking available for this response.</pre>";
-          applyPendingResponseScrollReset();
-          scheduleResponsePaneRepaintNudge();
           return;
         }
 

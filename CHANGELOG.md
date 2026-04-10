@@ -4,6 +4,19 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Studio now includes a live right-pane **Working** view for following current model/tool activity as it streams.
+- **Working** includes `All` / `Thinking` / `Tools` filters plus **Load visible into editor** and **Copy visible** actions.
+- Markdown preview/PDF regression coverage now includes preservation of literal LaTeX prose commands such as `\cite{...}` and `\ref{...}`.
+
+### Changed
+- The former standalone right-pane **Thinking** mode has been folded into **Working**.
+- Working status/summary chips are quieter and read more like status labels than action buttons.
+
+### Fixed
+- Markdown preview and PDF export now preserve literal LaTeX prose commands like `\cite{...}` and `\ref{...}` instead of silently dropping them outside math/code contexts.
+- Working-pane interaction handlers now survive response-pane replacement, so filters/actions keep working and scrolling up can pause live auto-follow until you return near the bottom.
+
 ## [0.5.52] — 2026-04-09
 
 ### Added
