@@ -1680,7 +1680,12 @@
       background: var(--panel);
     }
 
-    .trace-summary-status.trace-status-running,
+    .trace-summary-status.trace-status-running {
+      color: var(--muted);
+      border-color: var(--border);
+      background: var(--panel);
+    }
+
     .trace-entry-status.trace-entry-status-streaming,
     .trace-entry-status.trace-entry-status-pending {
       color: var(--accent);

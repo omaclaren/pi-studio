@@ -2490,6 +2490,40 @@
         });
       }
 
+      function handleTracePaneScroll() {
+        if (rightView !== "trace") return;
+        traceAutoScroll = shouldStickTraceToBottom();
+      }
+
+      async function handleTracePaneClick(event) {
+        if (rightView !== "trace") return;
+        const target = event.target;
+        const filterBtn = target instanceof Element ? target.closest("[data-trace-filter]") : null;
+        if (filterBtn) {
+          event.preventDefault();
+          const nextFilter = filterBtn.getAttribute("data-trace-filter") || "all";
+          setTraceFilter(nextFilter);
+          return;
+        }
+        const actionBtn = target instanceof Element ? target.closest("[data-trace-action]") : null;
+        if (!actionBtn) return;
+        event.preventDefault();
+        const action = actionBtn.getAttribute("data-trace-action") || "";
+        if (action === "copy") {
+          await copyVisibleWorkingToClipboard();
+          return;
+        }
+        if (action === "load") {
+          loadVisibleWorkingIntoEditor();
+        }
+      }
+
+      function attachResponsePaneInteractionHandlers() {
+        if (!critiqueViewEl) return;
+        critiqueViewEl.addEventListener("scroll", handleTracePaneScroll);
+        critiqueViewEl.addEventListener("click", handleTracePaneClick);
+      }
+
       function replaceResponsePaneWithClone() {
         const currentEl = critiqueViewEl;
         if (!currentEl || !currentEl.parentNode || typeof currentEl.cloneNode !== "function") {
@@ -2503,6 +2537,7 @@
 
         currentEl.parentNode.replaceChild(replacement, currentEl);
         critiqueViewEl = replacement;
+        attachResponsePaneInteractionHandlers();
         return critiqueViewEl;
       }
 
@@ -9762,34 +9797,7 @@
         setRightView(rightViewSelect.value);
       });
 
-      if (critiqueViewEl) {
-        critiqueViewEl.addEventListener("scroll", () => {
-          if (rightView !== "trace") return;
-          traceAutoScroll = shouldStickTraceToBottom();
-        });
-        critiqueViewEl.addEventListener("click", async (event) => {
-          if (rightView !== "trace") return;
-          const target = event.target;
-          const filterBtn = target instanceof Element ? target.closest("[data-trace-filter]") : null;
-          if (filterBtn) {
-            event.preventDefault();
-            const nextFilter = filterBtn.getAttribute("data-trace-filter") || "all";
-            setTraceFilter(nextFilter);
-            return;
-          }
-          const actionBtn = target instanceof Element ? target.closest("[data-trace-action]") : null;
-          if (!actionBtn) return;
-          event.preventDefault();
-          const action = actionBtn.getAttribute("data-trace-action") || "";
-          if (action === "copy") {
-            await copyVisibleWorkingToClipboard();
-            return;
-          }
-          if (action === "load") {
-            loadVisibleWorkingIntoEditor();
-          }
-        });
-      }
+      attachResponsePaneInteractionHandlers();
 
       followSelect.addEventListener("change", () => {
         followLatest = followSelect.value !== "off";
