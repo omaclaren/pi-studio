@@ -61,6 +61,10 @@
       const sourceBadgeEl = document.getElementById("sourceBadge");
       const syncBadgeEl = document.getElementById("syncBadge");
       let critiqueViewEl = document.getElementById("critiqueView");
+      const responseActionsEl = document.getElementById("responseActions");
+      const responseWrapEl = responseActionsEl && typeof responseActionsEl.closest === "function"
+        ? responseActionsEl.closest(".response-wrap")
+        : null;
       const referenceBadgeEl = document.getElementById("referenceBadge");
       const editorViewSelect = document.getElementById("editorViewSelect");
       const rightViewSelect = document.getElementById("rightViewSelect");
@@ -179,6 +183,9 @@
       let latestCritiqueNotesNormalized = "";
       let responseHistory = [];
       let responseHistoryIndex = -1;
+      let traceState = null;
+      let traceAutoScroll = true;
+      let traceRenderRaf = null;
       let studioRunChainActive = false;
       let queuedSteeringCount = 0;
       let agentBusyFromServer = false;
@@ -229,6 +236,162 @@
           }
         }
         return changed;
+      }
+
+      function createEmptyTraceState() {
+        return {
+          runId: null,
+          requestId: null,
+          requestKind: null,
+          status: "idle",
+          startedAt: null,
+          updatedAt: null,
+          entries: [],
+        };
+      }
+
+      function normalizeTraceStatus(status) {
+        return status === "running" || status === "complete" ? status : "idle";
+      }
+
+      function normalizeTraceEntryStatus(status) {
+        return status === "streaming" || status === "pending" || status === "complete" || status === "error"
+          ? status
+          : "pending";
+      }
+
+      function normalizeTraceEntry(entry, fallbackIndex) {
+        if (!entry || typeof entry !== "object") return null;
+        if (entry.type === "assistant") {
+          return {
+            id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : ("trace-assistant-" + fallbackIndex),
+            type: "assistant",
+            startedAt: parseFiniteNumber(entry.startedAt) || Date.now(),
+            updatedAt: parseFiniteNumber(entry.updatedAt) || Date.now(),
+            thinking: typeof entry.thinking === "string" ? entry.thinking : "",
+            text: typeof entry.text === "string" ? entry.text : "",
+            status: normalizeTraceEntryStatus(entry.status),
+            stopReason: typeof entry.stopReason === "string" && entry.stopReason.trim() ? entry.stopReason.trim() : null,
+          };
+        }
+        if (entry.type === "tool") {
+          return {
+            id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : ("trace-tool-" + fallbackIndex),
+            type: "tool",
+            toolCallId: typeof entry.toolCallId === "string" ? entry.toolCallId : ("tool-" + fallbackIndex),
+            toolName: typeof entry.toolName === "string" ? entry.toolName : "tool",
+            label: parseNonEmptyString(entry.label),
+            argsSummary: parseNonEmptyString(entry.argsSummary),
+            output: typeof entry.output === "string" ? entry.output : "",
+            startedAt: parseFiniteNumber(entry.startedAt) || Date.now(),
+            updatedAt: parseFiniteNumber(entry.updatedAt) || Date.now(),
+            status: normalizeTraceEntryStatus(entry.status),
+            isError: Boolean(entry.isError),
+          };
+        }
+        return null;
+      }
+
+      function normalizeTraceState(raw) {
+        const fallback = createEmptyTraceState();
+        if (!raw || typeof raw !== "object") return fallback;
+        const entries = Array.isArray(raw.entries)
+          ? raw.entries.map((entry, index) => normalizeTraceEntry(entry, index)).filter(Boolean)
+          : [];
+        return {
+          runId: parseNonEmptyString(raw.runId),
+          requestId: parseNonEmptyString(raw.requestId),
+          requestKind: parseNonEmptyString(raw.requestKind),
+          status: normalizeTraceStatus(raw.status),
+          startedAt: parseFiniteNumber(raw.startedAt),
+          updatedAt: parseFiniteNumber(raw.updatedAt),
+          entries,
+        };
+      }
+
+      function ensureTraceState() {
+        if (!traceState) traceState = createEmptyTraceState();
+        return traceState;
+      }
+
+      function replaceTraceState(nextState) {
+        traceState = normalizeTraceState(nextState);
+        renderTraceViewIfActive();
+      }
+
+      function upsertTraceEntry(entry) {
+        const normalized = normalizeTraceEntry(entry, ensureTraceState().entries.length);
+        if (!normalized) return;
+        const state = ensureTraceState();
+        const index = state.entries.findIndex((candidate) => candidate.id === normalized.id);
+        if (index >= 0) {
+          state.entries[index] = normalized;
+        } else {
+          state.entries.push(normalized);
+        }
+        state.updatedAt = normalized.updatedAt;
+        renderTraceViewIfActive();
+      }
+
+      function appendTraceAssistantDelta(entryId, deltaKind, delta, updatedAt) {
+        if (typeof delta !== "string" || !delta) return;
+        const state = ensureTraceState();
+        const targetId = typeof entryId === "string" && entryId.trim() ? entryId.trim() : null;
+        let entry = targetId ? state.entries.find((candidate) => candidate.id === targetId) : null;
+        if (!entry || entry.type !== "assistant") {
+          entry = normalizeTraceEntry({
+            id: targetId || ("trace-assistant-live-" + Date.now()),
+            type: "assistant",
+            startedAt: updatedAt,
+            updatedAt,
+            thinking: "",
+            text: "",
+            status: "streaming",
+            stopReason: null,
+          }, state.entries.length);
+          if (!entry) return;
+          state.entries.push(entry);
+        }
+        if (deltaKind === "thinking") {
+          entry.thinking += delta;
+        } else {
+          entry.text += delta;
+        }
+        entry.status = "streaming";
+        entry.updatedAt = parseFiniteNumber(updatedAt) || Date.now();
+        state.updatedAt = entry.updatedAt;
+        renderTraceViewIfActive();
+      }
+
+      function updateTraceStatusFromMessage(message) {
+        if (!message || typeof message !== "object") return;
+        const state = ensureTraceState();
+        state.runId = parseNonEmptyString(message.runId) || state.runId;
+        if (Object.prototype.hasOwnProperty.call(message, "requestId")) {
+          state.requestId = parseNonEmptyString(message.requestId);
+        }
+        if (Object.prototype.hasOwnProperty.call(message, "requestKind")) {
+          state.requestKind = parseNonEmptyString(message.requestKind);
+        }
+        if (Object.prototype.hasOwnProperty.call(message, "startedAt")) {
+          state.startedAt = parseFiniteNumber(message.startedAt);
+        }
+        if (Object.prototype.hasOwnProperty.call(message, "updatedAt")) {
+          state.updatedAt = parseFiniteNumber(message.updatedAt);
+        }
+        if (Object.prototype.hasOwnProperty.call(message, "status")) {
+          state.status = normalizeTraceStatus(message.status);
+        }
+        renderTraceViewIfActive();
+      }
+
+      function renderTraceViewIfActive() {
+        if (rightView !== "trace") return;
+        if (traceRenderRaf !== null) return;
+        traceRenderRaf = window.requestAnimationFrame(() => {
+          traceRenderRaf = null;
+          refreshResponseUi();
+        });
       }
 
       contextTokens = parseFiniteNumber(document.body && document.body.dataset ? document.body.dataset.contextTokens : null);
@@ -412,6 +575,17 @@
         if (typeof message.label === "string") summary.label = message.label;
         if (Array.isArray(message.responseHistory)) summary.responseHistoryCount = message.responseHistory.length;
         if (Array.isArray(message.items)) summary.itemsCount = message.items.length;
+        if (message.traceState && typeof message.traceState === "object" && Array.isArray(message.traceState.entries)) {
+          summary.traceEntries = message.traceState.entries.length;
+          summary.traceStatus = message.traceState.status;
+        }
+        if (message.trace && typeof message.trace === "object" && Array.isArray(message.trace.entries)) {
+          summary.traceEntries = message.trace.entries.length;
+          summary.traceStatus = message.trace.status;
+        }
+        if (typeof message.entryId === "string") summary.entryId = message.entryId;
+        if (typeof message.deltaKind === "string") summary.deltaKind = message.deltaKind;
+        if (typeof message.delta === "string") summary.deltaLength = message.delta.length;
         if (typeof message.details === "object" && message.details !== null) summary.details = message.details;
         return summary;
       }
@@ -1419,6 +1593,26 @@
       function updateReferenceBadge() {
         if (!referenceBadgeEl) return;
 
+        if (rightView === "trace") {
+          const state = traceState || createEmptyTraceState();
+          const entryCount = Array.isArray(state.entries) ? state.entries.length : 0;
+          const time = formatReferenceTime(state.startedAt || state.updatedAt);
+          const kindLabel = state.requestKind === "critique"
+            ? "critique"
+            : (state.requestKind === "direct"
+              ? "run"
+              : (state.requestKind ? state.requestKind : "activity"));
+          if (state.status === "idle") {
+            referenceBadgeEl.textContent = "Trace: no active run yet";
+            return;
+          }
+          const statusLabel = state.status === "running" ? "live" : "complete";
+          referenceBadgeEl.textContent = "Trace: " + kindLabel + " · " + statusLabel
+            + (entryCount ? (" · " + entryCount + " entr" + (entryCount === 1 ? "y" : "ies")) : "")
+            + (time ? (" · " + time) : "");
+          return;
+        }
+
         if (rightView === "editor-preview") {
           const hasResponse = Boolean(latestResponseMarkdown && latestResponseMarkdown.trim());
           if (hasResponse) {
@@ -1526,6 +1720,12 @@
 
       function updateSyncBadge(normalizedEditorText) {
         if (!syncBadgeEl) return;
+
+        if (rightView === "trace") {
+          syncBadgeEl.hidden = true;
+          syncBadgeEl.classList.remove("sync");
+          return;
+        }
 
         const showingThinking = rightView === "thinking";
         const hasComparableContent = showingThinking
@@ -2702,7 +2902,115 @@
         }, delay);
       }
 
+      function shouldStickTraceToBottom() {
+        if (!critiqueViewEl) return true;
+        const remaining = critiqueViewEl.scrollHeight - critiqueViewEl.scrollTop - critiqueViewEl.clientHeight;
+        return remaining < 56;
+      }
+
+      function buildTracePanelHtml() {
+        const state = traceState || createEmptyTraceState();
+        const entries = Array.isArray(state.entries) ? state.entries : [];
+        const started = formatReferenceTime(state.startedAt || state.updatedAt);
+        const kindLabel = state.requestKind === "critique"
+          ? "Critique"
+          : (state.requestKind === "direct"
+            ? "Run"
+            : (state.requestKind ? String(state.requestKind) : "Session"));
+        const statusLabel = state.status === "running"
+          ? "Live"
+          : (state.status === "complete" ? "Complete" : "Idle");
+        const summary = "<div class='trace-summary'>"
+          + "<span class='trace-summary-badge'>" + escapeHtml(kindLabel + " trace") + "</span>"
+          + "<span class='trace-summary-status trace-status-" + escapeHtml(String(state.status || "idle")) + "'>" + escapeHtml(statusLabel) + "</span>"
+          + (started ? ("<span class='trace-summary-meta'>Started " + escapeHtml(started) + "</span>") : "")
+          + (state.requestId ? ("<span class='trace-summary-meta'>Request " + escapeHtml(state.requestId.slice(0, 8)) + "</span>") : "")
+          + "</div>";
+
+        if (!entries.length) {
+          const emptyMessage = state.status === "running"
+            ? "Waiting for the first model or tool update…"
+            : "No live trace yet. Start a run or critique to watch working details here.";
+          return "<div class='trace-panel'>" + summary + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
+        }
+
+        const cards = entries.map((entry) => {
+          if (entry.type === "assistant") {
+            const sections = [];
+            if (entry.thinking) {
+              sections.push(
+                "<div class='trace-section'>"
+                + "<div class='trace-section-label'>Thinking</div>"
+                + "<pre class='plain-markdown trace-output'>" + escapeHtml(entry.thinking) + "</pre>"
+                + "</div>"
+              );
+            }
+            if (entry.text) {
+              sections.push(
+                "<div class='trace-section'>"
+                + "<div class='trace-section-label'>Response</div>"
+                + "<pre class='plain-markdown trace-output'>" + escapeHtml(entry.text) + "</pre>"
+                + "</div>"
+              );
+            }
+            if (!sections.length) {
+              sections.push("<div class='trace-empty-inline'>Waiting for streamed content…</div>");
+            }
+            return "<article class='trace-card trace-card-assistant'>"
+              + "<div class='trace-card-header'>"
+              + "<span class='trace-kind-badge'>Assistant</span>"
+              + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
+              + "<span class='trace-entry-status trace-entry-status-" + escapeHtml(entry.status) + "'>" + escapeHtml(entry.status) + "</span>"
+              + (entry.stopReason ? ("<span class='trace-card-meta'>stop: " + escapeHtml(entry.stopReason) + "</span>") : "")
+              + "</div>"
+              + sections.join("")
+              + "</article>";
+          }
+
+          const title = entry.label || entry.toolName || "tool";
+          const argsSummary = entry.argsSummary
+            ? "<div class='trace-section'><div class='trace-section-label'>Input</div><pre class='plain-markdown trace-output'>" + escapeHtml(entry.argsSummary) + "</pre></div>"
+            : "";
+          const output = entry.output
+            ? "<div class='trace-section'><div class='trace-section-label'>Output</div><pre class='plain-markdown trace-output'>" + escapeHtml(entry.output) + "</pre></div>"
+            : "<div class='trace-empty-inline'>No output yet.</div>";
+          return "<article class='trace-card trace-card-tool'>"
+            + "<div class='trace-card-header'>"
+            + "<span class='trace-kind-badge'>" + escapeHtml(entry.toolName || "tool") + "</span>"
+            + "<span class='trace-card-title'>" + escapeHtml(title) + "</span>"
+            + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
+            + "<span class='trace-entry-status trace-entry-status-" + escapeHtml(entry.status) + "'>" + escapeHtml(entry.isError ? "error" : entry.status) + "</span>"
+            + "</div>"
+            + argsSummary
+            + output
+            + "</article>";
+        }).join("");
+
+        return "<div class='trace-panel'>" + summary + "<div class='trace-list'>" + cards + "</div></div>";
+      }
+
+      function renderTraceView() {
+        if (!critiqueViewEl) return;
+        const shouldStick = traceAutoScroll || shouldStickTraceToBottom();
+        const previousScrollTop = critiqueViewEl.scrollTop;
+        finishPreviewRender(critiqueViewEl);
+        critiqueViewEl.innerHTML = buildTracePanelHtml();
+        critiqueViewEl.classList.remove("response-scroll-resetting");
+        if (shouldStick) {
+          critiqueViewEl.scrollTop = critiqueViewEl.scrollHeight;
+          traceAutoScroll = true;
+        } else {
+          critiqueViewEl.scrollTop = previousScrollTop;
+        }
+        scheduleResponsePaneRepaintNudge();
+      }
+
       function renderActiveResult() {
+        if (rightView === "trace") {
+          renderTraceView();
+          return;
+        }
+
         if (rightView === "editor-preview") {
           const editorText = prepareEditorTextForPreview(sourceTextEl.value || "");
           if (!editorText.trim()) {
@@ -2783,6 +3091,11 @@
         const thinkingLoaded = hasThinking && normalizedEditor === latestResponseThinkingNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
         const showingThinking = rightView === "thinking";
+        const showingTrace = rightView === "trace";
+
+        if (responseWrapEl) {
+          responseWrapEl.hidden = showingTrace;
+        }
 
         const critiqueNotes = isCritiqueResponse ? latestCritiqueNotes : "";
         const critiqueNotesLoaded = Boolean(critiqueNotes) && normalizedEditor === latestCritiqueNotesNormalized;
@@ -2822,7 +3135,9 @@
         const canExportPdf = rightPaneShowsPreview && Boolean(String(exportText || "").trim());
         if (exportPdfBtn) {
           exportPdfBtn.disabled = uiBusy || pdfExportInProgress || !canExportPdf;
-          if (rightView === "thinking") {
+          if (rightView === "trace") {
+            exportPdfBtn.title = "Trace view does not support PDF export.";
+          } else if (rightView === "thinking") {
             exportPdfBtn.title = "Thinking view does not support PDF export yet.";
           } else if (rightView === "markdown") {
             exportPdfBtn.title = "Switch right pane to Response (Preview) or Editor (Preview) to export PDF.";
@@ -3052,12 +3367,18 @@
       }
 
       function setRightView(nextView) {
+        const previousView = rightView;
         rightView = nextView === "preview"
           ? "preview"
           : (nextView === "editor-preview"
             ? "editor-preview"
-            : (nextView === "thinking" ? "thinking" : "markdown"));
+            : (nextView === "thinking"
+              ? "thinking"
+              : (nextView === "trace" ? "trace" : "markdown")));
         rightViewSelect.value = rightView;
+        if (rightView === "trace" && previousView !== "trace") {
+          traceAutoScroll = true;
+        }
 
         if (rightView !== "editor-preview" && responseEditorPreviewTimer) {
           window.clearTimeout(responseEditorPreviewTimer);
@@ -8580,6 +8901,10 @@
             }
           }
 
+          if (message.traceState) {
+            replaceTraceState(message.traceState);
+          }
+
           let appliedHistory = false;
           if (Array.isArray(message.responseHistory)) {
             appliedHistory = setResponseHistory(message.responseHistory, {
@@ -8623,6 +8948,26 @@
             refreshResponseUi();
             setStatus(getIdleStatus());
           }
+          return;
+        }
+
+        if (message.type === "trace_reset") {
+          replaceTraceState(message.trace);
+          return;
+        }
+
+        if (message.type === "trace_status") {
+          updateTraceStatusFromMessage(message);
+          return;
+        }
+
+        if (message.type === "trace_entry_upsert") {
+          upsertTraceEntry(message.entry);
+          return;
+        }
+
+        if (message.type === "trace_assistant_delta") {
+          appendTraceAssistantDelta(message.entryId, message.deltaKind, message.delta, message.updatedAt);
           return;
         }
 
@@ -9322,6 +9667,13 @@
       rightViewSelect.addEventListener("change", () => {
         setRightView(rightViewSelect.value);
       });
+
+      if (critiqueViewEl) {
+        critiqueViewEl.addEventListener("scroll", () => {
+          if (rightView !== "trace") return;
+          traceAutoScroll = shouldStickTraceToBottom();
+        });
+      }
 
       followSelect.addEventListener("change", () => {
         followLatest = followSelect.value !== "off";

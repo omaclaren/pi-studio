@@ -133,6 +133,46 @@ interface StudioPersistentState {
 	reviewNotesByDocument: Record<string, PersistedStudioReviewNote[]>;
 }
 
+type StudioTraceRunStatus = "idle" | "running" | "complete";
+type StudioTraceEntryStatus = "streaming" | "pending" | "complete" | "error";
+
+interface StudioTraceAssistantEntry {
+	id: string;
+	type: "assistant";
+	startedAt: number;
+	updatedAt: number;
+	thinking: string;
+	text: string;
+	status: StudioTraceEntryStatus;
+	stopReason: string | null;
+}
+
+interface StudioTraceToolEntry {
+	id: string;
+	type: "tool";
+	toolCallId: string;
+	toolName: string;
+	label: string | null;
+	argsSummary: string | null;
+	output: string;
+	startedAt: number;
+	updatedAt: number;
+	status: StudioTraceEntryStatus;
+	isError: boolean;
+}
+
+type StudioTraceEntry = StudioTraceAssistantEntry | StudioTraceToolEntry;
+
+interface StudioTraceState {
+	runId: string | null;
+	requestId: string | null;
+	requestKind: string | null;
+	status: StudioTraceRunStatus;
+	startedAt: number | null;
+	updatedAt: number | null;
+	entries: StudioTraceEntry[];
+}
+
 interface HelloMessage {
 	type: "hello";
 }
@@ -5710,6 +5750,72 @@ function deriveToolActivityLabel(toolName: string, args: unknown): string | null
 	return normalizeActivityLabel(`Running ${normalizedTool || "tool"}`);
 }
 
+function createEmptyStudioTraceState(): StudioTraceState {
+	return {
+		runId: null,
+		requestId: null,
+		requestKind: null,
+		status: "idle",
+		startedAt: null,
+		updatedAt: null,
+		entries: [],
+	};
+}
+
+function formatStudioTraceOutput(result: unknown): string {
+	if (result == null) return "";
+	if (typeof result === "string") return result;
+	if (Array.isArray(result)) {
+		return result.map((item) => formatStudioTraceOutput(item)).filter(Boolean).join("\n");
+	}
+	if (typeof result === "object") {
+		const payload = result as { content?: Array<{ type?: string; text?: string }> };
+		if (Array.isArray(payload.content)) {
+			return payload.content
+				.map((block) => {
+					if (block && block.type === "text" && typeof block.text === "string") return block.text;
+					try {
+						return JSON.stringify(block, null, 2);
+					} catch {
+						return String(block);
+					}
+				})
+				.filter(Boolean)
+				.join("\n");
+		}
+		try {
+			return JSON.stringify(result, null, 2);
+		} catch {
+			return String(result);
+		}
+	}
+	return String(result);
+}
+
+function summarizeStudioTraceToolArgs(toolName: string, args: unknown): string | null {
+	const normalizedTool = String(toolName || "").trim().toLowerCase();
+	const payload = (args && typeof args === "object") ? (args as Record<string, unknown>) : {};
+	const trimSummary = (value: string | null | undefined): string | null => {
+		const compact = normalizeActivityLabel(String(value || "").replace(/\s+/g, " ").trim());
+		return compact && compact.length <= 220 ? compact : (compact ? `${compact.slice(0, 217).trimEnd()}…` : null);
+	};
+
+	if (normalizedTool === "bash") {
+		return trimSummary(typeof payload.command === "string" ? payload.command : "");
+	}
+	if (normalizedTool === "read" || normalizedTool === "write" || normalizedTool === "edit") {
+		return trimSummary(typeof payload.path === "string" ? payload.path : "");
+	}
+	if (normalizedTool === "repl_send") {
+		return trimSummary(typeof payload.code === "string" ? payload.code : "");
+	}
+	try {
+		return trimSummary(JSON.stringify(args, null, 2));
+	} catch {
+		return trimSummary(String(args ?? ""));
+	}
+}
+
 function isAllowedOrigin(_origin: string | undefined, _port: number): boolean {
 	// For local-only studio, token auth is the primary guard. In practice,
 	// browser origin headers can vary (or be omitted) across wrappers/browsers,
@@ -6160,6 +6266,7 @@ ${cssVarsBlock}
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
             <option value="thinking">Thinking (Raw)</option>
+            <option value="trace">Trace</option>
           </select>
         </div>
         <div class="section-header-actions">
@@ -6266,6 +6373,9 @@ export default function (pi: ExtensionAPI) {
 	let studioResponseHistory: StudioResponseHistoryItem[] = [];
 	let latestSessionUserPrompt: string | null = null;
 	let pendingTurnPrompt: string | null = null;
+	let studioTraceState: StudioTraceState = createEmptyStudioTraceState();
+	let activeStudioTraceAssistantEntryId: string | null = null;
+	const studioTraceToolEntryIds = new Map<string, string>();
 	let contextUsageSnapshot: StudioContextUsageSnapshot = {
 		tokens: null,
 		contextWindow: null,
@@ -6710,6 +6820,184 @@ export default function (pi: ExtensionAPI) {
 		});
 	};
 
+	const broadcastStudioTraceReset = () => {
+		broadcast({
+			type: "trace_reset",
+			trace: studioTraceState,
+		});
+	};
+
+	const broadcastStudioTraceStatus = () => {
+		broadcast({
+			type: "trace_status",
+			runId: studioTraceState.runId,
+			requestId: studioTraceState.requestId,
+			requestKind: studioTraceState.requestKind,
+			status: studioTraceState.status,
+			startedAt: studioTraceState.startedAt,
+			updatedAt: studioTraceState.updatedAt,
+		});
+	};
+
+	const upsertStudioTraceEntry = (entry: StudioTraceEntry) => {
+		const entryIndex = studioTraceState.entries.findIndex((candidate) => candidate.id === entry.id);
+		if (entryIndex >= 0) {
+			studioTraceState.entries[entryIndex] = entry;
+		} else {
+			studioTraceState.entries.push(entry);
+		}
+		studioTraceState.updatedAt = entry.updatedAt;
+		broadcast({
+			type: "trace_entry_upsert",
+			entry,
+			runId: studioTraceState.runId,
+		});
+	};
+
+	const resetStudioTraceForRun = () => {
+		const now = Date.now();
+		studioTraceState = {
+			runId: randomUUID(),
+			requestId: activeRequest?.id ?? null,
+			requestKind: activeRequest?.kind ?? null,
+			status: "running",
+			startedAt: now,
+			updatedAt: now,
+			entries: [],
+		};
+		activeStudioTraceAssistantEntryId = null;
+		studioTraceToolEntryIds.clear();
+		broadcastStudioTraceReset();
+	};
+
+	const setStudioTraceRunStatus = (status: StudioTraceRunStatus) => {
+		if (studioTraceState.runId == null && status !== "idle") {
+			resetStudioTraceForRun();
+		}
+		studioTraceState.status = status;
+		studioTraceState.requestId = activeRequest?.id ?? studioTraceState.requestId ?? null;
+		studioTraceState.requestKind = activeRequest?.kind ?? studioTraceState.requestKind ?? null;
+		studioTraceState.updatedAt = Date.now();
+		broadcastStudioTraceStatus();
+	};
+
+	const ensureStudioTraceAssistantEntry = (): StudioTraceAssistantEntry => {
+		if (activeStudioTraceAssistantEntryId) {
+			const existing = studioTraceState.entries.find((entry) => entry.id === activeStudioTraceAssistantEntryId);
+			if (existing && existing.type === "assistant") return existing;
+		}
+		if (studioTraceState.runId == null || studioTraceState.status === "idle") {
+			resetStudioTraceForRun();
+		}
+		const now = Date.now();
+		const entry: StudioTraceAssistantEntry = {
+			id: randomUUID(),
+			type: "assistant",
+			startedAt: now,
+			updatedAt: now,
+			thinking: "",
+			text: "",
+			status: "streaming",
+			stopReason: null,
+		};
+		activeStudioTraceAssistantEntryId = entry.id;
+		upsertStudioTraceEntry(entry);
+		return entry;
+	};
+
+	const appendStudioTraceAssistantDelta = (deltaKind: "thinking" | "text", delta: string) => {
+		if (!delta) return;
+		const entry = ensureStudioTraceAssistantEntry();
+		if (deltaKind === "thinking") {
+			entry.thinking += delta;
+		} else {
+			entry.text += delta;
+		}
+		entry.status = "streaming";
+		entry.updatedAt = Date.now();
+		studioTraceState.updatedAt = entry.updatedAt;
+		broadcast({
+			type: "trace_assistant_delta",
+			entryId: entry.id,
+			deltaKind,
+			delta,
+			updatedAt: entry.updatedAt,
+			runId: studioTraceState.runId,
+		});
+	};
+
+	const finalizeStudioTraceAssistantEntry = (text: string | null, thinking: string | null, stopReason?: string | null) => {
+		const now = Date.now();
+		let entry = activeStudioTraceAssistantEntryId
+			? studioTraceState.entries.find((candidate) => candidate.id === activeStudioTraceAssistantEntryId)
+			: null;
+		if (!entry || entry.type !== "assistant") {
+			if (!(text && text.trim()) && !(thinking && thinking.trim())) {
+				activeStudioTraceAssistantEntryId = null;
+				return;
+			}
+			entry = ensureStudioTraceAssistantEntry();
+		}
+		entry.text = typeof text === "string" ? text : entry.text;
+		entry.thinking = typeof thinking === "string" ? thinking : entry.thinking;
+		entry.stopReason = typeof stopReason === "string" && stopReason.trim() ? stopReason : null;
+		entry.status = "complete";
+		entry.updatedAt = now;
+		upsertStudioTraceEntry(entry);
+		activeStudioTraceAssistantEntryId = null;
+	};
+
+	const ensureStudioTraceToolEntry = (toolCallId: string, toolName: string, args: unknown): StudioTraceToolEntry => {
+		const existingId = studioTraceToolEntryIds.get(toolCallId);
+		if (existingId) {
+			const existing = studioTraceState.entries.find((entry) => entry.id === existingId);
+			if (existing && existing.type === "tool") return existing;
+		}
+		if (studioTraceState.runId == null || studioTraceState.status === "idle") {
+			resetStudioTraceForRun();
+		}
+		const now = Date.now();
+		const entry: StudioTraceToolEntry = {
+			id: randomUUID(),
+			type: "tool",
+			toolCallId,
+			toolName,
+			label: deriveToolActivityLabel(toolName, args),
+			argsSummary: summarizeStudioTraceToolArgs(toolName, args),
+			output: "",
+			startedAt: now,
+			updatedAt: now,
+			status: "pending",
+			isError: false,
+		};
+		studioTraceToolEntryIds.set(toolCallId, entry.id);
+		upsertStudioTraceEntry(entry);
+		return entry;
+	};
+
+	const updateStudioTraceToolEntry = (
+		toolCallId: string,
+		toolName: string,
+		args: unknown,
+		output: string,
+		status: StudioTraceEntryStatus,
+		isError: boolean,
+	) => {
+		const entry = ensureStudioTraceToolEntry(toolCallId, toolName, args);
+		entry.output = output;
+		entry.status = status;
+		entry.isError = isError;
+		entry.updatedAt = Date.now();
+		upsertStudioTraceEntry(entry);
+	};
+
+	const clearStudioTrace = () => {
+		studioTraceState = createEmptyStudioTraceState();
+		activeStudioTraceAssistantEntryId = null;
+		studioTraceToolEntryIds.clear();
+		broadcastStudioTraceReset();
+	};
+
 	const setTerminalActivity = (phase: TerminalActivityPhase, toolName?: string | null, label?: string | null) => {
 		const nextPhase: TerminalActivityPhase =
 			phase === "running" || phase === "tool" || phase === "responding"
@@ -7071,6 +7359,7 @@ export default function (pi: ExtensionAPI) {
 				queuedSteeringCount: getQueuedStudioSteeringCount(),
 				lastResponse: lastStudioResponse,
 				responseHistory: studioResponseHistory,
+				traceState: studioTraceState,
 				initialDocument: initialStudioDocument,
 			});
 			return;
@@ -8363,6 +8652,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", async () => {
 		agentBusy = true;
+		resetStudioTraceForRun();
 		emitDebugEvent("agent_start", { activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
 		setTerminalActivity("running");
 	});
@@ -8379,12 +8669,33 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_execution_start", async (event) => {
 		if (!agentBusy) return;
 		const label = deriveToolActivityLabel(event.toolName, event.args);
+		ensureStudioTraceToolEntry(event.toolCallId, event.toolName, event.args);
 		emitDebugEvent("tool_execution_start", { toolName: event.toolName, label, activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
 		setTerminalActivity("tool", event.toolName, label);
 	});
 
+	pi.on("tool_execution_update", async (event) => {
+		if (!agentBusy) return;
+		updateStudioTraceToolEntry(
+			event.toolCallId,
+			event.toolName,
+			event.args,
+			formatStudioTraceOutput(event.partialResult),
+			"streaming",
+			false,
+		);
+	});
+
 	pi.on("tool_execution_end", async (event) => {
 		if (!agentBusy) return;
+		updateStudioTraceToolEntry(
+			event.toolCallId,
+			event.toolName,
+			undefined,
+			formatStudioTraceOutput(event.result),
+			event.isError ? "error" : "complete",
+			Boolean(event.isError),
+		);
 		emitDebugEvent("tool_execution_end", { toolName: event.toolName, activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
 		// Keep tool phase visible until the next tool call, assistant response phase,
 		// or agent_end. This avoids tool labels flashing too quickly to read.
@@ -8395,9 +8706,23 @@ export default function (pi: ExtensionAPI) {
 		emitDebugEvent("message_start", { role: role ?? "", activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
 		if (role === "assistant") {
 			persistPendingStudioPromptMetadata();
+			ensureStudioTraceAssistantEntry();
 		}
 		if (agentBusy && role === "assistant") {
 			setTerminalActivity("responding");
+		}
+	});
+
+	pi.on("message_update", async (event) => {
+		if (!agentBusy) return;
+		const deltaEvent = event.assistantMessageEvent as { type?: string; delta?: string } | undefined;
+		if (!deltaEvent || typeof deltaEvent.delta !== "string" || !deltaEvent.delta) return;
+		if (deltaEvent.type === "thinking_delta") {
+			appendStudioTraceAssistantDelta("thinking", deltaEvent.delta);
+			return;
+		}
+		if (deltaEvent.type === "text_delta") {
+			appendStudioTraceAssistantDelta("text", deltaEvent.delta);
 		}
 	});
 
@@ -8439,6 +8764,7 @@ export default function (pi: ExtensionAPI) {
 
 		// Assistant is handing off to tool calls; request is still in progress.
 		if (stopReason === "toolUse") {
+			finalizeStudioTraceAssistantEntry(markdown, thinking, stopReason);
 			emitDebugEvent("message_end_tool_use", {
 				role,
 				activeRequestId: activeRequest?.id ?? null,
@@ -8447,6 +8773,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		finalizeStudioTraceAssistantEntry(markdown, thinking, stopReason);
 		if (!markdown) return;
 
 		if (suppressedStudioResponse) {
@@ -8561,6 +8888,7 @@ export default function (pi: ExtensionAPI) {
 		});
 		clearStudioDirectRunState();
 		setTerminalActivity("idle");
+		setStudioTraceRunStatus("complete");
 		if (activeRequest) {
 			const requestId = activeRequest.id;
 			broadcast({
@@ -8584,6 +8912,7 @@ export default function (pi: ExtensionAPI) {
 		clearPendingStudioCompletion();
 		clearPreparedPdfExports();
 		clearCompactionState();
+		clearStudioTrace();
 		setTerminalActivity("idle");
 		await stopServer();
 	});
