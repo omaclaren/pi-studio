@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.53] — 2026-04-10
+
 ### Added
 - Studio now includes a live right-pane **Working** view for following current model/tool activity as it streams.
 - **Working** includes `All` / `Thinking` / `Tools` filters plus **Load visible into editor** and **Copy visible** actions.
