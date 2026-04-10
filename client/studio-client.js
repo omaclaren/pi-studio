@@ -1603,11 +1603,11 @@
               ? "run"
               : (state.requestKind ? state.requestKind : "activity"));
           if (state.status === "idle") {
-            referenceBadgeEl.textContent = "Trace: no active run yet";
+            referenceBadgeEl.textContent = "Working: no active run yet";
             return;
           }
           const statusLabel = state.status === "running" ? "live" : "complete";
-          referenceBadgeEl.textContent = "Trace: " + kindLabel + " · " + statusLabel
+          referenceBadgeEl.textContent = "Working: " + kindLabel + " · " + statusLabel
             + (entryCount ? (" · " + entryCount + " entr" + (entryCount === 1 ? "y" : "ies")) : "")
             + (time ? (" · " + time) : "");
           return;
@@ -2921,7 +2921,7 @@
           ? "Live"
           : (state.status === "complete" ? "Complete" : "Idle");
         const summary = "<div class='trace-summary'>"
-          + "<span class='trace-summary-badge'>" + escapeHtml(kindLabel + " trace") + "</span>"
+          + "<span class='trace-summary-badge'>" + escapeHtml(kindLabel + " working") + "</span>"
           + "<span class='trace-summary-status trace-status-" + escapeHtml(String(state.status || "idle")) + "'>" + escapeHtml(statusLabel) + "</span>"
           + (started ? ("<span class='trace-summary-meta'>Started " + escapeHtml(started) + "</span>") : "")
           + (state.requestId ? ("<span class='trace-summary-meta'>Request " + escapeHtml(state.requestId.slice(0, 8)) + "</span>") : "")
@@ -2930,7 +2930,7 @@
         if (!entries.length) {
           const emptyMessage = state.status === "running"
             ? "Waiting for the first model or tool update…"
-            : "No live trace yet. Start a run or critique to watch working details here.";
+            : "No live working view yet. Start a run or critique to watch working details here.";
           return "<div class='trace-panel'>" + summary + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
         }
 
@@ -3136,7 +3136,7 @@
         if (exportPdfBtn) {
           exportPdfBtn.disabled = uiBusy || pdfExportInProgress || !canExportPdf;
           if (rightView === "trace") {
-            exportPdfBtn.title = "Trace view does not support PDF export.";
+            exportPdfBtn.title = "Working view does not support PDF export.";
           } else if (rightView === "thinking") {
             exportPdfBtn.title = "Thinking view does not support PDF export yet.";
           } else if (rightView === "markdown") {
