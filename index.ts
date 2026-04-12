@@ -5823,6 +5823,23 @@ function isAllowedOrigin(_origin: string | undefined, _port: number): boolean {
 	return true;
 }
 
+function getStudioListenHost(): string {
+	return process.env.PI_STUDIO_HOST ?? "127.0.0.1";
+}
+function getStudioHost(): string {
+	// Explicit override takes priority.
+	const override = process.env.PI_STUDIO_HOST;
+	if (override && override !== "0.0.0.0") return override;
+	// In SSH environments, SSH_CONNECTION contains: client_ip client_port server_ip server_port
+	// Use the server IP so the URL is reachable from outside.
+	const sshConn = process.env.SSH_CONNECTION;
+	if (sshConn) {
+		const parts = sshConn.trim().split(/\s+/);
+		if (parts.length >= 3 && parts[2]) return parts[2];
+	}
+	return override ?? "127.0.0.1";
+}
+
 function normalizeStudioUiMode(raw: string | null | undefined): StudioUiMode {
 	return raw === "editor-only" ? "editor-only" : "full";
 }
@@ -5839,7 +5856,7 @@ function buildStudioUrl(
 	if (doc?.label) params.set("docLabel", doc.label);
 	if (doc?.path) params.set("docPath", doc.path);
 	if (doc?.draftId) params.set("draftId", doc.draftId);
-	return `http://127.0.0.1:${port}/?${params.toString()}`;
+	return `http://${getStudioHost()}:${port}/?${params.toString()}`;
 }
 
 function resolveRequestedStudioDocumentFromUrl(
@@ -8517,7 +8534,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			server.once("error", onError);
 			server.once("listening", onListening);
-			server.listen(0, "127.0.0.1");
+			server.listen(0, getStudioListenHost());
 		});
 
 		const address = server.address();
@@ -9054,10 +9071,10 @@ export default function (pi: ExtensionAPI) {
 			} else {
 				ctx.ui.notify(`Opened ${openedLabel} with blank editor.`, "info");
 			}
-			ctx.ui.notify(`Studio URL: ${url}`, "info");
-		} catch (error) {
-			ctx.ui.notify(`Failed to open browser: ${error instanceof Error ? error.message : String(error)}`, "error");
+		} catch {
+			// Browser open failed (e.g. no xdg-open in SSH env) — not a blocking error
 		} finally {
+			ctx.ui.notify(`Studio URL: ${url}`, "info");
 			void maybeNotifyUpdateAvailable(ctx);
 		}
 	};
