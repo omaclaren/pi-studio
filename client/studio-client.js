@@ -5309,6 +5309,7 @@
           || kind === "blockquote"
           || kind === "list"
           || kind === "math"
+          || kind === "code"
           || kind === "code-line"
           || kind === "diff-line"
           || kind === "text-line";
@@ -6422,7 +6423,7 @@
 
       function buildPreviewSelectionDisplayMap(blockText, kind) {
         const body = buildPreviewSelectionSourceBody(blockText, kind);
-        if (kind === "code-line" || kind === "diff-line" || kind === "text-line") {
+        if (kind === "code" || kind === "code-line" || kind === "diff-line" || kind === "text-line") {
           return buildLiteralPreviewDisplayMap(body.text, body.rawOffsets);
         }
         const inlineMap = buildPreviewInlineDisplayMap(body.text, body.rawOffsets);
@@ -6694,6 +6695,15 @@
           };
         }
 
+        function getChunkText(startLineIndex, endLineIndex) {
+          const safeStartLine = Math.max(0, Math.min(startLineIndex, Math.max(0, lines.length - 1)));
+          const safeEndLine = Math.max(safeStartLine, Math.min(endLineIndex, Math.max(0, lines.length - 1)));
+          return source.slice(
+            lineOffsets[safeStartLine] || 0,
+            (lineOffsets[safeEndLine] || 0) + getLine(safeEndLine).length,
+          );
+        }
+
         const blocks = [];
         let index = 0;
 
@@ -6826,7 +6836,11 @@
             }
             endParagraph = i;
           }
-          blocks.push(makeBlock("paragraph", index, endParagraph));
+          const paragraphText = getChunkText(index, endParagraph);
+          const markdownFigureCaption = annotationHelpers && typeof annotationHelpers.extractStandaloneMarkdownImageCaptionText === "function"
+            ? annotationHelpers.extractStandaloneMarkdownImageCaptionText(paragraphText)
+            : null;
+          blocks.push(makeBlock(markdownFigureCaption != null ? "figure" : "paragraph", index, endParagraph));
           index = endParagraph + 1;
         }
 
@@ -7145,6 +7159,42 @@
         });
       }
 
+      function isPreviewMediaOnlyParagraphElement(element) {
+        if (!element || !(element instanceof Element)) return false;
+        if ((element.tagName ? element.tagName.toUpperCase() : "") !== "P") return false;
+
+        let hasMedia = false;
+        for (const childNode of Array.from(element.childNodes || [])) {
+          if (!childNode) continue;
+          if (childNode.nodeType === Node.TEXT_NODE) {
+            if (normalizeVisiblePreviewText(childNode.nodeValue || "")) {
+              return false;
+            }
+            continue;
+          }
+          if (!(childNode instanceof Element)) continue;
+
+          const childTag = childNode.tagName ? childNode.tagName.toUpperCase() : "";
+          if (childTag === "BR") continue;
+          if (childTag === "IMG" || childTag === "EMBED" || childTag === "OBJECT" || childTag === "IFRAME" || childTag === "CANVAS") {
+            hasMedia = true;
+            continue;
+          }
+
+          const nestedMedia = typeof childNode.querySelector === "function"
+            ? childNode.querySelector("img, embed, object, iframe, canvas")
+            : null;
+          if (nestedMedia && !buildNormalizedPreviewSearchText(childNode)) {
+            hasMedia = true;
+            continue;
+          }
+
+          return false;
+        }
+
+        return hasMedia;
+      }
+
       function getPreviewCommentTargetKind(element) {
         if (!element || !(element instanceof Element)) return "";
         if (element.classList && element.classList.contains("studio-mathjax-fallback-display")) {
@@ -7155,12 +7205,12 @@
         }
         const tag = element.tagName ? element.tagName.toUpperCase() : "";
         if (/^H[1-6]$/.test(tag)) return "heading";
-        if (tag === "P") return "paragraph";
+        if (tag === "P") return isPreviewMediaOnlyParagraphElement(element) ? "figure" : "paragraph";
         if (tag === "FIGURE") {
           if (element.classList && element.classList.contains("studio-algorithm-block")) {
             return "algorithm";
           }
-          return editorLanguage === "latex" ? "figure" : "";
+          return "figure";
         }
         if (tag === "DIV" && element.classList) {
           if (element.classList.contains("studio-display-equation")) {
@@ -7267,6 +7317,14 @@
           const match = blockText.trim().match(/^\\(newpage|pagebreak|clearpage)/i);
           return match ? String(match[1] || "").toLowerCase() : "page-break";
         }
+        if (sourceBlock.kind === "figure") {
+          const figureCaption = annotationHelpers && typeof annotationHelpers.extractStandaloneMarkdownImageCaptionText === "function"
+            ? annotationHelpers.extractStandaloneMarkdownImageCaptionText(blockText)
+            : null;
+          if (figureCaption != null) {
+            return normalizeVisiblePreviewText(figureCaption);
+          }
+        }
         if (supportsPreviewSelectionCommentsForBlockKind(sourceBlock.kind)) {
           return normalizeVisiblePreviewText(buildPreviewSelectionDisplayMap(blockText, sourceBlock.kind).text);
         }
@@ -7287,12 +7345,33 @@
         return normalizeVisiblePreviewText(blockText);
       }
 
+      function getPreviewFigureSearchText(element) {
+        if (!element || !(element instanceof Element)) return "";
+        const visibleText = buildNormalizedPreviewSearchText(element);
+        if (visibleText) return visibleText;
+
+        const imageNodes = (element.tagName ? element.tagName.toUpperCase() : "") === "IMG"
+          ? [element]
+          : (typeof element.querySelectorAll === "function" ? Array.from(element.querySelectorAll("img[alt], img[title]")) : []);
+        const altText = imageNodes
+          .filter((imageEl) => imageEl instanceof Element)
+          .map((imageEl) => imageEl.getAttribute("alt") || imageEl.getAttribute("title") || "")
+          .map((text) => normalizeVisiblePreviewText(text))
+          .filter(Boolean)
+          .join(" ");
+        return altText;
+      }
+
       function getNormalizedPreviewCommentTargetText(targetEntry) {
         if (!targetEntry) return "";
         if (typeof targetEntry.normalizedText === "string") return targetEntry.normalizedText;
         if (targetEntry.kind === "page-break") {
           const element = targetEntry.element;
           targetEntry.normalizedText = String(element && element.getAttribute ? (element.getAttribute("data-page-break-kind") || "page-break") : "page-break").toLowerCase();
+          return targetEntry.normalizedText;
+        }
+        if (targetEntry.kind === "figure") {
+          targetEntry.normalizedText = getPreviewFigureSearchText(targetEntry.element);
           return targetEntry.normalizedText;
         }
         targetEntry.normalizedText = buildNormalizedPreviewSearchText(targetEntry.element);

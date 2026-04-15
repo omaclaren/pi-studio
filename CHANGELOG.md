@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.54] — 2026-04-13
+
+### Fixed
+- Markdown editor-preview comment mapping now keeps standalone markdown image blocks aligned with rendered preview figures, preventing later preview comment targets from drifting after figures.
+- Rendered Markdown fenced code blocks now once again support preview-side text-selection comments.
+
 ## [0.5.53] — 2026-04-10
 
 ### Added

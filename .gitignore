@@ -4,3 +4,4 @@ node_modules/
 *.tgz
 NEXT-STAGE.md
 context/
+assets/demo/*.mp4

@@ -187,7 +187,9 @@
 
     if (index >= text.length || text[index] !== "]" || text[index + 1] !== "(") return null;
 
+    const label = text.slice(startIndex + 1, index);
     index += 2;
+    const destinationStart = index;
     let parenDepth = 0;
     while (index < text.length) {
       const ch = text[index];
@@ -210,6 +212,8 @@
             type: "literal",
             raw: text.slice(startIndex, index + 1),
             end: index + 1,
+            label: label,
+            destination: text.slice(destinationStart, index),
           };
         }
         parenDepth -= 1;
@@ -221,6 +225,68 @@
     }
 
     return null;
+  }
+
+  function readMarkdownAttributeBlockAt(source, startIndex) {
+    const text = String(source || "");
+    if (text[startIndex] !== "{") return null;
+
+    let depth = 0;
+    for (let index = startIndex; index < text.length; index += 1) {
+      const ch = text[index];
+      if (ch === "\\") {
+        index += 1;
+        continue;
+      }
+      if (ch === "\n") return null;
+      if (ch === "{") {
+        depth += 1;
+        continue;
+      }
+      if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          return {
+            raw: text.slice(startIndex, index + 1),
+            end: index + 1,
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function extractStandaloneMarkdownImageCaptionText(text) {
+    const source = String(text || "").replace(/\r\n/g, "\n").trim();
+    if (!source) return null;
+
+    const captions = [];
+    let index = 0;
+    let sawImage = false;
+
+    while (index < source.length) {
+      while (index < source.length && /\s/.test(source[index])) index += 1;
+      if (index >= source.length) break;
+      if (source[index] !== "!") return null;
+
+      const imageToken = readInlineMarkdownLinkAt(source, index + 1);
+      if (!imageToken) return null;
+
+      sawImage = true;
+      captions.push(normalizePreviewAnnotationLabel(imageToken.label || ""));
+      index = imageToken.end;
+
+      while (index < source.length && /\s/.test(source[index])) index += 1;
+      if (index < source.length && source[index] === "{") {
+        const attributeBlock = readMarkdownAttributeBlockAt(source, index);
+        if (!attributeBlock) return null;
+        index = attributeBlock.end;
+      }
+    }
+
+    if (!sawImage) return null;
+    return captions.filter(Boolean).join(" ").trim();
   }
 
   function readDelimitedPreviewTokenAt(source, startIndex, open, close, allowNewlines) {
@@ -596,6 +662,7 @@
     collectInlineAnnotationMarkers: collectInlineAnnotationMarkers,
     hasAnnotationMarkers: hasAnnotationMarkers,
     normalizePreviewAnnotationLabel: normalizePreviewAnnotationLabel,
+    extractStandaloneMarkdownImageCaptionText: extractStandaloneMarkdownImageCaptionText,
     prepareMarkdownForPandocPreview: prepareMarkdownForPandocPreview,
     readInlineAnnotationMarkerAt: readInlineAnnotationMarkerAt,
     renderPreviewAnnotationHtml: renderPreviewAnnotationHtml,
