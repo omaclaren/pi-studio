@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.56] — 2026-04-15
+
 ### Removed
 - Removed Studio's standalone npm update checker and footer update badge now that package update tracking is handled in pi.
 
