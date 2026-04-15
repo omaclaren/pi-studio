@@ -7,6 +7,9 @@ All notable changes to `pi-studio` are documented here.
 ### Removed
 - Removed Studio's standalone npm update checker and footer update badge now that package update tracking is handled in pi.
 
+### Fixed
+- Studio now always prints its localhost URL even when automatic browser open fails, and SSH sessions get a localhost-only port-forwarding hint instead of needing non-local binding.
+
 ## [0.5.54] — 2026-04-13
 
 ### Fixed

@@ -74,6 +74,7 @@ pi -e https://github.com/omaclaren/pi-studio
 ## Notes
 
 - Local-only server (`127.0.0.1`) with tokenized Studio URLs.
+- For remote SSH sessions, keep Studio bound to localhost and use SSH local port forwarding; `/studio` prints the localhost URL and an SSH tunnel hint when SSH is detected.
 - Full Studio is a singleton per Pi session: use `/studio` to open it, `/studio-replace` to explicitly replace it, and `/studio-editor-only` for extra editing/preview tabs that do not take over the full Studio session view.
 - Studio is designed as a complement to terminal pi, not a replacement.
 - Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack.

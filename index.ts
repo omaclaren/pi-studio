@@ -5754,6 +5754,17 @@ function buildStudioUrl(
 	return `http://127.0.0.1:${port}/?${params.toString()}`;
 }
 
+function isSshSession(): boolean {
+	return Boolean(
+		String(process.env.SSH_CONNECTION ?? process.env.SSH_CLIENT ?? process.env.SSH_TTY ?? "").trim(),
+	);
+}
+
+function buildStudioSshTunnelHint(port: number): string | null {
+	if (!isSshSession()) return null;
+	return `SSH detected. If Studio is running on a remote machine, forward the port from your local machine, then open the Studio URL locally: ssh -L ${port}:127.0.0.1:${port} <remote-host>`;
+}
+
 function resolveRequestedStudioDocumentFromUrl(
 	requestUrl: URL,
 	fallback: InitialStudioDocument | null,
@@ -8899,6 +8910,8 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("A full pi Studio view is already open for this session. Close it first, use /studio-replace for a fresh full Studio view, or use /studio-editor-only for a concurrent editor-only Studio view.", "warning");
 				if (serverState) {
 					ctx.ui.notify(`Studio URL: ${buildStudioUrl(serverState.port, serverState.token, "full")}`, "info");
+					const sshTunnelHint = buildStudioSshTunnelHint(serverState.port);
+					if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				}
 				return;
 			}
@@ -8924,6 +8937,7 @@ export default function (pi: ExtensionAPI) {
 
 		const state = await ensureServer();
 		const url = buildStudioUrl(state.port, state.token, mode, selected);
+		const sshTunnelHint = buildStudioSshTunnelHint(state.port);
 		const openedLabel = mode === "editor-only" ? "pi Studio editor-only view" : "pi Studio";
 
 		try {
@@ -8935,9 +8949,16 @@ export default function (pi: ExtensionAPI) {
 			} else {
 				ctx.ui.notify(`Opened ${openedLabel} with blank editor.`, "info");
 			}
-			ctx.ui.notify(`Studio URL: ${url}`, "info");
 		} catch (error) {
-			ctx.ui.notify(`Failed to open browser: ${error instanceof Error ? error.message : String(error)}`, "error");
+			const message = error instanceof Error ? error.message : String(error);
+			if (isSshSession()) {
+				ctx.ui.notify(`Failed to open browser automatically over SSH: ${message}`, "warning");
+			} else {
+				ctx.ui.notify(`Failed to open browser: ${message}`, "error");
+			}
+		} finally {
+			ctx.ui.notify(`Studio URL: ${url}`, "info");
+			if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 		}
 	};
 
