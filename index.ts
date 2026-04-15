@@ -272,7 +272,6 @@ const PREVIEW_RENDER_MAX_CHARS = 400_000;
 const PDF_EXPORT_MAX_CHARS = 400_000;
 const REQUEST_BODY_MAX_BYTES = 1_000_000;
 const RESPONSE_HISTORY_LIMIT = 30;
-const UPDATE_CHECK_TIMEOUT_MS = 1800;
 const CMUX_NOTIFY_TIMEOUT_MS = 1200;
 const PREPARED_PDF_EXPORT_TTL_MS = 5 * 60 * 1000;
 const MAX_PREPARED_PDF_EXPORTS = 8;
@@ -2735,93 +2734,6 @@ function readStudioGitDiff(baseDir: string):
 	const labelBase = hasHead ? "git diff HEAD" : "git diff (no commits yet)";
 	const label = summaryParts.length > 0 ? `${labelBase} (${summaryParts.join(", ")})` : labelBase;
 	return { ok: true, text: fullDiff, label };
-}
-
-function readLocalPackageMetadata(): { name: string; version: string } | null {
-	try {
-		const raw = readFileSync(new URL("./package.json", import.meta.url), "utf-8");
-		const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown };
-		const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
-		const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
-		if (!name || !version) return null;
-		return { name, version };
-	} catch {
-		return null;
-	}
-}
-
-interface ParsedSemver {
-	major: number;
-	minor: number;
-	patch: number;
-	prerelease: string | null;
-}
-
-function parseSemverLoose(version: string): ParsedSemver | null {
-	const normalized = String(version || "").trim().replace(/^v/i, "");
-	const match = normalized.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/);
-	if (!match) return null;
-	const major = Number.parseInt(match[1] ?? "", 10);
-	const minor = Number.parseInt(match[2] ?? "0", 10);
-	const patch = Number.parseInt(match[3] ?? "0", 10);
-	if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) return null;
-	const prerelease = typeof match[4] === "string" && match[4].trim() ? match[4].trim() : null;
-	return { major, minor, patch, prerelease };
-}
-
-function compareSemverLoose(a: string, b: string): number {
-	const pa = parseSemverLoose(a);
-	const pb = parseSemverLoose(b);
-	if (!pa || !pb) {
-		return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
-	}
-	if (pa.major !== pb.major) return pa.major - pb.major;
-	if (pa.minor !== pb.minor) return pa.minor - pb.minor;
-	if (pa.patch !== pb.patch) return pa.patch - pb.patch;
-	if (pa.prerelease && !pb.prerelease) return -1;
-	if (!pa.prerelease && pb.prerelease) return 1;
-	if (!pa.prerelease && !pb.prerelease) return 0;
-	return (pa.prerelease ?? "").localeCompare(pb.prerelease ?? "", undefined, {
-		numeric: true,
-		sensitivity: "base",
-	});
-}
-
-function isVersionBehind(installedVersion: string, latestVersion: string): boolean {
-	return compareSemverLoose(installedVersion, latestVersion) < 0;
-}
-
-async function fetchLatestNpmVersion(packageName: string, timeoutMs = UPDATE_CHECK_TIMEOUT_MS): Promise<string | null> {
-	const pkg = String(packageName || "").trim();
-	if (!pkg) return null;
-	const encodedPackage = encodeURIComponent(pkg).replace(/^%40/, "@");
-	const endpoint = `https://registry.npmjs.org/${encodedPackage}/latest`;
-	const controller = typeof AbortController === "function" ? new AbortController() : null;
-	const timer = controller
-		? setTimeout(() => {
-			try {
-				controller.abort();
-			} catch {
-				// ignore abort race
-			}
-		}, timeoutMs)
-		: null;
-
-	try {
-		const response = await fetch(endpoint, {
-			method: "GET",
-			headers: { Accept: "application/json" },
-			signal: controller?.signal,
-		});
-		if (!response.ok) return null;
-		const payload = await response.json() as { version?: unknown };
-		const version = typeof payload.version === "string" ? payload.version.trim() : "";
-		return version || null;
-	} catch {
-		return null;
-	} finally {
-		if (timer) clearTimeout(timer);
-	}
 }
 
 function isLikelyMathExpression(expr: string): boolean {
@@ -6382,11 +6294,6 @@ export default function (pi: ExtensionAPI) {
 	};
 	let compactInProgress = false;
 	let compactRequestId: string | null = null;
-	let updateCheckStarted = false;
-	let updateCheckCompleted = false;
-	const packageMetadata = readLocalPackageMetadata();
-	const installedPackageVersion = packageMetadata?.version ?? null;
-	let updateAvailableLatestVersion: string | null = null;
 
 	const isStudioDirectRunChainActive = () => Boolean(studioDirectRunChain);
 	const getQueuedStudioSteeringCount = () => queuedStudioDirectRequests.length;
@@ -6766,28 +6673,6 @@ export default function (pi: ExtensionAPI) {
 		});
 	};
 
-	const maybeNotifyUpdateAvailable = async (ctx: ExtensionCommandContext) => {
-		if (updateCheckStarted || updateCheckCompleted) return;
-		updateCheckStarted = true;
-		try {
-			const metadata = packageMetadata;
-			if (!metadata) return;
-			const latest = await fetchLatestNpmVersion(metadata.name, UPDATE_CHECK_TIMEOUT_MS);
-			if (!latest) return;
-			if (!isVersionBehind(metadata.version, latest)) return;
-
-			updateAvailableLatestVersion = latest;
-			broadcastState();
-
-			const notification =
-				`Update available for ${metadata.name}: ${metadata.version} → ${latest}. Run: pi install npm:${metadata.name}`;
-			ctx.ui.notify(notification, "info");
-			broadcast({ type: "info", message: notification, level: "info" });
-		} finally {
-			updateCheckCompleted = true;
-		}
-	};
-
 	const sendToClient = (client: WebSocket, payload: unknown) => {
 		if (client.readyState !== WebSocket.OPEN) return;
 		try {
@@ -7067,8 +6952,6 @@ export default function (pi: ExtensionAPI) {
 			contextTokens: contextUsageSnapshot.tokens,
 			contextWindow: contextUsageSnapshot.contextWindow,
 			contextPercent: contextUsageSnapshot.percent,
-			updateInstalledVersion: installedPackageVersion,
-			updateLatestVersion: updateAvailableLatestVersion,
 			compactInProgress,
 			activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
 			activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
@@ -7349,8 +7232,6 @@ export default function (pi: ExtensionAPI) {
 				contextTokens: contextUsageSnapshot.tokens,
 				contextWindow: contextUsageSnapshot.contextWindow,
 				contextPercent: contextUsageSnapshot.percent,
-				updateInstalledVersion: installedPackageVersion,
-				updateLatestVersion: updateAvailableLatestVersion,
 				compactInProgress,
 				activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
 				activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
@@ -9057,8 +8938,6 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(`Studio URL: ${url}`, "info");
 		} catch (error) {
 			ctx.ui.notify(`Failed to open browser: ${error instanceof Error ? error.message : String(error)}`, "error");
-		} finally {
-			void maybeNotifyUpdateAvailable(ctx);
 		}
 	};
 

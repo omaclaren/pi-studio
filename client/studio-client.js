@@ -202,8 +202,6 @@
       let contextTokens = null;
       let contextWindow = null;
       let contextPercent = null;
-      let updateInstalledVersion = null;
-      let updateLatestVersion = null;
       let windowHasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : true;
       let titleAttentionMessage = "";
       let titleAttentionRequestId = null;
@@ -664,8 +662,6 @@
         if (typeof message.contextTokens === "number") summary.contextTokens = message.contextTokens;
         if (typeof message.contextWindow === "number") summary.contextWindow = message.contextWindow;
         if (typeof message.contextPercent === "number") summary.contextPercent = message.contextPercent;
-        if (typeof message.updateInstalledVersion === "string") summary.updateInstalledVersion = message.updateInstalledVersion;
-        if (typeof message.updateLatestVersion === "string") summary.updateLatestVersion = message.updateLatestVersion;
         if (message.document && typeof message.document === "object" && typeof message.document.text === "string") {
           summary.documentLength = message.document.text.length;
           if (typeof message.document.label === "string") summary.documentLabel = message.document.label;
@@ -926,30 +922,6 @@
         return changed;
       }
 
-      function applyUpdateInfoFromMessage(message) {
-        if (!message || typeof message !== "object") return false;
-
-        let changed = false;
-
-        if (Object.prototype.hasOwnProperty.call(message, "updateInstalledVersion")) {
-          const nextInstalled = parseNonEmptyString(message.updateInstalledVersion);
-          if (nextInstalled !== updateInstalledVersion) {
-            updateInstalledVersion = nextInstalled;
-            changed = true;
-          }
-        }
-
-        if (Object.prototype.hasOwnProperty.call(message, "updateLatestVersion")) {
-          const nextLatest = parseNonEmptyString(message.updateLatestVersion);
-          if (nextLatest !== updateLatestVersion) {
-            updateLatestVersion = nextLatest;
-            changed = true;
-          }
-        }
-
-        return changed;
-      }
-
       function isTitleAttentionRequestKind(kind) {
         return kind === "annotation" || kind === "critique" || kind === "direct";
       }
@@ -1134,13 +1106,7 @@
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
         const contextText = formatContextUsageText();
-        let updateText = "";
-        if (updateLatestVersion) {
-          updateText = updateInstalledVersion
-            ? "Update: " + updateInstalledVersion + " → " + updateLatestVersion
-            : "Update: " + updateLatestVersion + " available";
-        }
-        const text = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextText + (updateText ? " · " + updateText : "");
+        const text = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextText;
         if (footerMetaTextEl) {
           footerMetaTextEl.textContent = text;
           footerMetaTextEl.title = text;
@@ -9000,8 +8966,7 @@
         debugTrace("server_message", summarizeServerMessage(message));
 
         const contextChanged = applyContextUsageFromMessage(message);
-        const updateInfoChanged = applyUpdateInfoFromMessage(message);
-        if (contextChanged || updateInfoChanged) {
+        if (contextChanged) {
           updateFooterMeta();
         }
 
