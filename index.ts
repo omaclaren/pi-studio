@@ -6784,6 +6784,8 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const maybeNotifyUpdateAvailable = async (ctx: ExtensionCommandContext) => {
+		const updateCheckEnv = process.env["PI_STUDIO_UPDATE_CHECK"];
+		if (!updateCheckEnv || (updateCheckEnv !== "1" && updateCheckEnv.toLowerCase() !== "true")) return;
 		if (updateCheckStarted || updateCheckCompleted) return;
 		updateCheckStarted = true;
 		try {
