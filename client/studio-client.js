@@ -8103,7 +8103,7 @@
           const textarea = document.createElement("textarea");
           textarea.value = String(note.text || "");
           textarea.placeholder = "Write a local comment here…";
-          textarea.title = "Write a local comment. Press Enter to finish editing, or Shift+Enter for a new line.";
+          textarea.title = "Write a local comment. Enter inserts a new line; changes save automatically as you type.";
           card.appendChild(textarea);
 
           const footer = document.createElement("div");
@@ -8167,22 +8167,6 @@
               : "This comment is currently not inline in the editor. Click to add it as an inline [an: ...] annotation.";
             scheduleReviewNotesPersistence();
             updateReviewNotesUi();
-          });
-
-          textarea.addEventListener("keydown", (event) => {
-            if (
-              event.key === "Enter"
-              && !event.shiftKey
-              && !event.altKey
-              && !event.ctrlKey
-              && !event.metaKey
-            ) {
-              event.preventDefault();
-              textarea.blur();
-              if (!convertBtn.disabled) {
-                convertBtn.focus();
-              }
-            }
           });
 
           reviewNotesListEl.appendChild(card);
@@ -9684,10 +9668,10 @@
 
       function buildAnnotationHeader() {
         const sourceDescriptor = describeSourceForAnnotation();
-        let header = "annotated reply below:\n";
-        header += "original source: " + sourceDescriptor + "\n";
-        header += "user annotation syntax: [an: note]\n";
-        header += "precedence: later messages supersede these annotations unless user explicitly references them\n\n---\n\n";
+        let header = "annotated reply: below\n\n";
+        header += "- original source: " + sourceDescriptor + "\n";
+        header += "- user annotation syntax: [an: note]\n";
+        header += "- precedence: later messages supersede these annotations unless user explicitly references them\n\n---\n\n";
         return header;
       }
 
@@ -9697,7 +9681,8 @@
 
       function stripAnnotationHeader(text) {
         const normalized = String(text || "").replace(/\r\n/g, "\n");
-        if (!normalized.toLowerCase().startsWith("annotated reply below:")) {
+        const lower = normalized.toLowerCase();
+        if (!lower.startsWith("annotated reply: below") && !lower.startsWith("annotated reply below:")) {
           return { hadHeader: false, body: normalized };
         }
 

@@ -20,9 +20,11 @@ Studio uses a **single workspace**:
 Adds/updates an `annotated-reply` compatible scaffold in the editor:
 
 ```md
-annotated reply below:
-original source: <last model response | file <path> | studio editor>
-annotation syntax: [an: your note]
+annotated reply: below
+
+- original source: <last model response | file <path> | studio editor>
+- user annotation syntax: [an: your note]
+- precedence: later messages supersede these annotations unless user explicitly references them
 
 ---
 

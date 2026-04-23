@@ -20,7 +20,10 @@ import {
 	transformStudioMarkdownOutsideFences,
 } from "./shared/studio-annotation-scanner.js";
 import { stripStudioMarkdownHtmlComments } from "./shared/studio-markdown-html-comments.js";
-import { preserveLiteralLatexCommandsInMarkdown } from "./shared/studio-markdown-latex-literals.js";
+import {
+	extractStandaloneLatexDefinitionsFromMarkdown,
+	preserveLiteralLatexCommandsInMarkdown,
+} from "./shared/studio-markdown-latex-literals.js";
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 
 type Lens = "writing" | "code";
@@ -477,7 +480,7 @@ function buildStudioPdfCalloutTitleSizeCommand(options?: StudioPdfRenderOptions)
 	return "\\footnotesize";
 }
 
-function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
+function buildStudioPdfPreamble(options?: StudioPdfRenderOptions, extraPreamble = ""): string {
 	const sectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.sectionSize, "\\Large");
 	const subsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsectionSize, "\\large");
 	const subsubsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsubsectionSize, "\\normalsize");
@@ -543,7 +546,7 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions): string {
   \\RecustomVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\\\\{\\},breaklines,breakanywhere,bgcolor=StudioCodeBlockBg,framesep=2mm}%
 }
 \\makeatother
-`;
+${extraPreamble ? `${extraPreamble.trim()}\n` : ""}`;
 }
 
 type StudioThemeMode = "dark" | "light";
@@ -4478,6 +4481,7 @@ async function renderStudioPdfFromGeneratedLatex(
 	calloutBlocks: StudioPdfMarkdownCalloutBlock[] = [],
 	alignedImageBlocks: StudioPdfAlignedImageBlock[] = [],
 	pdfOptions?: StudioPdfRenderOptions,
+	extraPreamble = "",
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
 	const preamblePath = join(tempDir, "_pdf_preamble.tex");
@@ -4485,7 +4489,7 @@ async function renderStudioPdfFromGeneratedLatex(
 	const outputPath = join(tempDir, "studio-export.pdf");
 
 	await mkdir(tempDir, { recursive: true });
-	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions), "utf-8");
+	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions, extraPreamble), "utf-8");
 
 	const pandocArgs = [
 		"-f", inputFormat,
@@ -4767,17 +4771,22 @@ async function renderStudioPdfWithPandoc(
 		? "latex"
 		: "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris+superscript+subscript-raw_html";
 	const normalizedMarkdown = prepareStudioPdfMarkdown(pdfAlignedImageTransform.markdown, isLatex, effectiveEditorLanguage);
+	const markdownPreambleSplit = !isLatex && (!effectiveEditorLanguage || effectiveEditorLanguage === "markdown")
+		? extractStandaloneLatexDefinitionsFromMarkdown(normalizedMarkdown)
+		: { body: normalizedMarkdown, definitions: [], preamble: "" };
+	const normalizedMarkdownBody = markdownPreambleSplit.body;
+	const extraPdfPreamble = markdownPreambleSplit.preamble;
 
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
 	const preamblePath = join(tempDir, "_pdf_preamble.tex");
 	const outputPath = join(tempDir, "studio-export.pdf");
 
 	await mkdir(tempDir, { recursive: true });
-	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions), "utf-8");
+	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions, extraPdfPreamble), "utf-8");
 
 	const mermaidPrepared: StudioMermaidPdfPreprocessResult = isLatex
-		? { markdown: normalizedMarkdown, found: 0, replaced: 0, failed: 0, missingCli: false }
-		: await preprocessStudioMermaidForPdf(normalizedMarkdown, tempDir);
+		? { markdown: normalizedMarkdownBody, found: 0, replaced: 0, failed: 0, missingCli: false }
+		: await preprocessStudioMermaidForPdf(normalizedMarkdownBody, tempDir);
 	const markdownForPdf = mermaidPrepared.markdown;
 	const hasDiffBlocks = !isLatex && hasStudioMarkdownDiffFence(markdownForPdf);
 
@@ -4795,6 +4804,7 @@ async function renderStudioPdfWithPandoc(
 			pdfCalloutTransform.blocks,
 			pdfAlignedImageTransform.blocks,
 			pdfOptions,
+			extraPdfPreamble,
 		);
 		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
 		return { pdf: rendered.pdf, warning: mermaidPrepared.warning ?? rendered.warning };

@@ -4,6 +4,17 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.57] — 2026-04-20
+
+### Changed
+- The inserted annotated-reply scaffold now renders more cleanly in Markdown preview, using `annotated reply: below` plus a short metadata list instead of relying on hard line-break spacing.
+- Local review-note comment boxes now use normal multiline textarea behavior, so `Enter` inserts a newline while edits continue saving automatically as you type.
+
+### Fixed
+- Markdown preview now preserves standalone LaTeX math definition lines such as `\newcommand`, `\def`, and `\DeclareMathOperator` so custom math macros/operators can work in Markdown documents instead of showing up as literal preview text.
+- Markdown PDF export now moves standalone LaTeX math definition lines into the generated PDF preamble when needed, avoiding LaTeX errors like `Can be used only in preamble` for commands such as `\DeclareMathOperator`.
+- Annotated-reply header detection now accepts both the older `annotated reply below:` form and the newer `annotated reply: below` form when removing/reapplying the scaffold.
+
 ## [0.5.56] — 2026-04-15
 
 ### Removed
