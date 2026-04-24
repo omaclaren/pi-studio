@@ -133,6 +133,7 @@
       const reviewNotesEmptyStateEl = document.getElementById("reviewNotesEmptyState");
       const reviewNotesAddBtn = document.getElementById("reviewNotesAddBtn");
       const reviewNotesInlineAllBtn = document.getElementById("reviewNotesInlineAllBtn");
+      const reviewNotesDeleteAllBtn = document.getElementById("reviewNotesDeleteAllBtn");
       const reviewNotesCloseBtn = document.getElementById("reviewNotesCloseBtn");
       const reviewNotesDoneBtn = document.getElementById("reviewNotesDoneBtn");
 
@@ -459,16 +460,92 @@
         return "working";
       }
 
+      async function writeTextToClipboard(text) {
+        const content = String(text || "");
+
+        try {
+          await fetchStudioJson("/clipboard", {
+            method: "POST",
+            body: JSON.stringify({ text: content }),
+          });
+          return true;
+        } catch {
+          // Fall back to browser clipboard APIs. The server-side clipboard path
+          // is most reliable for local Studio, but may be unavailable over SSH
+          // or on systems without a clipboard command.
+        }
+
+        // Prefer a copy-event payload first. It runs synchronously inside the
+        // user's click gesture and avoids browser quirks where copying a hidden
+        // textarea reports success but leaves the system clipboard unchanged.
+        if (document.execCommand && typeof document.addEventListener === "function") {
+          let handled = false;
+          const handleCopy = (event) => {
+            if (!event || !event.clipboardData) return;
+            event.clipboardData.setData("text/plain", content);
+            event.preventDefault();
+            handled = true;
+          };
+          try {
+            document.addEventListener("copy", handleCopy, true);
+            const ok = document.execCommand("copy");
+            if (ok && handled) return true;
+          } catch {
+            // Fall through to the other clipboard paths.
+          } finally {
+            document.removeEventListener("copy", handleCopy, true);
+          }
+        }
+
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+          try {
+            await navigator.clipboard.writeText(content);
+            return true;
+          } catch {
+            // Fall through to the selection-based legacy path.
+          }
+        }
+
+        const textarea = document.createElement("textarea");
+        textarea.value = content;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.top = "0";
+        textarea.style.left = "0";
+        textarea.style.width = "1px";
+        textarea.style.height = "1px";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        const activeEl = document.activeElement;
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        let ok = false;
+        try {
+          ok = document.execCommand && document.execCommand("copy");
+        } catch {
+          ok = false;
+        }
+        textarea.remove();
+        if (activeEl && typeof activeEl.focus === "function") {
+          try {
+            activeEl.focus();
+          } catch {
+            // Ignore focus restore failures.
+          }
+        }
+        return Boolean(ok);
+      }
+
       async function copyVisibleWorkingToClipboard() {
         const content = buildVisibleWorkingText();
         if (!content.trim()) {
           setStatus("No visible working details to copy yet.", "warning");
           return;
         }
-        try {
-          await navigator.clipboard.writeText(content);
+        if (await writeTextToClipboard(content)) {
           setStatus("Copied visible working text.", "success");
-        } catch {
+        } else {
           setStatus("Clipboard write failed.", "warning");
         }
       }
@@ -2837,6 +2914,107 @@
         }
       }
 
+      function normalizeCopyableBlockText(text) {
+        return String(text || "").replace(/\r\n/g, "\n").replace(/\u200b/g, "");
+      }
+
+      function getCopyablePreviewBlockText(blockEl) {
+        if (!blockEl || typeof blockEl.querySelectorAll !== "function") return "";
+        if (blockEl.classList && blockEl.classList.contains("preview-code-lines")) {
+          return normalizeCopyableBlockText(
+            Array.from(blockEl.querySelectorAll(".preview-code-line-content"))
+              .map((lineEl) => lineEl && typeof lineEl.textContent === "string" ? lineEl.textContent : "")
+              .join("\n"),
+          );
+        }
+
+        const codeEl = typeof blockEl.querySelector === "function"
+          ? blockEl.querySelector("pre code, code")
+          : null;
+        if (codeEl && typeof codeEl.textContent === "string") {
+          return normalizeCopyableBlockText(codeEl.textContent);
+        }
+
+        const clone = typeof blockEl.cloneNode === "function" ? blockEl.cloneNode(true) : null;
+        if (clone && typeof clone.querySelectorAll === "function") {
+          Array.from(clone.querySelectorAll(".studio-copy-block-btn")).forEach((buttonEl) => {
+            if (buttonEl && buttonEl.parentNode) buttonEl.parentNode.removeChild(buttonEl);
+          });
+          return normalizeCopyableBlockText(clone.textContent || "");
+        }
+
+        return normalizeCopyableBlockText(blockEl.textContent || "");
+      }
+
+      async function handleCopyPreviewBlockButtonClick(event) {
+        const target = event && event.target;
+        const copyBtn = target instanceof Element ? target.closest(".studio-copy-block-btn") : null;
+        if (!copyBtn) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") {
+          event.stopImmediatePropagation();
+        }
+
+        const blockEl = copyBtn.closest(".studio-copyable-block");
+        if (!blockEl) {
+          setStatus("Could not find the block to copy.", "warning");
+          return;
+        }
+
+        const text = getCopyablePreviewBlockText(blockEl);
+        if (!text.trim()) {
+          setStatus("Nothing to copy from this block.", "warning");
+          return;
+        }
+
+        if (copyBtn.dataset && copyBtn.dataset.studioCopyBusy === "1") return;
+        if (copyBtn.dataset) copyBtn.dataset.studioCopyBusy = "1";
+        const ok = await writeTextToClipboard(text);
+        if (ok) {
+          setStatus("Copied block to clipboard.", "success");
+        } else {
+          setStatus("Clipboard write failed.", "warning");
+        }
+        if (copyBtn.dataset) {
+          window.setTimeout(() => {
+            if (copyBtn.dataset) copyBtn.dataset.studioCopyBusy = "0";
+          }, 150);
+        }
+      }
+
+      function decorateCopyablePreviewBlocks(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
+        const blocks = Array.from(targetEl.querySelectorAll("div.sourceCode, pre, .preview-code-lines"));
+        blocks.forEach((blockEl) => {
+          if (!blockEl || !(blockEl instanceof Element)) return;
+          if (blockEl.dataset && blockEl.dataset.studioCopyDecorated === "1") return;
+          if (blockEl.matches && blockEl.matches("pre") && blockEl.closest("div.sourceCode")) return;
+          if (blockEl.closest && blockEl.closest("button, .studio-copy-block-btn")) return;
+
+          const initialText = getCopyablePreviewBlockText(blockEl);
+          if (!initialText.trim()) return;
+
+          blockEl.classList.add("studio-copyable-block");
+          if (blockEl.dataset) blockEl.dataset.studioCopyDecorated = "1";
+
+          const copyBtn = document.createElement("button");
+          copyBtn.type = "button";
+          copyBtn.className = "studio-copy-block-btn";
+          copyBtn.textContent = "Copy";
+          copyBtn.title = "Copy this block to the clipboard.";
+          copyBtn.setAttribute("aria-label", "Copy this block to the clipboard");
+          copyBtn.addEventListener("pointerdown", (event) => {
+            event.stopPropagation();
+          });
+          copyBtn.addEventListener("mousedown", (event) => {
+            event.stopPropagation();
+          });
+
+          blockEl.appendChild(copyBtn);
+        });
+      }
+
       async function applyRenderedMarkdown(targetEl, markdown, pane, nonce) {
         const previewPrepared = annotationsEnabled
           ? prepareMarkdownForPandocPreview(markdown)
@@ -2879,6 +3057,7 @@
           if (shouldDecoratePreviewComments) {
             decorateRenderedEditorPreviewComments(targetEl, sourceTextEl.value || "");
           }
+          decorateCopyablePreviewBlocks(targetEl);
 
           // Warn if relative images are present but unlikely to resolve (non-file-backed content)
           if (!sourceState.path && !(resourceDirInput && resourceDirInput.value.trim())) {
@@ -4281,6 +4460,7 @@
         targetEl.innerHTML = buildCodePreviewHtmlWithCommentBlocks(text, editorLanguage || "");
         ensurePreviewSelectionActions(targetEl);
         updatePreviewCommentBlocksForElement(targetEl);
+        decorateCopyablePreviewBlocks(targetEl);
         if (pane === "response") {
           applyPendingResponseScrollReset();
           scheduleResponsePaneRepaintNudge();
@@ -8066,6 +8246,12 @@
             ? "Inline annotations derived from all non-empty comments are currently on. Click to remove them."
             : "Inline annotations derived from all non-empty comments are currently off. Click to add them.";
         }
+        if (reviewNotesDeleteAllBtn) {
+          reviewNotesDeleteAllBtn.disabled = uiBusy || !hasNotes;
+          reviewNotesDeleteAllBtn.title = hasNotes
+            ? "Delete all local comments for this document or draft. Existing inline [an: ...] annotations in the editor text are left unchanged."
+            : "No local comments to delete.";
+        }
         if (reviewNotesDoneBtn) {
           reviewNotesDoneBtn.disabled = !isOpen;
         }
@@ -8415,6 +8601,21 @@
         if (!confirmed) return;
         setReviewNotes(reviewNotes.filter((entry) => entry && entry.id !== noteId));
         setStatus("Deleted local comment.", "success");
+      }
+
+      function deleteAllReviewNotes() {
+        if (!reviewNotes.length) {
+          setStatus("No local comments to delete.", "warning");
+          return;
+        }
+        const count = reviewNotes.length;
+        const confirmed = window.confirm(
+          "Delete all " + count + " local comment" + (count === 1 ? "" : "s") + " for this document?\n\n"
+            + "Existing inline [an: ...] annotations in the editor text will not be removed.",
+        );
+        if (!confirmed) return;
+        setReviewNotes([]);
+        setStatus("Deleted all local comments.", "success");
       }
 
       function convertReviewNoteToAnnotation(noteId) {
@@ -10078,7 +10279,7 @@
         }
 
         try {
-          await navigator.clipboard.writeText(content);
+          await writeTextToClipboard(content);
           setStatus("Copied response text.", "success");
         } catch (error) {
           setStatus("Clipboard write failed.", "warning");
@@ -10302,7 +10503,7 @@
         }
 
         try {
-          await navigator.clipboard.writeText(content);
+          await writeTextToClipboard(content);
           setStatus("Copied editor text.", "success");
         } catch (error) {
           setStatus("Clipboard write failed.", "warning");
@@ -10386,6 +10587,12 @@
         });
       }
 
+      if (reviewNotesDeleteAllBtn) {
+        reviewNotesDeleteAllBtn.addEventListener("click", () => {
+          deleteAllReviewNotes();
+        });
+      }
+
       if (reviewNoteGutterContentEl) {
         reviewNoteGutterContentEl.addEventListener("click", (event) => {
           const target = event.target;
@@ -10396,6 +10603,20 @@
           focusReviewNoteInPanel(noteId);
         });
       }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        const copyBtn = target instanceof Element ? target.closest(".studio-copy-block-btn") : null;
+        if (!copyBtn) return;
+        void handleCopyPreviewBlockButtonClick(event);
+      }, true);
+
+      document.addEventListener("pointerup", (event) => {
+        const target = event.target;
+        const copyBtn = target instanceof Element ? target.closest(".studio-copy-block-btn") : null;
+        if (!copyBtn) return;
+        void handleCopyPreviewBlockButtonClick(event);
+      }, true);
 
       function handlePreviewCommentActionMouseDown(event) {
         const target = event.target;
@@ -10483,7 +10704,7 @@
           }
 
           try {
-            await navigator.clipboard.writeText(String(scratchpadText || ""));
+            await writeTextToClipboard(String(scratchpadText || ""));
             setStatus("Copied scratchpad text.", "success");
           } catch (error) {
             setStatus("Clipboard write failed.", "warning");

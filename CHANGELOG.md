@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.58] — 2026-04-24
+
+### Added
+- Rendered Markdown/editor previews now add small copy controls to code/fenced-content blocks so block contents can be copied directly from the preview.
+- The local comments rail now includes a **Delete all** action for clearing all comments attached to the current document or draft without removing inline `[an: ...]` annotations from the editor text.
+
 ## [0.5.57] — 2026-04-20
 
 ### Changed

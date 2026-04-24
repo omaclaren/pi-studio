@@ -1133,6 +1133,43 @@
       white-space: inherit;
     }
 
+    .rendered-markdown .studio-copyable-block {
+      position: relative;
+    }
+
+    .rendered-markdown .studio-copy-block-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 4;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border-muted);
+      background: var(--panel);
+      color: var(--muted);
+      font-family: var(--font-ui);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.4;
+      opacity: 0.25;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+      cursor: pointer;
+      pointer-events: auto;
+      user-select: none;
+    }
+
+    .rendered-markdown .studio-copy-block-btn:active {
+      transform: translateY(1px);
+    }
+
+    .rendered-markdown .studio-copyable-block:hover > .studio-copy-block-btn,
+    .rendered-markdown .studio-copy-block-btn:focus-visible {
+      opacity: 1;
+      color: var(--text);
+      border-color: var(--accent-soft-strong);
+      background: var(--panel);
+    }
+
     .rendered-markdown :not(pre) > code {
       background: rgba(127, 127, 127, 0.13);
       border: 1px solid var(--md-codeblock-border);
@@ -2226,7 +2263,8 @@
       background: var(--panel-2);
     }
 
-    .review-note-delete-btn:not(:disabled) {
+    .review-note-delete-btn:not(:disabled),
+    #reviewNotesDeleteAllBtn:not(:disabled) {
       border-color: var(--warn-border);
       color: var(--warn);
     }

@@ -4078,6 +4078,86 @@ async function preprocessStudioMermaidForPdf(markdown: string, workDir: string):
 	};
 }
 
+interface StudioClipboardCommand {
+	command: string;
+	args: string[];
+	label: string;
+}
+
+function getStudioClipboardCommands(): StudioClipboardCommand[] {
+	if (process.platform === "darwin") {
+		return [{ command: "pbcopy", args: [], label: "pbcopy" }];
+	}
+	if (process.platform === "win32") {
+		return [{ command: "cmd.exe", args: ["/c", "clip"], label: "clip" }];
+	}
+	return [
+		{ command: "wl-copy", args: [], label: "wl-copy" },
+		{ command: "xclip", args: ["-selection", "clipboard"], label: "xclip" },
+		{ command: "xsel", args: ["--clipboard", "--input"], label: "xsel" },
+	];
+}
+
+function writeStudioClipboardWithCommand(spec: StudioClipboardCommand, text: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(spec.command, spec.args, { stdio: ["pipe", "ignore", "pipe"] });
+		const stderrChunks: Buffer[] = [];
+		let settled = false;
+		const timer = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			try {
+				child.kill();
+			} catch {
+				// Ignore kill failures.
+			}
+			reject(new Error(`${spec.label} timed out.`));
+		}, 3000);
+
+		const fail = (error: Error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			reject(error);
+		};
+
+		child.stderr.on("data", (chunk: Buffer | string) => {
+			stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+		});
+
+		child.once("error", (error) => {
+			fail(error instanceof Error ? error : new Error(String(error)));
+		});
+
+		child.once("close", (code) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			if (code === 0) {
+				resolve();
+				return;
+			}
+			const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+			reject(new Error(`${spec.label} exited with code ${code}${stderr ? `: ${stderr}` : ""}`));
+		});
+
+		child.stdin.end(text, "utf-8");
+	});
+}
+
+async function writeStudioSystemClipboard(text: string): Promise<{ ok: true; method: string } | { ok: false; error: string }> {
+	const errors: string[] = [];
+	for (const spec of getStudioClipboardCommands()) {
+		try {
+			await writeStudioClipboardWithCommand(spec, text);
+			return { ok: true, method: spec.label };
+		} catch (error) {
+			errors.push(`${spec.label}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	return { ok: false, error: errors.join("; ") || "No system clipboard command is available." };
+}
+
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const markdownWithoutHtmlComments = isLatex ? markdown : stripStudioMarkdownHtmlComments(markdown);
@@ -6182,6 +6262,7 @@ ${cssVarsBlock}
                 <div class="scratchpad-actions">
                   <button id="reviewNotesAddBtn" type="button" title="Create a new local comment on the current editor line.">Line comment</button>
                   <button id="reviewNotesInlineAllBtn" type="button" title="Toggle inline annotations for all non-empty comments.">All inline: Off</button>
+                  <button id="reviewNotesDeleteAllBtn" type="button" title="Delete all local comments for this document or draft.">Delete all</button>
                   <button id="reviewNotesDoneBtn" type="button" title="Hide the comments rail.">Hide</button>
                 </div>
               </div>
@@ -7902,6 +7983,49 @@ export default function (pi: ExtensionAPI) {
 		respondJson(res, 200, { ok: true });
 	};
 
+	const handleClipboardRequest = async (req: IncomingMessage, res: ServerResponse) => {
+		const method = (req.method ?? "GET").toUpperCase();
+		if (method !== "POST") {
+			res.setHeader("Allow", "POST");
+			respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+			return;
+		}
+
+		let rawBody = "";
+		try {
+			rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const status = message.includes("exceeds") ? 413 : 400;
+			respondJson(res, status, { ok: false, error: message });
+			return;
+		}
+
+		let parsedBody: unknown;
+		try {
+			parsedBody = rawBody ? JSON.parse(rawBody) : {};
+		} catch {
+			respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+			return;
+		}
+
+		const text =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { text?: unknown }).text === "string"
+				? (parsedBody as { text: string }).text
+				: null;
+		if (text === null) {
+			respondJson(res, 400, { ok: false, error: "Missing clipboard text in request body." });
+			return;
+		}
+
+		const result = await writeStudioSystemClipboard(text);
+		if (result.ok) {
+			respondJson(res, 200, { ok: true, method: result.method });
+			return;
+		}
+		respondJson(res, 500, { ok: false, error: result.error });
+	};
+
 	const handleReviewNotesRequest = async (req: IncomingMessage, res: ServerResponse, requestUrl: URL) => {
 		const method = (req.method ?? "GET").toUpperCase();
 		if (method === "GET") {
@@ -8235,6 +8359,21 @@ export default function (pi: ExtensionAPI) {
 				respondJson(res, 500, {
 					ok: false,
 					error: `Review-note persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
+		if (requestUrl.pathname === "/clipboard") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+			void handleClipboardRequest(req, res).catch((error) => {
+				respondJson(res, 500, {
+					ok: false,
+					error: `Clipboard write failed: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			});
 			return;
