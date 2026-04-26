@@ -708,8 +708,8 @@
         svg.setAttribute("aria-hidden", "true");
         svg.classList.add("studio-refresh-icon");
         const paths = kind === "focus-exit"
-          ? ["M9 9H4V4", "M4 9l6-6", "M15 15h5v5", "M20 15l-6 6"]
-          : ["M15 4h5v5", "M20 4l-6 6", "M9 20H4v-5", "M4 20l6-6"];
+          ? ["M4 4l6 6", "M10 4v6H4", "M20 20l-6-6", "M14 20v-6h6"]
+          : ["M14 4h6v6", "M20 4l-6 6", "M10 20H4v-6", "M4 20l6-6"];
         for (const d of paths) {
           const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
           path.setAttribute("d", d);
@@ -763,8 +763,12 @@
         if (!studioUiRefreshUi) return;
         if (studioUiRefreshUi.annotationsButton) {
           const inlineLabel = annotationsEnabled ? "Inline on" : "Inline hidden";
-          const headerLabel = getStudioUiRefreshAnnotationHeaderEnabled() ? "Header on" : "Header off";
-          setStudioUiRefreshButtonText(studioUiRefreshUi.annotationsButton, "Annotations: " + inlineLabel + " · " + headerLabel);
+          if (isEditorOnlyMode) {
+            setStudioUiRefreshButtonText(studioUiRefreshUi.annotationsButton, "Annotations: " + inlineLabel);
+          } else {
+            const headerLabel = getStudioUiRefreshAnnotationHeaderEnabled() ? "Header on" : "Header off";
+            setStudioUiRefreshButtonText(studioUiRefreshUi.annotationsButton, "Annotations: " + inlineLabel + " · " + headerLabel);
+          }
         }
         if (studioUiRefreshUi.viewButton) {
           const syntaxLabel = editorHighlightEnabled
@@ -889,28 +893,29 @@
         }
         titleGroupEl.appendChild(makeStudioUiRefreshSeparator());
         if (isEditorOnlyMode) {
-          titleGroupEl.appendChild(makeStudioUiRefreshElement("span", "studio-refresh-static-title", "Editor"));
+          titleGroupEl.appendChild(makeStudioUiRefreshElement("span", "studio-refresh-static-title", "Editor (Raw)"));
         } else if (editorViewSelect) {
           titleGroupEl.appendChild(editorViewSelect);
         }
         headerTopEl.appendChild(titleGroupEl);
-        const originGroupEl = makeStudioUiRefreshElement("div", "studio-refresh-origin-group");
-        if (sourceBadgeEl) originGroupEl.appendChild(sourceBadgeEl);
-        headerTopEl.appendChild(originGroupEl);
-
-        const headerUtilityEl = makeStudioUiRefreshElement("div", "studio-refresh-header-utility");
-        const utilityLeftEl = makeStudioUiRefreshElement("div", "studio-refresh-utility-left");
-        if (resourceDirBtn) utilityLeftEl.appendChild(resourceDirBtn);
-        if (resourceDirLabel) utilityLeftEl.appendChild(resourceDirLabel);
-        if (resourceDirInputWrap) utilityLeftEl.appendChild(resourceDirInputWrap);
-        if (syncBadgeEl) utilityLeftEl.appendChild(syncBadgeEl);
         const headerToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
         if (reviewNotesBtn) headerToolsEl.appendChild(reviewNotesBtn);
         if (outlineBtn) headerToolsEl.appendChild(outlineBtn);
         if (scratchpadBtn) headerToolsEl.appendChild(scratchpadBtn);
         if (reviewMenu) headerToolsEl.appendChild(reviewMenu.anchor);
+        headerTopEl.appendChild(headerToolsEl);
+
+        const headerUtilityEl = makeStudioUiRefreshElement("div", "studio-refresh-header-utility");
+        const utilityLeftEl = makeStudioUiRefreshElement("div", "studio-refresh-utility-left");
+        if (sourceBadgeEl) utilityLeftEl.appendChild(sourceBadgeEl);
+        if (sourceBadgeEl && (resourceDirBtn || resourceDirLabel || resourceDirInputWrap || syncBadgeEl)) {
+          utilityLeftEl.appendChild(makeStudioUiRefreshSeparator());
+        }
+        if (resourceDirBtn) utilityLeftEl.appendChild(resourceDirBtn);
+        if (resourceDirLabel) utilityLeftEl.appendChild(resourceDirLabel);
+        if (resourceDirInputWrap) utilityLeftEl.appendChild(resourceDirInputWrap);
+        if (syncBadgeEl) utilityLeftEl.appendChild(syncBadgeEl);
         headerUtilityEl.appendChild(utilityLeftEl);
-        headerUtilityEl.appendChild(headerToolsEl);
         leftHeaderEl.replaceChildren(headerTopEl, headerUtilityEl);
 
         const rightHeaderEl = document.getElementById("rightSectionHeader");
@@ -923,7 +928,7 @@
             rightTitleGroupEl.appendChild(makeStudioUiRefreshSeparator());
           }
           if (isEditorOnlyMode) {
-            rightTitleGroupEl.appendChild(makeStudioUiRefreshElement("span", "studio-refresh-static-title", "Preview"));
+            rightTitleGroupEl.appendChild(makeStudioUiRefreshElement("span", "studio-refresh-static-title", "Editor (Preview)"));
           } else {
             rightTitleGroupEl.appendChild(rightViewSelect);
           }

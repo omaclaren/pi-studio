@@ -2317,7 +2317,7 @@
 
     /* Opt-in editor-side layout refresh prototype. Enabled with ?uiRefresh=1 or localStorage piStudio.uiRefresh=1. */
     body.studio-ui-refresh {
-      font-size: 13px;
+      font-size: 14px;
     }
 
     body.studio-ui-refresh > header {
@@ -2346,7 +2346,7 @@
     body.studio-ui-refresh #responseActions button,
     body.studio-ui-refresh #responseActions select {
       padding: 6px 8px;
-      font-size: 12px;
+      font-size: 13px;
     }
 
     body.studio-ui-refresh main {
@@ -2365,6 +2365,12 @@
 
     .studio-ui-refresh-toggle:not(:disabled):hover {
       opacity: 1;
+    }
+
+    body.studio-ui-refresh[data-studio-mode="editor-only"] #leftSectionHeader .section-header-main::before,
+    body.studio-ui-refresh[data-studio-mode="editor-only"] #rightSectionHeader .section-header-main::before {
+      content: none;
+      display: none;
     }
 
     body.studio-ui-refresh #leftSectionHeader,
@@ -2408,13 +2414,6 @@
       align-items: center;
       gap: 10px;
       min-width: 0;
-    }
-
-    body.studio-ui-refresh .studio-refresh-origin-group {
-      display: flex;
-      justify-content: flex-end;
-      min-width: 0;
-      overflow: hidden;
     }
 
     body.studio-ui-refresh .studio-refresh-pane-identity {
@@ -2470,7 +2469,7 @@
     body.studio-ui-refresh .studio-refresh-toolbar select {
       border-color: transparent;
       background: transparent;
-      font-size: 13px;
+      font-size: 14px;
     }
 
     body.studio-ui-refresh #leftSectionHeader select:hover,
@@ -2483,16 +2482,19 @@
     }
 
     body.studio-ui-refresh #editorViewSelect,
-    body.studio-ui-refresh #rightViewSelect,
-    body.studio-ui-refresh .studio-refresh-static-title {
-      font-size: 15px;
-      font-weight: 700;
+    body.studio-ui-refresh #rightViewSelect {
+      font-size: 18px;
+      font-weight: 750;
       padding: 3px 5px;
-      max-width: 190px;
+      max-width: 230px;
     }
 
     body.studio-ui-refresh .studio-refresh-static-title {
       color: var(--text);
+      font-size: 15px;
+      font-weight: 700;
+      padding: 3px 5px;
+      max-width: 230px;
       white-space: nowrap;
     }
 
@@ -2513,13 +2515,13 @@
       border-color: transparent;
       background: transparent;
       padding: 4px 6px;
-      font-size: 13px;
+      font-size: 14px;
       border-radius: 8px;
     }
 
     body.studio-ui-refresh #sourceBadge {
       color: var(--text);
-      max-width: min(24rem, 42vw);
+      max-width: min(34rem, 54vw);
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -2568,10 +2570,17 @@
     body.studio-ui-refresh #reviewNotesBtn,
     body.studio-ui-refresh #outlineBtn,
     body.studio-ui-refresh #scratchpadBtn,
+    body.studio-ui-refresh #exportPdfBtn,
     body.studio-ui-refresh .studio-refresh-tool-tab {
       font-weight: 500;
       padding: 6px 9px;
       border-radius: 9px;
+    }
+
+    body.studio-ui-refresh #exportPdfBtn {
+      background: var(--panel-2);
+      color: var(--text);
+      border-color: transparent;
     }
 
     body.studio-ui-refresh #reviewNotesBtn.is-active,
@@ -2638,6 +2647,7 @@
       color: var(--text);
       white-space: nowrap;
       padding: 6px 9px;
+      font-size: 14px;
     }
 
     body.studio-ui-refresh .studio-refresh-chip::after {
@@ -2740,34 +2750,34 @@
     }
 
     body.studio-ui-refresh #sendRunBtn,
+    body.studio-ui-refresh #queueSteerBtn,
     body.studio-ui-refresh #loadResponseBtn:not([hidden]) {
-      height: 34px;
-      min-height: 34px;
-      padding: 6px 12px;
+      height: 30px;
+      min-height: 30px;
+      padding: 4px 10px;
       font-size: 13px;
       line-height: 1.2;
-      border-radius: 9px;
+      border-radius: 8px;
     }
 
     body.studio-ui-refresh #sendRunBtn {
-      min-width: 10.5rem;
+      min-width: 9.2rem;
     }
 
     body.studio-ui-refresh #queueSteerBtn {
       min-width: auto;
-      min-height: 34px;
     }
 
     body.studio-ui-refresh #queueSteerBtn:not(:disabled) {
-      background: transparent;
-      border-color: transparent;
-      color: var(--text);
-      font-weight: 500;
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
+      font-weight: 600;
     }
 
     body.studio-ui-refresh #queueSteerBtn:not(:disabled):hover {
-      background: var(--panel-2);
-      filter: none;
+      background: var(--accent);
+      filter: brightness(0.95);
     }
 
     body.studio-ui-refresh .studio-refresh-review-btn.request-stop-active {
