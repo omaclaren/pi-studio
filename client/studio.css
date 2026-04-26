@@ -2436,6 +2436,10 @@
       white-space: nowrap;
     }
 
+    body.studio-ui-refresh .studio-refresh-title-group {
+      gap: 3px;
+    }
+
     body.studio-ui-refresh .studio-refresh-pane-tools {
       justify-content: flex-end;
       flex-wrap: nowrap;
@@ -2446,7 +2450,7 @@
       width: 1px;
       height: 18px;
       background: var(--border-muted);
-      margin: 0 4px;
+      margin: 0 1px;
       flex: 0 0 1px;
     }
 
@@ -2481,9 +2485,9 @@
       background: var(--panel-2);
     }
 
-    body.studio-ui-refresh #editorViewSelect,
-    body.studio-ui-refresh #rightViewSelect {
-      font-size: 18px;
+    body.studio-ui-refresh #leftSectionHeader #editorViewSelect,
+    body.studio-ui-refresh #rightSectionHeader #rightViewSelect {
+      font-size: 15px;
       font-weight: 750;
       padding: 3px 5px;
       max-width: 230px;
