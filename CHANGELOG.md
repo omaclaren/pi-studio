@@ -4,6 +4,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.5.59] — 2026-04-27
+
+### Added
+- Added an opt-in refreshed Studio layout, available via the footer UI switch or `?uiRefresh=1`, while keeping the classic layout as the default.
+- Added refreshed layout support for editor-only Studio mode.
+
+### Changed
+- Tuned refreshed pane headers, toolbar grouping, focus controls, dropdown labels, queue steering sizing, and preview export styling.
+
 ## [0.5.58] — 2026-04-24
 
 ### Added
