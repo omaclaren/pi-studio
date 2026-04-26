@@ -644,6 +644,12 @@
       let lineNumbersEnabled = false;
       let lineNumbersRenderRaf = null;
       let annotationsEnabled = true;
+      const STUDIO_UI_REFRESH_STORAGE_KEY = "piStudio.uiRefresh";
+      const studioUiRefreshEnabled = readStudioUiRefreshEnabled();
+      let studioUiRefreshUi = null;
+      if (studioUiRefreshEnabled && document.body) {
+        document.body.classList.add("studio-ui-refresh");
+      }
       let scratchpadText = "";
       let scratchpadReturnFocusEl = null;
       let scratchpadPersistTimer = null;
@@ -662,6 +668,285 @@
       let suppressedEditorSelectionEnd = null;
       const previewJumpHighlightState = new WeakMap();
       const PREVIEW_ANNOTATION_PLACEHOLDER_PREFIX = "PISTUDIOANNOT";
+
+      function readStudioUiRefreshEnabled() {
+        if (isEditorOnlyMode) return false;
+        const normalize = (value) => String(value == null ? "" : value).trim().toLowerCase();
+        const queryValue = initialQueryParams.has("uiRefresh")
+          ? initialQueryParams.get("uiRefresh")
+          : (initialQueryParams.has("studioUiRefresh") ? initialQueryParams.get("studioUiRefresh") : null);
+        const isTruthy = (value) => ["1", "true", "yes", "on", "v2", "refresh"].indexOf(normalize(value)) !== -1;
+        const isFalsey = (value) => ["0", "false", "no", "off"].indexOf(normalize(value)) !== -1;
+        if (queryValue !== null) {
+          const enabled = isTruthy(queryValue) || (!isFalsey(queryValue) && normalize(queryValue) !== "");
+          try {
+            if (enabled) window.localStorage && window.localStorage.setItem(STUDIO_UI_REFRESH_STORAGE_KEY, "1");
+            else window.localStorage && window.localStorage.removeItem(STUDIO_UI_REFRESH_STORAGE_KEY);
+          } catch {}
+          return enabled;
+        }
+        try {
+          return Boolean(window.localStorage && window.localStorage.getItem(STUDIO_UI_REFRESH_STORAGE_KEY) === "1");
+        } catch {
+          return false;
+        }
+      }
+
+      function makeStudioUiRefreshElement(tagName, className, text) {
+        const element = document.createElement(tagName);
+        if (className) element.className = className;
+        if (typeof text === "string") element.textContent = text;
+        return element;
+      }
+
+      function makeStudioUiRefreshSeparator() {
+        return makeStudioUiRefreshElement("span", "studio-refresh-sep");
+      }
+
+      function makeStudioUiRefreshIcon(kind) {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("aria-hidden", "true");
+        svg.classList.add("studio-refresh-icon");
+        const paths = kind === "focus-exit"
+          ? ["M9 9H4V4", "M4 9l6-6", "M15 15h5v5", "M20 15l-6 6"]
+          : ["M15 4h5v5", "M20 4l-6 6", "M9 20H4v-5", "M4 20l6-6"];
+        for (const d of paths) {
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", d);
+          svg.appendChild(path);
+        }
+        return svg;
+      }
+
+      function setStudioUiRefreshFocusButtonIcon(buttonEl, isFocusedPane) {
+        if (!buttonEl || !studioUiRefreshEnabled) return;
+        buttonEl.replaceChildren(makeStudioUiRefreshIcon(isFocusedPane ? "focus-exit" : "focus"));
+        buttonEl.setAttribute("aria-label", isFocusedPane ? "Exit focus" : "Focus pane");
+      }
+
+      function appendStudioUiRefreshMenuSection(menuEl, heading, controls) {
+        const sectionEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-section");
+        if (heading) {
+          sectionEl.appendChild(makeStudioUiRefreshElement("div", "studio-refresh-menu-heading", heading));
+        }
+        for (const control of controls) {
+          if (!control) continue;
+          const itemEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-item");
+          itemEl.appendChild(control);
+          sectionEl.appendChild(itemEl);
+        }
+        menuEl.appendChild(sectionEl);
+      }
+
+      function getStudioUiRefreshSelectSummary(selectEl, prefix) {
+        if (!selectEl) return "";
+        const option = selectEl.options && selectEl.selectedIndex >= 0 ? selectEl.options[selectEl.selectedIndex] : null;
+        let label = option ? String(option.textContent || option.label || option.value || "") : String(selectEl.value || "");
+        if (prefix) label = label.replace(new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*:?\\s*", "i"), "");
+        return label.trim();
+      }
+
+      function setStudioUiRefreshButtonText(buttonEl, text) {
+        if (!buttonEl) return;
+        buttonEl.textContent = text;
+      }
+
+      function getStudioUiRefreshAnnotationHeaderEnabled() {
+        try {
+          return Boolean(stripAnnotationHeader(sourceTextEl.value).hadHeader);
+        } catch {
+          return false;
+        }
+      }
+
+      function syncStudioUiRefreshSummaries() {
+        if (!studioUiRefreshUi) return;
+        if (studioUiRefreshUi.annotationsButton) {
+          const inlineLabel = annotationsEnabled ? "Inline on" : "Inline hidden";
+          const headerLabel = getStudioUiRefreshAnnotationHeaderEnabled() ? "Header on" : "Header off";
+          setStudioUiRefreshButtonText(studioUiRefreshUi.annotationsButton, "Annotations: " + inlineLabel + " · " + headerLabel);
+        }
+        if (studioUiRefreshUi.viewButton) {
+          const syntaxLabel = editorHighlightEnabled
+            ? (getStudioUiRefreshSelectSummary(highlightSelect, "Syntax highlight") || editorLanguage || "Markdown")
+            : "Off";
+          const lineLabel = lineNumbersEnabled ? "Lines on" : "Lines off";
+          setStudioUiRefreshButtonText(studioUiRefreshUi.viewButton, "View: " + syntaxLabel + " · " + lineLabel);
+        }
+        syncStudioUiRefreshReviewTrigger();
+      }
+
+      function closeStudioUiRefreshMenus() {
+        if (!studioUiRefreshUi || !studioUiRefreshUi.menus) return;
+        for (const item of studioUiRefreshUi.menus) {
+          item.menu.hidden = true;
+          item.button.classList.remove("is-open");
+          item.button.setAttribute("aria-expanded", "false");
+        }
+      }
+
+      function toggleStudioUiRefreshMenu(name) {
+        if (!studioUiRefreshUi || !studioUiRefreshUi.menus) return;
+        let willOpen = false;
+        for (const item of studioUiRefreshUi.menus) {
+          if (item.name === name) willOpen = item.menu.hidden;
+        }
+        for (const item of studioUiRefreshUi.menus) {
+          const isOpen = willOpen && item.name === name;
+          item.menu.hidden = !isOpen;
+          item.button.classList.toggle("is-open", isOpen);
+          item.button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+        }
+      }
+
+      function syncStudioUiRefreshReviewTrigger() {
+        if (!studioUiRefreshUi || !studioUiRefreshUi.reviewButton) return;
+        const critiqueIsStop = getAbortablePendingKind() === "critique";
+        const reviewButton = studioUiRefreshUi.reviewButton;
+        reviewButton.textContent = critiqueIsStop ? "Stop critique" : "Review";
+        reviewButton.classList.toggle("request-stop-active", critiqueIsStop);
+        reviewButton.disabled = critiqueIsStop ? Boolean(critiqueBtn && critiqueBtn.disabled) : false;
+        reviewButton.title = critiqueIsStop
+          ? "Stop the running critique request. Shortcut: Esc."
+          : "Open review actions and settings.";
+        if (critiqueIsStop) {
+          closeStudioUiRefreshMenus();
+        }
+      }
+
+      function makeStudioUiRefreshMenu(buttonEl, name, menuClassName) {
+        const anchorEl = makeStudioUiRefreshElement("span", "studio-refresh-menu-anchor " + (menuClassName || ""));
+        const menuEl = makeStudioUiRefreshElement("div", "studio-refresh-menu");
+        menuEl.hidden = true;
+        buttonEl.type = "button";
+        buttonEl.classList.add("studio-refresh-chip");
+        buttonEl.setAttribute("aria-haspopup", "menu");
+        buttonEl.setAttribute("aria-expanded", "false");
+        buttonEl.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (name === "review" && getAbortablePendingKind() === "critique") {
+            requestCancelForPendingRequest("critique");
+            return;
+          }
+          toggleStudioUiRefreshMenu(name);
+        });
+        anchorEl.appendChild(buttonEl);
+        anchorEl.appendChild(menuEl);
+        return { name, anchor: anchorEl, button: buttonEl, menu: menuEl };
+      }
+
+      function setupStudioUiRefreshPrototype() {
+        if (!studioUiRefreshEnabled || studioUiRefreshUi || isEditorOnlyMode) return;
+        const leftHeaderEl = document.getElementById("leftSectionHeader");
+        const sourceMetaEl = leftPaneEl ? leftPaneEl.querySelector(".source-meta") : null;
+        if (!leftHeaderEl || !sourceMetaEl || !editorViewSelect || !sendRunBtn || !copyDraftBtn) return;
+
+        const reviewButton = makeStudioUiRefreshElement("button", "studio-refresh-tool-tab studio-refresh-review-btn", "Review");
+        const reviewMenu = makeStudioUiRefreshMenu(reviewButton, "review", "studio-refresh-review-anchor");
+        appendStudioUiRefreshMenuSection(reviewMenu.menu, "Action", [critiqueBtn]);
+        appendStudioUiRefreshMenuSection(reviewMenu.menu, "Setting", [lensSelect]);
+
+        const headerTopEl = makeStudioUiRefreshElement("div", "studio-refresh-header-top");
+        const titleGroupEl = makeStudioUiRefreshElement("div", "studio-refresh-title-group");
+        if (leftFocusBtn) {
+          setStudioUiRefreshFocusButtonIcon(leftFocusBtn, false);
+          titleGroupEl.appendChild(leftFocusBtn);
+        }
+        titleGroupEl.appendChild(makeStudioUiRefreshSeparator());
+        titleGroupEl.appendChild(editorViewSelect);
+        headerTopEl.appendChild(titleGroupEl);
+        const originGroupEl = makeStudioUiRefreshElement("div", "studio-refresh-origin-group");
+        if (sourceBadgeEl) originGroupEl.appendChild(sourceBadgeEl);
+        headerTopEl.appendChild(originGroupEl);
+
+        const headerUtilityEl = makeStudioUiRefreshElement("div", "studio-refresh-header-utility");
+        const utilityLeftEl = makeStudioUiRefreshElement("div", "studio-refresh-utility-left");
+        if (resourceDirBtn) utilityLeftEl.appendChild(resourceDirBtn);
+        if (resourceDirLabel) utilityLeftEl.appendChild(resourceDirLabel);
+        if (resourceDirInputWrap) utilityLeftEl.appendChild(resourceDirInputWrap);
+        if (syncBadgeEl) utilityLeftEl.appendChild(syncBadgeEl);
+        const headerToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
+        if (reviewNotesBtn) headerToolsEl.appendChild(reviewNotesBtn);
+        if (outlineBtn) headerToolsEl.appendChild(outlineBtn);
+        if (scratchpadBtn) headerToolsEl.appendChild(scratchpadBtn);
+        headerToolsEl.appendChild(reviewMenu.anchor);
+        headerUtilityEl.appendChild(utilityLeftEl);
+        headerUtilityEl.appendChild(headerToolsEl);
+        leftHeaderEl.replaceChildren(headerTopEl, headerUtilityEl);
+
+        const rightHeaderEl = document.getElementById("rightSectionHeader");
+        if (rightHeaderEl && rightViewSelect) {
+          const rightIdentityEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-identity studio-refresh-pane-identity-right");
+          const rightTitleGroupEl = makeStudioUiRefreshElement("div", "studio-refresh-title-group");
+          if (rightFocusBtn) {
+            setStudioUiRefreshFocusButtonIcon(rightFocusBtn, false);
+            rightTitleGroupEl.appendChild(rightFocusBtn);
+            rightTitleGroupEl.appendChild(makeStudioUiRefreshSeparator());
+          }
+          rightTitleGroupEl.appendChild(rightViewSelect);
+          rightIdentityEl.appendChild(rightTitleGroupEl);
+          const rightToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
+          if (exportPdfBtn) rightToolsEl.appendChild(exportPdfBtn);
+          rightHeaderEl.replaceChildren(rightIdentityEl, rightToolsEl);
+        }
+
+        const toolbarEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar");
+        const toolbarMainEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-main");
+        const actionsEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-actions");
+        const actionLineOneEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
+        actionLineOneEl.appendChild(sendRunBtn);
+        if (queueSteerBtn) actionLineOneEl.appendChild(queueSteerBtn);
+        const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
+        actionLineTwoEl.appendChild(copyDraftBtn);
+        if (sendEditorBtn) actionLineTwoEl.appendChild(sendEditorBtn);
+        actionsEl.appendChild(actionLineOneEl);
+        actionsEl.appendChild(actionLineTwoEl);
+
+        const stateEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-state");
+        const annotationsButton = makeStudioUiRefreshElement("button", "", "Annotations");
+        const annotationsMenu = makeStudioUiRefreshMenu(annotationsButton, "annotations", "studio-refresh-annotations-anchor");
+        appendStudioUiRefreshMenuSection(annotationsMenu.menu, "Display", [annotationModeSelect, insertHeaderBtn]);
+        appendStudioUiRefreshMenuSection(annotationsMenu.menu, "Actions", [stripAnnotationsBtn, saveAnnotatedBtn]);
+        const viewButton = makeStudioUiRefreshElement("button", "", "View");
+        const viewMenu = makeStudioUiRefreshMenu(viewButton, "view", "studio-refresh-view-anchor");
+        appendStudioUiRefreshMenuSection(viewMenu.menu, "Display", [highlightSelect, lineNumbersSelect]);
+        stateEl.appendChild(annotationsMenu.anchor);
+        stateEl.appendChild(viewMenu.anchor);
+
+        toolbarMainEl.appendChild(actionsEl);
+        toolbarMainEl.appendChild(stateEl);
+        toolbarEl.appendChild(toolbarMainEl);
+        sourceMetaEl.replaceChildren(toolbarEl);
+
+        studioUiRefreshUi = {
+          annotationsButton,
+          viewButton,
+          reviewButton,
+          menus: [annotationsMenu, viewMenu, reviewMenu],
+        };
+
+        document.addEventListener("click", (event) => {
+          const target = event.target;
+          if (target instanceof Element && target.closest(".studio-refresh-menu-anchor")) return;
+          closeStudioUiRefreshMenus();
+        });
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") closeStudioUiRefreshMenus();
+        });
+        toolbarEl.addEventListener("change", () => {
+          window.setTimeout(syncStudioUiRefreshSummaries, 0);
+        });
+        toolbarEl.addEventListener("click", (event) => {
+          const target = event.target;
+          if (target instanceof Element && target.closest(".studio-refresh-menu")) {
+            window.setTimeout(syncStudioUiRefreshSummaries, 0);
+          }
+        });
+        syncStudioUiRefreshSummaries();
+      }
+
+      setupStudioUiRefreshPrototype();
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
       if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
         throw new Error("Studio annotation helpers failed to load.");
@@ -1301,7 +1586,7 @@
 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
-        sourceBadgeEl.textContent = "Editor origin: " + label;
+        sourceBadgeEl.textContent = (studioUiRefreshEnabled ? "Origin: " : "Editor origin: ") + label;
         const descriptor = getCurrentStudioDocumentDescriptor();
         if (sourceBadgeEl) {
           sourceBadgeEl.title = descriptor.fileBacked
@@ -1362,6 +1647,9 @@
           btn.classList.toggle("is-active", isFocusedPane);
           btn.setAttribute("aria-pressed", isFocusedPane ? "true" : "false");
           btn.textContent = isFocusedPane ? "Exit focus" : "Focus pane";
+          if (studioUiRefreshEnabled) {
+            setStudioUiRefreshFocusButtonIcon(btn, isFocusedPane);
+          }
           btn.title = isFocusedPane
             ? "Return to the two-pane layout. Shortcut: F10 or Cmd/Ctrl+Esc."
             : "Show only the " + paneName + " pane. Shortcut: F10 or Cmd/Ctrl+Esc.";
@@ -3849,6 +4137,7 @@
         if (lineNumbersSelect) {
           lineNumbersSelect.value = lineNumbersEnabled ? "on" : "off";
         }
+        syncStudioUiRefreshSummaries();
         updateLineNumberGutterVisibility();
         scheduleEditorLineNumberRender();
         if (editorHighlightEnabled && editorView === "markdown") {
@@ -4537,6 +4826,7 @@
         if (stripAnnotationsBtn) {
           stripAnnotationsBtn.disabled = uiBusy || !hasAnnotationMarkers(sourceTextEl.value);
         }
+        syncStudioUiRefreshSummaries();
       }
 
       function scheduleEditorMetaUpdate() {
@@ -8870,11 +9160,13 @@
         if (!highlightSelect) return;
         if (!editorHighlightEnabled) {
           highlightSelect.value = "off";
+          syncStudioUiRefreshSummaries();
           return;
         }
         highlightSelect.value = (editorLanguage && SUPPORTED_LANGUAGES.indexOf(editorLanguage) !== -1)
           ? editorLanguage
           : "markdown";
+        syncStudioUiRefreshSummaries();
       }
 
       function setEditorHighlightEnabled(enabled) {
@@ -8977,6 +9269,7 @@
             critiqueBtn.disabled = true;
             critiqueBtn.title = "Critique is unavailable in editor-only mode.";
           }
+          syncStudioUiRefreshReviewTrigger();
           return;
         }
 
@@ -9014,6 +9307,7 @@
                 ? "Critique text as-is (includes [an: ...] markers)."
                 : "Critique text with [an: ...] markers stripped."));
         }
+        syncStudioUiRefreshReviewTrigger();
       }
 
       function updateAnnotationModeUi() {
@@ -9024,6 +9318,7 @@
             : "Inline annotations Hide: keep markers in the editor, hide them in preview, and strip before Run/Critique.";
         }
 
+        syncStudioUiRefreshSummaries();
         syncRunAndCritiqueButtons();
       }
 
@@ -9909,10 +10204,12 @@
         if (hasHeader) {
           insertHeaderBtn.textContent = "Annotation header: On";
           insertHeaderBtn.title = "Remove annotated-reply protocol header while keeping body text.";
+          syncStudioUiRefreshSummaries();
           return;
         }
         insertHeaderBtn.textContent = "Annotation header: Off";
         insertHeaderBtn.title = "Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).";
+        syncStudioUiRefreshSummaries();
       }
 
       function toggleAnnotatedReplyHeader() {

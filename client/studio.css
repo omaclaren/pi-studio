@@ -2314,3 +2314,483 @@
         grid-template-columns: 1fr;
       }
     }
+
+    /* Opt-in editor-side layout refresh prototype. Enabled with ?uiRefresh=1 or localStorage piStudio.uiRefresh=1. */
+    body.studio-ui-refresh {
+      font-size: 13px;
+    }
+
+    body.studio-ui-refresh > header {
+      padding: 9px 14px;
+      gap: 10px;
+    }
+
+    body.studio-ui-refresh h1 {
+      font-size: 17px;
+    }
+
+    body.studio-ui-refresh .app-logo {
+      font-size: 20px;
+    }
+
+    body.studio-ui-refresh .app-subtitle {
+      font-size: 11px;
+    }
+
+    body.studio-ui-refresh > header .controls {
+      gap: 6px;
+    }
+
+    body.studio-ui-refresh > header button,
+    body.studio-ui-refresh > header .file-label,
+    body.studio-ui-refresh #responseActions button,
+    body.studio-ui-refresh #responseActions select {
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+
+    body.studio-ui-refresh main {
+      gap: 10px;
+      padding: 10px;
+    }
+
+    body.studio-ui-refresh footer {
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+
+    body.studio-ui-refresh #leftSectionHeader,
+    body.studio-ui-refresh #rightSectionHeader {
+      position: relative;
+      z-index: 30;
+      display: grid;
+      gap: 7px;
+      background: transparent;
+      padding: 8px 10px 7px;
+      overflow: visible;
+    }
+
+    body.studio-ui-refresh #leftSectionHeader {
+      grid-template-columns: 1fr;
+      align-items: stretch;
+    }
+
+    body.studio-ui-refresh #rightSectionHeader {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+    }
+
+    body.studio-ui-refresh .studio-refresh-utility-left,
+    body.studio-ui-refresh .studio-refresh-pane-identity,
+    body.studio-ui-refresh .studio-refresh-pane-tools,
+    body.studio-ui-refresh .studio-refresh-title-group,
+    body.studio-ui-refresh .studio-refresh-context-group,
+    body.studio-ui-refresh .studio-refresh-action-line {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    body.studio-ui-refresh .studio-refresh-header-top,
+    body.studio-ui-refresh .studio-refresh-header-utility {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    body.studio-ui-refresh .studio-refresh-origin-group {
+      display: flex;
+      justify-content: flex-end;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    body.studio-ui-refresh .studio-refresh-pane-identity {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      column-gap: 10px;
+      row-gap: 6px;
+    }
+
+    body.studio-ui-refresh .studio-refresh-title-group,
+    body.studio-ui-refresh .studio-refresh-context-group,
+    body.studio-ui-refresh .studio-refresh-utility-left {
+      flex-wrap: nowrap;
+    }
+
+    body.studio-ui-refresh .studio-refresh-context-group,
+    body.studio-ui-refresh .studio-refresh-utility-left {
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    body.studio-ui-refresh .studio-refresh-pane-tools {
+      justify-content: flex-end;
+      flex-wrap: nowrap;
+    }
+
+    body.studio-ui-refresh .studio-refresh-sep {
+      display: inline-block;
+      width: 1px;
+      height: 18px;
+      background: var(--border-muted);
+      margin: 0 4px;
+      flex: 0 0 1px;
+    }
+
+    body.studio-ui-refresh .studio-refresh-icon {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      stroke-width: 1.85;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      pointer-events: none;
+    }
+
+    body.studio-ui-refresh #leftSectionHeader select,
+    body.studio-ui-refresh #leftSectionHeader button,
+    body.studio-ui-refresh #rightSectionHeader select,
+    body.studio-ui-refresh #rightSectionHeader button,
+    body.studio-ui-refresh .studio-refresh-toolbar button,
+    body.studio-ui-refresh .studio-refresh-toolbar select {
+      border-color: transparent;
+      background: transparent;
+      font-size: 13px;
+    }
+
+    body.studio-ui-refresh #leftSectionHeader select:hover,
+    body.studio-ui-refresh #leftSectionHeader button:not(:disabled):hover,
+    body.studio-ui-refresh #rightSectionHeader select:hover,
+    body.studio-ui-refresh #rightSectionHeader button:not(:disabled):hover,
+    body.studio-ui-refresh .studio-refresh-toolbar button:not(:disabled):hover,
+    body.studio-ui-refresh .studio-refresh-toolbar select:not(:disabled):hover {
+      background: var(--panel-2);
+    }
+
+    body.studio-ui-refresh #editorViewSelect,
+    body.studio-ui-refresh #rightViewSelect {
+      font-size: 15px;
+      font-weight: 700;
+      padding: 3px 5px;
+      max-width: 190px;
+    }
+
+    body.studio-ui-refresh #leftFocusBtn,
+    body.studio-ui-refresh #rightFocusBtn {
+      width: 32px;
+      min-width: 32px;
+      min-height: 32px;
+      padding: 0;
+      color: var(--muted);
+      align-items: center;
+      justify-content: center;
+    }
+
+    body.studio-ui-refresh #sourceBadge,
+    body.studio-ui-refresh #resourceDirBtn,
+    body.studio-ui-refresh #resourceDirLabel {
+      border-color: transparent;
+      background: transparent;
+      padding: 4px 6px;
+      font-size: 13px;
+      border-radius: 8px;
+    }
+
+    body.studio-ui-refresh #sourceBadge {
+      color: var(--text);
+      max-width: min(24rem, 42vw);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    body.studio-ui-refresh #resourceDirBtn,
+    body.studio-ui-refresh #resourceDirLabel,
+    body.studio-ui-refresh #reviewNotesBtn,
+    body.studio-ui-refresh #outlineBtn,
+    body.studio-ui-refresh #scratchpadBtn,
+    body.studio-ui-refresh .studio-refresh-tool-tab {
+      color: var(--text);
+    }
+
+    body.studio-ui-refresh #resourceDirInputWrap.visible {
+      display: inline-flex;
+    }
+
+    body.studio-ui-refresh #syncBadge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 26px;
+      border: 0;
+      border-radius: 999px;
+      padding: 3px 9px;
+      background: var(--panel-2);
+      color: var(--muted);
+      opacity: 1;
+    }
+
+    body.studio-ui-refresh #syncBadge[hidden] {
+      display: none !important;
+    }
+
+    body.studio-ui-refresh #syncBadge::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--success, #22c55e);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #22c55e) 14%, transparent);
+    }
+
+    body.studio-ui-refresh #reviewNotesBtn,
+    body.studio-ui-refresh #outlineBtn,
+    body.studio-ui-refresh #scratchpadBtn,
+    body.studio-ui-refresh .studio-refresh-tool-tab {
+      font-weight: 500;
+      padding: 6px 9px;
+      border-radius: 9px;
+    }
+
+    body.studio-ui-refresh #reviewNotesBtn.is-active,
+    body.studio-ui-refresh #outlineBtn.is-active,
+    body.studio-ui-refresh #scratchpadBtn.has-content,
+    body.studio-ui-refresh #reviewNotesBtn.has-content {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: transparent;
+    }
+
+    body.studio-ui-refresh .source-wrap {
+      padding: 0;
+      gap: 0;
+    }
+
+    body.studio-ui-refresh .source-meta {
+      display: block;
+      padding: 0;
+      border-bottom: 1px solid var(--border-muted);
+      position: relative;
+      z-index: 20;
+      overflow: visible;
+    }
+
+    body.studio-ui-refresh .source-body {
+      padding: 8px;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar {
+      position: relative;
+      padding: 9px 12px 10px;
+      overflow: visible;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar-main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+      min-width: 0;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar-actions {
+      display: grid;
+      gap: 7px;
+      justify-items: start;
+      min-width: 0;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar-state {
+      display: grid;
+      gap: 7px;
+      justify-items: end;
+      align-content: start;
+      min-width: max-content;
+    }
+
+    body.studio-ui-refresh .studio-refresh-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 9px;
+      color: var(--text);
+      white-space: nowrap;
+      padding: 6px 9px;
+    }
+
+    body.studio-ui-refresh .studio-refresh-chip::after {
+      content: "⌄";
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1;
+      transform: translateY(-1px);
+    }
+
+    body.studio-ui-refresh .studio-refresh-chip.is-open {
+      background: var(--panel-2);
+      color: var(--text);
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu-anchor {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      overflow: visible;
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      width: min(420px, calc(100vw - 48px));
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.32);
+      z-index: 100;
+    }
+
+    body.studio-ui-refresh .studio-refresh-review-anchor .studio-refresh-menu {
+      width: min(360px, calc(100vw - 48px));
+      left: auto;
+      right: 0;
+    }
+
+    body.studio-ui-refresh .studio-refresh-view-anchor .studio-refresh-menu {
+      width: min(320px, calc(100vw - 48px));
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu[hidden] {
+      display: none !important;
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu-section {
+      padding: 8px 0 6px;
+      border-top: 1px solid var(--border-muted);
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu-section:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu-heading {
+      margin: 0 6px 6px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      min-width: 0;
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu-item > button,
+    body.studio-ui-refresh .studio-refresh-menu-item > select {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+      border-color: transparent;
+      background: transparent;
+      color: var(--text);
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu #critiqueBtn {
+      justify-content: flex-start;
+      text-align: left;
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu-item > button:not(:disabled):hover,
+    body.studio-ui-refresh .studio-refresh-menu-item > select:not(:disabled):hover {
+      background: var(--panel-2);
+    }
+
+    body.studio-ui-refresh #sendRunBtn,
+    body.studio-ui-refresh #loadResponseBtn:not([hidden]) {
+      height: 34px;
+      min-height: 34px;
+      padding: 6px 12px;
+      font-size: 13px;
+      line-height: 1.2;
+      border-radius: 9px;
+    }
+
+    body.studio-ui-refresh #sendRunBtn {
+      min-width: 10.5rem;
+    }
+
+    body.studio-ui-refresh #queueSteerBtn {
+      min-width: auto;
+      min-height: 34px;
+    }
+
+    body.studio-ui-refresh #queueSteerBtn:not(:disabled) {
+      background: transparent;
+      border-color: transparent;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    body.studio-ui-refresh #queueSteerBtn:not(:disabled):hover {
+      background: var(--panel-2);
+      filter: none;
+    }
+
+    body.studio-ui-refresh .studio-refresh-review-btn.request-stop-active {
+      background: var(--error);
+      border-color: var(--error);
+      color: var(--error-contrast);
+      font-weight: 600;
+    }
+
+    body.studio-ui-refresh .studio-refresh-review-btn.request-stop-active::after {
+      content: none;
+    }
+
+    body.studio-ui-refresh .studio-refresh-menu #critiqueBtn.request-stop-active {
+      background: var(--error);
+      border-color: var(--error);
+      color: var(--error-contrast);
+      font-weight: 600;
+    }
+
+    @media (max-width: 1280px) {
+      body.studio-ui-refresh #rightSectionHeader,
+      body.studio-ui-refresh .studio-refresh-header-top,
+      body.studio-ui-refresh .studio-refresh-header-utility,
+      body.studio-ui-refresh .studio-refresh-toolbar-main,
+      body.studio-ui-refresh .studio-refresh-pane-identity {
+        grid-template-columns: 1fr;
+      }
+
+      body.studio-ui-refresh .studio-refresh-pane-tools,
+      body.studio-ui-refresh .studio-refresh-toolbar-state {
+        justify-content: flex-start;
+        justify-items: start;
+      }
+
+      body.studio-ui-refresh .studio-refresh-pane-tools,
+      body.studio-ui-refresh .studio-refresh-title-group,
+      body.studio-ui-refresh .studio-refresh-utility-left {
+        flex-wrap: wrap;
+      }
+
+      body.studio-ui-refresh .studio-refresh-toolbar-state {
+        min-width: 0;
+      }
+    }
