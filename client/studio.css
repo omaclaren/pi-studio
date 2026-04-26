@@ -2359,6 +2359,14 @@
       font-size: 12px;
     }
 
+    .studio-ui-refresh-toggle {
+      opacity: 0.9;
+    }
+
+    .studio-ui-refresh-toggle:not(:disabled):hover {
+      opacity: 1;
+    }
+
     body.studio-ui-refresh #leftSectionHeader,
     body.studio-ui-refresh #rightSectionHeader {
       position: relative;
@@ -2475,11 +2483,17 @@
     }
 
     body.studio-ui-refresh #editorViewSelect,
-    body.studio-ui-refresh #rightViewSelect {
+    body.studio-ui-refresh #rightViewSelect,
+    body.studio-ui-refresh .studio-refresh-static-title {
       font-size: 15px;
       font-weight: 700;
       padding: 3px 5px;
       max-width: 190px;
+    }
+
+    body.studio-ui-refresh .studio-refresh-static-title {
+      color: var(--text);
+      white-space: nowrap;
     }
 
     body.studio-ui-refresh #leftFocusBtn,
@@ -2718,6 +2732,11 @@
     body.studio-ui-refresh .studio-refresh-menu-item > button:not(:disabled):hover,
     body.studio-ui-refresh .studio-refresh-menu-item > select:not(:disabled):hover {
       background: var(--panel-2);
+    }
+
+    body.studio-ui-refresh #copyDraftBtn:only-child {
+      min-height: 32px;
+      padding: 5px 9px;
     }
 
     body.studio-ui-refresh #sendRunBtn,
