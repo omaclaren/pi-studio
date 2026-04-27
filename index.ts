@@ -5966,6 +5966,17 @@ function buildTerminalSessionLabel(cwd: string, sessionName?: string): string {
 	return parts.join(" · ");
 }
 
+function buildTerminalSessionDetail(cwd: string, sessionName?: string): string {
+	const termProgram = String(process.env.TERM_PROGRAM ?? "").trim() || "unknown";
+	const name = String(sessionName ?? "").trim() || "unknown";
+	const workingDir = String(cwd || process.cwd() || "").trim() || "unknown";
+	return [
+		`Terminal: ${termProgram}`,
+		`Session: ${name}`,
+		`Working dir: ${workingDir}`,
+	].join("\n");
+}
+
 function sanitizePdfFilename(input: string | undefined): string {
 	const fallback = "studio-preview.pdf";
 	const raw = String(input ?? "").trim();
@@ -6069,6 +6080,7 @@ function buildStudioHtml(
 	theme?: Theme,
 	initialModelLabel?: string,
 	initialTerminalLabel?: string,
+	initialTerminalDetail?: string,
 	initialContextUsage?: StudioContextUsageSnapshot,
 	studioMode: StudioUiMode = "full",
 ): string {
@@ -6079,6 +6091,7 @@ function buildStudioHtml(
 	const initialDraftId = escapeHtmlForInline(initialDocument?.draftId ?? "");
 	const initialModel = escapeHtmlForInline(initialModelLabel ?? "none");
 	const initialTerminal = escapeHtmlForInline(initialTerminalLabel ?? "unknown");
+	const initialTerminalDetailAttr = escapeHtmlForInline(initialTerminalDetail ?? initialTerminalLabel ?? "unknown");
 	const initialContextTokens =
 		typeof initialContextUsage?.tokens === "number" && Number.isFinite(initialContextUsage.tokens)
 			? String(initialContextUsage.tokens)
@@ -6145,7 +6158,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}">
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -6424,6 +6437,7 @@ export default function (pi: ExtensionAPI) {
 	let currentModel: { provider?: string; id?: string } | undefined;
 	let currentModelLabel = "none";
 	let terminalSessionLabel = buildTerminalSessionLabel(studioCwd);
+	let terminalSessionDetail = buildTerminalSessionDetail(studioCwd);
 	let studioResponseHistory: StudioResponseHistoryItem[] = [];
 	let latestSessionUserPrompt: string | null = null;
 	let pendingTurnPrompt: string | null = null;
@@ -6508,6 +6522,7 @@ export default function (pi: ExtensionAPI) {
 		const baseModelLabel = formatModelLabel(currentModel);
 		currentModelLabel = formatModelLabelWithThinking(baseModelLabel, getThinkingLevelSafe());
 		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
+		terminalSessionDetail = buildTerminalSessionDetail(studioCwd, getSessionNameSafe());
 	};
 
 	const notifyStudio = (message: string, level: "info" | "warning" | "error" = "info") => {
@@ -7081,6 +7096,7 @@ export default function (pi: ExtensionAPI) {
 
 	const broadcastState = () => {
 		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
+		terminalSessionDetail = buildTerminalSessionDetail(studioCwd, getSessionNameSafe());
 		currentModelLabel = formatModelLabelWithThinking(formatModelLabel(currentModel), getThinkingLevelSafe());
 		refreshContextUsage();
 		broadcast({
@@ -7092,6 +7108,7 @@ export default function (pi: ExtensionAPI) {
 			terminalActivityLabel,
 			modelLabel: currentModelLabel,
 			terminalSessionLabel,
+			terminalSessionDetail,
 			contextTokens: contextUsageSnapshot.tokens,
 			contextWindow: contextUsageSnapshot.contextWindow,
 			contextPercent: contextUsageSnapshot.percent,
@@ -7386,6 +7403,7 @@ export default function (pi: ExtensionAPI) {
 				terminalActivityLabel,
 				modelLabel: currentModelLabel,
 				terminalSessionLabel,
+				terminalSessionDetail,
 				contextTokens: contextUsageSnapshot.tokens,
 				contextWindow: contextUsageSnapshot.contextWindow,
 				contextPercent: contextUsageSnapshot.percent,
@@ -8511,7 +8529,7 @@ export default function (pi: ExtensionAPI) {
 		refreshContextUsage();
 		const studioMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
 		const requestInitialDocument = resolveRequestedStudioDocumentFromUrl(requestUrl, initialStudioDocument, studioCwd, lastStudioResponse);
-		res.end(buildStudioHtml(requestInitialDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, contextUsageSnapshot, studioMode));
+		res.end(buildStudioHtml(requestInitialDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, terminalSessionDetail, contextUsageSnapshot, studioMode));
 	};
 
 	const ensureServer = async (): Promise<StudioServerState> => {

@@ -204,6 +204,7 @@
       let compactInProgress = false;
       let modelLabel = (document.body && document.body.dataset && document.body.dataset.modelLabel) || "none";
       let terminalSessionLabel = (document.body && document.body.dataset && document.body.dataset.terminalLabel) || "unknown";
+      let terminalSessionDetail = (document.body && document.body.dataset && document.body.dataset.terminalDetail) || terminalSessionLabel;
       let contextTokens = null;
       let contextWindow = null;
       let contextPercent = null;
@@ -1535,17 +1536,18 @@
       function updateFooterMeta() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
+        const terminalDetailText = terminalSessionDetail && terminalSessionDetail.trim() ? terminalSessionDetail.trim() : terminalText;
         const contextText = formatContextUsageText(true);
         const contextTitleText = formatContextUsageText(false);
         const contextDisplayText = contextText.replace(/^Context:\s*/i, "");
         const text = modelText + " · " + terminalText + " · " + contextDisplayText;
-        const titleText = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextTitleText;
+        const titleText = "Model: " + modelText + " · " + terminalDetailText + " · " + contextTitleText;
         if (footerMetaModelEl && footerMetaTerminalEl && footerMetaContextEl) {
           footerMetaModelEl.textContent = modelText;
           footerMetaTerminalEl.textContent = terminalText;
           footerMetaContextEl.textContent = contextDisplayText;
           footerMetaModelEl.title = "Model: " + modelText;
-          footerMetaTerminalEl.title = "Terminal: " + terminalText;
+          footerMetaTerminalEl.title = terminalDetailText;
           footerMetaContextEl.title = contextTitleText;
           if (footerMetaTextEl) footerMetaTextEl.title = titleText;
           if (footerMetaEl) footerMetaEl.title = titleText;
@@ -9633,6 +9635,9 @@
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
+          if (typeof message.terminalSessionDetail === "string") {
+            terminalSessionDetail = message.terminalSessionDetail;
+          }
           applyStudioRunQueueStateFromMessage(message);
           updateFooterMeta();
           setBusy(busy);
@@ -10040,6 +10045,9 @@
           }
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
+          }
+          if (typeof message.terminalSessionDetail === "string") {
+            terminalSessionDetail = message.terminalSessionDetail;
           }
           applyStudioRunQueueStateFromMessage(message);
           updateFooterMeta();
