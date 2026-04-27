@@ -6301,7 +6301,7 @@ ${cssVarsBlock}
               <div class="review-notes-dock-footer">
                 <div class="scratchpad-actions">
                   <button id="reviewNotesAddBtn" type="button" title="Create a new local comment on the current editor line.">Line comment</button>
-                  <button id="reviewNotesPromptBtn" type="button" title="Load local comments, line numbers, and file labels into the editor as a prompt.">Load prompt</button>
+                  <button id="reviewNotesPromptBtn" type="button" title="Load local comments, line numbers, and file labels into the editor as a prompt.">Load comments as prompt</button>
                   <button id="reviewNotesInlineAllBtn" type="button" title="Toggle inline annotations for all non-empty comments.">All inline: Off</button>
                   <button id="reviewNotesDeleteAllBtn" type="button" title="Delete all local comments for this document or draft.">Delete all</button>
                   <button id="reviewNotesDoneBtn" type="button" title="Hide the comments rail.">Hide</button>
