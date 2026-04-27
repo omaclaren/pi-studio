@@ -2830,12 +2830,9 @@
       border-radius: 8px;
     }
 
-    body.studio-ui-refresh #sendRunBtn {
-      min-width: 8.6rem;
-    }
-
+    body.studio-ui-refresh #sendRunBtn,
     body.studio-ui-refresh #queueSteerBtn {
-      min-width: auto;
+      min-width: 8.6rem;
     }
 
     body.studio-ui-refresh #queueSteerBtn:not(:disabled) {
