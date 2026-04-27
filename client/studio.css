@@ -2113,7 +2113,13 @@
 
     .review-notes-dock-footer .scratchpad-actions {
       width: 100%;
-      justify-content: space-between;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
+    .review-notes-dock-footer .scratchpad-actions button {
+      padding: 5px 7px;
+      font-size: 11px;
     }
 
     .outline-list {
@@ -2315,7 +2321,7 @@
       }
     }
 
-    /* Opt-in editor-side layout refresh prototype. Enabled with ?uiRefresh=1 or localStorage piStudio.uiRefresh=1. */
+    /* Default refreshed Studio layout. Classic layout remains available with ?uiRefresh=0 or the footer UI switch. */
     body.studio-ui-refresh {
       font-size: 13px;
     }

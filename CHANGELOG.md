@@ -5,9 +5,10 @@ All notable changes to `pi-studio` are documented here.
 ## [Unreleased]
 
 ### Added
-- The comments rail now includes **Load prompt**, which turns non-empty local comments into an editor prompt with line anchors and file labels when available.
+- The comments rail now includes **Comments → prompt**, which turns non-empty local comments into an editor prompt with line anchors and file labels when available.
 
 ### Changed
+- The refreshed Studio layout is now the default, with the classic layout still available via the footer UI switch or `?uiRefresh=0`.
 - Working-view tool output now replaces image/base64 payloads with compact placeholders instead of dumping raw image data.
 
 ### Fixed

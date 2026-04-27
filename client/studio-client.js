@@ -675,21 +675,21 @@
         const queryValue = initialQueryParams.has("uiRefresh")
           ? initialQueryParams.get("uiRefresh")
           : (initialQueryParams.has("studioUiRefresh") ? initialQueryParams.get("studioUiRefresh") : null);
-        const isTruthy = (value) => ["1", "true", "yes", "on", "v2", "refresh"].indexOf(normalize(value)) !== -1;
-        const isFalsey = (value) => ["0", "false", "no", "off"].indexOf(normalize(value)) !== -1;
+        const isTruthy = (value) => ["1", "true", "yes", "on", "v2", "refresh", "fresh"].indexOf(normalize(value)) !== -1;
+        const isFalsey = (value) => ["0", "false", "no", "off", "classic"].indexOf(normalize(value)) !== -1;
         if (queryValue !== null) {
-          const enabled = isTruthy(queryValue) || (!isFalsey(queryValue) && normalize(queryValue) !== "");
+          const normalizedQuery = normalize(queryValue);
+          const enabled = isTruthy(queryValue) || (!isFalsey(queryValue) && normalizedQuery !== "");
           try {
-            if (enabled) window.localStorage && window.localStorage.setItem(STUDIO_UI_REFRESH_STORAGE_KEY, "1");
-            else window.localStorage && window.localStorage.removeItem(STUDIO_UI_REFRESH_STORAGE_KEY);
+            window.localStorage && window.localStorage.setItem(STUDIO_UI_REFRESH_STORAGE_KEY, enabled ? "1" : "0");
           } catch {}
           return enabled;
         }
         try {
-          return Boolean(window.localStorage && window.localStorage.getItem(STUDIO_UI_REFRESH_STORAGE_KEY) === "1");
-        } catch {
-          return false;
-        }
+          const stored = window.localStorage ? window.localStorage.getItem(STUDIO_UI_REFRESH_STORAGE_KEY) : null;
+          if (stored !== null) return stored !== "0" && !isFalsey(stored);
+        } catch {}
+        return true;
       }
 
       function makeStudioUiRefreshElement(tagName, className, text) {
@@ -842,8 +842,7 @@
 
       function setStudioUiRefreshPreference(enabled) {
         try {
-          if (enabled) window.localStorage && window.localStorage.setItem(STUDIO_UI_REFRESH_STORAGE_KEY, "1");
-          else window.localStorage && window.localStorage.removeItem(STUDIO_UI_REFRESH_STORAGE_KEY);
+          window.localStorage && window.localStorage.setItem(STUDIO_UI_REFRESH_STORAGE_KEY, enabled ? "1" : "0");
         } catch {}
         try {
           const url = new URL(window.location.href);
@@ -8686,7 +8685,7 @@
           const toggleCandidates = getDisplayReviewNotes().filter((note) => getReviewNoteInlineState(note, currentText).canToggle);
           const allInline = toggleCandidates.length > 0 && toggleCandidates.every((note) => getReviewNoteInlineState(note, currentText).exists);
           reviewNotesInlineAllBtn.disabled = uiBusy || toggleCandidates.length === 0;
-          reviewNotesInlineAllBtn.textContent = allInline ? "All inline: On" : "All inline: Off";
+          reviewNotesInlineAllBtn.textContent = allInline ? "Inline: On" : "Inline: Off";
           reviewNotesInlineAllBtn.setAttribute("aria-pressed", allInline ? "true" : "false");
           reviewNotesInlineAllBtn.title = allInline
             ? "Inline annotations derived from all non-empty comments are currently on. Click to remove them."
