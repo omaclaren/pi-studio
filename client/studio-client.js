@@ -132,6 +132,7 @@
       const reviewNotesListEl = document.getElementById("reviewNotesList");
       const reviewNotesEmptyStateEl = document.getElementById("reviewNotesEmptyState");
       const reviewNotesAddBtn = document.getElementById("reviewNotesAddBtn");
+      const reviewNotesPromptBtn = document.getElementById("reviewNotesPromptBtn");
       const reviewNotesInlineAllBtn = document.getElementById("reviewNotesInlineAllBtn");
       const reviewNotesDeleteAllBtn = document.getElementById("reviewNotesDeleteAllBtn");
       const reviewNotesCloseBtn = document.getElementById("reviewNotesCloseBtn");
@@ -5769,6 +5770,87 @@
         };
       }
 
+      function getDiffFileLabelForLine(source, lineNumber) {
+        const lines = String(source || "").replace(/\r\n/g, "\n").split("\n");
+        const safeLine = Math.max(1, Math.min(Math.floor(Number(lineNumber) || 1), Math.max(1, lines.length)));
+        let currentFile = "";
+        for (let i = 0; i < safeLine; i += 1) {
+          const line = String(lines[i] || "");
+          const diffMatch = line.match(/^diff --git\s+a\/(.+?)\s+b\/(.+?)\s*$/);
+          if (diffMatch) {
+            currentFile = diffMatch[2] || diffMatch[1] || currentFile;
+            continue;
+          }
+          const plusMatch = line.match(/^\+\+\+\s+(?:b\/)?(.+)\s*$/);
+          if (plusMatch && plusMatch[1] && plusMatch[1] !== "/dev/null") {
+            currentFile = plusMatch[1];
+          }
+        }
+        return currentFile.trim();
+      }
+
+      function getReviewNotePromptFileLabel(note, source) {
+        if (sourceState && sourceState.path) return String(sourceState.path);
+        const bounds = getResolvedReviewNoteLineBounds(note, source);
+        const diffFile = bounds ? getDiffFileLabelForLine(source, bounds.lineStart) : "";
+        if (diffFile) return diffFile;
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        return descriptor && descriptor.fileBacked ? descriptor.label : "";
+      }
+
+      function formatReviewNotePromptLineRange(bounds, note) {
+        const start = bounds ? bounds.lineStart : Math.max(1, Number(note && note.lineStart) || 1);
+        const end = bounds ? bounds.lineEnd : Math.max(start, Number(note && note.lineEnd) || start);
+        return start === end ? "L" + start : ("L" + start + "-L" + end);
+      }
+
+      function buildReviewNotesPrompt() {
+        const source = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
+        const notes = getDisplayReviewNotes().filter((note) => String(note && note.text ? note.text : "").trim());
+        if (!notes.length) return "";
+
+        const descriptor = getCurrentStudioDocumentDescriptor();
+        const documentLabel = descriptor && descriptor.label ? descriptor.label : (sourceState && sourceState.label ? sourceState.label : "Studio document");
+        const parts = [
+          "Please address the following Studio comments. Use the file names and line numbers as anchors. The full document is not included here, only the comments and their anchors.",
+          "Document: " + documentLabel,
+          "",
+          "## Comments",
+        ];
+
+        notes.forEach((note, index) => {
+          const bounds = getResolvedReviewNoteLineBounds(note, source);
+          const fileLabel = getReviewNotePromptFileLabel(note, source);
+          const location = (fileLabel ? (fileLabel + ":") : "") + formatReviewNotePromptLineRange(bounds, note);
+          const comment = String(note && note.text ? note.text : "").trim();
+          const anchor = String(note && (note.selectedDisplayText || note.selectedText) ? (note.selectedDisplayText || note.selectedText) : "")
+            .replace(/\s+/g, " ")
+            .trim();
+          parts.push(
+            "### Comment " + (index + 1) + " — " + location,
+            "",
+            comment,
+          );
+          if (anchor) {
+            parts.push("", "> " + anchor.replace(/\n/g, "\n> "));
+          }
+          parts.push("");
+        });
+
+        return parts.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+      }
+
+      function loadReviewNotesPromptIntoEditor() {
+        const prompt = buildReviewNotesPrompt();
+        if (!prompt.trim()) {
+          setStatus("No non-empty comments to load as a prompt.", "warning");
+          return;
+        }
+        setEditorText(prompt, { preserveScroll: false, preserveSelection: false });
+        setSourceState({ source: "blank", label: "comments prompt", path: null });
+        setStatus("Loaded comments prompt into editor.", "success");
+      }
+
       function buildReviewNoteLineMap(text) {
         const source = String(text || "");
         const lineMap = new Map();
@@ -8592,6 +8674,13 @@
               ? "Select preview text and use Comment for a local preview-anchored comment."
               : "Switch to Editor (Raw) to comment on the current line.");
         }
+        if (reviewNotesPromptBtn) {
+          const promptCandidates = reviewNotes.filter((note) => String(note && note.text ? note.text : "").trim());
+          reviewNotesPromptBtn.disabled = uiBusy || promptCandidates.length === 0;
+          reviewNotesPromptBtn.title = promptCandidates.length > 0
+            ? "Load local comments, line numbers, and file labels into the editor as a prompt."
+            : "No non-empty local comments to load as a prompt.";
+        }
         if (reviewNotesInlineAllBtn) {
           const currentText = String(sourceTextEl && sourceTextEl.value ? sourceTextEl.value : "");
           const toggleCandidates = getDisplayReviewNotes().filter((note) => getReviewNoteInlineState(note, currentText).canToggle);
@@ -9724,6 +9813,7 @@
           setBusy(false);
           setWsState("Ready");
 
+          pendingResponseScrollReset = true;
           let appliedFromHistory = false;
           if (Array.isArray(message.responseHistory)) {
             appliedFromHistory = setResponseHistory(message.responseHistory, {
@@ -9752,6 +9842,9 @@
           if (pendingRequestId) return;
 
           const hasHistory = Array.isArray(message.responseHistory);
+          if (followLatest) {
+            pendingResponseScrollReset = true;
+          }
           if (hasHistory) {
             setResponseHistory(message.responseHistory, {
               autoSelectLatest: followLatest,
@@ -9775,7 +9868,7 @@
               return;
             }
 
-            if (!hasHistory && applyLatestPayload(payload)) {
+            if (!hasHistory && applyLatestPayload(payload, { resetScroll: true })) {
               queuedLatestResponse = null;
               updateResultActionButtons();
               setStatus("Updated from latest response.", "success");
@@ -10942,6 +11035,12 @@
         });
         editorSelectionJumpBtn.addEventListener("click", () => {
           jumpToEditorSelectionInPreview();
+        });
+      }
+
+      if (reviewNotesPromptBtn) {
+        reviewNotesPromptBtn.addEventListener("click", () => {
+          loadReviewNotesPromptIntoEditor();
         });
       }
 

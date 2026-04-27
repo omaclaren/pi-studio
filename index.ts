@@ -5764,34 +5764,74 @@ function createEmptyStudioTraceState(): StudioTraceState {
 	};
 }
 
+function sanitizeStudioTraceOutputText(text: string): string {
+	return String(text || "")
+		.replace(/data:image\/([a-zA-Z0-9.+-]+);base64,[A-Za-z0-9+/=\r\n]+/g, (_match, subtype: string) => `[Image: image/${subtype || "unknown"} data omitted]`)
+		.replace(/(\"(?:data|image|base64|content)\"\s*:\s*\")[A-Za-z0-9+/=]{1000,}(\")/g, "$1[base64 data omitted]$2")
+		.replace(/\b[A-Za-z0-9+/]{3000,}={0,2}\b/g, "[base64 data omitted]");
+}
+
+function isStudioTraceImageBlock(block: unknown): boolean {
+	if (!block || typeof block !== "object") return false;
+	const payload = block as Record<string, unknown>;
+	const type = typeof payload.type === "string" ? payload.type.toLowerCase() : "";
+	if (type.includes("image")) return true;
+	const mime = typeof payload.mimeType === "string"
+		? payload.mimeType
+		: (typeof payload.media_type === "string" ? payload.media_type : "");
+	if (mime.toLowerCase().startsWith("image/")) return true;
+	const source = payload.source && typeof payload.source === "object" ? payload.source as Record<string, unknown> : null;
+	const sourceMime = source && typeof source.media_type === "string" ? source.media_type : "";
+	return sourceMime.toLowerCase().startsWith("image/");
+}
+
+function describeStudioTraceImageBlock(block: unknown): string {
+	const payload = (block && typeof block === "object") ? block as Record<string, unknown> : {};
+	const source = payload.source && typeof payload.source === "object" ? payload.source as Record<string, unknown> : null;
+	const mime = typeof payload.mimeType === "string"
+		? payload.mimeType
+		: (typeof payload.media_type === "string"
+			? payload.media_type
+			: (source && typeof source.media_type === "string" ? source.media_type : "image"));
+	return `[Image: ${mime || "image"} output omitted from Working view]`;
+}
+
+function stringifyStudioTraceObject(value: unknown): string {
+	try {
+		return sanitizeStudioTraceOutputText(JSON.stringify(value, (_key, item) => {
+			if (typeof item === "string") {
+				if (/^data:image\//i.test(item)) return "[image data URI omitted]";
+				if (/^[A-Za-z0-9+/=]{1000,}$/.test(item)) return "[base64 data omitted]";
+			}
+			return item;
+		}, 2));
+	} catch {
+		return sanitizeStudioTraceOutputText(String(value));
+	}
+}
+
 function formatStudioTraceOutput(result: unknown): string {
 	if (result == null) return "";
-	if (typeof result === "string") return result;
+	if (typeof result === "string") return sanitizeStudioTraceOutputText(result);
 	if (Array.isArray(result)) {
 		return result.map((item) => formatStudioTraceOutput(item)).filter(Boolean).join("\n");
 	}
 	if (typeof result === "object") {
+		if (isStudioTraceImageBlock(result)) return describeStudioTraceImageBlock(result);
 		const payload = result as { content?: Array<{ type?: string; text?: string }> };
 		if (Array.isArray(payload.content)) {
 			return payload.content
 				.map((block) => {
-					if (block && block.type === "text" && typeof block.text === "string") return block.text;
-					try {
-						return JSON.stringify(block, null, 2);
-					} catch {
-						return String(block);
-					}
+					if (isStudioTraceImageBlock(block)) return describeStudioTraceImageBlock(block);
+					if (block && block.type === "text" && typeof block.text === "string") return sanitizeStudioTraceOutputText(block.text);
+					return stringifyStudioTraceObject(block);
 				})
 				.filter(Boolean)
 				.join("\n");
 		}
-		try {
-			return JSON.stringify(result, null, 2);
-		} catch {
-			return String(result);
-		}
+		return stringifyStudioTraceObject(result);
 	}
-	return String(result);
+	return sanitizeStudioTraceOutputText(String(result));
 }
 
 function summarizeStudioTraceToolArgs(toolName: string, args: unknown): string | null {
@@ -6261,6 +6301,7 @@ ${cssVarsBlock}
               <div class="review-notes-dock-footer">
                 <div class="scratchpad-actions">
                   <button id="reviewNotesAddBtn" type="button" title="Create a new local comment on the current editor line.">Line comment</button>
+                  <button id="reviewNotesPromptBtn" type="button" title="Load local comments, line numbers, and file labels into the editor as a prompt.">Load prompt</button>
                   <button id="reviewNotesInlineAllBtn" type="button" title="Toggle inline annotations for all non-empty comments.">All inline: Off</button>
                   <button id="reviewNotesDeleteAllBtn" type="button" title="Delete all local comments for this document or draft.">Delete all</button>
                   <button id="reviewNotesDoneBtn" type="button" title="Hide the comments rail.">Hide</button>
@@ -7228,6 +7269,20 @@ export default function (pi: ExtensionAPI) {
 			promptTriggerText: descriptor.promptTriggerText,
 		};
 		queuedStudioDirectRequests.push(queuedRequest);
+
+		// Steering is delivered into the currently running Studio turn rather than
+		// becoming a fully separate visible response request. Keep the active direct
+		// request metadata aligned with the effective prompt chain so persisted
+		// prompt metadata, response history, and "Load effective prompt" all refer
+		// to the original run plus queued steering, not just the original run.
+		if (activeRequest && activeRequest.kind === "direct") {
+			activeRequest.prompt = descriptor.prompt;
+			activeRequest.promptMode = descriptor.promptMode;
+			activeRequest.promptTriggerKind = descriptor.promptTriggerKind;
+			activeRequest.promptSteeringCount = descriptor.promptSteeringCount;
+			activeRequest.promptTriggerText = descriptor.promptTriggerText;
+		}
+
 		return queuedRequest;
 	};
 

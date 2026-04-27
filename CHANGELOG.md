@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- The comments rail now includes **Load prompt**, which turns non-empty local comments into an editor prompt with line anchors and file labels when available.
+
+### Changed
+- Working-view tool output now replaces image/base64 payloads with compact placeholders instead of dumping raw image data.
+
+### Fixed
+- Queued steering now updates Studio's active effective-prompt metadata so response history and prompt loading reflect the original run plus steering messages.
+- Newly arrived responses now force the right response pane to reset to the top, while editor-preview/document views still preserve scroll.
+
 ## [0.5.59] — 2026-04-27
 
 ### Added
