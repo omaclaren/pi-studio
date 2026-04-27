@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-04-27
+
 ### Added
 - The comments rail now includes **Comments → prompt**, which turns non-empty local comments into an editor prompt with line anchors and file labels when available.
 
