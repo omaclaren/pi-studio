@@ -855,7 +855,7 @@
 
       function setupStudioUiRefreshToggleButton() {
         if (!footerMetaEl || document.getElementById("studioUiRefreshToggleBtn")) return;
-        const button = makeStudioUiRefreshElement("button", "footer-compact-btn studio-ui-refresh-toggle", studioUiRefreshEnabled ? "UI: Refresh" : "UI: Classic");
+        const button = makeStudioUiRefreshElement("button", "footer-compact-btn studio-ui-refresh-toggle", studioUiRefreshEnabled ? "UI: Fresh" : "UI: Classic");
         button.id = "studioUiRefreshToggleBtn";
         button.type = "button";
         button.title = studioUiRefreshEnabled
@@ -1265,7 +1265,24 @@
         }
       }
 
-      function formatContextUsageText() {
+      function formatCompactNumber(value) {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "?";
+        const sign = value < 0 ? "-" : "";
+        const abs = Math.abs(value);
+        if (abs < 1000) return sign + formatNumber(abs);
+        const units = [
+          { divisor: 1_000_000_000, suffix: "B" },
+          { divisor: 1_000_000, suffix: "M" },
+          { divisor: 1_000, suffix: "k" },
+        ];
+        const unit = units.find((entry) => abs >= entry.divisor) || units[units.length - 1];
+        const scaled = abs / unit.divisor;
+        const decimals = scaled >= 100 ? 0 : 1;
+        return sign + scaled.toFixed(decimals).replace(/\.0$/, "") + unit.suffix;
+      }
+
+      function formatContextUsageText(compact) {
+        const formatContextNumber = compact ? formatCompactNumber : formatNumber;
         const hasWindow = typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0;
         const hasTokens = typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens >= 0;
         let percentValue = typeof contextPercent === "number" && Number.isFinite(contextPercent)
@@ -1280,12 +1297,12 @@
           return "Context: unknown";
         }
         if (!hasTokens && hasWindow) {
-          return "Context: ? / " + formatNumber(contextWindow);
+          return "Context: ? / " + formatContextNumber(contextWindow);
         }
 
-        let text = "Context: " + formatNumber(contextTokens);
+        let text = "Context: " + formatContextNumber(contextTokens);
         if (hasWindow) {
-          text += " / " + formatNumber(contextWindow);
+          text += " / " + formatContextNumber(contextWindow);
         }
         if (percentValue != null && Number.isFinite(percentValue)) {
           const bounded = Math.max(0, Math.min(100, percentValue));
@@ -1515,14 +1532,16 @@
       function updateFooterMeta() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
-        const contextText = formatContextUsageText();
+        const contextText = formatContextUsageText(true);
+        const contextTitleText = formatContextUsageText(false);
         const text = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextText;
+        const titleText = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextTitleText;
         if (footerMetaTextEl) {
           footerMetaTextEl.textContent = text;
-          footerMetaTextEl.title = text;
+          footerMetaTextEl.title = titleText;
         } else if (footerMetaEl) {
           footerMetaEl.textContent = text;
-          footerMetaEl.title = text;
+          footerMetaEl.title = titleText;
         }
         updateDocumentTitle();
       }

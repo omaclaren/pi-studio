@@ -2317,46 +2317,46 @@
 
     /* Opt-in editor-side layout refresh prototype. Enabled with ?uiRefresh=1 or localStorage piStudio.uiRefresh=1. */
     body.studio-ui-refresh {
-      font-size: 14px;
+      font-size: 13px;
     }
 
     body.studio-ui-refresh > header {
-      padding: 9px 14px;
-      gap: 10px;
+      padding: 8px 12px;
+      gap: 9px;
     }
 
     body.studio-ui-refresh h1 {
-      font-size: 17px;
+      font-size: 16px;
     }
 
     body.studio-ui-refresh .app-logo {
-      font-size: 20px;
+      font-size: 18px;
     }
 
     body.studio-ui-refresh .app-subtitle {
-      font-size: 11px;
+      font-size: 10px;
     }
 
     body.studio-ui-refresh > header .controls {
-      gap: 6px;
+      gap: 5px;
     }
 
     body.studio-ui-refresh > header button,
     body.studio-ui-refresh > header .file-label,
     body.studio-ui-refresh #responseActions button,
     body.studio-ui-refresh #responseActions select {
-      padding: 6px 8px;
-      font-size: 13px;
+      padding: 5px 7px;
+      font-size: 12px;
     }
 
     body.studio-ui-refresh main {
-      gap: 10px;
-      padding: 10px;
+      gap: 9px;
+      padding: 9px;
     }
 
     body.studio-ui-refresh footer {
-      padding: 8px 10px;
-      font-size: 12px;
+      padding: 7px 9px;
+      font-size: 11px;
     }
 
     .studio-ui-refresh-toggle {
@@ -2378,9 +2378,9 @@
       position: relative;
       z-index: 30;
       display: grid;
-      gap: 7px;
+      gap: 6px;
       background: transparent;
-      padding: 8px 10px 7px;
+      padding: 7px 9px 6px;
       overflow: visible;
     }
 
@@ -2402,7 +2402,7 @@
     body.studio-ui-refresh .studio-refresh-action-line {
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 6px;
       min-width: 0;
       flex-wrap: wrap;
     }
@@ -2412,7 +2412,7 @@
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
-      gap: 10px;
+      gap: 9px;
       min-width: 0;
     }
 
@@ -2420,8 +2420,8 @@
       display: grid;
       grid-template-columns: auto minmax(0, 1fr);
       align-items: center;
-      column-gap: 10px;
-      row-gap: 6px;
+      column-gap: 9px;
+      row-gap: 5px;
     }
 
     body.studio-ui-refresh .studio-refresh-title-group,
@@ -2437,7 +2437,7 @@
     }
 
     body.studio-ui-refresh .studio-refresh-title-group {
-      gap: 3px;
+      gap: 2px;
     }
 
     body.studio-ui-refresh .studio-refresh-pane-tools {
@@ -2448,15 +2448,15 @@
     body.studio-ui-refresh .studio-refresh-sep {
       display: inline-block;
       width: 1px;
-      height: 18px;
+      height: 16px;
       background: var(--border-muted);
       margin: 0 1px;
       flex: 0 0 1px;
     }
 
     body.studio-ui-refresh .studio-refresh-icon {
-      width: 17px;
-      height: 17px;
+      width: 15px;
+      height: 15px;
       stroke: currentColor;
       stroke-width: 1.85;
       stroke-linecap: round;
@@ -2473,7 +2473,7 @@
     body.studio-ui-refresh .studio-refresh-toolbar select {
       border-color: transparent;
       background: transparent;
-      font-size: 14px;
+      font-size: 13px;
     }
 
     body.studio-ui-refresh #leftSectionHeader select:hover,
@@ -2487,7 +2487,7 @@
 
     body.studio-ui-refresh #leftSectionHeader #editorViewSelect,
     body.studio-ui-refresh #rightSectionHeader #rightViewSelect {
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 750;
       padding: 3px 5px;
       max-width: 230px;
@@ -2495,7 +2495,7 @@
 
     body.studio-ui-refresh .studio-refresh-static-title {
       color: var(--text);
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 700;
       padding: 3px 5px;
       max-width: 230px;
@@ -2504,9 +2504,9 @@
 
     body.studio-ui-refresh #leftFocusBtn,
     body.studio-ui-refresh #rightFocusBtn {
-      width: 32px;
-      min-width: 32px;
-      min-height: 32px;
+      width: 29px;
+      min-width: 29px;
+      min-height: 29px;
       padding: 0;
       color: var(--muted);
       align-items: center;
@@ -2518,8 +2518,8 @@
     body.studio-ui-refresh #resourceDirLabel {
       border-color: transparent;
       background: transparent;
-      padding: 4px 6px;
-      font-size: 14px;
+      padding: 3px 5px;
+      font-size: 13px;
       border-radius: 8px;
     }
 
@@ -2548,11 +2548,11 @@
     body.studio-ui-refresh #syncBadge {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      min-height: 26px;
+      gap: 5px;
+      min-height: 24px;
       border: 0;
       border-radius: 999px;
-      padding: 3px 9px;
+      padding: 2px 8px;
       background: var(--panel-2);
       color: var(--muted);
       opacity: 1;
@@ -2564,8 +2564,8 @@
 
     body.studio-ui-refresh #syncBadge::before {
       content: "";
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       border-radius: 999px;
       background: var(--success, #22c55e);
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #22c55e) 14%, transparent);
@@ -2577,8 +2577,8 @@
     body.studio-ui-refresh #exportPdfBtn,
     body.studio-ui-refresh .studio-refresh-tool-tab {
       font-weight: 500;
-      padding: 6px 9px;
-      border-radius: 9px;
+      padding: 5px 8px;
+      border-radius: 8px;
     }
 
     body.studio-ui-refresh #exportPdfBtn {
@@ -2611,33 +2611,99 @@
     }
 
     body.studio-ui-refresh .source-body {
-      padding: 8px;
+      padding: 7px;
+    }
+
+    body.studio-ui-refresh textarea {
+      font-size: 12px;
+      line-height: 1.42;
+    }
+
+    body.studio-ui-refresh .editor-highlight,
+    body.studio-ui-refresh .editor-line-number-measure {
+      font-size: 12px;
+      line-height: 1.42;
+    }
+
+    body.studio-ui-refresh #sourceText,
+    body.studio-ui-refresh .editor-highlight {
+      padding: 9px 9px 9px calc(9px + var(--editor-review-note-gutter-width) + var(--editor-line-number-gutter-width));
+    }
+
+    body.studio-ui-refresh .editor-line-number-gutter-content {
+      padding: 9px 7px 9px 0;
+      font-size: 11px;
+      line-height: 1.42;
+    }
+
+    body.studio-ui-refresh .editor-review-note-gutter-content {
+      padding: 9px 4px;
+    }
+
+    body.studio-ui-refresh .panel-scroll {
+      padding: 11px;
+      line-height: 1.48;
+      font-size: 13px;
+    }
+
+    body.studio-ui-refresh .rendered-markdown {
+      line-height: 1.52;
+      font-size: 13.5px;
+    }
+
+    body.studio-ui-refresh .plain-markdown,
+    body.studio-ui-refresh .response-markdown-highlight {
+      font-size: 12px;
+      line-height: 1.42;
+    }
+
+    body.studio-ui-refresh .rendered-markdown pre {
+      padding: 11px 13px;
+    }
+
+    body.studio-ui-refresh .trace-panel,
+    body.studio-ui-refresh .trace-card,
+    body.studio-ui-refresh .trace-toolbar,
+    body.studio-ui-refresh .trace-summary,
+    body.studio-ui-refresh .trace-controls,
+    body.studio-ui-refresh .trace-card-header {
+      gap: 7px;
+    }
+
+    body.studio-ui-refresh .trace-card {
+      padding: 9px 11px;
+    }
+
+    body.studio-ui-refresh .trace-output {
+      padding: 9px 10px;
+      font-size: 12px;
+      line-height: 1.42;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar {
       position: relative;
-      padding: 9px 12px 10px;
+      padding: 8px 10px 9px;
       overflow: visible;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar-main {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 12px;
+      gap: 10px;
       align-items: start;
       min-width: 0;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar-actions {
       display: grid;
-      gap: 7px;
+      gap: 6px;
       justify-items: start;
       min-width: 0;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar-state {
       display: grid;
-      gap: 7px;
+      gap: 6px;
       justify-items: end;
       align-content: start;
       min-width: max-content;
@@ -2646,18 +2712,18 @@
     body.studio-ui-refresh .studio-refresh-chip {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      border-radius: 9px;
+      gap: 5px;
+      border-radius: 8px;
       color: var(--text);
       white-space: nowrap;
-      padding: 6px 9px;
-      font-size: 14px;
+      padding: 5px 8px;
+      font-size: 13px;
     }
 
     body.studio-ui-refresh .studio-refresh-chip::after {
       content: "⌄";
       color: var(--muted);
-      font-size: 15px;
+      font-size: 14px;
       line-height: 1;
       transform: translateY(-1px);
     }
@@ -2749,23 +2815,23 @@
     }
 
     body.studio-ui-refresh #copyDraftBtn:only-child {
-      min-height: 32px;
-      padding: 5px 9px;
+      min-height: 29px;
+      padding: 4px 8px;
     }
 
     body.studio-ui-refresh #sendRunBtn,
     body.studio-ui-refresh #queueSteerBtn,
     body.studio-ui-refresh #loadResponseBtn:not([hidden]) {
-      height: 30px;
-      min-height: 30px;
-      padding: 4px 10px;
-      font-size: 13px;
+      height: 28px;
+      min-height: 28px;
+      padding: 4px 9px;
+      font-size: 12px;
       line-height: 1.2;
       border-radius: 8px;
     }
 
     body.studio-ui-refresh #sendRunBtn {
-      min-width: 9.2rem;
+      min-width: 8.6rem;
     }
 
     body.studio-ui-refresh #queueSteerBtn {
