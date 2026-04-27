@@ -4,6 +4,9 @@
       const statusSpinnerEl = document.getElementById("statusSpinner");
       const footerMetaEl = document.getElementById("footerMeta");
       const footerMetaTextEl = document.getElementById("footerMetaText");
+      const footerMetaModelEl = document.getElementById("footerMetaModel");
+      const footerMetaTerminalEl = document.getElementById("footerMetaTerminal");
+      const footerMetaContextEl = document.getElementById("footerMetaContext");
       let faviconLinkEl = document.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
       if (!faviconLinkEl) {
         faviconLinkEl = document.createElement("link");
@@ -1534,9 +1537,19 @@
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
         const contextText = formatContextUsageText(true);
         const contextTitleText = formatContextUsageText(false);
-        const text = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextText;
+        const contextDisplayText = contextText.replace(/^Context:\s*/i, "");
+        const text = modelText + " · " + terminalText + " · " + contextDisplayText;
         const titleText = "Model: " + modelText + " · Terminal: " + terminalText + " · " + contextTitleText;
-        if (footerMetaTextEl) {
+        if (footerMetaModelEl && footerMetaTerminalEl && footerMetaContextEl) {
+          footerMetaModelEl.textContent = modelText;
+          footerMetaTerminalEl.textContent = terminalText;
+          footerMetaContextEl.textContent = contextDisplayText;
+          footerMetaModelEl.title = "Model: " + modelText;
+          footerMetaTerminalEl.title = "Terminal: " + terminalText;
+          footerMetaContextEl.title = contextTitleText;
+          if (footerMetaTextEl) footerMetaTextEl.title = titleText;
+          if (footerMetaEl) footerMetaEl.title = titleText;
+        } else if (footerMetaTextEl) {
           footerMetaTextEl.textContent = text;
           footerMetaTextEl.title = titleText;
         } else if (footerMetaEl) {

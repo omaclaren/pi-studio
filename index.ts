@@ -6365,7 +6365,7 @@ ${cssVarsBlock}
 
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
-    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text">Model: ${initialModel} · Terminal: ${initialTerminal} · Context: unknown</span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
+    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text"><span id="footerMetaModel" class="footer-meta-part footer-meta-model">${initialModel}</span><span class="footer-meta-sep">·</span><span id="footerMetaTerminal" class="footer-meta-part footer-meta-terminal">${initialTerminal}</span><span class="footer-meta-sep">·</span><span id="footerMetaContext" class="footer-meta-part footer-meta-context">unknown</span></span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
     <span class="shortcut-hint">Focus pane: F10 (or Cmd/Ctrl+Esc) to toggle · Save editor: Cmd/Ctrl+S · Run / queue steering: Cmd/Ctrl+Enter · Stop request: Esc</span>
   </footer>
 

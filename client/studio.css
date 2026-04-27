@@ -1886,10 +1886,40 @@
     }
 
     .footer-meta-text {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
       min-width: 0;
+      max-width: 100%;
       white-space: nowrap;
       overflow: hidden;
+    }
+
+    .footer-meta-part {
+      min-width: 0;
+      overflow: hidden;
       text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .footer-meta-model {
+      flex: 0 2 auto;
+      max-width: 34ch;
+    }
+
+    .footer-meta-terminal {
+      flex: 0 4 auto;
+      max-width: 34ch;
+    }
+
+    .footer-meta-context {
+      flex: 0 0 auto;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .footer-meta-sep {
+      flex: 0 0 auto;
+      opacity: 0.72;
     }
 
     .shortcut-hint {
