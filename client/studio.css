@@ -1143,7 +1143,7 @@
     }
 
     .rendered-markdown pre code {
-      color: var(--md-codeblock);
+      color: var(--text);
       white-space: inherit;
     }
 
@@ -1846,7 +1846,7 @@
     footer {
       border-top: 1px solid var(--panel-border);
       padding: 8px 12px;
-      color: var(--muted);
+      color: var(--studio-footer-text, var(--muted));
       font-size: 12px;
       min-height: 32px;
       background: var(--panel);
@@ -1903,7 +1903,7 @@
     .footer-meta {
       grid-area: meta;
       justify-self: start;
-      color: var(--muted);
+      color: var(--studio-footer-text, var(--muted));
       font-size: 11px;
       text-align: left;
       max-width: 100%;
@@ -1954,12 +1954,12 @@
       grid-area: hint;
       justify-self: end;
       align-self: center;
-      color: var(--muted);
+      color: var(--studio-footer-text, var(--muted));
       font-size: 11px;
       white-space: nowrap;
       text-align: right;
       font-style: normal;
-      opacity: 0.9;
+      opacity: 0.86;
       display: inline-flex;
       align-items: center;
       gap: 8px;

@@ -4341,6 +4341,13 @@ async function writeStudioSystemClipboard(text: string): Promise<{ ok: true; met
 	return { ok: false, error: errors.join("; ") || "No system clipboard command is available." };
 }
 
+function decorateStudioPandocSyntaxHtml(html: string): string {
+	return html.replace(
+		/(<span class="kw">def<\/span>)(\s*)([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()/g,
+		(_match, keyword: string, spacing: string, name: string) => `${keyword}${spacing}<span class="fu">${name}</span>`,
+	);
+}
+
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const markdownWithoutHtmlComments = isLatex ? markdown : stripStudioMarkdownHtmlComments(markdown);
@@ -4421,6 +4428,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 				} else {
 					html = decorateStudioPreviewPageBreakHtml(html);
 				}
+				html = decorateStudioPandocSyntaxHtml(html);
 				succeed(stripMathMlAnnotationTags(html));
 				return;
 			}
@@ -6210,6 +6218,8 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		style.mode === "light" ? 0.13 : 0.18,
 		style.mode === "light" ? "rgba(15, 23, 42, 0.06)" : "rgba(255, 255, 255, 0.07)",
 	);
+	const rawCodeBlockBorder = blendColors(style.palette.mdCodeBlockBorder, style.palette.panel2, style.mode === "light" ? 0.62 : 0.72);
+	const codeBlockBorder = capBorderContrast(rawCodeBlockBorder, style.palette.panel2, style.mode === "light" ? 1.16 : 1.18);
 	const diffAddedBg = withAlpha(style.palette.ok, style.mode === "light" ? 0.10 : 0.14, "rgba(46, 160, 67, 0.12)");
 	const diffRemovedBg = withAlpha(style.palette.error, style.mode === "light" ? 0.10 : 0.14, "rgba(248, 81, 73, 0.12)");
 	const okSoft = withAlpha(style.palette.ok, style.mode === "light" ? 0.10 : 0.12, "rgba(115, 209, 61, 0.08)");
@@ -6228,6 +6238,7 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 	const scratchpadHeaderBg = style.mode === "light" ? lightSecondarySurface : style.palette.panel2;
 	const scratchpadBodyBg = style.mode === "light" ? lightPrimarySurface : style.palette.panel;
 	const infoText = blendColors(style.palette.text, style.palette.muted, style.mode === "light" ? 0.36 : 0.30);
+	const footerText = blendColors(style.palette.text, style.palette.muted, style.mode === "light" ? 0.50 : 0.42);
 	const headerActionBg = style.mode === "light" ? lightPrimarySurface : "transparent";
 	const headerActionHoverBg = style.mode === "light" ? lightPrimarySurface : style.palette.panel2;
 	const headerActionBorder = style.mode === "light" ? controlBorder : "transparent";
@@ -6264,7 +6275,7 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--md-link-url": style.palette.mdLinkUrl,
 		"--md-code": style.palette.mdCode,
 		"--md-codeblock": style.palette.mdCodeBlock,
-		"--md-codeblock-border": style.palette.mdCodeBlockBorder,
+		"--md-codeblock-border": codeBlockBorder,
 		"--md-quote": style.palette.mdQuote,
 		"--md-quote-border": style.palette.mdQuoteBorder,
 		"--md-hr": style.palette.mdHr,
@@ -6298,6 +6309,7 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--scratchpad-header-bg": scratchpadHeaderBg,
 		"--scratchpad-body-bg": scratchpadBodyBg,
 		"--studio-info-text": infoText,
+		"--studio-footer-text": footerText,
 		"--studio-header-action-bg": headerActionBg,
 		"--studio-header-action-hover-bg": headerActionHoverBg,
 		"--studio-header-action-border": headerActionBorder,
