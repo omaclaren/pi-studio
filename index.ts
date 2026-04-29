@@ -864,6 +864,26 @@ function readableTextOn(background: string, darkText = "#0e1616", lightText = "#
 	return contrastRatio(background, darkText) >= contrastRatio(background, lightText) ? darkText : lightText;
 }
 
+function capBorderContrast(color: string, surface: string, maxContrast: number): string {
+	if (!hexToRgb(color) || !hexToRgb(surface)) return color;
+	if (contrastRatio(color, surface) <= maxContrast) return color;
+
+	let low = 0;
+	let high = 1;
+	let result = color;
+	for (let i = 0; i < 12; i += 1) {
+		const mid = (low + high) / 2;
+		const candidate = blendColors(color, surface, mid);
+		if (contrastRatio(candidate, surface) > maxContrast) {
+			low = mid;
+		} else {
+			result = candidate;
+			high = mid;
+		}
+	}
+	return result;
+}
+
 function deriveCanvasColors(
 	baseColor: string,
 	mode: StudioThemeMode,
@@ -6165,10 +6185,14 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		style.mode === "light"
 			? `0 1px 2px ${withAlpha(style.palette.text, 0.035, "rgba(15, 23, 42, 0.03)")}, 0 4px 14px ${withAlpha(style.palette.text, 0.055, "rgba(15, 23, 42, 0.04)")}`
 			: "0 1px 2px rgba(0, 0, 0, 0.30), 0 6px 18px rgba(0, 0, 0, 0.18)";
-	const borderSubtle = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.58 : 0.48);
-	const panelBorder = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.42 : 0.36);
-	const controlBorder = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.30 : 0.22);
-	const paneActiveBorder = blendColors(style.palette.border, style.palette.panel, style.mode === "light" ? 0.34 : 0.48);
+	const rawBorderSubtle = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.58 : 0.48);
+	const rawPanelBorder = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.42 : 0.36);
+	const rawControlBorder = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.30 : 0.22);
+	const rawPaneActiveBorder = blendColors(style.palette.border, style.palette.panel, style.mode === "light" ? 0.34 : 0.48);
+	const borderSubtle = capBorderContrast(rawBorderSubtle, style.palette.panel, style.mode === "light" ? 1.10 : 1.12);
+	const panelBorder = capBorderContrast(rawPanelBorder, style.palette.panel, style.mode === "light" ? 1.15 : 1.18);
+	const controlBorder = capBorderContrast(rawControlBorder, style.palette.panel, style.mode === "light" ? 1.22 : 1.25);
+	const paneActiveBorder = capBorderContrast(rawPaneActiveBorder, style.palette.panel, style.mode === "light" ? 1.38 : 1.45);
 	const accentContrast = style.accentContrast ?? (style.mode === "light" ? "#ffffff" : "#0e1616");
 	const errorContrast = style.errorContrast ?? readableTextOn(style.palette.error);
 	const blockquoteBg = withAlpha(
@@ -6201,6 +6225,13 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 	const editorGutterBg = style.mode === "light" ? lightSecondarySurface : style.palette.panel2;
 	const referenceMetaBg = style.mode === "light" ? lightSecondarySurface : style.palette.panel2;
 	const referenceBadgeBg = style.mode === "light" ? lightPrimarySurface : style.palette.panel;
+	const scratchpadHeaderBg = style.mode === "light" ? lightSecondarySurface : style.palette.panel2;
+	const scratchpadBodyBg = style.mode === "light" ? lightPrimarySurface : style.palette.panel;
+	const infoText = blendColors(style.palette.text, style.palette.muted, style.mode === "light" ? 0.36 : 0.30);
+	const headerActionBg = style.mode === "light" ? lightPrimarySurface : "transparent";
+	const headerActionHoverBg = style.mode === "light" ? lightPrimarySurface : style.palette.panel2;
+	const headerActionBorder = style.mode === "light" ? controlBorder : "transparent";
+	const headerFilledBg = style.mode === "light" ? lightPrimarySurface : style.palette.panel2;
 	const monoFontStack = getStudioMonoFontStack();
 	const uiFontStack = getStudioUiFontStack();
 	const proseFontStack = getStudioProseFontStack();
@@ -6264,6 +6295,13 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--editor-gutter-bg": editorGutterBg,
 		"--reference-meta-bg": referenceMetaBg,
 		"--reference-badge-bg": referenceBadgeBg,
+		"--scratchpad-header-bg": scratchpadHeaderBg,
+		"--scratchpad-body-bg": scratchpadBodyBg,
+		"--studio-info-text": infoText,
+		"--studio-header-action-bg": headerActionBg,
+		"--studio-header-action-hover-bg": headerActionHoverBg,
+		"--studio-header-action-border": headerActionBorder,
+		"--studio-header-filled-bg": headerFilledBg,
 		"--font-ui": uiFontStack,
 		"--font-prose": proseFontStack,
 		"--font-mono": monoFontStack,

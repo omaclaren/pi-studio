@@ -2020,7 +2020,7 @@
       gap: 12px;
       padding: 16px 18px 12px;
       border-bottom: 1px solid var(--panel-border);
-      background: var(--panel-2);
+      background: var(--scratchpad-header-bg, var(--panel-2));
     }
 
     .scratchpad-header > div {
@@ -2038,7 +2038,7 @@
       margin: 6px 0 0;
       font-size: 12px;
       line-height: 1.45;
-      color: var(--muted);
+      color: var(--studio-info-text, var(--muted));
       max-width: none;
     }
 
@@ -2057,7 +2057,7 @@
       border-radius: 0;
       margin: 0;
       padding: 16px 18px;
-      background: var(--panel);
+      background: var(--scratchpad-body-bg, var(--panel));
       color: var(--text);
       font-family: var(--font-mono);
       font-size: 13px;
@@ -2073,12 +2073,12 @@
       gap: 12px;
       flex-wrap: wrap;
       padding: 12px 18px 16px;
-      background: var(--panel);
+      background: var(--scratchpad-body-bg, var(--panel));
     }
 
     .scratchpad-meta {
       font-size: 12px;
-      color: var(--muted);
+      color: var(--studio-info-text, var(--muted));
     }
 
     .scratchpad-actions {
@@ -2140,7 +2140,7 @@
       padding: 14px;
       font-size: 13px;
       line-height: 1.5;
-      color: var(--muted);
+      color: var(--studio-info-text, var(--muted));
       border-bottom: 1px solid var(--panel-border);
       background: var(--panel);
     }
@@ -2229,7 +2229,7 @@
 
     .outline-entry-meta {
       font-size: 11px;
-      color: var(--muted);
+      color: var(--studio-info-text, var(--muted));
       white-space: nowrap;
       font-variant-numeric: tabular-nums;
     }
@@ -2553,7 +2553,7 @@
     body.studio-ui-refresh #rightSectionHeader button:not(:disabled):hover,
     body.studio-ui-refresh .studio-refresh-toolbar button:not(:disabled):hover,
     body.studio-ui-refresh .studio-refresh-toolbar select:not(:disabled):hover {
-      background: var(--panel-2);
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
     }
 
     body.studio-ui-refresh #leftSectionHeader #editorViewSelect,
@@ -2653,10 +2653,18 @@
       border-radius: 8px;
     }
 
+    body.studio-ui-refresh #reviewNotesBtn,
+    body.studio-ui-refresh #outlineBtn,
+    body.studio-ui-refresh #scratchpadBtn,
+    body.studio-ui-refresh .studio-refresh-tool-tab {
+      background: var(--studio-header-action-bg, transparent);
+      border-color: var(--studio-header-action-border, transparent);
+    }
+
     body.studio-ui-refresh #exportPdfBtn {
-      background: var(--panel-2);
+      background: var(--studio-header-filled-bg, var(--panel-2));
       color: var(--text);
-      border-color: transparent;
+      border-color: var(--studio-header-action-border, transparent);
     }
 
     body.studio-ui-refresh #reviewNotesBtn.is-active,
@@ -2834,7 +2842,7 @@
 
     body.studio-ui-refresh .studio-refresh-chip.is-open,
     body.studio-ui-refresh .studio-refresh-chip:hover {
-      background: var(--panel-2);
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
       color: var(--text);
     }
 
@@ -2917,7 +2925,7 @@
 
     body.studio-ui-refresh .studio-refresh-menu-item > button:not(:disabled):hover,
     body.studio-ui-refresh .studio-refresh-menu-item > select:not(:disabled):hover {
-      background: var(--panel-2);
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
     }
 
     body.studio-ui-refresh #copyDraftBtn:only-child {
