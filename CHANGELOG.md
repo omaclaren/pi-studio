@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-04-29
+
+### Changed
+- Polished rendered code blocks so ordinary code text uses normal foreground, Python function definitions keep function-name highlighting, and fenced-block borders are softened to better match theme intent.
+- Slightly sharpened footer metadata and shortcut text for better readability across darker custom themes.
+
 ## [0.6.2] — 2026-04-29
 
 ### Changed
