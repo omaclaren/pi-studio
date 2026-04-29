@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-04-29
+
 ### Added
 - Added independent editor and response text-size controls, persisted locally and available in both full Studio and editor-only views.
 - Added optional `pi-studio-dark` and `pi-studio-light` package themes tuned for Studio's browser workspace.
