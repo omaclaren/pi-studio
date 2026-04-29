@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-04-29
+
+### Changed
+- Polished refreshed Studio theme surfaces so light-mode header actions, scratchpad panels, response-history badges, and editor surfaces are more consistent.
+- Softened overly sharp derived borders in high-contrast themes while preserving theme hue and tightened secondary info text contrast in comment, outline, and scratchpad panels.
+
 ## [0.6.1] — 2026-04-29
 
 ### Added
