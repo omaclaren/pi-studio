@@ -1382,18 +1382,25 @@ function isValidRequestId(id: string): boolean {
 	return /^[a-zA-Z0-9_-]{1,120}$/.test(id);
 }
 
-function parsePathArgument(args: string): string | null {
-	const trimmed = args.trim();
-	if (!trimmed) return null;
-
+function stripMatchingPathQuotes(value: string): string {
+	const trimmed = value.trim();
 	if (
 		(trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
 		(trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
 	) {
 		return trimmed.slice(1, -1).trim();
 	}
-
 	return trimmed;
+}
+
+function parsePathArgument(args: string): string | null {
+	const trimmed = args.trim();
+	if (!trimmed) return null;
+
+	const hasAtPrefix = trimmed.startsWith("@");
+	const pathPart = hasAtPrefix ? trimmed.slice(1).trim() : trimmed;
+	const unquoted = stripMatchingPathQuotes(pathPart);
+	return hasAtPrefix ? `@${unquoted}` : unquoted;
 }
 
 function tokenizeStudioCommandArgs(input: string): { tokens: string[]; error?: string } {
@@ -1445,8 +1452,8 @@ function tokenizeStudioCommandArgs(input: string): { tokens: string[]; error?: s
 
 function normalizePathInput(pathInput: string): string {
 	const trimmed = pathInput.trim();
-	if (trimmed.startsWith("@")) return trimmed.slice(1).trim();
-	return trimmed;
+	if (trimmed.startsWith("@")) return stripMatchingPathQuotes(trimmed.slice(1).trim());
+	return stripMatchingPathQuotes(trimmed);
 }
 
 function expandHome(pathInput: string): string {
@@ -6083,7 +6090,7 @@ function isSshSession(): boolean {
 
 function buildStudioSshTunnelHint(port: number): string | null {
 	if (!isSshSession()) return null;
-	return `SSH detected. If Studio is running on a remote machine, forward the port from your local machine, then open the Studio URL locally: ssh -L ${port}:127.0.0.1:${port} <remote-host>`;
+	return `SSH detected. Forward the remote Studio port, then open the full Studio URL above locally, including its ?token=... parameter: ssh -L ${port}:127.0.0.1:${port} <remote-host>. If you choose a different local port, change only the port in the URL; keep the token.`;
 }
 
 function resolveRequestedStudioDocumentFromUrl(
@@ -9481,10 +9488,13 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const counts = getStudioClientCounts();
+				const url = buildStudioUrl(serverState.port, serverState.token, "full");
 				ctx.ui.notify(
-					`Studio running at http://127.0.0.1:${serverState.port}/ (busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
+					`Studio running at ${url} (busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
 					"info",
 				);
+				const sshTunnelHint = buildStudioSshTunnelHint(serverState.port);
+				if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				return;
 			}
 
