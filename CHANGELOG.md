@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-04-29
+
+### Fixed
+- Fixed `@`-selected quoted file paths such as `@"folder/file.md"` so Studio commands strip the `@` prefix and surrounding quotes before resolving the file.
+- `/studio --status` now prints the full tokenized Studio URL, and SSH tunnel hints explicitly say to preserve the `?token=...` parameter.
+
 ## [0.6.3] — 2026-04-29
 
 ### Changed
