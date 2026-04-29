@@ -4,6 +4,14 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Added independent editor and response text-size controls, persisted locally and available in both full Studio and editor-only views.
+- Added optional `pi-studio-dark` and `pi-studio-light` package themes tuned for Studio's browser workspace.
+
+### Changed
+- Improved theme adaptation for Studio surfaces, borders, Markdown/code colours, light/dark detection, and softer active-pane borders across bundled and custom pi themes.
+- Footer model/session/context metadata now keeps context usage visible by truncating longer model/session labels first, with full working-directory details available in hover text.
+
 ## [0.6.0] — 2026-04-27
 
 ### Added

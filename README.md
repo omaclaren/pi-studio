@@ -35,6 +35,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
   - strips markers before send (optional)
   - saves `.annotated.md`
 - Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi
+- Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
 - Exports right-pane preview as PDF (pandoc + LaTeX)
 - Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf`
 - Shows model/session/context usage in the footer, plus a compact-context action
@@ -77,7 +78,8 @@ pi -e https://github.com/omaclaren/pi-studio
 - For remote SSH sessions, keep Studio bound to localhost and use SSH local port forwarding; `/studio` prints the localhost URL and an SSH tunnel hint when SSH is detected.
 - Full Studio is a singleton per Pi session: use `/studio` to open it, `/studio-replace` to explicitly replace it, and `/studio-editor-only` for extra editing/preview tabs that do not take over the full Studio session view.
 - Studio is designed as a complement to terminal pi, not a replacement.
-- Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack.
+- Installing pi-studio makes the optional `pi-studio-dark` and `pi-studio-light` themes available in pi's theme selector; it does not change your active theme.
+- Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack. Use `PI_STUDIO_FONT_UI` or `PI_STUDIO_FONT_PROSE` to override the Studio UI or rendered-preview font stacks.
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
   - `brew install pandoc`
   - install TeX Live/MacTeX for PDF export

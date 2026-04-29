@@ -593,6 +593,8 @@ interface StudioPalette {
 interface StudioThemeStyle {
 	mode: StudioThemeMode;
 	palette: StudioPalette;
+	accentContrast?: string;
+	errorContrast?: string;
 }
 
 const DARK_STUDIO_PALETTE: StudioPalette = {
@@ -673,9 +675,39 @@ const LIGHT_STUDIO_PALETTE: StudioPalette = {
 	syntaxPunctuation: "#000000",
 };
 
+function inferThemeModeFromName(name: string): StudioThemeMode | undefined {
+	const lower = name.toLowerCase();
+	if (/\b(light|dawn|day|latte)\b/.test(lower) || lower.includes("-light")) return "light";
+	if (/\b(dark|night|moon|mocha)\b/.test(lower) || lower.includes("-dark")) return "dark";
+	return undefined;
+}
+
+function inferThemeModeFromColorCandidates(...colors: Array<string | undefined>): StudioThemeMode | undefined {
+	for (const color of colors) {
+		const inferred = inferThemeModeFromColor(color);
+		if (inferred) return inferred;
+	}
+	return undefined;
+}
+
 function getStudioThemeMode(theme?: Theme): StudioThemeMode {
-	const name = (theme?.name ?? "").toLowerCase();
-	return name.includes("light") ? "light" : "dark";
+	const exported = readThemeExportPalette(theme);
+	const inferredFromExport = inferThemeModeFromColorCandidates(exported?.pageBg, exported?.cardBg);
+	if (inferredFromExport) return inferredFromExport;
+
+	const inferredFromSurface = inferThemeModeFromColorCandidates(
+		inferThemeSurfaceColor(theme, "page"),
+		inferThemeSurfaceColor(theme, "card"),
+		readThemeColorToken(theme, "userMessageBg"),
+		readThemeColorToken(theme, "customMessageBg"),
+		readThemeColorToken(theme, "toolPendingBg"),
+	);
+	if (inferredFromSurface) return inferredFromSurface;
+
+	const inferredFromName = inferThemeModeFromName(theme?.name ?? "");
+	if (inferredFromName) return inferredFromName;
+
+	return "dark";
 }
 
 function toHexByte(value: number): string {
@@ -809,6 +841,29 @@ function blendColors(a: string, b: string, t: number): string {
 	);
 }
 
+function wcagRelativeLuminance(color: string): number {
+	const rgb = hexToRgb(color);
+	if (!rgb) return 0;
+	const linear = [rgb.r, rgb.g, rgb.b].map((channel) => {
+		const value = channel / 255;
+		return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+	});
+	return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+}
+
+function contrastRatio(a: string, b: string): number {
+	const lumA = wcagRelativeLuminance(a);
+	const lumB = wcagRelativeLuminance(b);
+	const lighter = Math.max(lumA, lumB);
+	const darker = Math.min(lumA, lumB);
+	return (lighter + 0.05) / (darker + 0.05);
+}
+
+function readableTextOn(background: string, darkText = "#0e1616", lightText = "#ffffff"): string {
+	if (!hexToRgb(background)) return lightText;
+	return contrastRatio(background, darkText) >= contrastRatio(background, lightText) ? darkText : lightText;
+}
+
 function deriveCanvasColors(
 	baseColor: string,
 	mode: StudioThemeMode,
@@ -848,7 +903,17 @@ interface ThemeExportPalette {
 	infoBg?: string;
 }
 
-const themeExportPaletteCache = new Map<string, ThemeExportPalette | null>();
+interface ThemeSourceJson {
+	name?: string;
+	vars?: Record<string, string | number>;
+	colors?: Record<string, string | number>;
+	export?: { pageBg?: string | number; cardBg?: string | number; infoBg?: string | number };
+}
+
+const themeSourceJsonCache = new Map<string, { mtimeMs: number; json: ThemeSourceJson | null }>();
+
+const DEFAULT_UI_FONT_STACK = "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif";
+const DEFAULT_PROSE_FONT_STACK = DEFAULT_UI_FONT_STACK;
 
 const DEFAULT_MONO_FONT_FAMILIES = [
 	"ui-monospace",
@@ -1049,6 +1114,14 @@ function getStudioMonoFontStack(): string {
 	return cachedStudioMonoFontStack;
 }
 
+function getStudioUiFontStack(): string {
+	return sanitizeCssValue(process.env.PI_STUDIO_FONT_UI ?? "") || DEFAULT_UI_FONT_STACK;
+}
+
+function getStudioProseFontStack(): string {
+	return sanitizeCssValue(process.env.PI_STUDIO_FONT_PROSE ?? "") || DEFAULT_PROSE_FONT_STACK;
+}
+
 function resolveThemeExportValue(
 	value: string | number | undefined,
 	vars: Record<string, string | number>,
@@ -1071,35 +1144,107 @@ function resolveThemeExportValue(
 	return resolveThemeExportValue(referenced, vars, seen) ?? token;
 }
 
-function readThemeExportPalette(theme?: Theme): ThemeExportPalette | undefined {
+function isCssColorValue(value: string | undefined): value is string {
+	if (!value) return false;
+	const trimmed = value.trim();
+	return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(trimmed) || /^rgba?\(/i.test(trimmed);
+}
+
+function normalizeResolvedThemeColor(value: string | undefined): string | undefined {
+	if (!isCssColorValue(value)) return undefined;
+	return value.trim();
+}
+
+function readThemeSourceJson(theme?: Theme): ThemeSourceJson | undefined {
 	const sourcePath = theme?.sourcePath?.trim();
 	if (!sourcePath) return undefined;
 
-	if (themeExportPaletteCache.has(sourcePath)) {
-		const cached = themeExportPaletteCache.get(sourcePath);
-		return cached ?? undefined;
-	}
-
 	try {
-		const raw = readFileSync(sourcePath, "utf-8");
-		const parsed = JSON.parse(raw) as {
-			export?: { pageBg?: string | number; cardBg?: string | number; infoBg?: string | number };
-			vars?: Record<string, string | number>;
-		};
-		const vars = parsed.vars ?? {};
-		const exportSection = parsed.export ?? {};
-		const resolved: ThemeExportPalette = {
-			pageBg: resolveThemeExportValue(exportSection.pageBg, vars),
-			cardBg: resolveThemeExportValue(exportSection.cardBg, vars),
-			infoBg: resolveThemeExportValue(exportSection.infoBg, vars),
-		};
+		const mtimeMs = statSync(sourcePath).mtimeMs;
+		const cached = themeSourceJsonCache.get(sourcePath);
+		if (cached && cached.mtimeMs === mtimeMs) return cached.json ?? undefined;
 
-		themeExportPaletteCache.set(sourcePath, resolved);
-		return resolved;
+		const raw = readFileSync(sourcePath, "utf-8");
+		const parsed = JSON.parse(raw) as ThemeSourceJson;
+		themeSourceJsonCache.set(sourcePath, { mtimeMs, json: parsed });
+		return parsed;
 	} catch {
-		themeExportPaletteCache.set(sourcePath, null);
+		themeSourceJsonCache.set(sourcePath, { mtimeMs: -1, json: null });
 		return undefined;
 	}
+}
+
+function resolveThemeJsonValue(
+	value: string | number | undefined,
+	vars: Record<string, string | number>,
+): string | undefined {
+	return normalizeResolvedThemeColor(resolveThemeExportValue(value, vars));
+}
+
+function readThemeExportPalette(theme?: Theme): ThemeExportPalette | undefined {
+	const parsed = readThemeSourceJson(theme);
+	if (!parsed) return undefined;
+	const vars = parsed.vars ?? {};
+	const exportSection = parsed.export ?? {};
+	const resolved: ThemeExportPalette = {
+		pageBg: resolveThemeJsonValue(exportSection.pageBg, vars),
+		cardBg: resolveThemeJsonValue(exportSection.cardBg, vars),
+		infoBg: resolveThemeJsonValue(exportSection.infoBg, vars),
+	};
+	return resolved.pageBg || resolved.cardBg || resolved.infoBg ? resolved : undefined;
+}
+
+function readThemeColorToken(theme: Theme | undefined, token: string): string | undefined {
+	const parsed = readThemeSourceJson(theme);
+	if (!parsed) return undefined;
+	return resolveThemeJsonValue(parsed.colors?.[token], parsed.vars ?? {});
+}
+
+function readThemeVarColor(theme: Theme | undefined, keys: string[]): string | undefined {
+	const parsed = readThemeSourceJson(theme);
+	if (!parsed) return undefined;
+	const vars = parsed.vars ?? {};
+	for (const key of keys) {
+		const color = resolveThemeJsonValue(vars[key], vars);
+		if (color) return color;
+	}
+	return undefined;
+}
+
+function readThemeAnyColor(theme: Theme | undefined, keys: string[]): string | undefined {
+	const parsed = readThemeSourceJson(theme);
+	if (!parsed) return undefined;
+	const vars = parsed.vars ?? {};
+	for (const key of keys) {
+		const color = resolveThemeJsonValue(parsed.colors?.[key], vars);
+		if (color) return color;
+	}
+	return undefined;
+}
+
+function inferThemeModeFromColor(color: string | undefined): StudioThemeMode | undefined {
+	if (!color || !hexToRgb(color)) return undefined;
+	return relativeLuminance(color) >= 0.58 ? "light" : "dark";
+}
+
+function inferThemeTextColor(theme: Theme | undefined, mode: StudioThemeMode): string | undefined {
+	return readThemeAnyColor(theme, ["text", "userMessageText", "customMessageText", "mdCodeBlock"])
+		?? readThemeVarColor(
+			theme,
+			mode === "light"
+				? ["text", "fg", "foreground", "textDark1", "fg0", "fg1", "nord0"]
+				: ["text", "fg", "foreground", "text", "fg0", "fg1", "subtext1", "subtext0", "nord4", "gray3"],
+		);
+}
+
+function inferThemeSurfaceColor(theme: Theme | undefined, role: "page" | "card" | "panel2"): string | undefined {
+	if (role === "page") {
+		return readThemeVarColor(theme, ["pageBg", "bg", "base", "background", "mantle", "bg_dark", "bg0", "nord0"]);
+	}
+	if (role === "card") {
+		return readThemeVarColor(theme, ["cardBg", "surface", "base", "bg", "bg1", "nord1"]);
+	}
+	return readThemeVarColor(theme, ["infoBg", "surfaceAlt", "surface0", "overlay", "bg_hl", "bg2", "nord2"]);
 }
 
 function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
@@ -1116,36 +1261,49 @@ function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
 	const accent =
 		safeThemeColor(() => theme.getFgAnsi("mdLink"))
 		?? safeThemeColor(() => theme.getFgAnsi("accent"))
+		?? readThemeColorToken(theme, "mdLink")
+		?? readThemeColorToken(theme, "accent")
 		?? fallback.accent;
-	const warn = safeThemeColor(() => theme.getFgAnsi("warning")) ?? fallback.warn;
-	const error = safeThemeColor(() => theme.getFgAnsi("error")) ?? fallback.error;
-	const ok = safeThemeColor(() => theme.getFgAnsi("success")) ?? fallback.ok;
+	const warn = safeThemeColor(() => theme.getFgAnsi("warning")) ?? readThemeColorToken(theme, "warning") ?? fallback.warn;
+	const error = safeThemeColor(() => theme.getFgAnsi("error")) ?? readThemeColorToken(theme, "error") ?? fallback.error;
+	const ok = safeThemeColor(() => theme.getFgAnsi("success")) ?? readThemeColorToken(theme, "success") ?? fallback.ok;
+	const text = safeThemeColor(() => theme.getFgAnsi("text")) ?? inferThemeTextColor(theme, mode) ?? fallback.text;
 	const exported = readThemeExportPalette(theme);
 
 	const surfaceBase =
 		safeThemeColor(() => theme.getBgAnsi("userMessageBg"))
-		?? safeThemeColor(() => theme.getBgAnsi("customMessageBg"));
+		?? safeThemeColor(() => theme.getBgAnsi("customMessageBg"))
+		?? readThemeColorToken(theme, "userMessageBg")
+		?? readThemeColorToken(theme, "customMessageBg");
 	const derived = surfaceBase ? deriveCanvasColors(surfaceBase, mode) : undefined;
+	const themePageBg = inferThemeSurfaceColor(theme, "page");
+	const themeCardBg = inferThemeSurfaceColor(theme, "card");
+	const themePanel2 = inferThemeSurfaceColor(theme, "panel2");
 
 	const palette: StudioPalette = {
 		bg:
 			exported?.pageBg
+			?? themePageBg
 			?? derived?.pageBg
 			?? fallback.bg,
 		panel:
 			exported?.cardBg
+			?? themeCardBg
 			?? derived?.cardBg
 			?? safeThemeColor(() => theme.getBgAnsi("toolPendingBg"))
+			?? readThemeColorToken(theme, "toolPendingBg")
 			?? fallback.panel,
 		panel2:
-			derived?.panel2
+			themePanel2
+			?? derived?.panel2
 			?? safeThemeColor(() => theme.getBgAnsi("selectedBg"))
+			?? readThemeColorToken(theme, "selectedBg")
 			?? exported?.infoBg
 			?? fallback.panel2,
-		border: safeThemeColor(() => theme.getFgAnsi("border")) ?? fallback.border,
-		borderMuted: safeThemeColor(() => theme.getFgAnsi("borderMuted")) ?? fallback.borderMuted,
-		text: safeThemeColor(() => theme.getFgAnsi("text")) ?? fallback.text,
-		muted: safeThemeColor(() => theme.getFgAnsi("muted")) ?? fallback.muted,
+		border: safeThemeColor(() => theme.getFgAnsi("border")) ?? readThemeColorToken(theme, "border") ?? fallback.border,
+		borderMuted: safeThemeColor(() => theme.getFgAnsi("borderMuted")) ?? readThemeColorToken(theme, "borderMuted") ?? fallback.borderMuted,
+		text,
+		muted: safeThemeColor(() => theme.getFgAnsi("muted")) ?? readThemeColorToken(theme, "muted") ?? fallback.muted,
 		accent,
 		warn,
 		error,
@@ -1156,28 +1314,33 @@ function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
 		accentSoftStrong: withAlpha(accent, mode === "light" ? 0.35 : 0.40, fallback.accentSoftStrong),
 		okBorder: withAlpha(ok, mode === "light" ? 0.55 : 0.70, fallback.okBorder),
 		warnBorder: withAlpha(warn, mode === "light" ? 0.55 : 0.70, fallback.warnBorder),
-		mdHeading: safeThemeColor(() => theme.getFgAnsi("mdHeading")) ?? fallback.mdHeading,
-		mdLink: safeThemeColor(() => theme.getFgAnsi("mdLink")) ?? fallback.mdLink,
-		mdLinkUrl: safeThemeColor(() => theme.getFgAnsi("mdLinkUrl")) ?? fallback.mdLinkUrl,
-		mdCode: safeThemeColor(() => theme.getFgAnsi("mdCode")) ?? fallback.mdCode,
-		mdCodeBlock: safeThemeColor(() => theme.getFgAnsi("mdCodeBlock")) ?? fallback.mdCodeBlock,
-		mdCodeBlockBorder: safeThemeColor(() => theme.getFgAnsi("mdCodeBlockBorder")) ?? fallback.mdCodeBlockBorder,
-		mdQuote: safeThemeColor(() => theme.getFgAnsi("mdQuote")) ?? fallback.mdQuote,
-		mdQuoteBorder: safeThemeColor(() => theme.getFgAnsi("mdQuoteBorder")) ?? fallback.mdQuoteBorder,
-		mdHr: safeThemeColor(() => theme.getFgAnsi("mdHr")) ?? fallback.mdHr,
-		mdListBullet: safeThemeColor(() => theme.getFgAnsi("mdListBullet")) ?? fallback.mdListBullet,
-		syntaxComment: safeThemeColor(() => theme.getFgAnsi("syntaxComment")) ?? fallback.syntaxComment,
-		syntaxKeyword: safeThemeColor(() => theme.getFgAnsi("syntaxKeyword")) ?? fallback.syntaxKeyword,
-		syntaxFunction: safeThemeColor(() => theme.getFgAnsi("syntaxFunction")) ?? fallback.syntaxFunction,
-		syntaxVariable: safeThemeColor(() => theme.getFgAnsi("syntaxVariable")) ?? fallback.syntaxVariable,
-		syntaxString: safeThemeColor(() => theme.getFgAnsi("syntaxString")) ?? fallback.syntaxString,
-		syntaxNumber: safeThemeColor(() => theme.getFgAnsi("syntaxNumber")) ?? fallback.syntaxNumber,
-		syntaxType: safeThemeColor(() => theme.getFgAnsi("syntaxType")) ?? fallback.syntaxType,
-		syntaxOperator: safeThemeColor(() => theme.getFgAnsi("syntaxOperator")) ?? fallback.syntaxOperator,
-		syntaxPunctuation: safeThemeColor(() => theme.getFgAnsi("syntaxPunctuation")) ?? fallback.syntaxPunctuation,
+		mdHeading: safeThemeColor(() => theme.getFgAnsi("mdHeading")) ?? readThemeColorToken(theme, "mdHeading") ?? fallback.mdHeading,
+		mdLink: safeThemeColor(() => theme.getFgAnsi("mdLink")) ?? readThemeColorToken(theme, "mdLink") ?? fallback.mdLink,
+		mdLinkUrl: safeThemeColor(() => theme.getFgAnsi("mdLinkUrl")) ?? readThemeColorToken(theme, "mdLinkUrl") ?? fallback.mdLinkUrl,
+		mdCode: safeThemeColor(() => theme.getFgAnsi("mdCode")) ?? readThemeColorToken(theme, "mdCode") ?? fallback.mdCode,
+		mdCodeBlock: safeThemeColor(() => theme.getFgAnsi("mdCodeBlock")) ?? readThemeColorToken(theme, "mdCodeBlock") ?? text,
+		mdCodeBlockBorder: safeThemeColor(() => theme.getFgAnsi("mdCodeBlockBorder")) ?? readThemeColorToken(theme, "mdCodeBlockBorder") ?? fallback.mdCodeBlockBorder,
+		mdQuote: safeThemeColor(() => theme.getFgAnsi("mdQuote")) ?? readThemeColorToken(theme, "mdQuote") ?? fallback.mdQuote,
+		mdQuoteBorder: safeThemeColor(() => theme.getFgAnsi("mdQuoteBorder")) ?? readThemeColorToken(theme, "mdQuoteBorder") ?? fallback.mdQuoteBorder,
+		mdHr: safeThemeColor(() => theme.getFgAnsi("mdHr")) ?? readThemeColorToken(theme, "mdHr") ?? fallback.mdHr,
+		mdListBullet: safeThemeColor(() => theme.getFgAnsi("mdListBullet")) ?? readThemeColorToken(theme, "mdListBullet") ?? fallback.mdListBullet,
+		syntaxComment: safeThemeColor(() => theme.getFgAnsi("syntaxComment")) ?? readThemeColorToken(theme, "syntaxComment") ?? fallback.syntaxComment,
+		syntaxKeyword: safeThemeColor(() => theme.getFgAnsi("syntaxKeyword")) ?? readThemeColorToken(theme, "syntaxKeyword") ?? fallback.syntaxKeyword,
+		syntaxFunction: safeThemeColor(() => theme.getFgAnsi("syntaxFunction")) ?? readThemeColorToken(theme, "syntaxFunction") ?? fallback.syntaxFunction,
+		syntaxVariable: safeThemeColor(() => theme.getFgAnsi("syntaxVariable")) ?? readThemeColorToken(theme, "syntaxVariable") ?? fallback.syntaxVariable,
+		syntaxString: safeThemeColor(() => theme.getFgAnsi("syntaxString")) ?? readThemeColorToken(theme, "syntaxString") ?? fallback.syntaxString,
+		syntaxNumber: safeThemeColor(() => theme.getFgAnsi("syntaxNumber")) ?? readThemeColorToken(theme, "syntaxNumber") ?? fallback.syntaxNumber,
+		syntaxType: safeThemeColor(() => theme.getFgAnsi("syntaxType")) ?? readThemeColorToken(theme, "syntaxType") ?? fallback.syntaxType,
+		syntaxOperator: safeThemeColor(() => theme.getFgAnsi("syntaxOperator")) ?? readThemeColorToken(theme, "syntaxOperator") ?? fallback.syntaxOperator,
+		syntaxPunctuation: safeThemeColor(() => theme.getFgAnsi("syntaxPunctuation")) ?? readThemeColorToken(theme, "syntaxPunctuation") ?? fallback.syntaxPunctuation,
 	};
 
-	return { mode, palette };
+	return {
+		mode,
+		palette,
+		accentContrast: readThemeVarColor(theme, ["studioAccentText", "studioAccentContrast"]),
+		errorContrast: readThemeVarColor(theme, ["studioErrorText", "studioErrorContrast"]),
+	};
 }
 
 function createSessionToken(): string {
@@ -5995,12 +6158,19 @@ function sanitizePdfFilename(input: string | undefined): string {
 }
 
 function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
+	const shadowColor = style.mode === "light"
+		? withAlpha(style.palette.text, 0.10, "rgba(15, 23, 42, 0.08)")
+		: "rgba(0, 0, 0, 0.32)";
 	const panelShadow =
 		style.mode === "light"
-			? "0 1px 2px rgba(15, 23, 42, 0.03), 0 4px 14px rgba(15, 23, 42, 0.04)"
-			: "0 1px 2px rgba(0, 0, 0, 0.36), 0 6px 18px rgba(0, 0, 0, 0.22)";
-	const accentContrast = style.mode === "light" ? "#ffffff" : "#0e1616";
-	const errorContrast = style.mode === "light" ? "#ffffff" : "#0e1616";
+			? `0 1px 2px ${withAlpha(style.palette.text, 0.035, "rgba(15, 23, 42, 0.03)")}, 0 4px 14px ${withAlpha(style.palette.text, 0.055, "rgba(15, 23, 42, 0.04)")}`
+			: "0 1px 2px rgba(0, 0, 0, 0.30), 0 6px 18px rgba(0, 0, 0, 0.18)";
+	const borderSubtle = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.58 : 0.48);
+	const panelBorder = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.42 : 0.36);
+	const controlBorder = blendColors(style.palette.borderMuted, style.palette.panel, style.mode === "light" ? 0.30 : 0.22);
+	const paneActiveBorder = blendColors(style.palette.border, style.palette.panel, style.mode === "light" ? 0.34 : 0.48);
+	const accentContrast = style.accentContrast ?? (style.mode === "light" ? "#ffffff" : "#0e1616");
+	const errorContrast = style.errorContrast ?? readableTextOn(style.palette.error);
 	const blockquoteBg = withAlpha(
 		style.palette.mdQuoteBorder,
 		style.mode === "light" ? 0.10 : 0.16,
@@ -6011,10 +6181,29 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		style.mode === "light" ? 0.10 : 0.14,
 		style.mode === "light" ? "rgba(15, 23, 42, 0.03)" : "rgba(255, 255, 255, 0.04)",
 	);
-	const editorBg = style.mode === "light"
-		? blendColors(style.palette.panel, "#ffffff", 0.5)
+	const inlineCodeBg = withAlpha(
+		style.palette.mdCodeBlockBorder,
+		style.mode === "light" ? 0.13 : 0.18,
+		style.mode === "light" ? "rgba(15, 23, 42, 0.06)" : "rgba(255, 255, 255, 0.07)",
+	);
+	const diffAddedBg = withAlpha(style.palette.ok, style.mode === "light" ? 0.10 : 0.14, "rgba(46, 160, 67, 0.12)");
+	const diffRemovedBg = withAlpha(style.palette.error, style.mode === "light" ? 0.10 : 0.14, "rgba(248, 81, 73, 0.12)");
+	const okSoft = withAlpha(style.palette.ok, style.mode === "light" ? 0.10 : 0.12, "rgba(115, 209, 61, 0.08)");
+	const errorSoft = withAlpha(style.palette.error, style.mode === "light" ? 0.10 : 0.12, "rgba(255, 107, 107, 0.08)");
+	const backdropBg = style.mode === "light" ? "rgba(15, 23, 42, 0.20)" : "rgba(0, 0, 0, 0.48)";
+	const panelLum = hexToRgb(style.palette.panel) ? relativeLuminance(style.palette.panel) : null;
+	const panel2Lum = hexToRgb(style.palette.panel2) ? relativeLuminance(style.palette.panel2) : null;
+	const lightPrimarySurface = panelLum != null && panel2Lum != null && panel2Lum > panelLum
+		? style.palette.panel2
 		: style.palette.panel;
+	const lightSecondarySurface = lightPrimarySurface === style.palette.panel ? style.palette.panel2 : style.palette.panel;
+	const editorBg = style.mode === "light" ? lightPrimarySurface : style.palette.panel;
+	const editorGutterBg = style.mode === "light" ? lightSecondarySurface : style.palette.panel2;
+	const referenceMetaBg = style.mode === "light" ? lightSecondarySurface : style.palette.panel2;
+	const referenceBadgeBg = style.mode === "light" ? lightPrimarySurface : style.palette.panel;
 	const monoFontStack = getStudioMonoFontStack();
+	const uiFontStack = getStudioUiFontStack();
+	const proseFontStack = getStudioProseFontStack();
 
 	return {
 		"color-scheme": style.mode,
@@ -6023,6 +6212,10 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--panel-2": style.palette.panel2,
 		"--border": style.palette.border,
 		"--border-muted": style.palette.borderMuted,
+		"--border-subtle": borderSubtle,
+		"--panel-border": panelBorder,
+		"--control-border": controlBorder,
+		"--pane-active-border": paneActiveBorder,
 		"--text": style.palette.text,
 		"--muted": style.palette.muted,
 		"--accent": style.palette.accent,
@@ -6055,11 +6248,24 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--syntax-operator": style.palette.syntaxOperator,
 		"--syntax-punctuation": style.palette.syntaxPunctuation,
 		"--panel-shadow": panelShadow,
+		"--shadow-color": shadowColor,
 		"--accent-contrast": accentContrast,
 		"--error-contrast": errorContrast,
 		"--blockquote-bg": blockquoteBg,
+		"--inline-code-bg": inlineCodeBg,
 		"--table-alt-bg": tableAltBg,
+		"--md-table-border": borderSubtle,
+		"--diff-added-bg": diffAddedBg,
+		"--diff-removed-bg": diffRemovedBg,
+		"--ok-soft": okSoft,
+		"--error-soft": errorSoft,
+		"--backdrop-bg": backdropBg,
 		"--editor-bg": editorBg,
+		"--editor-gutter-bg": editorGutterBg,
+		"--reference-meta-bg": referenceMetaBg,
+		"--reference-badge-bg": referenceBadgeBg,
+		"--font-ui": uiFontStack,
+		"--font-prose": proseFontStack,
 		"--font-mono": monoFontStack,
 	};
 }
@@ -6254,6 +6460,16 @@ ${cssVarsBlock}
                 <option value="off">Line numbers: Off</option>
                 <option value="on" selected>Line numbers: On</option>
               </select>
+              <select id="editorFontSizeSelect" aria-label="Editor text size" title="Adjust raw editor text size.">
+                <option value="10">Editor text: 10px</option>
+                <option value="11">Editor text: 11px</option>
+                <option value="12" selected>Editor text: 12px</option>
+                <option value="13">Editor text: 13px</option>
+                <option value="14">Editor text: 14px</option>
+                <option value="15">Editor text: 15px</option>
+                <option value="16">Editor text: 16px</option>
+                <option value="18">Editor text: 18px</option>
+              </select>
             </div>
           </div>
         </div>
@@ -6347,7 +6563,7 @@ ${cssVarsBlock}
       <div id="critiqueView" class="panel-scroll rendered-markdown"><pre class="plain-markdown">No response yet.</pre></div>
       <div class="response-wrap">
         <div id="responseActions" class="response-actions">
-          <div class="response-actions-row">
+          <div class="response-actions-row response-options-row">
             <select id="followSelect" aria-label="Auto-update response">
               <option value="on" selected>Auto-update response: On</option>
               <option value="off">Auto-update response: Off</option>
@@ -6355,6 +6571,20 @@ ${cssVarsBlock}
             <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
               <option value="off">Syntax highlight: Off</option>
               <option value="on" selected>Syntax highlight: On</option>
+            </select>
+            <select id="responseFontSizeSelect" aria-label="Response text size" title="Adjust right-pane response, preview, and working text size.">
+              <option value="11">Response text: 11px</option>
+              <option value="12">Response text: 12px</option>
+              <option value="12.5">Response text: 12.5px</option>
+              <option value="13">Response text: 13px</option>
+              <option value="13.5" selected>Response text: 13.5px</option>
+              <option value="14">Response text: 14px</option>
+              <option value="14.5">Response text: 14.5px</option>
+              <option value="15">Response text: 15px</option>
+              <option value="15.5">Response text: 15.5px</option>
+              <option value="16">Response text: 16px</option>
+              <option value="18">Response text: 18px</option>
+              <option value="20">Response text: 20px</option>
             </select>
           </div>
           <div class="response-actions-row history-row">
@@ -6364,7 +6594,7 @@ ${cssVarsBlock}
             <button id="historyNextBtn" type="button" title="Show next response in history.">Next response ▶</button>
             <button id="historyLastBtn" type="button" title="Jump to the latest loaded response in history.">Last response ▶|</button>
           </div>
-          <div class="response-actions-row">
+          <div class="response-actions-row response-result-row">
             <button id="loadResponseBtn" type="button">Load response into editor</button>
             <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
             <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>

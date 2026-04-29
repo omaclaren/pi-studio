@@ -73,6 +73,7 @@
       const rightViewSelect = document.getElementById("rightViewSelect");
       const followSelect = document.getElementById("followSelect");
       const responseHighlightSelect = document.getElementById("responseHighlightSelect");
+      const responseFontSizeSelect = document.getElementById("responseFontSizeSelect");
       const pullLatestBtn = document.getElementById("pullLatestBtn");
       const insertHeaderBtn = document.getElementById("insertHeaderBtn");
       const critiqueBtn = document.getElementById("critiqueBtn");
@@ -106,6 +107,7 @@
       const stripAnnotationsBtn = document.getElementById("stripAnnotationsBtn");
       const highlightSelect = document.getElementById("highlightSelect");
       const lineNumbersSelect = document.getElementById("lineNumbersSelect");
+      const editorFontSizeSelect = document.getElementById("editorFontSizeSelect");
       const annotationModeSelect = document.getElementById("annotationModeSelect");
       const compactBtn = document.getElementById("compactBtn");
       const leftFocusBtn = document.getElementById("leftFocusBtn");
@@ -592,6 +594,7 @@
       const EDITOR_HIGHLIGHT_STORAGE_KEY = "piStudio.editorHighlightEnabled";
       const EDITOR_LANGUAGE_STORAGE_KEY = "piStudio.editorLanguage";
       const EDITOR_LINE_NUMBERS_STORAGE_KEY = "piStudio.editorLineNumbersEnabled";
+      const EDITOR_FONT_SIZE_STORAGE_KEY = "piStudio.editorFontSize";
       // Single source of truth: language -> file extensions (and display label)
       var LANG_EXT_MAP = {
         markdown:   { label: "Markdown",   exts: ["md", "markdown", "mdx", "qmd"] },
@@ -632,6 +635,7 @@
       var SUPPORTED_LANGUAGES = Object.keys(LANG_EXT_MAP);
       const RESPONSE_HIGHLIGHT_MAX_CHARS = 120_000;
       const RESPONSE_HIGHLIGHT_STORAGE_KEY = "piStudio.responseHighlightEnabled";
+      const RESPONSE_FONT_SIZE_STORAGE_KEY = "piStudio.responseFontSize";
       const ANNOTATION_MODE_STORAGE_KEY = "piStudio.annotationsEnabled";
       const PREVIEW_INPUT_DEBOUNCE_MS = 0;
       const PREVIEW_PENDING_BADGE_DELAY_MS = 220;
@@ -651,6 +655,12 @@
       let annotationsEnabled = true;
       const STUDIO_UI_REFRESH_STORAGE_KEY = "piStudio.uiRefresh";
       const studioUiRefreshEnabled = readStudioUiRefreshEnabled();
+      const EDITOR_FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 15, 16, 18];
+      const RESPONSE_FONT_SIZE_OPTIONS = [11, 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16, 18, 20];
+      const DEFAULT_EDITOR_FONT_SIZE = studioUiRefreshEnabled ? 12 : 13;
+      const DEFAULT_RESPONSE_FONT_SIZE = studioUiRefreshEnabled ? 13.5 : 15;
+      let editorFontSize = DEFAULT_EDITOR_FONT_SIZE;
+      let responseFontSize = DEFAULT_RESPONSE_FONT_SIZE;
       let studioUiRefreshUi = null;
       if (studioUiRefreshEnabled && document.body) {
         document.body.classList.add("studio-ui-refresh");
@@ -756,6 +766,74 @@
         buttonEl.textContent = text;
       }
 
+      function formatStudioFontSizeLabel(size) {
+        const value = Number(size);
+        if (!Number.isFinite(value)) return "";
+        return String(value).replace(/\.0$/, "") + "px";
+      }
+
+      function normalizeStudioFontSize(value, options, fallback) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return fallback;
+        for (const option of options) {
+          if (Math.abs(option - parsed) < 0.001) return option;
+        }
+        return fallback;
+      }
+
+      function readStoredFontSize(storageKey, options, fallback) {
+        try {
+          if (!window.localStorage) return fallback;
+          return normalizeStudioFontSize(window.localStorage.getItem(storageKey), options, fallback);
+        } catch {
+          return fallback;
+        }
+      }
+
+      function persistStoredFontSize(storageKey, size) {
+        try {
+          if (window.localStorage) window.localStorage.setItem(storageKey, String(size));
+        } catch {
+          // ignore storage failures
+        }
+      }
+
+      function syncFontSizeSelect(selectEl, size) {
+        if (!selectEl) return;
+        selectEl.value = String(size);
+      }
+
+      function applyStudioFontSizeVariables() {
+        if (!document.body || !document.body.style) return;
+        const editorLineNumberSize = Math.max(10, editorFontSize - 1);
+        const responseRawSize = Math.max(11, responseFontSize - 1.5);
+        document.body.style.setProperty("--studio-editor-font-size", formatStudioFontSizeLabel(editorFontSize));
+        document.body.style.setProperty("--studio-editor-line-number-font-size", formatStudioFontSizeLabel(editorLineNumberSize));
+        document.body.style.setProperty("--studio-response-font-size", formatStudioFontSizeLabel(responseFontSize));
+        document.body.style.setProperty("--studio-response-raw-font-size", formatStudioFontSizeLabel(responseRawSize));
+        document.body.style.setProperty("--studio-working-font-size", formatStudioFontSizeLabel(responseRawSize));
+      }
+
+      function setEditorFontSize(size, options) {
+        editorFontSize = normalizeStudioFontSize(size, EDITOR_FONT_SIZE_OPTIONS, DEFAULT_EDITOR_FONT_SIZE);
+        if (!options || options.persist !== false) persistStoredFontSize(EDITOR_FONT_SIZE_STORAGE_KEY, editorFontSize);
+        syncFontSizeSelect(editorFontSizeSelect, editorFontSize);
+        applyStudioFontSizeVariables();
+        syncStudioUiRefreshSummaries();
+        scheduleEditorLineNumberRender();
+        if (editorHighlightEnabled && editorView === "markdown") {
+          scheduleEditorHighlightRender();
+        }
+      }
+
+      function setResponseFontSize(size, options) {
+        responseFontSize = normalizeStudioFontSize(size, RESPONSE_FONT_SIZE_OPTIONS, DEFAULT_RESPONSE_FONT_SIZE);
+        if (!options || options.persist !== false) persistStoredFontSize(RESPONSE_FONT_SIZE_STORAGE_KEY, responseFontSize);
+        syncFontSizeSelect(responseFontSizeSelect, responseFontSize);
+        applyStudioFontSizeVariables();
+        scheduleResponsePaneRepaintNudge();
+      }
+
       function getStudioUiRefreshAnnotationHeaderEnabled() {
         try {
           return Boolean(stripAnnotationHeader(sourceTextEl.value).hadHeader);
@@ -780,7 +858,8 @@
             ? (getStudioUiRefreshSelectSummary(highlightSelect, "Syntax highlight") || editorLanguage || "Markdown")
             : "Off";
           const lineLabel = lineNumbersEnabled ? "Lines on" : "Lines off";
-          setStudioUiRefreshButtonText(studioUiRefreshUi.viewButton, "View: " + syntaxLabel + " · " + lineLabel);
+          const editorSizeLabel = formatStudioFontSizeLabel(editorFontSize);
+          setStudioUiRefreshButtonText(studioUiRefreshUi.viewButton, "View: " + syntaxLabel + " · " + lineLabel + " · " + editorSizeLabel);
         }
         syncStudioUiRefreshReviewTrigger();
       }
@@ -961,7 +1040,7 @@
         appendStudioUiRefreshMenuSection(annotationsMenu.menu, "Actions", [stripAnnotationsBtn, saveAnnotatedBtn]);
         const viewButton = makeStudioUiRefreshElement("button", "", "View");
         const viewMenu = makeStudioUiRefreshMenu(viewButton, "view", "studio-refresh-view-anchor");
-        appendStudioUiRefreshMenuSection(viewMenu.menu, "Display", [highlightSelect, lineNumbersSelect]);
+        appendStudioUiRefreshMenuSection(viewMenu.menu, "Display", [highlightSelect, lineNumbersSelect, editorFontSizeSelect]);
         stateEl.appendChild(annotationsMenu.anchor);
         stateEl.appendChild(viewMenu.anchor);
 
@@ -10498,6 +10577,18 @@
         });
       }
 
+      if (editorFontSizeSelect) {
+        editorFontSizeSelect.addEventListener("change", () => {
+          setEditorFontSize(editorFontSizeSelect.value);
+        });
+      }
+
+      if (responseFontSizeSelect) {
+        responseFontSizeSelect.addEventListener("change", () => {
+          setResponseFontSize(responseFontSizeSelect.value);
+        });
+      }
+
       if (lineNumbersSelect) {
         lineNumbersSelect.addEventListener("change", () => {
           setLineNumbersEnabled(lineNumbersSelect.value === "on");
@@ -11356,6 +11447,12 @@
         });
         editorResizeObserver.observe(sourceEditorWrapEl);
       }
+
+      const initialEditorFontSize = readStoredFontSize(EDITOR_FONT_SIZE_STORAGE_KEY, EDITOR_FONT_SIZE_OPTIONS, DEFAULT_EDITOR_FONT_SIZE);
+      setEditorFontSize(initialEditorFontSize, { persist: false });
+
+      const initialResponseFontSize = readStoredFontSize(RESPONSE_FONT_SIZE_STORAGE_KEY, RESPONSE_FONT_SIZE_OPTIONS, DEFAULT_RESPONSE_FONT_SIZE);
+      setResponseFontSize(initialResponseFontSize, { persist: false });
 
       setSourceState(initialSourceState);
       refreshResponseUi();

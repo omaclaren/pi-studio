@@ -13,12 +13,15 @@
     "url": "https://github.com/omaclaren/pi-studio/issues"
   },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-extension",
+    "pi-theme"
   ],
   "files": [
     "index.ts",
     "client",
     "shared",
+    "themes",
     "README.md",
     "CHANGELOG.md",
     "WORKFLOW.md",
@@ -31,6 +34,9 @@
   "pi": {
     "extensions": [
       "./index.ts"
+    ],
+    "themes": [
+      "./themes"
     ]
   },
   "peerDependencies": {
