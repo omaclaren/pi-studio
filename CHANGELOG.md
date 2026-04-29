@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-04-30
+
+### Changed
+- Studio now opens the right pane on **Editor (Preview)** by default for file-backed and blank launches, while last-response launches still open on the response preview.
+
 ## [0.6.5] — 2026-04-30
 
 ### Changed

@@ -174,8 +174,13 @@
       let pendingKind = null;
       let stickyStudioKind = null;
       let initialDocumentApplied = false;
-      let editorView = isEditorOnlyMode ? "markdown" : "markdown";
-      let rightView = isEditorOnlyMode ? "editor-preview" : "preview";
+      function getInitialRightView(source) {
+        if (isEditorOnlyMode) return "editor-preview";
+        return String(source || "").trim() === "last-response" ? "preview" : "editor-preview";
+      }
+
+      let editorView = "markdown";
+      let rightView = getInitialRightView(initialSourceState.source);
       let followLatest = !isEditorOnlyMode;
       let queuedLatestResponse = null;
       let latestResponseMarkdown = "";
