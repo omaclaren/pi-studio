@@ -194,6 +194,9 @@
       let traceFilter = "all";
       let traceAutoScroll = true;
       let traceRenderRaf = null;
+      const traceExpandedOutputs = new Set();
+      const TRACE_OUTPUT_PREVIEW_MAX_LINES = 50;
+      const TRACE_OUTPUT_PREVIEW_MAX_CHARS = 8000;
       let studioRunChainActive = false;
       let queuedSteeringCount = 0;
       let agentBusyFromServer = false;
@@ -322,7 +325,11 @@
       }
 
       function replaceTraceState(nextState) {
+        const previousRunId = traceState && traceState.runId ? traceState.runId : null;
         traceState = normalizeTraceState(nextState);
+        if ((traceState.runId || null) !== previousRunId) {
+          traceExpandedOutputs.clear();
+        }
         renderTraceViewIfActive();
       }
 
@@ -2971,6 +2978,21 @@
           setTraceFilter(nextFilter);
           return;
         }
+        const outputToggleBtn = target instanceof Element ? target.closest("[data-trace-output-key]") : null;
+        if (outputToggleBtn) {
+          event.preventDefault();
+          const key = outputToggleBtn.getAttribute("data-trace-output-key") || "";
+          if (key) {
+            if (traceExpandedOutputs.has(key)) {
+              traceExpandedOutputs.delete(key);
+            } else {
+              traceExpandedOutputs.add(key);
+            }
+            traceAutoScroll = false;
+            renderTraceViewIfActive();
+          }
+          return;
+        }
         const actionBtn = target instanceof Element ? target.closest("[data-trace-action]") : null;
         if (!actionBtn) return;
         event.preventDefault();
@@ -3607,6 +3629,65 @@
         return remaining < 56;
       }
 
+      function formatTraceOutputSize(text) {
+        const value = String(text || "");
+        const chars = value.length;
+        const lines = value ? value.split(/\n/).length : 0;
+        const compactChars = chars >= 1000 ? ((chars / 1000).toFixed(chars >= 10_000 ? 0 : 1) + "k") : String(chars);
+        return lines + " line" + (lines === 1 ? "" : "s") + ", " + compactChars + " chars";
+      }
+
+      function getTraceOutputPreview(text) {
+        const value = String(text || "");
+        const lines = value.split(/\n/);
+        let preview = value;
+        let truncated = false;
+        if (lines.length > TRACE_OUTPUT_PREVIEW_MAX_LINES) {
+          preview = lines.slice(0, TRACE_OUTPUT_PREVIEW_MAX_LINES).join("\n");
+          truncated = true;
+        }
+        if (preview.length > TRACE_OUTPUT_PREVIEW_MAX_CHARS) {
+          preview = preview.slice(0, TRACE_OUTPUT_PREVIEW_MAX_CHARS);
+          truncated = true;
+        }
+        if (!truncated && value.length <= TRACE_OUTPUT_PREVIEW_MAX_CHARS) {
+          return { text: value, truncated: false, hiddenChars: 0, hiddenLines: 0 };
+        }
+        if (!truncated && value.length > TRACE_OUTPUT_PREVIEW_MAX_CHARS) {
+          preview = value.slice(0, TRACE_OUTPUT_PREVIEW_MAX_CHARS);
+          truncated = true;
+        }
+        const hiddenChars = Math.max(0, value.length - preview.length);
+        const previewLineCount = preview ? preview.split(/\n/).length : 0;
+        const hiddenLines = Math.max(0, lines.length - previewLineCount);
+        return { text: preview, truncated: true, hiddenChars, hiddenLines };
+      }
+
+      function renderTraceOutput(text, outputKey) {
+        const value = String(text || "");
+        const key = String(outputKey || "trace-output");
+        const isExpanded = traceExpandedOutputs.has(key);
+        const preview = getTraceOutputPreview(value);
+        const visibleText = isExpanded || !preview.truncated ? value : preview.text;
+        const body = "<pre class='plain-markdown trace-output'>" + escapeHtml(visibleText) + "</pre>";
+        if (!preview.truncated) return body;
+
+        const hiddenParts = [];
+        if (preview.hiddenLines > 0) hiddenParts.push(preview.hiddenLines + " more line" + (preview.hiddenLines === 1 ? "" : "s"));
+        if (preview.hiddenChars > 0) hiddenParts.push(formatCompactNumber(preview.hiddenChars) + " chars hidden");
+        const summary = isExpanded
+          ? "Showing full output (" + formatTraceOutputSize(value) + ")."
+          : "Output truncated — " + (hiddenParts.join(", ") || "more hidden") + ".";
+        const buttonLabel = isExpanded ? "Collapse" : "Show full";
+        return "<div class='trace-output-wrap" + (isExpanded ? " is-expanded" : " is-truncated") + "'>"
+          + body
+          + "<div class='trace-output-truncation'>"
+          + "<span>" + escapeHtml(summary) + "</span>"
+          + "<button type='button' class='trace-output-toggle' data-trace-output-key='" + escapeHtml(key) + "' aria-expanded='" + (isExpanded ? "true" : "false") + "'>" + escapeHtml(buttonLabel) + "</button>"
+          + "</div>"
+          + "</div>";
+      }
+
       function buildTracePanelHtml() {
         const state = traceState || createEmptyTraceState();
         const filter = normalizeTraceFilter(traceFilter);
@@ -3656,7 +3737,7 @@
               sections.push(
                 "<div class='trace-section'>"
                 + "<div class='trace-section-label'>Thinking</div>"
-                + "<pre class='plain-markdown trace-output'>" + escapeHtml(entry.thinking) + "</pre>"
+                + renderTraceOutput(entry.thinking, entry.id + ":thinking")
                 + "</div>"
               );
             }
@@ -3664,7 +3745,7 @@
               sections.push(
                 "<div class='trace-section'>"
                 + "<div class='trace-section-label'>Response</div>"
-                + "<pre class='plain-markdown trace-output'>" + escapeHtml(entry.text) + "</pre>"
+                + renderTraceOutput(entry.text, entry.id + ":response")
                 + "</div>"
               );
             }
@@ -3684,10 +3765,10 @@
 
           const title = entry.label || entry.toolName || "tool";
           const argsSummary = entry.argsSummary
-            ? "<div class='trace-section'><div class='trace-section-label'>Input</div><pre class='plain-markdown trace-output'>" + escapeHtml(entry.argsSummary) + "</pre></div>"
+            ? "<div class='trace-section'><div class='trace-section-label'>Input</div>" + renderTraceOutput(entry.argsSummary, entry.id + ":input") + "</div>"
             : "";
           const output = entry.output
-            ? "<div class='trace-section'><div class='trace-section-label'>Output</div><pre class='plain-markdown trace-output'>" + escapeHtml(entry.output) + "</pre></div>"
+            ? "<div class='trace-section'><div class='trace-section-label'>Output</div>" + renderTraceOutput(entry.output, entry.id + ":output") + "</div>"
             : "<div class='trace-empty-inline'>No output yet.</div>";
           const toolStatusLabel = entry.isError
             ? "Error"

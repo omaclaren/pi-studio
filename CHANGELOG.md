@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-04-30
+
+### Changed
+- Working view output blocks now show a compact 50-line preview by default with per-block **Show full** / **Collapse** controls for longer thinking, responses, and tool input/output.
+
 ## [0.6.4] — 2026-04-29
 
 ### Fixed

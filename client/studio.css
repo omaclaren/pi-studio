@@ -1822,15 +1822,49 @@
       letter-spacing: 0.04em;
     }
 
-    .trace-output {
-      padding: 10px 11px;
-      border-radius: 8px;
+    .trace-output-wrap {
       border: 1px solid var(--panel-border);
+      border-radius: 8px;
       background: var(--panel);
+      overflow: hidden;
+    }
+
+    .trace-output {
+      margin: 0;
+      padding: 10px 11px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
       overflow-x: auto;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       font-size: var(--studio-working-font-size);
+    }
+
+    .trace-section > .trace-output {
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .trace-output-truncation {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 8px;
+      border-top: 1px solid var(--border-subtle);
+      color: var(--studio-info-text, var(--muted));
+      font-size: 11px;
+      background: var(--panel-2);
+    }
+
+    .trace-output-toggle {
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 1.2;
     }
 
     .trace-empty,
