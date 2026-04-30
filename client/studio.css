@@ -396,7 +396,7 @@
       border-radius: 999px;
       padding: 4px 10px;
       font-size: 12px;
-      color: var(--muted);
+      color: var(--studio-info-text, var(--muted));
       white-space: nowrap;
     }
 
@@ -406,7 +406,14 @@
 
     body.studio-ui-refresh #rightPane .reference-meta .source-badge {
       border-color: var(--border-subtle);
-      color: color-mix(in srgb, var(--text) 58%, var(--muted));
+      color: var(--studio-info-text, var(--muted));
+    }
+
+    #historyIndexBadge {
+      color: var(--studio-info-text, var(--muted));
+      background: var(--reference-badge-bg, var(--panel));
+      border-color: var(--control-border);
+      font-weight: 500;
     }
 
     .source-badge-button {
@@ -727,7 +734,8 @@
     }
 
     .hl-fence {
-      color: var(--muted);
+      color: var(--studio-markdown-marker-text, var(--studio-info-text, var(--muted)));
+      font-weight: 600;
     }
 
     .hl-code {
@@ -793,8 +801,9 @@
     }
 
     .hl-quote {
-      color: var(--md-quote);
+      color: var(--studio-markdown-marker-text, var(--md-quote));
       font-style: normal;
+      font-weight: 600;
     }
 
     .hl-link {
@@ -1031,10 +1040,10 @@
     .rendered-markdown blockquote {
       margin-left: 0;
       padding: 0.2em 1em;
-      border-left: 0.25em solid var(--md-quote-border);
+      border-left: 0.25em solid var(--studio-quote-border, var(--md-quote-border));
       border-radius: 0 8px 8px 0;
       background: var(--blockquote-bg);
-      color: var(--md-quote);
+      color: var(--studio-quote-text, var(--md-quote));
     }
 
     .rendered-markdown .callout-note,

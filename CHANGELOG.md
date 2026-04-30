@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-04-30
+
+### Changed
+- Sharpened Markdown quote markers, fenced-code fence lines, rendered blockquote borders/text, and Studio badge text so they remain legible across darker custom themes.
+
 ## [0.6.6] — 2026-04-30
 
 ### Changed

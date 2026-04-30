@@ -6210,9 +6210,12 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 	const paneActiveBorder = capBorderContrast(rawPaneActiveBorder, style.palette.panel, style.mode === "light" ? 1.38 : 1.45);
 	const accentContrast = style.accentContrast ?? (style.mode === "light" ? "#ffffff" : "#0e1616");
 	const errorContrast = style.errorContrast ?? readableTextOn(style.palette.error);
+	const quoteText = blendColors(style.palette.text, style.palette.mdQuote, style.mode === "light" ? 0.34 : 0.28);
+	const quoteBorder = blendColors(style.palette.mdQuoteBorder, style.palette.text, style.mode === "light" ? 0.18 : 0.24);
+	const markdownMarkerText = blendColors(style.palette.text, style.palette.muted, style.mode === "light" ? 0.28 : 0.24);
 	const blockquoteBg = withAlpha(
-		style.palette.mdQuoteBorder,
-		style.mode === "light" ? 0.10 : 0.16,
+		quoteBorder,
+		style.mode === "light" ? 0.10 : 0.15,
 		style.mode === "light" ? "rgba(15, 23, 42, 0.04)" : "rgba(255, 255, 255, 0.05)",
 	);
 	const tableAltBg = withAlpha(
@@ -6285,6 +6288,9 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--md-codeblock-border": codeBlockBorder,
 		"--md-quote": style.palette.mdQuote,
 		"--md-quote-border": style.palette.mdQuoteBorder,
+		"--studio-quote-text": quoteText,
+		"--studio-quote-border": quoteBorder,
+		"--studio-markdown-marker-text": markdownMarkerText,
 		"--md-hr": style.palette.mdHr,
 		"--md-list-bullet": style.palette.mdListBullet,
 		"--syntax-comment": style.palette.syntaxComment,
