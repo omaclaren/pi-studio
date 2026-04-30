@@ -6213,6 +6213,14 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 	const quoteText = blendColors(style.palette.text, style.palette.mdQuote, style.mode === "light" ? 0.34 : 0.28);
 	const quoteBorder = blendColors(style.palette.mdQuoteBorder, style.palette.text, style.mode === "light" ? 0.18 : 0.24);
 	const markdownMarkerText = blendColors(style.palette.text, style.palette.muted, style.mode === "light" ? 0.28 : 0.24);
+	const linkText = blendColors(style.palette.text, style.palette.mdLink, style.mode === "light" ? 0.62 : 0.58);
+	const linkUrlText = blendColors(linkText, style.palette.mdLinkUrl, style.mode === "light" ? 0.22 : 0.18);
+	const linkDecoration = withAlpha(
+		linkText,
+		style.mode === "light" ? 0.42 : 0.50,
+		style.mode === "light" ? "rgba(84, 125, 167, 0.42)" : "rgba(129, 162, 190, 0.50)",
+	);
+	const listMarkerText = blendColors(markdownMarkerText, style.palette.mdListBullet, style.mode === "light" ? 0.46 : 0.42);
 	const blockquoteBg = withAlpha(
 		quoteBorder,
 		style.mode === "light" ? 0.10 : 0.15,
@@ -6291,6 +6299,10 @@ function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
 		"--studio-quote-text": quoteText,
 		"--studio-quote-border": quoteBorder,
 		"--studio-markdown-marker-text": markdownMarkerText,
+		"--studio-link": linkText,
+		"--studio-link-url": linkUrlText,
+		"--studio-link-decoration": linkDecoration,
+		"--studio-list-marker-text": listMarkerText,
 		"--md-hr": style.palette.mdHr,
 		"--md-list-bullet": style.palette.mdListBullet,
 		"--syntax-comment": style.palette.syntaxComment,

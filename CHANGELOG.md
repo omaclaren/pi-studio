@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.8] — 2026-05-01
+
+### Changed
+- Sharpened rendered and raw Markdown links, bare URLs, list markers, and sync/history-style badges so low-contrast theme tokens remain readable in Studio.
+- Softened the bundled `pi-studio-light` theme surfaces to reduce pure-white glare and large-surface contrast.
+
 ## [0.6.7] — 2026-04-30
 
 ### Changed

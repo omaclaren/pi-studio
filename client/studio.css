@@ -436,8 +436,8 @@
 
     .sync-badge.sync {
       border-color: var(--control-border);
-      color: var(--muted);
-      opacity: 0.88;
+      color: var(--studio-info-text, var(--muted));
+      opacity: 0.96;
     }
 
     .source-actions {
@@ -796,7 +796,7 @@
     }
 
     .hl-list {
-      color: var(--md-list-bullet);
+      color: var(--studio-list-marker-text, var(--md-list-bullet));
       font-weight: 600;
     }
 
@@ -807,12 +807,15 @@
     }
 
     .hl-link {
-      color: var(--md-link);
+      color: var(--studio-link, var(--md-link));
       text-decoration: underline;
+      text-decoration-color: var(--studio-link-decoration, currentColor);
+      text-underline-offset: 0.13em;
     }
 
     .hl-url {
-      color: var(--md-link-url);
+      color: var(--studio-link-url, var(--studio-link, var(--md-link-url)));
+      font-weight: 500;
     }
 
     .hl-annotation {
@@ -1020,21 +1023,25 @@
     }
 
     .rendered-markdown li::marker {
-      color: var(--md-list-bullet);
+      color: var(--studio-list-marker-text, var(--md-list-bullet));
     }
 
     .rendered-markdown a {
-      color: var(--md-link);
-      text-decoration: none;
+      color: var(--studio-link, var(--md-link));
+      text-decoration: underline;
+      text-decoration-color: var(--studio-link-decoration, currentColor);
+      text-decoration-thickness: 0.06em;
+      text-underline-offset: 0.14em;
     }
 
     .rendered-markdown a:hover {
-      text-decoration: underline;
+      text-decoration-color: currentColor;
     }
 
     .rendered-markdown a.uri,
     .rendered-markdown .uri {
-      color: var(--md-link-url);
+      color: var(--studio-link-url, var(--studio-link, var(--md-link-url)));
+      font-weight: 500;
     }
 
     .rendered-markdown blockquote {

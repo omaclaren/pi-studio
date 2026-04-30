@@ -2,9 +2,9 @@
   "$schema": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
   "name": "pi-studio-light",
   "vars": {
-    "bg": "#ffffff",
-    "surface": "#f6f8fa",
-    "surfaceAlt": "#ffffff",
+    "bg": "#f7f8fa",
+    "surface": "#fbfcfd",
+    "surfaceAlt": "#f2f4f7",
     "border": "#d0d7de",
     "borderMuted": "#eaeef2",
     "fg": "#0e1116",
@@ -70,8 +70,8 @@
     "bashMode": "success"
   },
   "export": {
-    "pageBg": "#ffffff",
-    "cardBg": "#f6f8fa",
+    "pageBg": "#f7f8fa",
+    "cardBg": "#fbfcfd",
     "infoBg": "#f3ecf8"
   }
 }
