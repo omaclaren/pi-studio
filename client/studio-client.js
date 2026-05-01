@@ -176,7 +176,7 @@
       let initialDocumentApplied = false;
       function getInitialRightView(source) {
         if (isEditorOnlyMode) return "editor-preview";
-        return String(source || "").trim() === "last-response" ? "preview" : "editor-preview";
+        return String(source || "").trim() === "file" ? "editor-preview" : "preview";
       }
 
       let editorView = "markdown";
