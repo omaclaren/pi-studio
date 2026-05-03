@@ -6088,9 +6088,9 @@ function isSshSession(): boolean {
 	);
 }
 
-function buildStudioSshTunnelHint(port: number): string | null {
+function buildStudioSshTunnelHint(port: number, studioUrl: string): string | null {
 	if (!isSshSession()) return null;
-	return `SSH detected. Forward the remote Studio port, then open the full Studio URL above locally, including its ?token=... parameter: ssh -L ${port}:127.0.0.1:${port} <remote-host>. If you choose a different local port, change only the port in the URL; keep the token.`;
+	return `SSH detected. Full Studio URL: ${studioUrl}. Forward the remote Studio port with: ssh -L ${port}:127.0.0.1:${port} <remote-host>. Open the full URL locally through the tunnel, preserving its ?token=... parameter. If you choose a different local port, change only the port in the URL; keep the token.`;
 }
 
 function resolveRequestedStudioDocumentFromUrl(
@@ -9436,8 +9436,9 @@ export default function (pi: ExtensionAPI) {
 			} else {
 				ctx.ui.notify("A full pi Studio view is already open for this session. Close it first, use /studio-replace for a fresh full Studio view, or use /studio-editor-only for a concurrent editor-only Studio view.", "warning");
 				if (serverState) {
-					ctx.ui.notify(`Studio URL: ${buildStudioUrl(serverState.port, serverState.token, "full")}`, "info");
-					const sshTunnelHint = buildStudioSshTunnelHint(serverState.port);
+					const url = buildStudioUrl(serverState.port, serverState.token, "full");
+					ctx.ui.notify(`Studio URL: ${url}`, "info");
+					const sshTunnelHint = buildStudioSshTunnelHint(serverState.port, url);
 					if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				}
 				return;
@@ -9464,7 +9465,7 @@ export default function (pi: ExtensionAPI) {
 
 		const state = await ensureServer();
 		const url = buildStudioUrl(state.port, state.token, mode, selected);
-		const sshTunnelHint = buildStudioSshTunnelHint(state.port);
+		const sshTunnelHint = buildStudioSshTunnelHint(state.port, url);
 		const openedLabel = mode === "editor-only" ? "pi Studio editor-only view" : "pi Studio";
 
 		try {
@@ -9511,7 +9512,7 @@ export default function (pi: ExtensionAPI) {
 					`Studio running at ${url} (busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
 					"info",
 				);
-				const sshTunnelHint = buildStudioSshTunnelHint(serverState.port);
+				const sshTunnelHint = buildStudioSshTunnelHint(serverState.port, url);
 				if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				return;
 			}

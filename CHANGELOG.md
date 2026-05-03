@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.6.10] — 2026-05-04
+
+### Fixed
+- SSH tunnel hints now include the full tokenized Studio URL directly so the token remains visible even when the terminal only shows the latest notification.
+
 ## [0.6.9] — 2026-05-01
 
 ### Changed

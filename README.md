@@ -75,7 +75,7 @@ pi -e https://github.com/omaclaren/pi-studio
 ## Notes
 
 - Local-only server (`127.0.0.1`) with tokenized Studio URLs.
-- For remote SSH sessions, keep Studio bound to localhost and use SSH local port forwarding; `/studio` and `/studio --status` print the full tokenized localhost URL. Open that URL through the tunnel, preserving the `?token=...` parameter.
+- For remote SSH sessions, keep Studio bound to localhost and use SSH local port forwarding; `/studio` and `/studio --status` print the full tokenized localhost URL. The SSH hint repeats the full URL so it is visible even if your terminal only shows the latest notification. Open that URL through the tunnel, preserving the `?token=...` parameter.
 - Full Studio is a singleton per Pi session: use `/studio` to open it, `/studio-replace` to explicitly replace it, and `/studio-editor-only` for extra editing/preview tabs that do not take over the full Studio session view.
 - Studio is designed as a complement to terminal pi, not a replacement.
 - Installing pi-studio makes the optional `pi-studio-dark` and `pi-studio-light` themes available in pi's theme selector; it does not change your active theme.
