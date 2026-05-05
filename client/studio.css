@@ -1393,6 +1393,62 @@
       max-width: 100%;
     }
 
+    .rendered-markdown .studio-pdf-card {
+      margin: 1.15em 0;
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      background: var(--panel);
+      overflow: hidden;
+      box-shadow: 0 1px 2px var(--shadow-color);
+    }
+
+    .rendered-markdown .studio-pdf-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--panel-2);
+      color: var(--studio-info-text, var(--muted));
+      font-size: 12px;
+    }
+
+    .rendered-markdown .studio-pdf-card-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .rendered-markdown .studio-pdf-card-link {
+      flex: 0 0 auto;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .rendered-markdown .studio-pdf-card-caption {
+      padding: 8px 10px 0;
+      color: var(--studio-info-text, var(--muted));
+      font-size: 12px;
+    }
+
+    .rendered-markdown .studio-pdf-card-error {
+      padding: 12px;
+      color: var(--warn);
+      font-size: 12px;
+    }
+
+    .rendered-markdown .studio-pdf-frame {
+      display: block;
+      width: 100%;
+      min-height: 240px;
+      border: 0;
+      background: #fff;
+    }
+
     .rendered-markdown .studio-subfigure-group {
       margin: 1.25em auto;
     }
@@ -2579,7 +2635,7 @@
       width: 15px;
       height: 15px;
       stroke: currentColor;
-      stroke-width: 1.85;
+      stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
       fill: none;
@@ -2629,9 +2685,21 @@
       min-width: 29px;
       min-height: 29px;
       padding: 0;
-      color: var(--muted);
+      color: var(--studio-info-text, var(--muted));
       align-items: center;
       justify-content: center;
+    }
+
+    body.studio-ui-refresh #leftFocusBtn:not(:disabled):hover,
+    body.studio-ui-refresh #rightFocusBtn:not(:disabled):hover {
+      color: var(--text);
+    }
+
+    body.studio-ui-refresh #leftFocusBtn.is-active,
+    body.studio-ui-refresh #rightFocusBtn.is-active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
     }
 
     body.studio-ui-refresh #sourceBadge,

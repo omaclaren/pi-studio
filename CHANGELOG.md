@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-06
+
+### Added
+- Added explicit `studio-pdf` fenced blocks that render token-protected local PDFs in Studio preview cards.
+- Added an **Open new editor** action that opens a detached copy of the current editor text in a new editor-only Studio view.
+- Documented Studio Markdown asset paths and `studio-pdf` syntax in the README.
+
+### Changed
+- Hid response-sync badges in editor-only Studio views, simplified editor action labels, and slightly strengthened refreshed-layout focus icons.
+
 ## [0.6.10] — 2026-05-04
 
 ### Fixed

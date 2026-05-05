@@ -19,7 +19,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 ## What it does
 
 - Opens a two-pane browser workspace: **Editor** (left) + **Response/Working/Editor Preview** (right)
-- Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces
+- Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces; the editor toolbar can open a detached copy of the current editor text as a companion view
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
 - Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters plus **Load visible into editor** and **Copy visible** actions
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
@@ -35,6 +35,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
   - strips markers before send (optional)
   - saves `.annotated.md`
 - Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi
+- Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
 - Exports right-pane preview as PDF (pandoc + LaTeX)
 - Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf`
@@ -71,6 +72,28 @@ Run once without installing:
 ```bash
 pi -e https://github.com/omaclaren/pi-studio
 ```
+
+## Studio Markdown extras
+
+Studio previews standard Markdown, code fences, display math, Mermaid, and local images. When adding companion files such as generated plots or PDFs, prefer the project's existing folder convention. If there is no convention, `attachments/` is a reasonable default for newly generated assets. Use relative paths from the opened Markdown file or Studio working/resource directory, and wrap paths in angle brackets when spaces are possible:
+
+```md
+![Short descriptive caption](<attachments/plot.png>)
+```
+
+Local PDFs can be embedded with an explicit Studio-only fenced block:
+
+````md
+```studio-pdf
+path: attachments/paper.pdf
+title: Optional title
+page: 3
+height: 760
+caption: Optional caption
+```
+````
+
+`path` must point to a local `.pdf` within the current Studio resource directory. Relative paths resolve from the opened document's directory, or from Studio's working dir for non-file-backed content. `page` is an initial page hint for the browser PDF viewer, and `height` controls the embedded frame height in pixels. Use normal Markdown links for PDFs when embedding is not useful.
 
 ## Notes
 

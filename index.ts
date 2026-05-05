@@ -25,6 +25,7 @@ import {
 	preserveLiteralLatexCommandsInMarkdown,
 } from "./shared/studio-markdown-latex-literals.js";
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
+import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
@@ -115,6 +116,7 @@ interface InitialStudioDocument {
 	source: StudioSourceKind;
 	path?: string;
 	draftId?: string;
+	resourceDir?: string;
 }
 
 interface PersistedStudioReviewNote {
@@ -249,6 +251,15 @@ interface LoadGitDiffRequestMessage {
 	resourceDir?: string;
 }
 
+interface OpenEditorOnlyRequestMessage {
+	type: "open_editor_only_request";
+	requestId: string;
+	content: string;
+	label?: string;
+	path?: string;
+	resourceDir?: string;
+}
+
 interface CancelRequestMessage {
 	type: "cancel_request";
 	requestId: string;
@@ -268,6 +279,7 @@ type IncomingStudioMessage =
 	| SendToEditorRequestMessage
 	| GetFromEditorRequestMessage
 	| LoadGitDiffRequestMessage
+	| OpenEditorOnlyRequestMessage
 	| CancelRequestMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
@@ -278,6 +290,8 @@ const RESPONSE_HISTORY_LIMIT = 30;
 const CMUX_NOTIFY_TIMEOUT_MS = 1200;
 const PREPARED_PDF_EXPORT_TTL_MS = 5 * 60 * 1000;
 const MAX_PREPARED_PDF_EXPORTS = 8;
+const TRANSIENT_STUDIO_DOCUMENT_TTL_MS = 30 * 60 * 1000;
+const MAX_TRANSIENT_STUDIO_DOCUMENTS = 16;
 const STUDIO_TERMINAL_NOTIFY_TITLE = "pi Studio";
 const CMUX_STUDIO_STATUS_KEY = "pi_studio";
 const CMUX_STUDIO_STATUS_COLOR_DARK = "#5ea1ff";
@@ -289,6 +303,7 @@ const STUDIO_PERSISTENT_STATE_PATH = join(STUDIO_PERSISTENT_STATE_DIR, "local-st
 
 let studioPersistentStateCache: StudioPersistentState | null = null;
 let studioPersistentStateQueue: Promise<void> = Promise.resolve();
+let transientStudioDocuments: Map<string, { document: InitialStudioDocument; createdAt: number }> = new Map();
 
 function createEmptyStudioPersistentState(): StudioPersistentState {
 	return {
@@ -1636,6 +1651,31 @@ function resolveStudioBaseDir(sourcePath: string | undefined, resourceDir: strin
 
 function resolveStudioGitDiffBaseDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
 	return resolveStudioBaseDir(sourcePath, resourceDir, fallbackCwd);
+}
+
+function resolveStudioCompanionResourceDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string | undefined {
+	const explicitResource = typeof resourceDir === "string" ? resourceDir.trim() : "";
+	if (explicitResource) {
+		const expanded = expandHome(explicitResource);
+		return isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded);
+	}
+
+	const source = typeof sourcePath === "string" ? sourcePath.trim() : "";
+	if (source) {
+		const expanded = expandHome(source);
+		return dirname(isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded));
+	}
+
+	return undefined;
+}
+
+function buildStudioCompanionLabel(_label: string | undefined): string {
+	return "copy of editor text";
+}
+
+function resolveStudioPdfResourcePath(pdfPath: string | undefined, sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
+	const baseDir = resolveStudioBaseDir(sourcePath, resourceDir, fallbackCwd);
+	return resolveStudioPdfResourceFile(pdfPath, baseDir);
 }
 
 function resolveStudioPandocWorkingDir(baseDir: string | undefined): string | undefined {
@@ -5213,6 +5253,26 @@ function respondText(res: ServerResponse, status: number, text: string): void {
 	res.end(text);
 }
 
+function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: string): void {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "GET" && method !== "HEAD") {
+		res.setHeader("Allow", "GET, HEAD");
+		respondText(res, 405, "Method not allowed. Use GET.");
+		return;
+	}
+
+	const pdf = readFileSync(filePath);
+	res.writeHead(200, {
+		"Content-Type": "application/pdf",
+		"Content-Length": String(pdf.length),
+		"Content-Disposition": `inline; filename="${basename(filePath).replace(/["\\]/g, "") || "document.pdf"}"`,
+		"Cache-Control": "no-store",
+		"X-Content-Type-Options": "nosniff",
+		"Cross-Origin-Resource-Policy": "same-origin",
+	});
+	res.end(method === "HEAD" ? undefined : pdf);
+}
+
 function openUrlInDefaultBrowser(url: string): Promise<void> {
 	const openCommand =
 		process.platform === "darwin"
@@ -5810,6 +5870,24 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
+	if (
+		msg.type === "open_editor_only_request"
+		&& typeof msg.requestId === "string"
+		&& typeof msg.content === "string"
+		&& (msg.label === undefined || typeof msg.label === "string")
+		&& (msg.path === undefined || typeof msg.path === "string")
+		&& (msg.resourceDir === undefined || typeof msg.resourceDir === "string")
+	) {
+		return {
+			type: "open_editor_only_request",
+			requestId: msg.requestId,
+			content: msg.content,
+			label: typeof msg.label === "string" ? msg.label : undefined,
+			path: typeof msg.path === "string" ? msg.path : undefined,
+			resourceDir: typeof msg.resourceDir === "string" ? msg.resourceDir : undefined,
+		};
+	}
+
 	if (msg.type === "cancel_request" && typeof msg.requestId === "string") {
 		return {
 			type: "cancel_request",
@@ -6067,18 +6145,52 @@ function normalizeStudioUiMode(raw: string | null | undefined): StudioUiMode {
 	return raw === "editor-only" ? "editor-only" : "full";
 }
 
+function cleanupTransientStudioDocuments(now = Date.now()): void {
+	for (const [id, entry] of transientStudioDocuments) {
+		if (now - entry.createdAt > TRANSIENT_STUDIO_DOCUMENT_TTL_MS) {
+			transientStudioDocuments.delete(id);
+		}
+	}
+
+	while (transientStudioDocuments.size > MAX_TRANSIENT_STUDIO_DOCUMENTS) {
+		const oldest = transientStudioDocuments.keys().next().value;
+		if (!oldest) break;
+		transientStudioDocuments.delete(oldest);
+	}
+}
+
+function storeTransientStudioDocument(document: InitialStudioDocument): string {
+	cleanupTransientStudioDocuments();
+	const id = randomUUID();
+	transientStudioDocuments.set(id, {
+		document: { ...document },
+		createdAt: Date.now(),
+	});
+	cleanupTransientStudioDocuments();
+	return id;
+}
+
+function readTransientStudioDocument(id: string): InitialStudioDocument | null {
+	cleanupTransientStudioDocuments();
+	const entry = transientStudioDocuments.get(id);
+	return entry ? { ...entry.document } : null;
+}
+
 function buildStudioUrl(
 	port: number,
 	token: string,
 	mode: StudioUiMode = "full",
 	doc?: InitialStudioDocument | null,
+	docId?: string,
 ): string {
 	const params = new URLSearchParams({ token });
 	if (mode !== "full") params.set("mode", mode);
+	if (docId) params.set("docId", docId);
 	if (doc?.source) params.set("docSource", doc.source);
 	if (doc?.label) params.set("docLabel", doc.label);
 	if (doc?.path) params.set("docPath", doc.path);
 	if (doc?.draftId) params.set("draftId", doc.draftId);
+	if (doc?.resourceDir) params.set("resourceDir", doc.resourceDir);
 	return `http://127.0.0.1:${port}/?${params.toString()}`;
 }
 
@@ -6099,10 +6211,17 @@ function resolveRequestedStudioDocumentFromUrl(
 	studioCwd: string,
 	latestResponse?: LastStudioResponse | null,
 ): InitialStudioDocument | null {
+	const requestedDocId = (requestUrl.searchParams.get("docId") ?? "").trim();
+	if (requestedDocId) {
+		const transientDocument = readTransientStudioDocument(requestedDocId);
+		if (transientDocument) return transientDocument;
+	}
+
 	const requestedPath = (requestUrl.searchParams.get("docPath") ?? "").trim();
 	const requestedSourceRaw = (requestUrl.searchParams.get("docSource") ?? "").trim();
 	const requestedLabel = (requestUrl.searchParams.get("docLabel") ?? "").trim();
 	const requestedDraftId = (requestUrl.searchParams.get("draftId") ?? "").trim();
+	const requestedResourceDir = (requestUrl.searchParams.get("resourceDir") ?? "").trim();
 
 	if (requestedPath) {
 		const file = readStudioFile(requestedPath, studioCwd);
@@ -6112,6 +6231,7 @@ function resolveRequestedStudioDocumentFromUrl(
 				label: requestedLabel || file.label,
 				source: "file",
 				path: file.resolvedPath,
+				resourceDir: requestedResourceDir || undefined,
 			};
 		}
 	}
@@ -6122,6 +6242,7 @@ function resolveRequestedStudioDocumentFromUrl(
 			label: requestedLabel || "last model response",
 			source: "last-response",
 			draftId: requestedDraftId || undefined,
+			resourceDir: requestedResourceDir || undefined,
 		};
 	}
 
@@ -6131,6 +6252,7 @@ function resolveRequestedStudioDocumentFromUrl(
 			label: requestedLabel || requestedSourceRaw || "blank",
 			source: "blank",
 			draftId: requestedDraftId || undefined,
+			resourceDir: requestedResourceDir || fallback?.resourceDir || undefined,
 		};
 	}
 
@@ -6370,6 +6492,7 @@ function buildStudioHtml(
 	const initialLabel = escapeHtmlForInline(initialDocument?.label ?? "blank");
 	const initialPath = escapeHtmlForInline(initialDocument?.path ?? "");
 	const initialDraftId = escapeHtmlForInline(initialDocument?.draftId ?? "");
+	const initialResourceDir = escapeHtmlForInline(initialDocument?.resourceDir ?? "");
 	const initialModel = escapeHtmlForInline(initialModelLabel ?? "none");
 	const initialTerminal = escapeHtmlForInline(initialTerminalLabel ?? "unknown");
 	const initialTerminalDetailAttr = escapeHtmlForInline(initialTerminalDetail ?? initialTerminalLabel ?? "unknown");
@@ -6439,7 +6562,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}">
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -6484,7 +6607,8 @@ ${cssVarsBlock}
             <div class="source-actions-row">
               <button id="sendRunBtn" type="button" title="Run editor text. While a direct run is active, this button becomes Stop. Cmd/Ctrl+Enter queues steering from the current editor text. Stop the active request with Esc.">Run editor text</button>
               <button id="queueSteerBtn" type="button" title="Queue steering is available while Run editor text is active." disabled>Queue steering</button>
-              <button id="copyDraftBtn" type="button">Copy editor text</button>
+              <button id="copyDraftBtn" type="button" title="Copy the current editor text to the clipboard.">Copy text</button>
+              <button id="openCompanionBtn" type="button" title="Open a detached copy of the current editor text in a new editor-only Studio tab.">Open new editor</button>
               <button id="sendEditorBtn" type="button">Send to pi editor</button>
             </div>
             <div class="source-actions-row">
@@ -7778,6 +7902,45 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (msg.type === "open_editor_only_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			if (!serverState) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Studio server is not running." });
+				return;
+			}
+			if (msg.content.length > PREVIEW_RENDER_MAX_CHARS) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: `Editor text is too large to copy into a companion view (${PREVIEW_RENDER_MAX_CHARS} character limit).`,
+				});
+				return;
+			}
+
+			const resourceDir = resolveStudioCompanionResourceDir(msg.path, msg.resourceDir, studioCwd);
+			const document: InitialStudioDocument = {
+				text: msg.content,
+				label: buildStudioCompanionLabel(msg.label),
+				source: "blank",
+				draftId: createStudioDraftId(),
+				resourceDir,
+			};
+			const docId = storeTransientStudioDocument(document);
+			const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+			const parsedUrl = new URL(url);
+			sendToClient(client, {
+				type: "editor_only_ready",
+				requestId: msg.requestId,
+				url,
+				relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+				message: "Companion editor is ready with a detached copy of the current editor text.",
+			});
+			return;
+		}
+
 		if (msg.type === "cancel_request") {
 			if (!isValidRequestId(msg.requestId)) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
@@ -8812,6 +8975,27 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/pdf-resource") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
+				return;
+			}
+
+			try {
+				const filePath = resolveStudioPdfResourcePath(
+					requestUrl.searchParams.get("path") ?? "",
+					requestUrl.searchParams.get("sourcePath") ?? undefined,
+					requestUrl.searchParams.get("resourceDir") ?? undefined,
+					studioCwd,
+				);
+				respondPdfFile(req, res, filePath);
+			} catch (error) {
+				respondText(res, 404, `PDF resource unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			return;
+		}
+
 		if (requestUrl.pathname !== "/") {
 			respondText(res, 404, "Not found");
 			return;
@@ -9329,6 +9513,7 @@ export default function (pi: ExtensionAPI) {
 		clearStudioDirectRunState();
 		clearPendingStudioCompletion();
 		clearPreparedPdfExports();
+		transientStudioDocuments.clear();
 		clearCompactionState();
 		clearStudioTrace();
 		setTerminalActivity("idle");

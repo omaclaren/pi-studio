@@ -98,6 +98,7 @@
       const saveOverBtn = document.getElementById("saveOverBtn");
       const refreshFromDiskBtn = document.getElementById("refreshFromDiskBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
+      const openCompanionBtn = document.getElementById("openCompanionBtn");
       const getEditorBtn = document.getElementById("getEditorBtn");
       const loadGitDiffBtn = document.getElementById("loadGitDiffBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
@@ -149,7 +150,8 @@
       const isEditorOnlyMode = studioMode === "editor-only";
 
       const initialQueryParams = new URLSearchParams(window.location.search || "");
-      const explicitDocumentIdentityFromUrl = initialQueryParams.has("docSource")
+      const explicitDocumentIdentityFromUrl = initialQueryParams.has("docId")
+        || initialQueryParams.has("docSource")
         || initialQueryParams.has("docLabel")
         || initialQueryParams.has("docPath")
         || initialQueryParams.has("draftId");
@@ -163,6 +165,8 @@
         draftId: initialQueryParams.get("draftId")
           || ((document.body && document.body.dataset && document.body.dataset.initialDraftId) || null),
       };
+      const initialResourceDir = initialQueryParams.get("resourceDir")
+        || ((document.body && document.body.dataset && document.body.dataset.initialResourceDir) || "");
 
       let ws = null;
       let wsState = "Connecting";
@@ -173,6 +177,7 @@
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
+      const pendingCompanionWindows = new Map();
       let initialDocumentApplied = false;
       function getInitialRightView(source) {
         if (isEditorOnlyMode) return "editor-preview";
@@ -1041,6 +1046,7 @@
         if (!isEditorOnlyMode && queueSteerBtn) actionLineOneEl.appendChild(queueSteerBtn);
         const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         actionLineTwoEl.appendChild(copyDraftBtn);
+        if (openCompanionBtn) actionLineTwoEl.appendChild(openCompanionBtn);
         if (!isEditorOnlyMode && sendEditorBtn) actionLineTwoEl.appendChild(sendEditorBtn);
         if (actionLineOneEl.childNodes.length > 0) actionsEl.appendChild(actionLineOneEl);
         actionsEl.appendChild(actionLineTwoEl);
@@ -1266,6 +1272,7 @@
         if (kind === "send_to_editor") return "sending to pi editor";
         if (kind === "get_from_editor") return "loading from pi editor";
         if (kind === "load_git_diff") return "loading git diff";
+        if (kind === "open_editor_only") return "opening companion editor";
         if (kind === "refresh_from_disk") return "refreshing from disk";
         if (kind === "save_as" || kind === "save_over") return "saving editor text";
         return "submitting request";
@@ -2301,6 +2308,12 @@
       function updateSyncBadge(normalizedEditorText) {
         if (!syncBadgeEl) return;
 
+        if (isEditorOnlyMode) {
+          syncBadgeEl.hidden = true;
+          syncBadgeEl.classList.remove("sync");
+          return;
+        }
+
         if (rightView === "trace") {
           syncBadgeEl.hidden = true;
           syncBadgeEl.classList.remove("sync");
@@ -2337,6 +2350,148 @@
 
       function buildPreviewErrorHtml(message, markdown, options) {
         return "<div class='preview-error'>" + escapeHtml(String(message || "Preview rendering failed.")) + "</div>" + buildPlainMarkdownHtml(markdown, options);
+      }
+
+      function stripMatchingQuotes(value) {
+        const text = String(value || "").trim();
+        if (text.length >= 2) {
+          const first = text[0];
+          const last = text[text.length - 1];
+          if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
+            return text.slice(1, -1).trim();
+          }
+        }
+        return text;
+      }
+
+      function parseStudioPdfBlockOptions(body) {
+        const options = { path: "", title: "", caption: "", page: "", height: "" };
+        String(body || "").split(/\r?\n/).forEach((line) => {
+          const raw = String(line || "").trim();
+          if (!raw || raw.startsWith("#")) return;
+          const match = raw.match(/^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*([\s\S]*)$/);
+          if (match) {
+            const key = String(match[1] || "").toLowerCase();
+            const value = stripMatchingQuotes(match[2] || "");
+            if (key === "path" || key === "src" || key === "file") options.path = value;
+            else if (key === "title") options.title = value;
+            else if (key === "caption") options.caption = value;
+            else if (key === "page") options.page = value;
+            else if (key === "height") options.height = value;
+            return;
+          }
+          if (!options.path) options.path = stripMatchingQuotes(raw);
+        });
+        return options;
+      }
+
+      function prepareStudioPdfBlocksForPreview(markdown) {
+        const blocks = [];
+        const prefix = "STUDIO_PDF_BLOCK_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2) + "_";
+        const source = String(markdown || "");
+        const blockPattern = /(^|\n)([ \t]{0,3})(`{3,}|~{3,})[ \t]*studio-pdf[^\n]*\n([\s\S]*?)\n[ \t]*\3[ \t]*(?=\n|$)/g;
+        const nextMarkdown = source.replace(blockPattern, (match, leadingNewline, _indent, _fence, body) => {
+          const placeholder = prefix + blocks.length;
+          blocks.push({ placeholder, options: parseStudioPdfBlockOptions(body) });
+          return String(leadingNewline || "") + placeholder + "\n";
+        });
+        return { markdown: nextMarkdown, blocks };
+      }
+
+      function normalizeStudioPdfHeight(value) {
+        const parsed = Number.parseInt(String(value || ""), 10);
+        if (!Number.isFinite(parsed)) return 680;
+        return Math.max(240, Math.min(1400, parsed));
+      }
+
+      function normalizeStudioPdfPage(value) {
+        const parsed = Number.parseInt(String(value || ""), 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+      }
+
+      function buildStudioPdfResourceUrl(options) {
+        const token = getToken();
+        if (!token) return "";
+        const pdfPath = String(options && options.path ? options.path : "").trim();
+        if (!pdfPath) return "";
+        const effectivePath = getEffectiveSavePath();
+        const sourcePath = effectivePath || sourceState.path || "";
+        const params = new URLSearchParams({ token, path: pdfPath });
+        if (sourcePath) {
+          params.set("sourcePath", sourcePath);
+        } else if (resourceDirInput && resourceDirInput.value.trim()) {
+          params.set("resourceDir", resourceDirInput.value.trim());
+        }
+        return "/pdf-resource?" + params.toString();
+      }
+
+      function createStudioPdfCard(block) {
+        const options = block && block.options ? block.options : {};
+        const path = String(options.path || "").trim();
+        const title = String(options.title || path || "Embedded PDF").trim();
+        const caption = String(options.caption || "").trim();
+        const height = normalizeStudioPdfHeight(options.height);
+        const page = normalizeStudioPdfPage(options.page);
+        const resourceUrl = buildStudioPdfResourceUrl(options);
+        const viewerUrl = resourceUrl && page ? resourceUrl + "#page=" + encodeURIComponent(String(page)) : resourceUrl;
+
+        const card = document.createElement("figure");
+        card.className = "studio-pdf-card";
+
+        const header = document.createElement("figcaption");
+        header.className = "studio-pdf-card-header";
+        const label = document.createElement("div");
+        label.className = "studio-pdf-card-title";
+        label.textContent = title;
+        header.appendChild(label);
+
+        if (resourceUrl) {
+          const openLink = document.createElement("a");
+          openLink.className = "studio-pdf-card-link";
+          openLink.href = viewerUrl;
+          openLink.target = "_blank";
+          openLink.rel = "noopener noreferrer";
+          openLink.textContent = "Open PDF";
+          header.appendChild(openLink);
+        }
+        card.appendChild(header);
+
+        if (caption) {
+          const captionEl = document.createElement("div");
+          captionEl.className = "studio-pdf-card-caption";
+          captionEl.textContent = caption;
+          card.appendChild(captionEl);
+        }
+
+        if (!resourceUrl) {
+          const errorEl = document.createElement("div");
+          errorEl.className = "studio-pdf-card-error";
+          errorEl.textContent = "PDF block needs a local path.";
+          card.appendChild(errorEl);
+          return card;
+        }
+
+        const iframe = document.createElement("iframe");
+        iframe.className = "studio-pdf-frame";
+        iframe.src = viewerUrl;
+        iframe.title = title;
+        iframe.loading = "lazy";
+        iframe.style.height = height + "px";
+        card.appendChild(iframe);
+        return card;
+      }
+
+      function renderStudioPdfBlocksInElement(targetEl, blocks) {
+        if (!targetEl || !Array.isArray(blocks) || blocks.length === 0) return;
+        const candidates = Array.from(targetEl.querySelectorAll("p, pre, div"));
+        blocks.forEach((block) => {
+          const placeholder = block && block.placeholder ? block.placeholder : "";
+          if (!placeholder) return;
+          const match = candidates.find((el) => String(el.textContent || "").trim() === placeholder);
+          if (match && match.parentNode) {
+            match.replaceWith(createStudioPdfCard(block));
+          }
+        });
       }
 
       function sanitizeRenderedHtml(html, markdown, options) {
@@ -3499,9 +3654,10 @@
         const previewFallbackOptions = {
           stripMarkdownHtmlComments: !previewingEditorText || editorLanguage !== "latex",
         };
+        const pdfPrepared = prepareStudioPdfBlocksForPreview(previewPrepared.markdown);
 
         try {
-          const renderedHtml = await renderMarkdownWithPandoc(previewPrepared.markdown, {
+          const renderedHtml = await renderMarkdownWithPandoc(pdfPrepared.markdown, {
             includeEditorLanguage: pane === "source" || rightView === "editor-preview",
           });
 
@@ -3514,6 +3670,7 @@
           clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown, previewFallbackOptions);
+          renderStudioPdfBlocksInElement(targetEl, pdfPrepared.blocks);
           applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
           await renderAnnotationMathInElement(targetEl);
           decoratePdfEmbeds(targetEl);
@@ -4002,6 +4159,7 @@
         if (loadGitDiffBtn) loadGitDiffBtn.disabled = uiBusy;
         syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
+        if (openCompanionBtn) openCompanionBtn.disabled = uiBusy || wsState !== "Ready";
         if (highlightSelect) highlightSelect.disabled = uiBusy;
         if (lineNumbersSelect) lineNumbersSelect.disabled = uiBusy;
         if (annotationModeSelect) annotationModeSelect.disabled = uiBusy;
@@ -10201,6 +10359,27 @@
           return;
         }
 
+        if (message.type === "editor_only_ready") {
+          const responseRequestId = typeof message.requestId === "string" ? message.requestId : "";
+          if (responseRequestId && pendingRequestId === responseRequestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+            clearArmedTitleAttention(responseRequestId);
+            stickyStudioKind = null;
+          }
+          setBusy(false);
+          setWsState("Ready");
+          const targetUrl = resolveCompanionEditorTargetUrl(message);
+          const opened = navigatePendingCompanionWindow(responseRequestId, targetUrl);
+          setStatus(
+            opened
+              ? "Opened companion editor with a detached copy of the current editor text."
+              : (targetUrl ? "Companion editor ready: " + targetUrl : "Companion editor is ready, but Studio did not receive a URL."),
+            opened ? "success" : "warning",
+          );
+          return;
+        }
+
         if (message.type === "studio_state") {
           const busy = Boolean(message.busy);
           agentBusyFromServer = Boolean(message.agentBusy);
@@ -10267,6 +10446,9 @@
         }
 
         if (message.type === "busy") {
+          if (typeof message.requestId === "string") {
+            closePendingCompanionWindow(message.requestId);
+          }
           if (message.requestId && pendingRequestId === message.requestId) {
             if (pendingKind === "compact") {
               compactInProgress = false;
@@ -10285,6 +10467,9 @@
         }
 
         if (message.type === "error") {
+          if (typeof message.requestId === "string") {
+            closePendingCompanionWindow(message.requestId);
+          }
           if (message.requestId && pendingRequestId === message.requestId) {
             if (pendingKind === "compact") {
               compactInProgress = false;
@@ -10492,6 +10677,69 @@
         setWsState("Submitting");
         setStatus(getStudioBusyStatus(kind), "warning");
         return requestId;
+      }
+
+      function openPendingCompanionWindow(requestId) {
+        if (!requestId) return null;
+        let companionWindow = null;
+        try {
+          companionWindow = window.open("", "_blank");
+          if (companionWindow && companionWindow.document && companionWindow.document.body) {
+            companionWindow.document.title = "Opening companion editor…";
+            companionWindow.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Opening companion editor…</p>";
+          }
+        } catch {
+          companionWindow = null;
+        }
+        if (companionWindow) {
+          pendingCompanionWindows.set(requestId, companionWindow);
+        }
+        return companionWindow;
+      }
+
+      function takePendingCompanionWindow(requestId) {
+        if (!requestId || !pendingCompanionWindows.has(requestId)) return null;
+        const companionWindow = pendingCompanionWindows.get(requestId);
+        pendingCompanionWindows.delete(requestId);
+        return companionWindow || null;
+      }
+
+      function closePendingCompanionWindow(requestId) {
+        const companionWindow = takePendingCompanionWindow(requestId);
+        if (!companionWindow || companionWindow.closed) return;
+        try {
+          companionWindow.close();
+        } catch {}
+      }
+
+      function resolveCompanionEditorTargetUrl(message) {
+        const relativeUrl = message && typeof message.relativeUrl === "string" ? message.relativeUrl : "";
+        if (relativeUrl) {
+          try {
+            return new URL(relativeUrl, window.location.href).href;
+          } catch {}
+        }
+        return message && typeof message.url === "string" ? message.url : "";
+      }
+
+      function navigatePendingCompanionWindow(requestId, targetUrl) {
+        if (!targetUrl) {
+          closePendingCompanionWindow(requestId);
+          return false;
+        }
+        const companionWindow = takePendingCompanionWindow(requestId);
+        if (companionWindow && !companionWindow.closed) {
+          try {
+            companionWindow.opener = null;
+            companionWindow.location.href = targetUrl;
+            return true;
+          } catch {}
+        }
+        try {
+          return Boolean(window.open(targetUrl, "_blank", "noopener"));
+        } catch {
+          return false;
+        }
       }
 
       function describeSourceForAnnotation() {
@@ -11056,6 +11304,38 @@
         }
       });
 
+      if (openCompanionBtn) {
+        openCompanionBtn.addEventListener("click", () => {
+          const content = sourceTextEl.value;
+          if (!content.trim()) {
+            setStatus("Editor is empty. Nothing to copy into a companion view.", "warning");
+            return;
+          }
+
+          const requestId = beginUiAction("open_editor_only");
+          if (!requestId) return;
+          openPendingCompanionWindow(requestId);
+
+          const sent = sendMessage({
+            type: "open_editor_only_request",
+            requestId,
+            content,
+            label: sourceState && sourceState.label ? sourceState.label : "current editor",
+            path: sourceState && sourceState.path ? sourceState.path : undefined,
+            resourceDir: resourceDirInput && resourceDirInput.value.trim()
+              ? resourceDirInput.value.trim()
+              : undefined,
+          });
+
+          if (!sent) {
+            closePendingCompanionWindow(requestId);
+            pendingRequestId = null;
+            pendingKind = null;
+            setBusy(false);
+          }
+        });
+      }
+
       if (getEditorBtn) {
         getEditorBtn.addEventListener("click", () => {
           const requestId = beginUiAction("get_from_editor");
@@ -11158,7 +11438,7 @@
 
         try {
           await writeTextToClipboard(content);
-          setStatus("Copied editor text.", "success");
+          setStatus("Copied text.", "success");
         } catch (error) {
           setStatus("Clipboard write failed.", "warning");
         }
@@ -11540,6 +11820,9 @@
       const initialResponseFontSize = readStoredFontSize(RESPONSE_FONT_SIZE_STORAGE_KEY, RESPONSE_FONT_SIZE_OPTIONS, DEFAULT_RESPONSE_FONT_SIZE);
       setResponseFontSize(initialResponseFontSize, { persist: false });
 
+      if (resourceDirInput && initialResourceDir) {
+        resourceDirInput.value = initialResourceDir;
+      }
       setSourceState(initialSourceState);
       refreshResponseUi();
       updateAnnotatedReplyHeaderButton();
