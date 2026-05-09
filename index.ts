@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionCommandContext, SessionEntry, Theme } from "@mariozechner/pi-coding-agent";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
@@ -9193,9 +9193,14 @@ export default function (pi: ExtensionAPI) {
 		syncStudioResponseHistory(entries);
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
+		const isSessionReplacement = event.reason === "new" || event.reason === "resume" || event.reason === "fork";
 		pendingTurnPrompt = null;
 		clearStudioDirectRunState();
+		if (isSessionReplacement) {
+			clearActiveRequest({ notify: "Session switched. Studio request state cleared.", level: "warning" });
+			lastCommandCtx = null;
+		}
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
 		clearCompactionState();
 		agentBusy = false;
@@ -9212,26 +9217,6 @@ export default function (pi: ExtensionAPI) {
 		broadcastResponseHistory();
 	});
 
-	pi.on("session_switch", async (_event, ctx) => {
-		clearStudioDirectRunState();
-		clearActiveRequest({ notify: "Session switched. Studio request state cleared.", level: "warning" });
-		clearCompactionState();
-		pendingTurnPrompt = null;
-		lastCommandCtx = null;
-		hydrateLatestAssistant(ctx.sessionManager.getBranch());
-		agentBusy = false;
-		clearPendingStudioCompletion();
-		clearPreparedPdfExports();
-		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
-		refreshContextUsage(ctx);
-		emitDebugEvent("session_switch", {
-			entryCount: ctx.sessionManager.getBranch().length,
-			modelLabel: currentModelLabel,
-			terminalSessionLabel,
-		});
-		setTerminalActivity("idle");
-		broadcastResponseHistory();
-	});
 
 	pi.on("session_tree", async (_event, ctx) => {
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());

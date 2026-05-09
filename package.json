@@ -1,6 +1,6 @@
 {
   "name": "pi-studio",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Two-pane browser workspace for pi with prompt/response editing, annotations, critiques, prompt/response history, and live Markdown/LaTeX/code preview",
   "type": "module",
   "license": "MIT",
@@ -40,15 +40,15 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "^0.64.0",
     "@types/node": "^24.3.0",
     "@types/ws": "^8.18.1",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "@earendil-works/pi-coding-agent": "^0.74.0"
   }
 }
