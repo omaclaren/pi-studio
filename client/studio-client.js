@@ -760,6 +760,7 @@
       const PREVIEW_INPUT_DEBOUNCE_MS = 0;
       const PREVIEW_PENDING_BADGE_DELAY_MS = 220;
       const previewPendingTimers = new WeakMap();
+      const htmlArtifactFramesById = new Map();
       let sourcePreviewRenderTimer = null;
       let sourcePreviewRenderNonce = 0;
       let responsePreviewRenderNonce = 0;
@@ -2550,6 +2551,283 @@
         return "<div class='preview-error'>" + escapeHtml(String(message || "Preview rendering failed.")) + "</div>" + buildPlainMarkdownHtml(markdown, options);
       }
 
+      function stripLeadingHtmlPreviewTrivia(text) {
+        let source = String(text || "").replace(/^\uFEFF/, "").trimStart();
+        let previous = "";
+        while (source && source !== previous) {
+          previous = source;
+          source = source.replace(/^<!--[\s\S]*?-->\s*/, "").trimStart();
+        }
+        return source;
+      }
+
+      function startsWithSingleFencedBlock(text) {
+        const source = String(text || "").trimStart();
+        return /^(`{3,}|~{3,})/.test(source);
+      }
+
+      function isLikelyFullHtmlDocument(text) {
+        const source = stripLeadingHtmlPreviewTrivia(text);
+        if (!source) return false;
+        if (/^<!doctype\s+html\b/i.test(source)) return true;
+        if (/^<html(?:\s|>|$)/i.test(source)) return true;
+        if (/^<body(?:\s|>|$)/i.test(source) && /<\/body\s*>/i.test(source)) return true;
+        return false;
+      }
+
+      function looksLikeHtmlMarkup(text) {
+        return /<[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>/.test(String(text || ""));
+      }
+
+      function isHtmlArtifactPreviewText(text, language) {
+        const source = String(text || "");
+        if (!source.trim()) return false;
+        if (startsWithSingleFencedBlock(source)) return false;
+        if (isLikelyFullHtmlDocument(source)) return true;
+        return normalizeFenceLanguage(language || "") === "html" && looksLikeHtmlMarkup(source);
+      }
+
+      const HTML_ARTIFACT_PREVIEW_CSP = "default-src 'none'; script-src 'unsafe-inline' data: blob:; style-src 'unsafe-inline' data: blob:; img-src data: blob:; font-src data: blob:; connect-src 'none'; media-src data: blob:; object-src 'none'; frame-src data: blob:; child-src data: blob:; worker-src blob:; form-action 'none'; base-uri 'none'; navigate-to 'none'";
+      const HTML_ARTIFACT_FRAME_MIN_HEIGHT = 360;
+      const HTML_ARTIFACT_FRAME_FIT_CAP_HEIGHT = 1800;
+      const HTML_ARTIFACT_ZOOM_MIN = 0.5;
+      const HTML_ARTIFACT_ZOOM_MAX = 1.75;
+      const HTML_ARTIFACT_ZOOM_STEP = 0.1;
+
+      function buildHtmlArtifactPreviewResizeScript(previewId) {
+        const idJson = JSON.stringify(String(previewId || ""));
+        return "<script>\n"
+          + "(() => {\n"
+          + "  const PREVIEW_ID = " + idJson.replace(/<\//g, "<\\/") + ";\n"
+          + "  let lastHeight = 0;\n"
+          + "  let scheduled = false;\n"
+          + "  let currentZoom = 1;\n"
+          + "  function applyZoom(value) {\n"
+          + "    const next = Number(value);\n"
+          + "    if (!Number.isFinite(next) || next <= 0) return;\n"
+          + "    currentZoom = Math.max(0.25, Math.min(4, next));\n"
+          + "    document.documentElement.style.zoom = String(currentZoom);\n"
+          + "    lastHeight = 0;\n"
+          + "    scheduleHeight();\n"
+          + "  }\n"
+          + "  function measureHeight() {\n"
+          + "    const body = document.body;\n"
+          + "    const root = document.documentElement;\n"
+          + "    return Math.ceil(Math.max(\n"
+          + "      body ? body.scrollHeight : 0,\n"
+          + "      body ? body.offsetHeight : 0,\n"
+          + "      root ? root.scrollHeight : 0,\n"
+          + "      root ? root.offsetHeight : 0\n"
+          + "    ));\n"
+          + "  }\n"
+          + "  function sendHeight() {\n"
+          + "    scheduled = false;\n"
+          + "    const height = measureHeight();\n"
+          + "    if (!height || Math.abs(height - lastHeight) < 2) return;\n"
+          + "    lastHeight = height;\n"
+          + "    try { parent.postMessage({ type: 'pi-studio-html-artifact-size', id: PREVIEW_ID, height }, '*'); } catch {}\n"
+          + "  }\n"
+          + "  function scheduleHeight() {\n"
+          + "    if (scheduled) return;\n"
+          + "    scheduled = true;\n"
+          + "    requestAnimationFrame(sendHeight);\n"
+          + "  }\n"
+          + "  window.addEventListener('message', (event) => {\n"
+          + "    const data = event && event.data;\n"
+          + "    if (!data || typeof data !== 'object') return;\n"
+          + "    if (data.type !== 'pi-studio-html-artifact-zoom' || data.id !== PREVIEW_ID) return;\n"
+          + "    applyZoom(data.zoom);\n"
+          + "  });\n"
+          + "  window.addEventListener('load', scheduleHeight);\n"
+          + "  window.addEventListener('resize', scheduleHeight);\n"
+          + "  if (typeof ResizeObserver === 'function') {\n"
+          + "    const observer = new ResizeObserver(scheduleHeight);\n"
+          + "    observer.observe(document.documentElement);\n"
+          + "    if (document.body) observer.observe(document.body);\n"
+          + "  }\n"
+          + "  if (typeof MutationObserver === 'function') {\n"
+          + "    const observer = new MutationObserver(scheduleHeight);\n"
+          + "    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });\n"
+          + "  }\n"
+          + "  scheduleHeight();\n"
+          + "  setTimeout(scheduleHeight, 80);\n"
+          + "  setTimeout(scheduleHeight, 350);\n"
+          + "})();\n"
+          + "<\/script>";
+      }
+
+      function buildHtmlArtifactPreviewHeadMarkup(previewId) {
+        return "<meta charset=\"utf-8\">\n"
+          + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
+          + "<meta http-equiv=\"Content-Security-Policy\" content=\"" + escapeHtml(HTML_ARTIFACT_PREVIEW_CSP) + "\">\n"
+          + buildHtmlArtifactPreviewResizeScript(previewId);
+      }
+
+      function buildHtmlArtifactSrcdoc(html, previewId) {
+        const source = String(html || "");
+        const headMarkup = buildHtmlArtifactPreviewHeadMarkup(previewId);
+        if (/<head\b[^>]*>/i.test(source)) {
+          return source.replace(/<head\b[^>]*>/i, (match) => match + "\n" + headMarkup + "\n");
+        }
+        if (/<body\b[^>]*>/i.test(source)) {
+          return source.replace(/<body\b/i, "<head>\n" + headMarkup + "\n</head>\n<body");
+        }
+        if (/<html\b[^>]*>/i.test(source)) {
+          return source.replace(/<html\b[^>]*>/i, (match) => match + "\n<head>\n" + headMarkup + "\n</head>\n");
+        }
+        return "<!doctype html>\n<html>\n<head>\n" + headMarkup + "\n</head>\n<body>\n" + source + "\n</body>\n</html>";
+      }
+
+      function pruneDisconnectedHtmlArtifactFrames() {
+        htmlArtifactFramesById.forEach((record, id) => {
+          if (!record || !record.iframe || !record.iframe.isConnected) {
+            htmlArtifactFramesById.delete(id);
+          }
+        });
+      }
+
+      function handleHtmlArtifactFrameSizeMessage(event) {
+        const data = event && event.data;
+        if (!data || typeof data !== "object" || data.type !== "pi-studio-html-artifact-size") return;
+        const id = typeof data.id === "string" ? data.id : "";
+        const record = id ? htmlArtifactFramesById.get(id) : null;
+        if (!record || !record.iframe || !record.iframe.isConnected) {
+          if (id) htmlArtifactFramesById.delete(id);
+          return;
+        }
+        if (event.source && record.iframe.contentWindow && event.source !== record.iframe.contentWindow) return;
+        const rawHeight = Number(data.height);
+        if (!Number.isFinite(rawHeight) || rawHeight <= 0) return;
+        const measuredHeight = Math.ceil(rawHeight + 2);
+        const capped = measuredHeight > HTML_ARTIFACT_FRAME_FIT_CAP_HEIGHT;
+        const nextHeight = Math.max(
+          HTML_ARTIFACT_FRAME_MIN_HEIGHT,
+          Math.min(HTML_ARTIFACT_FRAME_FIT_CAP_HEIGHT, measuredHeight),
+        );
+        record.iframe.style.height = nextHeight + "px";
+        record.iframe.classList.toggle("is-height-capped", capped);
+        if (record.shell && record.shell.style) {
+          record.shell.style.minHeight = "0";
+          record.shell.classList.toggle("is-height-capped", capped);
+        }
+        if (record.detail) {
+          record.detail.textContent = "HTML artifact";
+        }
+      }
+
+      window.addEventListener("message", handleHtmlArtifactFrameSizeMessage);
+
+      function renderHtmlArtifactPreview(targetEl, html, pane, options) {
+        if (!targetEl) return;
+        const title = options && options.title ? String(options.title) : "HTML artifact preview";
+        const previewId = "html_artifact_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
+        pruneDisconnectedHtmlArtifactFrames();
+        clearPreviewJumpHighlight(targetEl);
+        finishPreviewRender(targetEl);
+        targetEl.innerHTML = "";
+
+        const shell = document.createElement("div");
+        shell.className = "studio-html-artifact-shell";
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "studio-html-artifact-toolbar";
+        const label = document.createElement("span");
+        label.className = "studio-html-artifact-label";
+        label.textContent = title;
+        const detail = document.createElement("span");
+        detail.className = "studio-html-artifact-detail";
+        detail.textContent = "HTML artifact";
+
+        const tools = document.createElement("span");
+        tools.className = "studio-html-artifact-tools";
+        tools.appendChild(detail);
+
+        const zoomControls = document.createElement("span");
+        zoomControls.className = "studio-html-artifact-zoom-controls";
+        let artifactZoom = 1;
+        let iframe = null;
+        const formatZoomLabel = () => Math.round(artifactZoom * 100) + "%";
+        const postArtifactZoom = () => {
+          if (!iframe || !iframe.contentWindow) return;
+          try {
+            iframe.contentWindow.postMessage({ type: "pi-studio-html-artifact-zoom", id: previewId, zoom: artifactZoom }, "*");
+          } catch {
+            // Ignore iframe postMessage failures.
+          }
+        };
+        const updateZoomUi = () => {
+          zoomResetBtn.textContent = formatZoomLabel();
+          zoomOutBtn.disabled = artifactZoom <= HTML_ARTIFACT_ZOOM_MIN + 0.001;
+          zoomInBtn.disabled = artifactZoom >= HTML_ARTIFACT_ZOOM_MAX - 0.001;
+        };
+        const setArtifactZoom = (nextZoom) => {
+          artifactZoom = Math.max(
+            HTML_ARTIFACT_ZOOM_MIN,
+            Math.min(HTML_ARTIFACT_ZOOM_MAX, Math.round(Number(nextZoom || 1) * 100) / 100),
+          );
+          updateZoomUi();
+          postArtifactZoom();
+        };
+        const makeZoomButton = (text, title, onClick) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "studio-html-artifact-zoom-btn";
+          button.textContent = text;
+          button.title = title;
+          button.addEventListener("pointerdown", (event) => { event.stopPropagation(); });
+          button.addEventListener("mousedown", (event) => { event.stopPropagation(); });
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onClick();
+          });
+          return button;
+        };
+        const zoomOutBtn = makeZoomButton("−", "Zoom out HTML artifact", () => setArtifactZoom(artifactZoom - HTML_ARTIFACT_ZOOM_STEP));
+        const zoomResetBtn = makeZoomButton("100%", "Reset HTML artifact zoom", () => setArtifactZoom(1));
+        zoomResetBtn.classList.add("studio-html-artifact-zoom-reset");
+        const zoomInBtn = makeZoomButton("+", "Zoom in HTML artifact", () => setArtifactZoom(artifactZoom + HTML_ARTIFACT_ZOOM_STEP));
+        zoomControls.appendChild(zoomOutBtn);
+        zoomControls.appendChild(zoomResetBtn);
+        zoomControls.appendChild(zoomInBtn);
+        updateZoomUi();
+        tools.appendChild(zoomControls);
+
+        toolbar.appendChild(label);
+        toolbar.appendChild(tools);
+        shell.appendChild(toolbar);
+
+        iframe = document.createElement("iframe");
+        iframe.className = "studio-html-artifact-frame";
+        iframe.title = title;
+        iframe.loading = "lazy";
+        iframe.referrerPolicy = "no-referrer";
+        iframe.setAttribute("sandbox", "allow-scripts allow-modals");
+        iframe.setAttribute("allow", "clipboard-write");
+        iframe.addEventListener("load", () => { postArtifactZoom(); });
+        iframe.srcdoc = buildHtmlArtifactSrcdoc(html, previewId);
+        shell.appendChild(iframe);
+        htmlArtifactFramesById.set(previewId, { iframe, shell, detail, zoomControls });
+
+        targetEl.appendChild(shell);
+
+        if (pane === "response") {
+          applyPendingResponseScrollReset();
+          scheduleResponsePaneRepaintNudge();
+        }
+      }
+
+      function getRightPaneHtmlArtifactSource() {
+        if (rightView === "editor-preview") {
+          const editorText = prepareEditorTextForPreview(sourceTextEl.value || "");
+          return isHtmlArtifactPreviewText(editorText, editorLanguage) ? editorText : "";
+        }
+        if (rightView === "preview") {
+          return isHtmlArtifactPreviewText(latestResponseMarkdown, "") ? latestResponseMarkdown : "";
+        }
+        return "";
+      }
+
       function stripMatchingQuotes(value) {
         const text = String(value || "").trim();
         if (text.length >= 2) {
@@ -3602,6 +3880,12 @@
           return;
         }
 
+        const htmlArtifactSource = getRightPaneHtmlArtifactSource();
+        if (htmlArtifactSource) {
+          setStatus("PDF export does not support HTML artifacts yet. Export as HTML or use the browser print dialog inside the artifact.", "warning");
+          return;
+        }
+
         const markdown = rightView === "editor-preview"
           ? prepareEditorTextForPdfExport(sourceTextEl.value)
           : prepareEditorTextForPreview(latestResponseMarkdown);
@@ -3761,9 +4045,10 @@
           return;
         }
 
-        const markdown = rightView === "editor-preview"
+        const htmlArtifactSource = getRightPaneHtmlArtifactSource();
+        const markdown = htmlArtifactSource || (rightView === "editor-preview"
           ? prepareEditorTextForHtmlExport(sourceTextEl.value)
-          : prepareEditorTextForPreview(latestResponseMarkdown);
+          : prepareEditorTextForPreview(latestResponseMarkdown));
         if (!markdown || !markdown.trim()) {
           setStatus("Nothing to export yet.", "warning");
           return;
@@ -3773,10 +4058,10 @@
         const sourcePath = effectivePath || sourceState.path || "";
         const resourceDir = (!sourcePath && resourceDirInput) ? resourceDirInput.value.trim() : "";
         const isEditorPreview = rightView === "editor-preview";
-        const editorHtmlLanguage = isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "";
-        const isLatex = isEditorPreview
+        const editorHtmlLanguage = htmlArtifactSource ? "html" : (isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "");
+        const isLatex = htmlArtifactSource ? false : (isEditorPreview
           ? editorHtmlLanguage === "latex"
-          : /\\documentclass\b|\\begin\{document\}/.test(markdown);
+          : /\\documentclass\b|\\begin\{document\}/.test(markdown));
         let filenameHint = isEditorPreview ? "studio-editor-preview.html" : "studio-response-preview.html";
         let titleHint = isEditorPreview ? "Studio editor preview" : "Studio response preview";
         if (sourcePath) {
@@ -4114,6 +4399,10 @@
       function renderSourcePreviewNow() {
         if (editorView !== "preview") return;
         const text = prepareEditorTextForPreview(sourceTextEl.value || "");
+        if (isHtmlArtifactPreviewText(text, editorLanguage)) {
+          renderHtmlArtifactPreview(sourcePreviewEl, text, "source", { title: "Editor HTML artifact preview" });
+          return;
+        }
         if (supportsCodePreviewCommentsForCurrentEditor()) {
           renderCodePreviewWithCommentBlocks(sourcePreviewEl, text, "source");
           return;
@@ -4382,6 +4671,10 @@
             scheduleResponsePaneRepaintNudge();
             return;
           }
+          if (isHtmlArtifactPreviewText(editorText, editorLanguage)) {
+            renderHtmlArtifactPreview(critiqueViewEl, editorText, "response", { title: "Editor HTML artifact preview" });
+            return;
+          }
           if (supportsCodePreviewCommentsForCurrentEditor()) {
             renderCodePreviewWithCommentBlocks(critiqueViewEl, editorText, "response");
             return;
@@ -4402,6 +4695,10 @@
         }
 
         if (rightView === "preview") {
+          if (isHtmlArtifactPreviewText(markdown, "")) {
+            renderHtmlArtifactPreview(critiqueViewEl, markdown, "response", { title: "Response HTML artifact preview" });
+            return;
+          }
           const nonce = ++responsePreviewRenderNonce;
           beginPreviewRender(critiqueViewEl);
           void applyRenderedMarkdown(critiqueViewEl, markdown, "response", nonce);
@@ -4468,6 +4765,8 @@
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         const exportText = rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown;
         const canExportPreview = rightPaneShowsPreview && Boolean(String(exportText || "").trim());
+        const htmlArtifactExportSource = canExportPreview ? getRightPaneHtmlArtifactSource() : "";
+        const isHtmlArtifactPreview = Boolean(htmlArtifactExportSource);
         if (exportPdfBtn) {
           exportPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
           exportPdfBtn.textContent = previewExportInProgress ? "Exporting…" : "Export right preview";
@@ -4477,19 +4776,27 @@
             exportPdfBtn.title = "Switch right pane to Response (Preview) or Editor (Preview) to export.";
           } else if (!canExportPreview) {
             exportPdfBtn.title = "Nothing to export yet.";
+          } else if (isHtmlArtifactPreview) {
+            exportPdfBtn.title = "This is an HTML artifact preview. Export as HTML; PDF export is not available yet.";
           } else {
             exportPdfBtn.title = "Choose PDF or HTML and export the current right-pane preview.";
           }
         }
         if (exportPreviewPdfBtn) {
-          exportPreviewPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
+          exportPreviewPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview || isHtmlArtifactPreview;
+          exportPreviewPdfBtn.title = isHtmlArtifactPreview
+            ? "HTML artifact PDF export is not available yet."
+            : "Export the current right-pane preview as PDF.";
         }
         if (exportPreviewHtmlBtn) {
           exportPreviewHtmlBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
+          exportPreviewHtmlBtn.title = isHtmlArtifactPreview
+            ? "Export the authored HTML artifact."
+            : "Export the current right-pane preview as standalone HTML.";
         }
         if (exportPreviewControlsEl) {
           exportPreviewControlsEl.title = canExportPreview
-            ? "Choose a format and export the current right-pane preview."
+            ? (isHtmlArtifactPreview ? "Export this HTML artifact." : "Choose a format and export the current right-pane preview.")
             : "Switch right pane to a non-empty preview before exporting.";
         }
         if (!canExportPreview || previewExportInProgress) {

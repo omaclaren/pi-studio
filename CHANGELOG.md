@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-05-13
+
+### Added
+- Added first-cut HTML artifact preview for straight, unfenced HTML in Studio preview panes, rendered in a sandboxed iframe with inline scripts enabled, network requests blocked by CSP, fit/capped sizing, and toolbar zoom controls; HTML export preserves authored HTML artifacts instead of converting them through Markdown.
+
 ## [0.8.0] — 2026-05-12
 
 ### Added

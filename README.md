@@ -35,9 +35,10 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
   - strips markers before send (optional)
   - saves `.annotated.md`
 - Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi
+- Renders straight, unfenced HTML artifacts in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
 - Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
-- Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML
+- Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML, preserving authored HTML artifacts as HTML
 - Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf` or `/studio-html <path>` to `<name>.studio.html`; without a path, those commands export the last model response to a timestamped file
 - Shows model/session/context usage in the footer, plus a compact-context action
 

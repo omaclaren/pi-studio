@@ -3296,6 +3296,33 @@ function normalizeStudioEditorLanguage(language: string | undefined): string | u
 	return trimmed;
 }
 
+function stripLeadingStudioHtmlTrivia(text: string): string {
+	let source = String(text ?? "").replace(/^\uFEFF/, "").trimStart();
+	let previous = "";
+	while (source && source !== previous) {
+		previous = source;
+		source = source.replace(/^<!--[\s\S]*?-->\s*/, "").trimStart();
+	}
+	return source;
+}
+
+function isStudioHtmlMarkup(text: string): boolean {
+	return /<[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>/.test(String(text ?? ""));
+}
+
+function isLikelyStandaloneStudioHtml(text: string, editorLanguage?: string): boolean {
+	const source = String(text ?? "");
+	if (!source.trim()) return false;
+	if (parseStudioSingleFencedCodeBlock(source)) return false;
+
+	const leading = stripLeadingStudioHtmlTrivia(source);
+	if (/^<!doctype\s+html\b/i.test(leading)) return true;
+	if (/^<html(?:\s|>|$)/i.test(leading)) return true;
+	if (/^<body(?:\s|>|$)/i.test(leading) && /<\/body\s*>/i.test(leading)) return true;
+
+	return normalizeStudioEditorLanguage(editorLanguage) === "html" && isStudioHtmlMarkup(source);
+}
+
 function parseStudioSingleFencedCodeBlock(markdown: string): { info: string; content: string } | null {
 	const trimmed = markdown.trim();
 	if (!trimmed) return null;
@@ -3468,6 +3495,7 @@ function isLikelyRawStudioGitDiff(markdown: string): boolean {
 function inferStudioPdfLanguage(markdown: string, editorLanguage?: string): string | undefined {
 	const normalizedEditorLanguage = normalizeStudioEditorLanguage(editorLanguage);
 	if (normalizedEditorLanguage) return normalizedEditorLanguage;
+	if (isLikelyStandaloneStudioHtml(markdown)) return "html";
 
 	const fenced = parseStudioSingleFencedCodeBlock(markdown);
 	if (fenced) {
@@ -4966,6 +4994,9 @@ async function renderStudioStandaloneHtmlWithPandoc(
 	options?: StudioHtmlRenderOptions,
 ): Promise<{ html: Buffer; warning?: string }> {
 	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorLanguage);
+	if (!isLatex && isLikelyStandaloneStudioHtml(markdown, effectiveEditorLanguage)) {
+		return { html: Buffer.from(String(markdown ?? ""), "utf-8") };
+	}
 	const source = !isLatex
 		&& effectiveEditorLanguage
 		&& effectiveEditorLanguage !== "markdown"
