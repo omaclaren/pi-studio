@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-12
+
+### Added
+- Added first-cut standalone HTML export for Studio previews, including `/studio-html <path>` and a right-preview PDF/HTML export menu.
+- `/studio-pdf` and `/studio-html` without a path now export the last model response to timestamped files.
+- The Working view now keeps bounded in-memory snapshots for completed responses and follows the selected response when cycling response history.
+
 ## [0.7.0] — 2026-05-06
 
 ### Added

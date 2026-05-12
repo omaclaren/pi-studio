@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -71,12 +71,22 @@ interface LastStudioResponse {
 	kind: StudioRequestKind;
 }
 
+interface StudioTraceSnapshotSummary {
+	hasTrace: boolean;
+	entryCount: number;
+	startedAt: number | null;
+	updatedAt: number | null;
+	status: StudioTraceRunStatus;
+	truncated: boolean;
+}
+
 interface StudioResponseHistoryItem extends StudioPromptDescriptor {
 	id: string;
 	markdown: string;
 	thinking: string | null;
 	timestamp: number;
 	kind: StudioRequestKind;
+	traceSummary?: StudioTraceSnapshotSummary;
 }
 
 interface StudioDirectRunChain {
@@ -108,6 +118,40 @@ interface PreparedStudioPdfExport {
 	createdAt: number;
 	filePath?: string;
 	tempDirPath?: string;
+}
+
+interface PreparedStudioHtmlExport {
+	html: Buffer;
+	filename: string;
+	warning?: string;
+	createdAt: number;
+	filePath?: string;
+	tempDirPath?: string;
+}
+
+interface StudioHtmlAnnotationPlaceholder {
+	token: string;
+	text: string;
+	title: string;
+}
+
+interface StudioHtmlPdfBlockOptions {
+	path: string;
+	title: string;
+	caption: string;
+	page: string;
+	height: string;
+}
+
+interface StudioHtmlPdfBlock {
+	placeholder: string;
+	options: StudioHtmlPdfBlockOptions;
+}
+
+interface StudioHtmlRenderOptions {
+	title?: string;
+	sourceLabel?: string;
+	themeVars?: Record<string, string>;
 }
 
 interface InitialStudioDocument {
@@ -190,6 +234,11 @@ interface GetLatestResponseMessage {
 	type: "get_latest_response";
 }
 
+interface GetTraceSnapshotMessage {
+	type: "get_trace_snapshot";
+	responseHistoryId: string;
+}
+
 interface CritiqueRequestMessage {
 	type: "critique_request";
 	requestId: string;
@@ -269,6 +318,7 @@ type IncomingStudioMessage =
 	| HelloMessage
 	| PingMessage
 	| GetLatestResponseMessage
+	| GetTraceSnapshotMessage
 	| CritiqueRequestMessage
 	| AnnotationRequestMessage
 	| SendRunRequestMessage
@@ -285,11 +335,17 @@ type IncomingStudioMessage =
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
 const PDF_EXPORT_MAX_CHARS = 400_000;
+const HTML_EXPORT_MAX_CHARS = 400_000;
 const REQUEST_BODY_MAX_BYTES = 1_000_000;
 const RESPONSE_HISTORY_LIMIT = 30;
 const CMUX_NOTIFY_TIMEOUT_MS = 1200;
 const PREPARED_PDF_EXPORT_TTL_MS = 5 * 60 * 1000;
+const PREPARED_HTML_EXPORT_TTL_MS = 5 * 60 * 1000;
 const MAX_PREPARED_PDF_EXPORTS = 8;
+const MAX_PREPARED_HTML_EXPORTS = 8;
+const STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES = 80;
+const STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS = 20_000;
+const MAX_STUDIO_TRACE_SNAPSHOTS = RESPONSE_HISTORY_LIMIT;
 const TRANSIENT_STUDIO_DOCUMENT_TTL_MS = 30 * 60 * 1000;
 const MAX_TRANSIENT_STUDIO_DOCUMENTS = 16;
 const STUDIO_TERMINAL_NOTIFY_TITLE = "pi Studio";
@@ -1538,10 +1594,64 @@ function readStudioFile(pathArg: string, cwd: string):
 
 function inferStudioPdfLanguageFromPath(pathInput: string): string | undefined {
 	const extension = extname(pathInput).toLowerCase();
-	if (extension === ".tex" || extension === ".latex") return "latex";
-	if (extension === ".md" || extension === ".markdown" || extension === ".mdx" || extension === ".qmd") return "markdown";
-	if (extension === ".diff" || extension === ".patch") return "diff";
-	return undefined;
+	const languageByExtension: Record<string, string> = {
+		".md": "markdown",
+		".markdown": "markdown",
+		".mdx": "markdown",
+		".qmd": "markdown",
+		".tex": "latex",
+		".latex": "latex",
+		".diff": "diff",
+		".patch": "diff",
+		".js": "javascript",
+		".mjs": "javascript",
+		".cjs": "javascript",
+		".jsx": "javascript",
+		".ts": "typescript",
+		".mts": "typescript",
+		".cts": "typescript",
+		".tsx": "typescript",
+		".py": "python",
+		".pyw": "python",
+		".sh": "bash",
+		".bash": "bash",
+		".zsh": "bash",
+		".json": "json",
+		".jsonc": "json",
+		".json5": "json",
+		".rs": "rust",
+		".c": "c",
+		".h": "c",
+		".cpp": "cpp",
+		".cxx": "cpp",
+		".cc": "cpp",
+		".hpp": "cpp",
+		".hxx": "cpp",
+		".jl": "julia",
+		".f90": "fortran",
+		".f95": "fortran",
+		".f03": "fortran",
+		".f": "fortran",
+		".for": "fortran",
+		".r": "r",
+		".m": "matlab",
+		".java": "java",
+		".go": "go",
+		".rb": "ruby",
+		".swift": "swift",
+		".html": "html",
+		".htm": "html",
+		".css": "css",
+		".xml": "xml",
+		".yaml": "yaml",
+		".yml": "yaml",
+		".toml": "toml",
+		".lua": "lua",
+		".txt": "text",
+		".rst": "text",
+		".adoc": "text",
+	};
+	return languageByExtension[extension];
 }
 
 function buildStudioPdfOutputPath(sourcePath: string): string {
@@ -1551,6 +1661,32 @@ function buildStudioPdfOutputPath(sourcePath: string): string {
 	const sourceStem = sourceExt ? sourceName.slice(0, -sourceExt.length) : sourceName;
 	const outputStem = sourceStem || sourceName || "studio-export";
 	return join(sourceDir, `${outputStem}.studio.pdf`);
+}
+
+function buildStudioHtmlOutputPath(sourcePath: string): string {
+	const sourceDir = dirname(sourcePath);
+	const sourceName = basename(sourcePath);
+	const sourceExt = extname(sourceName);
+	const sourceStem = sourceExt ? sourceName.slice(0, -sourceExt.length) : sourceName;
+	const outputStem = sourceStem || sourceName || "studio-export";
+	return join(sourceDir, `${outputStem}.studio.html`);
+}
+
+function formatStudioExportTimestamp(date = new Date()): string {
+	const pad = (value: number) => String(value).padStart(2, "0");
+	return [
+		String(date.getFullYear()),
+		pad(date.getMonth() + 1),
+		pad(date.getDate()),
+		"-",
+		pad(date.getHours()),
+		pad(date.getMinutes()),
+		pad(date.getSeconds()),
+	].join("");
+}
+
+function buildStudioResponseExportOutputPath(cwd: string, extension: "pdf" | "html"): string {
+	return join(cwd || process.cwd(), `studio-response-${formatStudioExportTimestamp()}.studio.${extension}`);
 }
 
 function writeStudioFile(pathArg: string, cwd: string, content: string):
@@ -3593,7 +3729,7 @@ interface StudioPdfRenderOptions {
 }
 
 interface StudioParsedPdfCommandArgs {
-	pathArg: string;
+	pathArg: string | null;
 	options: StudioPdfRenderOptions;
 }
 
@@ -3925,7 +4061,6 @@ function parseStudioPdfCommandArgs(args: string): StudioParsedPdfCommandArgs | {
 	const parsed = tokenizeStudioCommandArgs(args);
 	if (parsed.error) return { error: parsed.error };
 	const tokens = parsed.tokens;
-	if (tokens.length === 0) return { error: "Missing file path." };
 
 	const options: StudioPdfRenderOptions = {};
 	let pathArg: string | null = null;
@@ -4031,7 +4166,6 @@ function parseStudioPdfCommandArgs(args: string): StudioParsedPdfCommandArgs | {
 		}
 	}
 
-	if (!pathArg) return { error: "Missing file path." };
 	if (options.geometry && (options.margin || options.marginTop || options.marginRight || options.marginBottom || options.marginLeft || options.footskip)) {
 		return { error: "Use either --geometry or the --margin/--margin-*/--footskip flags, not both." };
 	}
@@ -4487,6 +4621,365 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	});
 
 	return renderedHtml;
+}
+
+function escapeStudioRegExpLiteral(text: string): string {
+	return String(text ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseStudioHtmlPdfBlockOptions(body: string): StudioHtmlPdfBlockOptions {
+	const options: StudioHtmlPdfBlockOptions = { path: "", title: "", caption: "", page: "", height: "" };
+	String(body ?? "").split(/\r?\n/).forEach((line) => {
+		const raw = String(line ?? "").trim();
+		if (!raw || raw.startsWith("#")) return;
+		const match = raw.match(/^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*([\s\S]*)$/);
+		if (match) {
+			const key = String(match[1] ?? "").toLowerCase();
+			const value = stripMatchingPathQuotes(String(match[2] ?? ""));
+			if (key === "path" || key === "src" || key === "file") options.path = value;
+			else if (key === "title") options.title = value;
+			else if (key === "caption") options.caption = value;
+			else if (key === "page") options.page = value;
+			else if (key === "height") options.height = value;
+			return;
+		}
+		if (!options.path) options.path = stripMatchingPathQuotes(raw);
+	});
+	return options;
+}
+
+function prepareStudioPdfBlocksForHtml(markdown: string): { markdown: string; blocks: StudioHtmlPdfBlock[] } {
+	const blocks: StudioHtmlPdfBlock[] = [];
+	const prefix = `PISTUDIOHTMLPDF${Date.now().toString(36)}${randomUUID().replace(/-/g, "")}TOKEN`;
+	const source = String(markdown ?? "");
+	const blockPattern = /(^|\n)([ \t]{0,3})(`{3,}|~{3,})[ \t]*studio-pdf[^\n]*\n([\s\S]*?)\n[ \t]*\3[ \t]*(?=\n|$)/g;
+	const nextMarkdown = source.replace(blockPattern, (_match, leadingNewline: string, _indent: string, _fence: string, body: string) => {
+		const placeholder = `${prefix}${blocks.length}`;
+		blocks.push({ placeholder, options: parseStudioHtmlPdfBlockOptions(body) });
+		return `${String(leadingNewline ?? "")}${placeholder}\n`;
+	});
+	return { markdown: nextMarkdown, blocks };
+}
+
+function prepareStudioAnnotationMarkersForHtml(markdown: string): { markdown: string; placeholders: StudioHtmlAnnotationPlaceholder[] } {
+	const placeholders: StudioHtmlAnnotationPlaceholder[] = [];
+	if (!hasStudioMarkdownAnnotationMarkers(markdown)) return { markdown: String(markdown ?? ""), placeholders };
+
+	const prefix = `PISTUDIOHTMLANNOT${Date.now().toString(36)}${randomUUID().replace(/-/g, "")}TOKEN`;
+	const prepared = transformStudioMarkdownOutsideFences(markdown, (segment: string) => replaceStudioInlineAnnotationMarkers(segment, (marker: { body?: unknown }) => {
+		const label = normalizeStudioAnnotationText(String(marker.body ?? ""));
+		if (!label) return "";
+		const token = `${prefix}${placeholders.length}`;
+		placeholders.push({ token, text: label, title: `[an: ${label}]` });
+		return token;
+	}));
+	return { markdown: prepared, placeholders };
+}
+
+function applyStudioAnnotationPlaceholdersToHtml(html: string, placeholders: StudioHtmlAnnotationPlaceholder[]): string {
+	let transformed = String(html ?? "");
+	for (const placeholder of placeholders) {
+		const tokenPattern = new RegExp(escapeStudioRegExpLiteral(placeholder.token), "g");
+		const markerHtml = `<span class="annotation-preview-marker" title="${escapeStudioHtmlText(placeholder.title)}">${escapeStudioHtmlText(placeholder.text)}</span>`;
+		transformed = transformed.replace(tokenPattern, markerHtml);
+	}
+	return transformed;
+}
+
+function normalizeStudioHtmlPdfHeight(value: string): number {
+	const parsed = Number.parseInt(String(value || ""), 10);
+	if (!Number.isFinite(parsed)) return 680;
+	return Math.max(240, Math.min(1400, parsed));
+}
+
+function normalizeStudioHtmlPdfPage(value: string): number {
+	const parsed = Number.parseInt(String(value || ""), 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function renderStudioHtmlPdfBlock(block: StudioHtmlPdfBlock, sourcePath: string | undefined, resourcePath: string | undefined): string {
+	const options = block.options;
+	const pdfPath = String(options.path || "").trim();
+	const title = String(options.title || pdfPath || "Embedded PDF").trim();
+	const caption = String(options.caption || "").trim();
+	const height = normalizeStudioHtmlPdfHeight(options.height);
+	const page = normalizeStudioHtmlPdfPage(options.page);
+
+	let iframeSrc = "";
+	let linkHref = "";
+	let error = "";
+	if (!pdfPath) {
+		error = "PDF block needs a local path.";
+	} else {
+		try {
+			const baseDir = resourcePath || (sourcePath ? dirname(sourcePath) : process.cwd());
+			const resolvedPath = resolveStudioPdfResourceFile(pdfPath, baseDir);
+			const pdfBuffer = readFileSync(resolvedPath);
+			iframeSrc = `data:application/pdf;base64,${pdfBuffer.toString("base64")}`;
+			linkHref = pathToFileURL(resolvedPath).href;
+		} catch (readError) {
+			error = `PDF resource unavailable: ${readError instanceof Error ? readError.message : String(readError)}`;
+		}
+	}
+
+	const viewerSrc = iframeSrc && page ? `${iframeSrc}#page=${encodeURIComponent(String(page))}` : iframeSrc;
+	const openLink = linkHref
+		? `<a class="studio-pdf-card-link" href="${escapeStudioHtmlText(linkHref)}" target="_blank" rel="noopener noreferrer">Open PDF</a>`
+		: "";
+	const captionHtml = caption
+		? `<div class="studio-pdf-card-caption">${escapeStudioHtmlText(caption)}</div>`
+		: "";
+	const bodyHtml = viewerSrc
+		? `<iframe class="studio-pdf-frame" src="${escapeStudioHtmlText(viewerSrc)}" title="${escapeStudioHtmlText(title)}" loading="lazy" style="height: ${height}px"></iframe>`
+		: `<div class="studio-pdf-card-error">${escapeStudioHtmlText(error || "PDF resource unavailable.")}</div>`;
+
+	return `<figure class="studio-pdf-card"><figcaption class="studio-pdf-card-header"><div class="studio-pdf-card-title">${escapeStudioHtmlText(title)}</div>${openLink}</figcaption>${captionHtml}${bodyHtml}</figure>`;
+}
+
+function renderStudioPdfBlocksInHtml(html: string, blocks: StudioHtmlPdfBlock[], sourcePath: string | undefined, resourcePath: string | undefined): string {
+	let transformed = String(html ?? "");
+	for (const block of blocks) {
+		const replacement = renderStudioHtmlPdfBlock(block, sourcePath, resourcePath);
+		const paragraphPattern = new RegExp(`<p>\\s*${escapeStudioRegExpLiteral(block.placeholder)}\\s*<\\/p>`, "g");
+		transformed = transformed.replace(paragraphPattern, replacement);
+		transformed = transformed.replace(new RegExp(escapeStudioRegExpLiteral(block.placeholder), "g"), replacement);
+	}
+	return transformed;
+}
+
+function parseStudioThemeVarsJson(json: string | undefined): Record<string, string> | null {
+	const raw = String(json ?? "").trim();
+	if (!raw) return null;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+		const vars: Record<string, string> = {};
+		for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+			if ((key === "color-scheme" || key.startsWith("--")) && typeof value === "string") {
+				vars[key] = value;
+			}
+		}
+		return Object.keys(vars).length > 0 ? vars : null;
+	} catch {
+		return null;
+	}
+}
+
+function buildStudioCssVarsBlock(vars: Record<string, string>): string {
+	return Object.entries(vars).map(([key, value]) => `      ${key}: ${value};`).join("\n");
+}
+
+function buildStudioHtmlExportBaseHref(resourcePath: string | undefined): string {
+	const base = String(resourcePath ?? "").trim();
+	if (!base) return "";
+	try {
+		return pathToFileURL(base.endsWith("/") ? base : `${base}/`).href;
+	} catch {
+		return "";
+	}
+}
+
+function buildStudioHtmlMermaidConfig(vars: Record<string, string>): Record<string, unknown> {
+	return {
+		startOnLoad: false,
+		theme: "base",
+		fontFamily: vars["--font-mono"] ?? "ui-monospace, SFMono-Regular, Menlo, monospace",
+		flowchart: {
+			curve: "basis",
+		},
+		themeVariables: {
+			background: vars["--bg"] ?? "#ffffff",
+			primaryColor: vars["--panel-2"] ?? "#f6f8fa",
+			primaryTextColor: vars["--text"] ?? "#111827",
+			primaryBorderColor: vars["--md-codeblock-border"] ?? vars["--border"] ?? "#d0d7de",
+			secondaryColor: vars["--panel"] ?? "#ffffff",
+			secondaryTextColor: vars["--text"] ?? "#111827",
+			secondaryBorderColor: vars["--md-codeblock-border"] ?? vars["--border"] ?? "#d0d7de",
+			tertiaryColor: vars["--panel"] ?? "#ffffff",
+			tertiaryTextColor: vars["--text"] ?? "#111827",
+			tertiaryBorderColor: vars["--md-codeblock-border"] ?? vars["--border"] ?? "#d0d7de",
+			lineColor: vars["--md-quote"] ?? vars["--text"] ?? "#111827",
+			textColor: vars["--text"] ?? "#111827",
+			edgeLabelBackground: vars["--panel-2"] ?? "#f6f8fa",
+			nodeBorder: vars["--md-codeblock-border"] ?? vars["--border"] ?? "#d0d7de",
+			clusterBkg: vars["--panel"] ?? "#ffffff",
+			clusterBorder: vars["--md-codeblock-border"] ?? vars["--border"] ?? "#d0d7de",
+			titleColor: vars["--md-heading"] ?? vars["--text"] ?? "#111827",
+		},
+	};
+}
+
+function buildStudioStandaloneHtmlMermaidScript(vars: Record<string, string>): string {
+	const mermaidConfigJson = JSON.stringify(buildStudioHtmlMermaidConfig(vars)).replace(/</g, "\\u003c");
+	return `<script>
+(() => {
+  const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  const MERMAID_CONFIG = ${mermaidConfigJson};
+
+  function appendMermaidWarning(message) {
+    const documentEl = document.querySelector(".studio-export-document") || document.body;
+    if (!documentEl || documentEl.querySelector(".preview-mermaid-warning")) return;
+    const warningEl = document.createElement("div");
+    warningEl.className = "preview-warning preview-mermaid-warning";
+    warningEl.textContent = message || "Mermaid renderer unavailable. Showing mermaid blocks as code.";
+    documentEl.appendChild(warningEl);
+  }
+
+  function prepareMermaidBlocks() {
+    const preBlocks = Array.from(document.querySelectorAll("pre.mermaid"));
+    preBlocks.forEach((preEl) => {
+      const source = preEl.querySelector("code") ? preEl.querySelector("code").textContent : preEl.textContent;
+      const wrapper = document.createElement("div");
+      wrapper.className = "mermaid-container";
+      const diagramEl = document.createElement("div");
+      diagramEl.className = "mermaid";
+      diagramEl.textContent = source || "";
+      wrapper.appendChild(diagramEl);
+      preEl.replaceWith(wrapper);
+    });
+    return Array.from(document.querySelectorAll(".mermaid"));
+  }
+
+  async function renderMermaid() {
+    const nodes = prepareMermaidBlocks();
+    if (nodes.length === 0) return;
+    try {
+      const module = await import(MERMAID_CDN_URL);
+      const mermaidApi = module && module.default ? module.default : null;
+      if (!mermaidApi) throw new Error("Mermaid module did not expose a default export.");
+      mermaidApi.initialize(MERMAID_CONFIG);
+      await mermaidApi.run({ nodes });
+    } catch (error) {
+      console.error("Mermaid render failed:", error);
+      appendMermaidWarning("Mermaid renderer unavailable. Showing mermaid source text.");
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => { void renderMermaid(); }, { once: true });
+  } else {
+    void renderMermaid();
+  }
+})();
+</script>`;
+}
+
+function buildStudioStandaloneHtmlDocument(contentHtml: string, resourcePath: string | undefined, options?: StudioHtmlRenderOptions): string {
+	const title = String(options?.title || "pi Studio preview").trim() || "pi Studio preview";
+	const vars = options?.themeVars ?? buildThemeCssVars(getStudioThemeStyle());
+	const cssVarsBlock = buildStudioCssVarsBlock(vars);
+	const stylesheet = readFileSync(STUDIO_CSS_URL, "utf-8");
+	const mermaidScript = buildStudioStandaloneHtmlMermaidScript(vars);
+	const baseHref = buildStudioHtmlExportBaseHref(resourcePath);
+	const baseTag = baseHref ? `  <base href="${escapeStudioHtmlText(baseHref)}" />\n` : "";
+	const generatedAt = new Date().toISOString();
+	const sourceLabel = String(options?.sourceLabel || "").trim();
+	const sourceMeta = sourceLabel ? ` data-source-label="${escapeStudioHtmlText(sourceLabel)}"` : "";
+	const exportCss = `
+body.studio-html-export {
+  display: block;
+  min-height: 100%;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+body.studio-html-export .studio-export-shell {
+  display: block;
+  flex: none;
+  width: 100%;
+  max-width: 1180px;
+  min-height: auto;
+  margin: 0 auto;
+  padding: 32px clamp(16px, 4vw, 48px) 56px;
+}
+body.studio-html-export .studio-export-document {
+  display: block;
+  width: 100%;
+  overflow: visible;
+  padding: 28px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--panel-shadow);
+}
+body.studio-html-export .studio-export-document > :first-child {
+  margin-top: 0;
+}
+body.studio-html-export .studio-export-document > :last-child {
+  margin-bottom: 0;
+}
+body.studio-html-export .preview-selection-actions,
+body.studio-html-export .studio-copy-block-btn {
+  display: none !important;
+}
+@media print {
+  body.studio-html-export {
+    background: #fff;
+    color: #111;
+  }
+  body.studio-html-export .studio-export-shell {
+    max-width: none;
+    padding: 0;
+  }
+  body.studio-html-export .studio-export-document {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+  }
+}
+`;
+
+	return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="generator" content="pi Studio" />
+  <meta name="pi-studio-exported-at" content="${escapeStudioHtmlText(generatedAt)}" />
+${baseTag}  <title>${escapeStudioHtmlText(title)}</title>
+  <style>
+    :root {
+${cssVarsBlock}
+    }
+${stylesheet}
+${exportCss}
+  </style>
+</head>
+<body class="studio-html-export"${sourceMeta}>
+  <main class="studio-export-shell">
+    <article class="panel-scroll rendered-markdown studio-export-document">
+${contentHtml}
+    </article>
+  </main>
+${mermaidScript}
+</body>
+</html>`;
+}
+
+async function renderStudioStandaloneHtmlWithPandoc(
+	markdown: string,
+	isLatex?: boolean,
+	resourcePath?: string,
+	editorLanguage?: string,
+	sourcePath?: string,
+	options?: StudioHtmlRenderOptions,
+): Promise<{ html: Buffer; warning?: string }> {
+	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorLanguage);
+	const source = !isLatex
+		&& effectiveEditorLanguage
+		&& effectiveEditorLanguage !== "markdown"
+		&& effectiveEditorLanguage !== "latex"
+		&& !isStudioSingleFencedCodeBlock(markdown)
+		? wrapStudioCodeAsMarkdown(markdown, effectiveEditorLanguage)
+		: markdown;
+	const annotationPrepared = prepareStudioAnnotationMarkersForHtml(source);
+	const pdfPrepared = prepareStudioPdfBlocksForHtml(annotationPrepared.markdown);
+	let renderedHtml = await renderStudioMarkdownWithPandoc(pdfPrepared.markdown, isLatex, resourcePath, sourcePath);
+	renderedHtml = renderStudioPdfBlocksInHtml(renderedHtml, pdfPrepared.blocks, sourcePath, resourcePath);
+	renderedHtml = applyStudioAnnotationPlaceholdersToHtml(renderedHtml, annotationPrepared.placeholders);
+	const standaloneHtml = buildStudioStandaloneHtmlDocument(renderedHtml, resourcePath, options);
+	return { html: Buffer.from(standaloneHtml, "utf-8") };
 }
 
 async function renderStudioLiteralTextPdf(text: string, title = "Studio export", options?: StudioPdfRenderOptions): Promise<Buffer> {
@@ -5667,8 +6160,23 @@ function parseEntryTimestamp(timestamp: unknown): number {
 	return Date.now();
 }
 
+function getStudioResponseHistoryContentHash(markdown: string): string {
+	return createHash("sha256").update(String(markdown ?? ""), "utf-8").digest("hex").slice(0, 16);
+}
+
+function buildStudioResponseHistoryId(contentHash: string, occurrenceIndex: number): string {
+	return `response-${contentHash}-${String(Math.max(0, occurrenceIndex) + 1).padStart(3, "0")}`;
+}
+
+function buildNextStudioResponseHistoryId(markdown: string, existingItems: StudioResponseHistoryItem[]): string {
+	const contentHash = getStudioResponseHistoryContentHash(markdown);
+	const occurrenceIndex = existingItems.filter((item) => getStudioResponseHistoryContentHash(item.markdown) === contentHash).length;
+	return buildStudioResponseHistoryId(contentHash, occurrenceIndex);
+}
+
 function buildResponseHistoryFromEntries(entries: SessionEntry[], limit = RESPONSE_HISTORY_LIMIT): StudioResponseHistoryItem[] {
 	const history: StudioResponseHistoryItem[] = [];
+	const occurrenceCountsByHash = new Map<string, number>();
 	let lastUserPrompt: string | null = null;
 	let pendingPromptDescriptor: StudioPromptDescriptor | null = null;
 
@@ -5700,8 +6208,11 @@ function buildResponseHistoryFromEntries(entries: SessionEntry[], limit = RESPON
 		if (!markdown) continue;
 		const thinking = extractAssistantThinking(message);
 		const promptDescriptor = pendingPromptDescriptor ?? buildStudioPromptDescriptor(lastUserPrompt);
+		const contentHash = getStudioResponseHistoryContentHash(markdown);
+		const occurrenceIndex = occurrenceCountsByHash.get(contentHash) ?? 0;
+		occurrenceCountsByHash.set(contentHash, occurrenceIndex + 1);
 		history.push({
-			id: typeof (entry as { id?: unknown }).id === "string" ? (entry as { id: string }).id : randomUUID(),
+			id: buildStudioResponseHistoryId(contentHash, occurrenceIndex),
 			markdown,
 			thinking,
 			timestamp: parseEntryTimestamp((entry as { timestamp?: unknown }).timestamp),
@@ -5769,6 +6280,12 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 	if (msg.type === "hello") return { type: "hello" };
 	if (msg.type === "ping") return { type: "ping" };
 	if (msg.type === "get_latest_response") return { type: "get_latest_response" };
+	if (msg.type === "get_trace_snapshot" && typeof msg.responseHistoryId === "string") {
+		return {
+			type: "get_trace_snapshot",
+			responseHistoryId: msg.responseHistoryId,
+		};
+	}
 
 	if (
 		msg.type === "critique_request" &&
@@ -6037,6 +6554,68 @@ function createEmptyStudioTraceState(): StudioTraceState {
 		startedAt: null,
 		updatedAt: null,
 		entries: [],
+	};
+}
+
+function truncateStudioTraceSnapshotText(text: string, maxChars = STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS): { text: string; truncated: boolean } {
+	const value = String(text ?? "");
+	if (value.length <= maxChars) return { text: value, truncated: false };
+	const keepHead = Math.max(0, Math.floor(maxChars * 0.62));
+	const keepTail = Math.max(0, maxChars - keepHead);
+	const omitted = value.length - keepHead - keepTail;
+	return {
+		text: `${value.slice(0, keepHead)}\n\n… ${omitted} chars omitted from saved Working view …\n\n${value.slice(value.length - keepTail)}`,
+		truncated: true,
+	};
+}
+
+function createStudioTraceSnapshot(source: StudioTraceState): { traceState: StudioTraceState; truncated: boolean } {
+	let truncated = false;
+	const sourceEntries = Array.isArray(source.entries) ? source.entries : [];
+	const entries = sourceEntries.slice(-STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES).map((entry) => {
+		if (entry.type === "assistant") {
+			const thinking = truncateStudioTraceSnapshotText(entry.thinking);
+			const text = truncateStudioTraceSnapshotText(entry.text);
+			truncated = truncated || thinking.truncated || text.truncated;
+			return {
+				...entry,
+				thinking: thinking.text,
+				text: text.text,
+			};
+		}
+		const argsSummary = truncateStudioTraceSnapshotText(entry.argsSummary ?? "");
+		const output = truncateStudioTraceSnapshotText(entry.output);
+		truncated = truncated || argsSummary.truncated || output.truncated;
+		return {
+			...entry,
+			argsSummary: argsSummary.text || null,
+			output: output.text,
+		};
+	});
+	if (sourceEntries.length > entries.length) truncated = true;
+
+	return {
+		traceState: {
+			runId: source.runId,
+			requestId: source.requestId,
+			requestKind: source.requestKind,
+			status: source.status,
+			startedAt: source.startedAt,
+			updatedAt: source.updatedAt,
+			entries,
+		},
+		truncated,
+	};
+}
+
+function summarizeStudioTraceSnapshot(traceState: StudioTraceState, truncated = false): StudioTraceSnapshotSummary {
+	return {
+		hasTrace: Array.isArray(traceState.entries) && traceState.entries.length > 0,
+		entryCount: Array.isArray(traceState.entries) ? traceState.entries.length : 0,
+		startedAt: traceState.startedAt,
+		updatedAt: traceState.updatedAt,
+		status: traceState.status,
+		truncated,
 	};
 }
 
@@ -6312,6 +6891,23 @@ function sanitizePdfFilename(input: string | undefined): string {
 	const ensuredExt = cleaned.toLowerCase().endsWith(".pdf") ? cleaned : `${cleaned}.pdf`;
 	if (ensuredExt.length <= 160) return ensuredExt;
 	return `${ensuredExt.slice(0, 156)}.pdf`;
+}
+
+function sanitizeHtmlFilename(input: string | undefined): string {
+	const fallback = "studio-preview.html";
+	const raw = String(input ?? "").trim();
+	if (!raw) return fallback;
+
+	const noPath = raw.split(/[\\/]/).pop() ?? raw;
+	const cleaned = noPath
+		.replace(/[\x00-\x1f\x7f]+/g, "")
+		.replace(/[<>:"|?*]+/g, "-")
+		.trim();
+	if (!cleaned) return fallback;
+
+	const ensuredExt = /\.html?$/i.test(cleaned) ? cleaned : `${cleaned}.html`;
+	if (ensuredExt.length <= 160) return ensuredExt;
+	return `${ensuredExt.slice(0, 155)}.html`;
 }
 
 function buildThemeCssVars(style: StudioThemeStyle): Record<string, string> {
@@ -6753,7 +7349,13 @@ ${cssVarsBlock}
         </div>
         <div class="section-header-actions">
           <button id="rightFocusBtn" class="pane-focus-btn" type="button" title="Show only the response pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
-          <button id="exportPdfBtn" type="button" title="Export the current right-pane preview as PDF via pandoc + xelatex.">Export right preview as PDF</button>
+          <span id="exportPreviewControls" class="export-preview-controls">
+            <button id="exportPdfBtn" class="export-preview-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose a format and export the current right-pane preview.">Export right preview</button>
+            <div id="exportPreviewMenu" class="export-preview-menu" role="menu" hidden>
+              <button id="exportPreviewPdfBtn" type="button" role="menuitem" data-export-preview-format="pdf">Export as PDF</button>
+              <button id="exportPreviewHtmlBtn" type="button" role="menuitem" data-export-preview-format="html">Export as HTML</button>
+            </div>
+          </span>
         </div>
       </div>
       <div class="reference-meta">
@@ -6852,6 +7454,7 @@ export default function (pi: ExtensionAPI) {
 	let pendingStudioPromptMetadata: StudioPromptDescriptor | null = null;
 	let lastStudioResponse: LastStudioResponse | null = null;
 	let preparedPdfExports = new Map<string, PreparedStudioPdfExport>();
+	let preparedHtmlExports = new Map<string, PreparedStudioHtmlExport>();
 	let initialStudioDocument: InitialStudioDocument | null = null;
 	let studioCwd = process.cwd();
 	let lastCommandCtx: ExtensionCommandContext | null = null;
@@ -6871,6 +7474,7 @@ export default function (pi: ExtensionAPI) {
 	let latestSessionUserPrompt: string | null = null;
 	let pendingTurnPrompt: string | null = null;
 	let studioTraceState: StudioTraceState = createEmptyStudioTraceState();
+	let studioTraceHistory = new Map<string, { traceState: StudioTraceState; summary: StudioTraceSnapshotSummary }>();
 	let activeStudioTraceAssistantEntryId: string | null = null;
 	const studioTraceToolEntryIds = new Map<string, string>();
 	let contextUsageSnapshot: StudioContextUsageSnapshot = {
@@ -7222,6 +7826,36 @@ export default function (pi: ExtensionAPI) {
 		notifyStudioTerminal(message, "info");
 	};
 
+	const attachStudioTraceSummariesToHistory = (items: StudioResponseHistoryItem[]): StudioResponseHistoryItem[] => items.map((item) => {
+		const stored = studioTraceHistory.get(item.id);
+		return stored ? { ...item, traceSummary: stored.summary } : item;
+	});
+
+	const pruneStudioTraceHistory = () => {
+		const liveIds = new Set(studioResponseHistory.map((item) => item.id));
+		for (const key of Array.from(studioTraceHistory.keys())) {
+			if (!liveIds.has(key)) studioTraceHistory.delete(key);
+		}
+		while (studioTraceHistory.size > MAX_STUDIO_TRACE_SNAPSHOTS) {
+			const oldestKey = studioTraceHistory.keys().next().value;
+			if (!oldestKey) break;
+			studioTraceHistory.delete(oldestKey);
+		}
+	};
+
+	const storeStudioTraceSnapshotForResponse = (responseHistoryId: string | null | undefined): StudioTraceSnapshotSummary | null => {
+		const id = String(responseHistoryId ?? "").trim();
+		if (!id) return null;
+		if (!Array.isArray(studioTraceState.entries) || studioTraceState.entries.length === 0) return null;
+		const snapshot = createStudioTraceSnapshot(studioTraceState);
+		const summary = summarizeStudioTraceSnapshot(snapshot.traceState, snapshot.truncated);
+		if (!summary.hasTrace) return null;
+		studioTraceHistory.set(id, { traceState: snapshot.traceState, summary });
+		studioResponseHistory = studioResponseHistory.map((item) => item.id === id ? { ...item, traceSummary: summary } : item);
+		pruneStudioTraceHistory();
+		return summary;
+	};
+
 	const refreshContextUsage = (
 		ctx?: { getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
 	): StudioContextUsageSnapshot => {
@@ -7239,7 +7873,8 @@ export default function (pi: ExtensionAPI) {
 
 	const syncStudioResponseHistory = (entries: SessionEntry[]) => {
 		latestSessionUserPrompt = findLatestUserPrompt(entries);
-		studioResponseHistory = buildResponseHistoryFromEntries(entries, RESPONSE_HISTORY_LIMIT);
+		studioResponseHistory = attachStudioTraceSummariesToHistory(buildResponseHistoryFromEntries(entries, RESPONSE_HISTORY_LIMIT));
+		pruneStudioTraceHistory();
 		const latest = studioResponseHistory[studioResponseHistory.length - 1];
 		if (!latest) {
 			lastStudioResponse = null;
@@ -7865,6 +8500,18 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (msg.type === "get_trace_snapshot") {
+			const responseHistoryId = String(msg.responseHistoryId ?? "").trim();
+			const stored = responseHistoryId ? studioTraceHistory.get(responseHistoryId) : null;
+			sendToClient(client, {
+				type: "trace_snapshot",
+				responseHistoryId,
+				traceState: stored?.traceState ?? createEmptyStudioTraceState(),
+				summary: stored?.summary ?? summarizeStudioTraceSnapshot(createEmptyStudioTraceState()),
+			});
+			return;
+		}
+
 		if (msg.type === "load_git_diff_request") {
 			if (!isValidRequestId(msg.requestId)) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
@@ -8467,6 +9114,100 @@ export default function (pi: ExtensionAPI) {
 		res.end(prepared.pdf);
 	};
 
+	const disposePreparedHtmlExport = (entry: PreparedStudioHtmlExport | null | undefined) => {
+		if (!entry?.tempDirPath) return;
+		void rm(entry.tempDirPath, { recursive: true, force: true }).catch(() => undefined);
+	};
+
+	const clearPreparedHtmlExports = () => {
+		for (const entry of preparedHtmlExports.values()) {
+			disposePreparedHtmlExport(entry);
+		}
+		preparedHtmlExports.clear();
+	};
+
+	const prunePreparedHtmlExports = () => {
+		const now = Date.now();
+		for (const [id, entry] of preparedHtmlExports) {
+			if (entry.createdAt + PREPARED_HTML_EXPORT_TTL_MS <= now) {
+				preparedHtmlExports.delete(id);
+				disposePreparedHtmlExport(entry);
+			}
+		}
+		while (preparedHtmlExports.size > MAX_PREPARED_HTML_EXPORTS) {
+			const oldestKey = preparedHtmlExports.keys().next().value;
+			if (!oldestKey) break;
+			const oldestEntry = preparedHtmlExports.get(oldestKey);
+			preparedHtmlExports.delete(oldestKey);
+			disposePreparedHtmlExport(oldestEntry);
+		}
+	};
+
+	const storePreparedHtmlExport = (html: Buffer, filename: string, warning?: string): string => {
+		prunePreparedHtmlExports();
+		const exportId = randomUUID();
+		preparedHtmlExports.set(exportId, {
+			html,
+			filename,
+			warning,
+			createdAt: Date.now(),
+		});
+		return exportId;
+	};
+
+	const ensurePreparedHtmlExportFile = async (exportId: string): Promise<PreparedStudioHtmlExport | null> => {
+		prunePreparedHtmlExports();
+		const entry = preparedHtmlExports.get(exportId);
+		if (!entry) return null;
+		if (entry.filePath && entry.tempDirPath) return entry;
+
+		const tempDirPath = join(tmpdir(), `pi-studio-prepared-html-${Date.now()}-${randomUUID()}`);
+		const filePath = join(tempDirPath, sanitizeHtmlFilename(entry.filename));
+		await mkdir(tempDirPath, { recursive: true });
+		await writeFile(filePath, entry.html);
+		entry.tempDirPath = tempDirPath;
+		entry.filePath = filePath;
+		preparedHtmlExports.set(exportId, entry);
+		return entry;
+	};
+
+	const getPreparedHtmlExport = (exportId: string): PreparedStudioHtmlExport | null => {
+		prunePreparedHtmlExports();
+		return preparedHtmlExports.get(exportId) ?? null;
+	};
+
+	const handlePreparedHtmlDownloadRequest = (requestUrl: URL, res: ServerResponse) => {
+		const exportId = requestUrl.searchParams.get("id") ?? "";
+		if (!exportId) {
+			respondText(res, 400, "Missing HTML export id.");
+			return;
+		}
+
+		const prepared = getPreparedHtmlExport(exportId);
+		if (!prepared) {
+			respondText(res, 404, "HTML export is no longer available. Re-export the document.");
+			return;
+		}
+
+		const safeAsciiName = prepared.filename
+			.replace(/[\x00-\x1f\x7f]/g, "")
+			.replace(/[;"\\]/g, "_")
+			.replace(/\s+/g, " ")
+			.trim() || "studio-preview.html";
+
+		const headers: Record<string, string> = {
+			"Content-Type": "text/html; charset=utf-8",
+			"Cache-Control": "no-store",
+			"X-Content-Type-Options": "nosniff",
+			"Content-Disposition": `inline; filename="${safeAsciiName}"; filename*=UTF-8''${encodeURIComponent(prepared.filename)}`,
+			"Content-Length": String(prepared.html.length),
+		};
+		if (prepared.warning) headers["X-Pi-Studio-Export-Warning"] = prepared.warning;
+
+		res.writeHead(200, headers);
+		res.end(prepared.html);
+	};
+
 	const handleScratchpadStateRequest = async (req: IncomingMessage, res: ServerResponse, requestUrl: URL) => {
 		const method = (req.method ?? "GET").toUpperCase();
 		if (method === "GET") {
@@ -8784,6 +9525,117 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const handleExportHtmlRequest = async (req: IncomingMessage, res: ServerResponse) => {
+		let rawBody = "";
+		try {
+			rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const status = message.includes("exceeds") ? 413 : 400;
+			respondJson(res, status, { ok: false, error: message });
+			return;
+		}
+
+		let parsedBody: unknown;
+		try {
+			parsedBody = rawBody ? JSON.parse(rawBody) : {};
+		} catch {
+			respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+			return;
+		}
+
+		const markdown =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { markdown?: unknown }).markdown === "string"
+				? (parsedBody as { markdown: string }).markdown
+				: null;
+		if (markdown === null) {
+			respondJson(res, 400, { ok: false, error: "Missing markdown string in request body." });
+			return;
+		}
+
+		if (markdown.length > HTML_EXPORT_MAX_CHARS) {
+			respondJson(res, 413, {
+				ok: false,
+				error: `HTML export text exceeds ${HTML_EXPORT_MAX_CHARS} characters.`,
+			});
+			return;
+		}
+
+		const sourcePath =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { sourcePath?: unknown }).sourcePath === "string"
+				? (parsedBody as { sourcePath: string }).sourcePath
+				: "";
+		const userResourceDir =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { resourceDir?: unknown }).resourceDir === "string"
+				? (parsedBody as { resourceDir: string }).resourceDir
+				: "";
+		const resourcePath = resolveStudioBaseDir(sourcePath || undefined, userResourceDir || undefined, studioCwd);
+		const requestedIsLatex =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { isLatex?: unknown }).isLatex === "boolean"
+				? (parsedBody as { isLatex: boolean }).isLatex
+				: null;
+		const requestedFilename =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { filenameHint?: unknown }).filenameHint === "string"
+				? (parsedBody as { filenameHint: string }).filenameHint
+				: "";
+		const requestedTitle =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { title?: unknown }).title === "string"
+				? (parsedBody as { title: string }).title
+				: "";
+		const requestedEditorHtmlLanguage =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { editorHtmlLanguage?: unknown }).editorHtmlLanguage === "string"
+				? (parsedBody as { editorHtmlLanguage: string }).editorHtmlLanguage
+				: "";
+		const editorHtmlLanguage = inferStudioPdfLanguage(markdown, requestedEditorHtmlLanguage);
+		const isLatex = editorHtmlLanguage === "latex"
+			|| (
+				(editorHtmlLanguage === undefined || editorHtmlLanguage === "markdown")
+				&& (requestedIsLatex ?? isLikelyStandaloneLatexPreview(markdown))
+			);
+		const filename = sanitizeHtmlFilename(requestedFilename || (isLatex ? "studio-latex-preview.html" : "studio-preview.html"));
+		const themeVars = parseStudioThemeVarsJson(lastThemeVarsJson) ?? buildThemeCssVars(getStudioThemeStyle(lastCommandCtx?.ui?.theme));
+
+		try {
+			const { html, warning } = await renderStudioStandaloneHtmlWithPandoc(
+				markdown,
+				isLatex,
+				resourcePath,
+				editorHtmlLanguage,
+				sourcePath || undefined,
+				{
+					title: requestedTitle || filename,
+					sourceLabel: sourcePath || userResourceDir || "right preview",
+					themeVars,
+				},
+			);
+			const exportId = storePreparedHtmlExport(html, filename, warning);
+			const token = serverState?.token ?? "";
+			let openedExternal = false;
+			let openError: string | null = null;
+			try {
+				const prepared = await ensurePreparedHtmlExportFile(exportId);
+				if (!prepared?.filePath) {
+					throw new Error("Prepared HTML file was not available for external open.");
+				}
+				await openPathInDefaultViewer(prepared.filePath);
+				openedExternal = true;
+			} catch (viewerError) {
+				openError = viewerError instanceof Error ? viewerError.message : String(viewerError);
+			}
+			respondJson(res, 200, {
+				ok: true,
+				filename,
+				warning: warning ?? null,
+				openedExternal,
+				openError,
+				downloadUrl: `/export-html?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}`,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			respondJson(res, 500, { ok: false, error: `HTML export failed: ${message}` });
+		}
+	};
+
 	const handleHttpRequest = (req: IncomingMessage, res: ServerResponse) => {
 		if (!serverState) {
 			respondText(res, 503, "Studio server not ready");
@@ -8970,6 +9822,38 @@ export default function (pi: ExtensionAPI) {
 				respondJson(res, 500, {
 					ok: false,
 					error: `PDF export failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
+		if (requestUrl.pathname === "/export-html") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				const method = (req.method ?? "GET").toUpperCase();
+				if (method === "GET") {
+					respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
+				} else {
+					respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				}
+				return;
+			}
+
+			const method = (req.method ?? "GET").toUpperCase();
+			if (method === "GET") {
+				handlePreparedHtmlDownloadRequest(requestUrl, res);
+				return;
+			}
+			if (method !== "POST") {
+				res.setHeader("Allow", "GET, POST");
+				respondJson(res, 405, { ok: false, error: "Method not allowed. Use GET or POST." });
+				return;
+			}
+
+			void handleExportHtmlRequest(req, res).catch((error) => {
+				respondJson(res, 500, {
+					ok: false,
+					error: `HTML export failed: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			});
 			return;
@@ -9174,6 +10058,7 @@ export default function (pi: ExtensionAPI) {
 		clearActiveRequest();
 		clearPendingStudioCompletion();
 		clearPreparedPdfExports();
+		clearPreparedHtmlExports();
 		clearCompactionState();
 		closeAllClients(1001, "Server shutting down");
 
@@ -9199,6 +10084,7 @@ export default function (pi: ExtensionAPI) {
 		clearStudioDirectRunState();
 		if (isSessionReplacement) {
 			clearActiveRequest({ notify: "Session switched. Studio request state cleared.", level: "warning" });
+			studioTraceHistory.clear();
 			lastCommandCtx = null;
 		}
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
@@ -9206,6 +10092,7 @@ export default function (pi: ExtensionAPI) {
 		agentBusy = false;
 		clearPendingStudioCompletion();
 		clearPreparedPdfExports();
+		clearPreparedHtmlExports();
 		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
 		refreshContextUsage(ctx);
 		emitDebugEvent("session_start", {
@@ -9382,7 +10269,7 @@ export default function (pi: ExtensionAPI) {
 				? getPromptDescriptorForActiveRequest(activeRequest)
 				: buildStudioPromptDescriptor(pendingTurnPrompt ?? latestSessionUserPrompt ?? null);
 			const fallbackHistoryItem: StudioResponseHistoryItem = {
-				id: randomUUID(),
+				id: buildNextStudioResponseHistoryId(markdown, studioResponseHistory),
 				markdown,
 				thinking,
 				timestamp: Date.now(),
@@ -9401,6 +10288,10 @@ export default function (pi: ExtensionAPI) {
 		const responseTimestamp = latestItem?.timestamp ?? Date.now();
 		const responseThinking = latestItem?.thinking ?? thinking ?? null;
 		pendingTurnPrompt = null;
+		setStudioTraceRunStatus("complete");
+		if (latestItem) {
+			storeStudioTraceSnapshotForResponse(latestItem.id);
+		}
 
 		if (activeRequest) {
 			const requestId = activeRequest.id;
@@ -9498,6 +10389,8 @@ export default function (pi: ExtensionAPI) {
 		clearStudioDirectRunState();
 		clearPendingStudioCompletion();
 		clearPreparedPdfExports();
+		clearPreparedHtmlExports();
+		studioTraceHistory.clear();
 		transientStudioDocuments.clear();
 		clearCompactionState();
 		clearStudioTrace();
@@ -9592,6 +10485,17 @@ export default function (pi: ExtensionAPI) {
 			source: "file",
 			path: file.resolvedPath,
 		};
+	};
+
+	const resolveLastModelResponseForExport = (ctx: ExtensionCommandContext): { markdown: string } | null => {
+		const branchEntries = ctx.sessionManager.getBranch();
+		syncStudioResponseHistory(branchEntries);
+		const markdown =
+			extractLatestAssistantFromEntries(branchEntries)
+				?? extractLatestAssistantFromEntries(ctx.sessionManager.getEntries())
+				?? lastStudioResponse?.markdown
+				?? "";
+		return markdown.trim() ? { markdown } : null;
 	};
 
 	const openStudioView = async (
@@ -9700,7 +10604,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio-replace [path]  Replace the current full Studio view with a new one\n"
 						+ "  /studio-editor-only [path]  Open another Studio tab in editor-only mode\n"
 						+ "  /studio-current <path>  Load a file into currently open Studio tab(s)\n"
-						+ "  /studio-pdf <path>      Export a file to <name>.studio.pdf via Studio PDF",
+						+ "  /studio-pdf [path]      Export a file or last response via Studio PDF\n"
+						+ "  /studio-html [path]     Export a file or last response via Studio preview HTML",
 					"info",
 				);
 				return;
@@ -9757,13 +10662,14 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("studio-pdf", {
-		description: "Export a file to PDF via the Studio PDF pipeline (/studio-pdf <file>)",
+		description: "Export a file or the last model response to PDF via the Studio PDF pipeline (/studio-pdf [file])",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
-			if (!trimmed || trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
+			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
 				ctx.ui.notify(
-					"Usage: /studio-pdf <path> [options]\n"
-						+ "  Export a local Markdown/LaTeX file to <name>.studio.pdf using the Studio PDF pipeline.\n"
+					"Usage: /studio-pdf [path] [options]\n"
+						+ "  Without a path, export the last model response to studio-response-<timestamp>.studio.pdf.\n"
+						+ "  With a path, export a local Markdown/LaTeX/code file to <name>.studio.pdf using the Studio PDF pipeline.\n"
 						+ "Options:\n"
 						+ "  --fontsize <value>       e.g. 12pt\n"
 						+ "  --section-size <value>   e.g. 24pt\n"
@@ -9795,6 +10701,61 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const { pathArg, options: pdfOptions } = parsedArgs;
+
+			if (!pathArg) {
+				await ctx.waitForIdle();
+				const response = resolveLastModelResponseForExport(ctx);
+				if (!response) {
+					ctx.ui.notify("No last model response to export. Use /studio-pdf <path> or run a prompt first.", "warning");
+					return;
+				}
+				if (response.markdown.length > PDF_EXPORT_MAX_CHARS) {
+					ctx.ui.notify(`PDF export text exceeds ${PDF_EXPORT_MAX_CHARS} characters.`, "error");
+					return;
+				}
+
+				const editorPdfLanguage = inferStudioPdfLanguage(response.markdown);
+				const isLatex = editorPdfLanguage === "latex"
+					|| (
+						(editorPdfLanguage === undefined || editorPdfLanguage === "markdown")
+						&& /\\documentclass\b|\\begin\{document\}/.test(response.markdown)
+					);
+				const resourcePath = resolveStudioBaseDir(undefined, undefined, ctx.cwd);
+				const outputPath = buildStudioResponseExportOutputPath(ctx.cwd, "pdf");
+
+				try {
+					const { pdf, warning } = await renderStudioPdfWithPandoc(
+						response.markdown,
+						isLatex,
+						resourcePath,
+						editorPdfLanguage,
+						undefined,
+						pdfOptions,
+					);
+					await writeFile(outputPath, pdf);
+
+					let openError: string | null = null;
+					try {
+						await openPathInDefaultViewer(outputPath);
+					} catch (error) {
+						openError = error instanceof Error ? error.message : String(error);
+					}
+
+					ctx.ui.notify(`Exported last response Studio PDF: ${outputPath}`, "info");
+					if (warning) {
+						ctx.ui.notify(warning, "warning");
+					}
+					if (openError) {
+						ctx.ui.notify(`PDF was exported but could not be opened automatically: ${openError}`, "warning");
+					}
+				} catch (error) {
+					ctx.ui.notify(
+						`Studio PDF export failed for last response: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+				return;
+			}
 
 			const file = readStudioFile(pathArg, ctx.cwd);
 			if (file.ok === false) {
@@ -9847,6 +10808,148 @@ export default function (pi: ExtensionAPI) {
 			} catch (error) {
 				ctx.ui.notify(
 					`Studio PDF export failed for ${file.label}: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
+			}
+		},
+	});
+
+	pi.registerCommand("studio-html", {
+		description: "Export a file or the last model response to standalone HTML via the Studio preview pipeline (/studio-html [file])",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const trimmed = args.trim();
+			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
+				ctx.ui.notify(
+					"Usage: /studio-html [path]\n"
+						+ "  Without a path, export the last model response to studio-response-<timestamp>.studio.html.\n"
+						+ "  With a path, export a local Markdown/LaTeX/code file to <name>.studio.html using the Studio preview HTML pipeline.",
+					"info",
+				);
+				return;
+			}
+
+			if (!trimmed) {
+				await ctx.waitForIdle();
+				const response = resolveLastModelResponseForExport(ctx);
+				if (!response) {
+					ctx.ui.notify("No last model response to export. Use /studio-html <path> or run a prompt first.", "warning");
+					return;
+				}
+				if (response.markdown.length > HTML_EXPORT_MAX_CHARS) {
+					ctx.ui.notify(`HTML export text exceeds ${HTML_EXPORT_MAX_CHARS} characters.`, "error");
+					return;
+				}
+
+				const editorHtmlLanguage = inferStudioPdfLanguage(response.markdown);
+				const isLatex = editorHtmlLanguage === "latex"
+					|| (
+						(editorHtmlLanguage === undefined || editorHtmlLanguage === "markdown")
+						&& isLikelyStandaloneLatexPreview(response.markdown)
+					);
+				const resourcePath = resolveStudioBaseDir(undefined, undefined, ctx.cwd);
+				const outputPath = buildStudioResponseExportOutputPath(ctx.cwd, "html");
+				const themeVars = buildThemeCssVars(getStudioThemeStyle(ctx.ui.theme));
+
+				try {
+					const { html, warning } = await renderStudioStandaloneHtmlWithPandoc(
+						response.markdown,
+						isLatex,
+						resourcePath,
+						editorHtmlLanguage,
+						undefined,
+						{
+							title: basename(outputPath),
+							sourceLabel: "last model response",
+							themeVars,
+						},
+					);
+					await writeFile(outputPath, html);
+
+					let openError: string | null = null;
+					try {
+						await openPathInDefaultViewer(outputPath);
+					} catch (error) {
+						openError = error instanceof Error ? error.message : String(error);
+					}
+
+					ctx.ui.notify(`Exported last response Studio HTML: ${outputPath}`, "info");
+					if (warning) {
+						ctx.ui.notify(warning, "warning");
+					}
+					if (openError) {
+						ctx.ui.notify(`HTML was exported but could not be opened automatically: ${openError}`, "warning");
+					}
+				} catch (error) {
+					ctx.ui.notify(
+						`Studio HTML export failed for last response: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+				return;
+			}
+
+			const pathArg = parsePathArgument(trimmed);
+			if (!pathArg) {
+				ctx.ui.notify("Invalid file path argument.", "error");
+				return;
+			}
+
+			const file = readStudioFile(pathArg, ctx.cwd);
+			if (file.ok === false) {
+				ctx.ui.notify(file.message, "error");
+				return;
+			}
+
+			if (file.text.length > HTML_EXPORT_MAX_CHARS) {
+				ctx.ui.notify(`HTML export text exceeds ${HTML_EXPORT_MAX_CHARS} characters.`, "error");
+				return;
+			}
+
+			await ctx.waitForIdle();
+			const pathHtmlLanguage = inferStudioPdfLanguageFromPath(file.resolvedPath);
+			const editorHtmlLanguage = pathHtmlLanguage ?? inferStudioPdfLanguage(file.text);
+			const isLatex = editorHtmlLanguage === "latex"
+				|| (
+					!pathHtmlLanguage
+					&& (editorHtmlLanguage === undefined || editorHtmlLanguage === "markdown")
+					&& isLikelyStandaloneLatexPreview(file.text)
+				);
+			const resourcePath = resolveStudioBaseDir(file.resolvedPath, undefined, ctx.cwd);
+			const outputPath = buildStudioHtmlOutputPath(file.resolvedPath);
+			const themeVars = buildThemeCssVars(getStudioThemeStyle(ctx.ui.theme));
+
+			try {
+				const { html, warning } = await renderStudioStandaloneHtmlWithPandoc(
+					file.text,
+					isLatex,
+					resourcePath,
+					editorHtmlLanguage,
+					file.resolvedPath,
+					{
+						title: basename(outputPath),
+						sourceLabel: file.resolvedPath,
+						themeVars,
+					},
+				);
+				await writeFile(outputPath, html);
+
+				let openError: string | null = null;
+				try {
+					await openPathInDefaultViewer(outputPath);
+				} catch (error) {
+					openError = error instanceof Error ? error.message : String(error);
+				}
+
+				ctx.ui.notify(`Exported Studio HTML: ${outputPath}`, "info");
+				if (warning) {
+					ctx.ui.notify(warning, "warning");
+				}
+				if (openError) {
+					ctx.ui.notify(`HTML was exported but could not be opened automatically: ${openError}`, "warning");
+				}
+			} catch (error) {
+				ctx.ui.notify(
+					`Studio HTML export failed for ${file.label}: ${error instanceof Error ? error.message : String(error)}`,
 					"error",
 				);
 			}

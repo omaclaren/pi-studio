@@ -88,6 +88,10 @@
       const loadCritiqueNotesBtn = document.getElementById("loadCritiqueNotesBtn");
       const loadCritiqueFullBtn = document.getElementById("loadCritiqueFullBtn");
       const copyResponseBtn = document.getElementById("copyResponseBtn");
+      const exportPreviewControlsEl = document.getElementById("exportPreviewControls");
+      const exportPreviewMenuEl = document.getElementById("exportPreviewMenu");
+      const exportPreviewPdfBtn = document.getElementById("exportPreviewPdfBtn");
+      const exportPreviewHtmlBtn = document.getElementById("exportPreviewHtmlBtn");
       const exportPdfBtn = document.getElementById("exportPdfBtn");
       const historyPrevBtn = document.getElementById("historyPrevBtn");
       const historyNextBtn = document.getElementById("historyNextBtn");
@@ -201,6 +205,9 @@
       let responseHistory = [];
       let responseHistoryIndex = -1;
       let traceState = null;
+      let liveTraceState = null;
+      const traceSnapshotCache = new Map();
+      let traceDisplayContext = { mode: "live", responseId: null, historyIndex: -1, total: 0, summary: null };
       let traceFilter = "all";
       let traceAutoScroll = true;
       let traceRenderRaf = null;
@@ -215,7 +222,7 @@
       let terminalActivityLabel = "";
       let lastSpecificToolLabel = "";
       let uiBusy = false;
-      let pdfExportInProgress = false;
+      let previewExportInProgress = false;
       let compactInProgress = false;
       let modelLabel = (document.body && document.body.dataset && document.body.dataset.modelLabel) || "none";
       let terminalSessionLabel = (document.body && document.body.dataset && document.body.dataset.terminalLabel) || "unknown";
@@ -407,6 +414,102 @@
           state.status = normalizeTraceStatus(message.status);
         }
         renderTraceViewIfActive();
+      }
+
+      function shouldDisplayLiveTrace() {
+        return !Array.isArray(responseHistory)
+          || responseHistory.length === 0
+          || responseHistoryIndex < 0
+          || responseHistoryIndex >= responseHistory.length - 1;
+      }
+
+      function setTraceDisplayContext(nextContext) {
+        const fallback = { mode: "live", responseId: null, historyIndex: -1, total: 0, summary: null };
+        traceDisplayContext = Object.assign(fallback, nextContext && typeof nextContext === "object" ? nextContext : {});
+      }
+
+      function ensureLiveTraceState() {
+        if (!liveTraceState) liveTraceState = createEmptyTraceState();
+        return liveTraceState;
+      }
+
+      function upsertTraceEntryInState(state, entry) {
+        const normalized = normalizeTraceEntry(entry, Array.isArray(state.entries) ? state.entries.length : 0);
+        if (!normalized) return null;
+        if (!Array.isArray(state.entries)) state.entries = [];
+        const index = state.entries.findIndex((candidate) => candidate.id === normalized.id);
+        if (index >= 0) {
+          state.entries[index] = normalized;
+        } else {
+          state.entries.push(normalized);
+        }
+        state.updatedAt = normalized.updatedAt;
+        return normalized;
+      }
+
+      function replaceLiveTraceState(nextState) {
+        liveTraceState = normalizeTraceState(nextState);
+        if (shouldDisplayLiveTrace()) {
+          setTraceDisplayContext({ mode: "live", responseId: null, historyIndex: responseHistoryIndex, total: responseHistory.length, summary: null });
+          replaceTraceState(liveTraceState);
+        }
+      }
+
+      function upsertLiveTraceEntry(entry) {
+        const normalized = upsertTraceEntryInState(ensureLiveTraceState(), entry);
+        if (!normalized) return;
+        if (shouldDisplayLiveTrace()) {
+          setTraceDisplayContext({ mode: "live", responseId: null, historyIndex: responseHistoryIndex, total: responseHistory.length, summary: null });
+          upsertTraceEntry(normalized);
+        }
+      }
+
+      function appendLiveTraceAssistantDelta(entryId, deltaKind, delta, updatedAt) {
+        if (typeof delta !== "string" || !delta) return;
+        const state = ensureLiveTraceState();
+        const targetId = typeof entryId === "string" && entryId.trim() ? entryId.trim() : null;
+        let entry = targetId ? state.entries.find((candidate) => candidate.id === targetId) : null;
+        if (!entry || entry.type !== "assistant") {
+          entry = normalizeTraceEntry({
+            id: targetId || ("trace-assistant-live-" + Date.now()),
+            type: "assistant",
+            startedAt: updatedAt,
+            updatedAt,
+            thinking: "",
+            text: "",
+            status: "streaming",
+            stopReason: null,
+          }, state.entries.length);
+          if (!entry) return;
+          state.entries.push(entry);
+        }
+        if (deltaKind === "thinking") {
+          entry.thinking += delta;
+        } else {
+          entry.text += delta;
+        }
+        entry.status = "streaming";
+        entry.updatedAt = parseFiniteNumber(updatedAt) || Date.now();
+        state.updatedAt = entry.updatedAt;
+        if (shouldDisplayLiveTrace()) {
+          setTraceDisplayContext({ mode: "live", responseId: null, historyIndex: responseHistoryIndex, total: responseHistory.length, summary: null });
+          appendTraceAssistantDelta(entryId, deltaKind, delta, updatedAt);
+        }
+      }
+
+      function updateLiveTraceStatusFromMessage(message) {
+        if (!message || typeof message !== "object") return;
+        const state = ensureLiveTraceState();
+        state.runId = parseNonEmptyString(message.runId) || state.runId;
+        if (Object.prototype.hasOwnProperty.call(message, "requestId")) state.requestId = parseNonEmptyString(message.requestId);
+        if (Object.prototype.hasOwnProperty.call(message, "requestKind")) state.requestKind = parseNonEmptyString(message.requestKind);
+        if (Object.prototype.hasOwnProperty.call(message, "startedAt")) state.startedAt = parseFiniteNumber(message.startedAt);
+        if (Object.prototype.hasOwnProperty.call(message, "updatedAt")) state.updatedAt = parseFiniteNumber(message.updatedAt);
+        if (Object.prototype.hasOwnProperty.call(message, "status")) state.status = normalizeTraceStatus(message.status);
+        if (shouldDisplayLiveTrace()) {
+          setTraceDisplayContext({ mode: "live", responseId: null, historyIndex: responseHistoryIndex, total: responseHistory.length, summary: null });
+          updateTraceStatusFromMessage(message);
+        }
       }
 
       function normalizeTraceFilter(filter) {
@@ -1034,7 +1137,11 @@
           }
           rightIdentityEl.appendChild(rightTitleGroupEl);
           const rightToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
-          if (exportPdfBtn) rightToolsEl.appendChild(exportPdfBtn);
+          if (exportPreviewControlsEl) {
+            rightToolsEl.appendChild(exportPreviewControlsEl);
+          } else if (exportPdfBtn) {
+            rightToolsEl.appendChild(exportPdfBtn);
+          }
           rightHeaderEl.replaceChildren(rightIdentityEl, rightToolsEl);
         }
 
@@ -2027,6 +2134,20 @@
         return kind === "critique" ? "critique" : "annotation";
       }
 
+      function normalizeTraceSummary(summary) {
+        if (!summary || typeof summary !== "object") return null;
+        return {
+          hasTrace: summary.hasTrace === true,
+          entryCount: typeof summary.entryCount === "number" && Number.isFinite(summary.entryCount)
+            ? Math.max(0, Math.floor(summary.entryCount))
+            : 0,
+          startedAt: parseFiniteNumber(summary.startedAt),
+          updatedAt: parseFiniteNumber(summary.updatedAt),
+          status: normalizeTraceStatus(summary.status),
+          truncated: summary.truncated === true,
+        };
+      }
+
       function normalizeHistoryItem(item, fallbackIndex) {
         if (!item || typeof item !== "object") return null;
         if (typeof item.markdown !== "string") return null;
@@ -2057,6 +2178,7 @@
         const promptTriggerText = typeof item.promptTriggerText === "string"
           ? item.promptTriggerText
           : (item.promptTriggerText == null ? null : String(item.promptTriggerText));
+        const traceSummary = normalizeTraceSummary(item.traceSummary);
 
         return {
           id,
@@ -2069,6 +2191,7 @@
           promptTriggerKind,
           promptSteeringCount,
           promptTriggerText,
+          traceSummary,
         };
       }
 
@@ -2076,6 +2199,48 @@
         if (!Array.isArray(responseHistory) || responseHistory.length === 0) return null;
         if (responseHistoryIndex < 0 || responseHistoryIndex >= responseHistory.length) return null;
         return responseHistory[responseHistoryIndex] || null;
+      }
+
+      function syncTraceForSelectedHistoryItem() {
+        const item = getSelectedHistoryItem();
+        const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
+        const index = responseHistoryIndex;
+        if (!item) {
+          setTraceDisplayContext({ mode: "live", responseId: null, historyIndex: index, total, summary: null });
+          replaceTraceState(liveTraceState || createEmptyTraceState());
+          return;
+        }
+        if (index >= total - 1) {
+          setTraceDisplayContext({ mode: "live", responseId: null, historyIndex: index, total, summary: item.traceSummary || null });
+          replaceTraceState(liveTraceState || createEmptyTraceState());
+          return;
+        }
+
+        const summary = item.traceSummary || null;
+        if (!summary || !summary.hasTrace) {
+          setTraceDisplayContext({ mode: "missing", responseId: item.id, historyIndex: index, total, summary });
+          replaceTraceState(createEmptyTraceState());
+          return;
+        }
+
+        const cached = traceSnapshotCache.get(item.id);
+        if (cached) {
+          setTraceDisplayContext({ mode: "history", responseId: item.id, historyIndex: index, total, summary });
+          replaceTraceState(cached);
+          return;
+        }
+
+        setTraceDisplayContext({ mode: "loading", responseId: item.id, historyIndex: index, total, summary });
+        replaceTraceState({
+          runId: null,
+          requestId: null,
+          requestKind: null,
+          status: "idle",
+          startedAt: summary.startedAt || null,
+          updatedAt: summary.updatedAt || null,
+          entries: [],
+        });
+        sendMessage({ type: "get_trace_snapshot", responseHistoryId: item.id });
       }
 
       function clearActiveResponseView() {
@@ -2152,6 +2317,7 @@
         const nextId = nextItem && typeof nextItem.id === "string" ? nextItem.id : null;
         const applied = applySelectedHistoryItem({ resetScroll: previousId !== nextId });
         updateHistoryControls();
+        syncTraceForSelectedHistoryItem();
 
         if (applied && !(options && options.silent)) {
           const item = getSelectedHistoryItem();
@@ -2202,20 +2368,43 @@
         return selectHistoryIndex(targetIndex, { silent: Boolean(options && options.silent) });
       }
 
+      function getTraceHistoryContextLabel() {
+        const context = traceDisplayContext || {};
+        const total = typeof context.total === "number" && Number.isFinite(context.total) ? context.total : responseHistory.length;
+        const index = typeof context.historyIndex === "number" && Number.isFinite(context.historyIndex) ? context.historyIndex : responseHistoryIndex;
+        if (context.mode === "history" || context.mode === "missing" || context.mode === "loading") {
+          return total > 0 && index >= 0 ? ("response " + (index + 1) + "/" + total) : "selected response";
+        }
+        return "live";
+      }
+
       function updateReferenceBadge() {
         if (!referenceBadgeEl) return;
 
         if (rightView === "trace") {
           const state = traceState || createEmptyTraceState();
+          const context = traceDisplayContext || {};
           const entryCount = getTraceEntriesForFilter(traceFilter).length;
           const time = formatReferenceTime(state.startedAt || state.updatedAt);
+          if (context.mode === "loading") {
+            referenceBadgeEl.textContent = "Working: loading " + getTraceHistoryContextLabel();
+            return;
+          }
+          if (context.mode === "missing") {
+            referenceBadgeEl.textContent = "Working: no saved working for " + getTraceHistoryContextLabel();
+            return;
+          }
           if (state.status === "idle") {
             referenceBadgeEl.textContent = "Working: no active run yet";
             return;
           }
-          const statusLabel = state.status === "running" ? "live" : "complete";
+          const statusLabel = context.mode === "history"
+            ? "saved"
+            : (state.status === "running" ? "live" : "complete");
           referenceBadgeEl.textContent = "Working: " + statusLabel
+            + (context.mode === "history" ? (" · " + getTraceHistoryContextLabel()) : "")
             + (entryCount ? (" · " + entryCount + " entr" + (entryCount === 1 ? "y" : "ies")) : "")
+            + (context.summary && context.summary.truncated ? " · truncated" : "")
             + (time ? (" · " + time) : "");
           return;
         }
@@ -2297,6 +2486,15 @@
       }
 
       function prepareEditorTextForPdfExport(text) {
+        const prepared = prepareEditorTextForPreview(text);
+        const lang = normalizeFenceLanguage(editorLanguage || "");
+        if (lang && lang !== "markdown" && lang !== "latex") {
+          return wrapAsFencedCodeBlock(prepared, lang);
+        }
+        return prepared;
+      }
+
+      function prepareEditorTextForHtmlExport(text) {
         const prepared = prepareEditorTextForPreview(text);
         const lang = normalizeFenceLanguage(editorLanguage || "");
         if (lang && lang !== "markdown" && lang !== "latex") {
@@ -3387,7 +3585,7 @@
       }
 
       async function exportRightPanePdf() {
-        if (uiBusy || pdfExportInProgress) {
+        if (uiBusy || previewExportInProgress) {
           setStatus("Studio is busy.", "warning");
           return;
         }
@@ -3427,7 +3625,7 @@
           filenameHint = stem + "-preview.pdf";
         }
 
-        pdfExportInProgress = true;
+        previewExportInProgress = true;
         updateResultActionButtons();
         setStatus("Exporting PDF…", "warning");
 
@@ -3540,9 +3738,199 @@
           const detail = error && error.message ? error.message : String(error || "unknown error");
           setStatus("PDF export failed: " + detail, "error");
         } finally {
-          pdfExportInProgress = false;
+          previewExportInProgress = false;
           updateResultActionButtons();
         }
+      }
+
+      async function exportRightPaneHtml() {
+        if (uiBusy || previewExportInProgress) {
+          setStatus("Studio is busy.", "warning");
+          return;
+        }
+
+        const token = getToken();
+        if (!token) {
+          setStatus("Missing Studio token in URL. Re-run /studio.", "error");
+          return;
+        }
+
+        const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
+        if (!rightPaneShowsPreview) {
+          setStatus("Switch right pane to Response (Preview) or Editor (Preview) to export HTML.", "warning");
+          return;
+        }
+
+        const markdown = rightView === "editor-preview"
+          ? prepareEditorTextForHtmlExport(sourceTextEl.value)
+          : prepareEditorTextForPreview(latestResponseMarkdown);
+        if (!markdown || !markdown.trim()) {
+          setStatus("Nothing to export yet.", "warning");
+          return;
+        }
+
+        const effectivePath = getEffectiveSavePath();
+        const sourcePath = effectivePath || sourceState.path || "";
+        const resourceDir = (!sourcePath && resourceDirInput) ? resourceDirInput.value.trim() : "";
+        const isEditorPreview = rightView === "editor-preview";
+        const editorHtmlLanguage = isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "";
+        const isLatex = isEditorPreview
+          ? editorHtmlLanguage === "latex"
+          : /\\documentclass\b|\\begin\{document\}/.test(markdown);
+        let filenameHint = isEditorPreview ? "studio-editor-preview.html" : "studio-response-preview.html";
+        let titleHint = isEditorPreview ? "Studio editor preview" : "Studio response preview";
+        if (sourcePath) {
+          const baseName = sourcePath.split(/[\\/]/).pop() || "studio";
+          const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
+          filenameHint = stem + "-preview.html";
+          titleHint = stem + " preview";
+        }
+
+        previewExportInProgress = true;
+        updateResultActionButtons();
+        setStatus("Exporting HTML…", "warning");
+
+        try {
+          const response = await fetch("/export-html?token=" + encodeURIComponent(token), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              markdown: String(markdown || ""),
+              sourcePath: sourcePath,
+              resourceDir: resourceDir,
+              isLatex: isLatex,
+              editorHtmlLanguage: editorHtmlLanguage,
+              filenameHint: filenameHint,
+              title: titleHint,
+            }),
+          });
+
+          const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+          if (!response.ok) {
+            let message = "HTML export failed with HTTP " + response.status + ".";
+            if (contentType.includes("application/json")) {
+              const payload = await response.json().catch(() => null);
+              if (payload && typeof payload.error === "string") {
+                message = payload.error;
+              }
+            } else {
+              const text = await response.text().catch(() => "");
+              if (text && text.trim()) {
+                message = text.trim();
+              }
+            }
+            throw new Error(message);
+          }
+
+          if (contentType.includes("application/json")) {
+            const payload = await response.json().catch(() => null);
+            if (!payload || typeof payload.downloadUrl !== "string") {
+              throw new Error("HTML export prepared successfully, but Studio did not receive a download URL.");
+            }
+
+            const exportWarning = typeof payload.warning === "string" ? payload.warning.trim() : "";
+            const openError = typeof payload.openError === "string" ? payload.openError.trim() : "";
+            const openedExternal = payload.openedExternal === true;
+            let downloadName = typeof payload.filename === "string" && payload.filename.trim()
+              ? payload.filename.trim()
+              : (filenameHint || "studio-preview.html");
+            if (!/\.html?$/i.test(downloadName)) {
+              downloadName += ".html";
+            }
+
+            if (openedExternal) {
+              if (exportWarning) {
+                setStatus("Opened HTML in default browser with warning: " + exportWarning, "warning");
+              } else {
+                setStatus("Opened HTML in default browser: " + downloadName, "success");
+              }
+              return;
+            }
+
+            const link = document.createElement("a");
+            link.href = payload.downloadUrl;
+            link.download = downloadName;
+            link.rel = "noopener";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+
+            if (openError) {
+              if (exportWarning) {
+                setStatus("Opened browser fallback because external viewer failed (" + openError + "). Warning: " + exportWarning, "warning");
+              } else {
+                setStatus("Opened browser fallback because external viewer failed (" + openError + ").", "warning");
+              }
+            } else if (exportWarning) {
+              setStatus("Exported HTML with warning: " + exportWarning, "warning");
+            } else {
+              setStatus("Exported HTML: " + downloadName, "success");
+            }
+            return;
+          }
+
+          const exportWarning = String(response.headers.get("x-pi-studio-export-warning") || "").trim();
+          const blob = await response.blob();
+          const headerFilename = parseContentDispositionFilename(response.headers.get("content-disposition"));
+          let downloadName = headerFilename || filenameHint || "studio-preview.html";
+          if (!/\.html?$/i.test(downloadName)) {
+            downloadName += ".html";
+          }
+
+          const blobUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = blobUrl;
+          link.download = downloadName;
+          link.rel = "noopener";
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          window.setTimeout(() => {
+            URL.revokeObjectURL(blobUrl);
+          }, 1800);
+
+          if (exportWarning) {
+            setStatus("Exported HTML with warning: " + exportWarning, "warning");
+          } else {
+            setStatus("Exported HTML: " + downloadName, "success");
+          }
+        } catch (error) {
+          const detail = error && error.message ? error.message : String(error || "unknown error");
+          setStatus("HTML export failed: " + detail, "error");
+        } finally {
+          previewExportInProgress = false;
+          updateResultActionButtons();
+        }
+      }
+
+      function closeExportPreviewMenu() {
+        if (!exportPreviewMenuEl) return;
+        exportPreviewMenuEl.hidden = true;
+        if (exportPdfBtn) {
+          exportPdfBtn.classList.remove("is-open");
+          exportPdfBtn.setAttribute("aria-expanded", "false");
+        }
+      }
+
+      function toggleExportPreviewMenu() {
+        if (!exportPreviewMenuEl || !exportPdfBtn || exportPdfBtn.disabled) return;
+        if (typeof closeStudioUiRefreshMenus === "function") {
+          closeStudioUiRefreshMenus();
+        }
+        const willOpen = exportPreviewMenuEl.hidden;
+        exportPreviewMenuEl.hidden = !willOpen;
+        exportPdfBtn.classList.toggle("is-open", willOpen);
+        exportPdfBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      }
+
+      function exportRightPaneFormat(format) {
+        closeExportPreviewMenu();
+        if (format === "html") {
+          return exportRightPaneHtml();
+        }
+        return exportRightPanePdf();
       }
 
       function normalizeCopyableBlockText(text) {
@@ -3857,17 +4245,27 @@
         const visibleWorking = buildVisibleWorkingText(filter);
         const hasVisibleContent = Boolean(visibleWorking.trim());
         const started = formatReferenceTime(state.startedAt || state.updatedAt);
-        const statusLabel = state.status === "running"
-          ? "Live"
-          : (state.status === "complete" ? "Complete" : "Idle");
+        const context = traceDisplayContext || {};
+        const statusLabel = context.mode === "history"
+          ? "Saved"
+          : (context.mode === "loading"
+            ? "Loading"
+            : (context.mode === "missing"
+              ? "Not saved"
+              : (state.status === "running" ? "Live" : (state.status === "complete" ? "Complete" : "Idle"))));
         const filterMeta = filter === "thinking"
           ? "Thinking only"
           : (filter === "tools" ? "Tools only" : null);
+        const historyMeta = (context.mode === "history" || context.mode === "missing" || context.mode === "loading")
+          ? getTraceHistoryContextLabel()
+          : null;
         const toolbar = "<div class='trace-toolbar'>"
           + "<div class='trace-summary'>"
           + "<span class='trace-summary-badge'>Working</span>"
           + "<span class='trace-summary-status trace-status-" + escapeHtml(String(state.status || "idle")) + "'>" + escapeHtml(statusLabel) + "</span>"
+          + (historyMeta ? ("<span class='trace-summary-meta'>" + escapeHtml(historyMeta) + "</span>") : "")
           + (started ? ("<span class='trace-summary-meta'>Started " + escapeHtml(started) + "</span>") : "")
+          + (context.summary && context.summary.truncated ? "<span class='trace-summary-meta'>Truncated</span>" : "")
           + (filterMeta ? ("<span class='trace-summary-meta'>" + escapeHtml(filterMeta) + "</span>") : "")
           + "</div>"
           + "<div class='trace-controls'>"
@@ -3882,13 +4280,17 @@
           + "</div>";
 
         if (!entries.length) {
-          const emptyMessage = filter === "thinking"
-            ? "No thinking steps in this working view yet."
-            : (filter === "tools"
-              ? "No tool steps in this working view yet."
-              : (state.status === "running"
-                ? "Waiting for the first model or tool update…"
-                : "No live working view yet. Start a run or critique to watch working details here."));
+          const emptyMessage = context.mode === "loading"
+            ? "Loading saved working for this response…"
+            : (context.mode === "missing"
+              ? "No working was saved for this response."
+              : (filter === "thinking"
+                ? "No thinking steps in this working view yet."
+                : (filter === "tools"
+                  ? "No tool steps in this working view yet."
+                  : (state.status === "running"
+                    ? "Waiting for the first model or tool update…"
+                    : "No live working view yet. Start a run or critique to watch working details here."))));
           return "<div class='trace-panel'>" + toolbar + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
         }
 
@@ -4065,18 +4467,33 @@
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         const exportText = rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown;
-        const canExportPdf = rightPaneShowsPreview && Boolean(String(exportText || "").trim());
+        const canExportPreview = rightPaneShowsPreview && Boolean(String(exportText || "").trim());
         if (exportPdfBtn) {
-          exportPdfBtn.disabled = uiBusy || pdfExportInProgress || !canExportPdf;
+          exportPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
+          exportPdfBtn.textContent = previewExportInProgress ? "Exporting…" : "Export right preview";
           if (rightView === "trace") {
-            exportPdfBtn.title = "Working view does not support PDF export.";
+            exportPdfBtn.title = "Working view does not support preview export.";
           } else if (rightView === "markdown") {
-            exportPdfBtn.title = "Switch right pane to Response (Preview) or Editor (Preview) to export PDF.";
-          } else if (!canExportPdf) {
+            exportPdfBtn.title = "Switch right pane to Response (Preview) or Editor (Preview) to export.";
+          } else if (!canExportPreview) {
             exportPdfBtn.title = "Nothing to export yet.";
           } else {
-            exportPdfBtn.title = "Export the current right-pane preview as PDF via pandoc + xelatex.";
+            exportPdfBtn.title = "Choose PDF or HTML and export the current right-pane preview.";
           }
+        }
+        if (exportPreviewPdfBtn) {
+          exportPreviewPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
+        }
+        if (exportPreviewHtmlBtn) {
+          exportPreviewHtmlBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
+        }
+        if (exportPreviewControlsEl) {
+          exportPreviewControlsEl.title = canExportPreview
+            ? "Choose a format and export the current right-pane preview."
+            : "Switch right pane to a non-empty preview before exporting.";
+        }
+        if (!canExportPreview || previewExportInProgress) {
+          closeExportPreviewMenu();
         }
 
         pullLatestBtn.disabled = uiBusy || followLatest;
@@ -10014,7 +10431,7 @@
           }
 
           if (message.traceState) {
-            replaceTraceState(message.traceState);
+            replaceLiveTraceState(message.traceState);
           }
 
           let appliedHistory = false;
@@ -10064,22 +10481,41 @@
         }
 
         if (message.type === "trace_reset") {
-          replaceTraceState(message.trace);
+          replaceLiveTraceState(message.trace);
           return;
         }
 
         if (message.type === "trace_status") {
-          updateTraceStatusFromMessage(message);
+          updateLiveTraceStatusFromMessage(message);
           return;
         }
 
         if (message.type === "trace_entry_upsert") {
-          upsertTraceEntry(message.entry);
+          upsertLiveTraceEntry(message.entry);
           return;
         }
 
         if (message.type === "trace_assistant_delta") {
-          appendTraceAssistantDelta(message.entryId, message.deltaKind, message.delta, message.updatedAt);
+          appendLiveTraceAssistantDelta(message.entryId, message.deltaKind, message.delta, message.updatedAt);
+          return;
+        }
+
+        if (message.type === "trace_snapshot") {
+          const responseId = typeof message.responseHistoryId === "string" ? message.responseHistoryId.trim() : "";
+          if (responseId && message.traceState) {
+            const normalizedSnapshot = normalizeTraceState(message.traceState);
+            traceSnapshotCache.set(responseId, normalizedSnapshot);
+            if (traceDisplayContext && traceDisplayContext.responseId === responseId) {
+              setTraceDisplayContext({
+                mode: "history",
+                responseId,
+                historyIndex: responseHistoryIndex,
+                total: responseHistory.length,
+                summary: normalizeTraceSummary(message.summary) || (getSelectedHistoryItem() ? getSelectedHistoryItem().traceSummary : null),
+              });
+              replaceTraceState(normalizedSnapshot);
+            }
+          }
           return;
         }
 
@@ -11189,10 +11625,34 @@
       });
 
       if (exportPdfBtn) {
-        exportPdfBtn.addEventListener("click", () => {
-          void exportRightPanePdf();
+        exportPdfBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleExportPreviewMenu();
         });
       }
+
+      if (exportPreviewMenuEl) {
+        exportPreviewMenuEl.addEventListener("click", (event) => {
+          const target = event.target;
+          const actionBtn = target instanceof Element ? target.closest("[data-export-preview-format]") : null;
+          if (!actionBtn) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (actionBtn.disabled) return;
+          const format = String(actionBtn.getAttribute("data-export-preview-format") || "pdf").toLowerCase();
+          void exportRightPaneFormat(format === "html" ? "html" : "pdf");
+        });
+      }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (target instanceof Element && target.closest("#exportPreviewControls")) return;
+        closeExportPreviewMenu();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeExportPreviewMenu();
+      });
 
       saveAsBtn.addEventListener("click", () => {
         const content = sourceTextEl.value;

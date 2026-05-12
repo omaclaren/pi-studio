@@ -59,6 +59,67 @@
       flex-wrap: wrap;
     }
 
+    .export-preview-controls {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: nowrap;
+      overflow: visible;
+    }
+
+    .export-preview-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      white-space: nowrap;
+    }
+
+    .export-preview-trigger::after {
+      content: "⌄";
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1;
+      transform: translateY(-1px);
+    }
+
+    .export-preview-trigger.is-open,
+    .export-preview-trigger:not(:disabled):hover {
+      background: var(--panel-2);
+    }
+
+    .export-preview-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      min-width: 180px;
+      padding: 6px;
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      background: var(--panel);
+      box-shadow: 0 18px 46px var(--shadow-color);
+      z-index: 100;
+    }
+
+    .export-preview-menu[hidden] {
+      display: none !important;
+    }
+
+    .export-preview-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border-color: transparent;
+      background: transparent;
+      color: var(--text);
+      font-weight: 450;
+    }
+
+    .export-preview-menu button:not(:disabled):hover,
+    .export-preview-menu button:not(:disabled):focus-visible {
+      background: var(--panel-2);
+    }
+
     button, select, .file-label {
       border: 1px solid var(--control-border);
       background: var(--panel);
