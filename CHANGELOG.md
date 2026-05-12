@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-05-13
+
+### Changed
+- Improved dark-theme contrast for Studio dropdown arrows and the HTML artifact zoom percentage by using the stronger Studio info text colour token.
+
 ## [0.8.1] — 2026-05-13
 
 ### Added

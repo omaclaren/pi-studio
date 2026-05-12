@@ -77,7 +77,7 @@
 
     .export-preview-trigger::after {
       content: "⌄";
-      color: var(--muted);
+      color: var(--studio-info-text, var(--text));
       font-size: 14px;
       line-height: 1;
       transform: translateY(-1px);
@@ -1598,7 +1598,7 @@
 
     .rendered-markdown .studio-html-artifact-zoom-reset {
       min-width: 42px;
-      color: var(--muted);
+      color: var(--studio-info-text, var(--text));
     }
 
     .rendered-markdown .studio-html-artifact-frame {
@@ -3121,7 +3121,7 @@
 
     body.studio-ui-refresh .studio-refresh-chip::after {
       content: "⌄";
-      color: var(--muted);
+      color: var(--studio-info-text, var(--text));
       font-size: 14px;
       line-height: 1;
       transform: translateY(-1px);
