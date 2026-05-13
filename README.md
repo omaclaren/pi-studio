@@ -21,7 +21,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Opens a two-pane browser workspace: **Editor** (left) + **Response/Working/Editor Preview** (right)
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces; the editor toolbar can open a detached copy of the current editor text as a companion view
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
-- Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available
+- Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
 - Includes a docked **Outline** rail for navigating document structure in the current editor text, with clickable entries that jump in the raw editor and reveal matching preview locations when available
 - Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with transient **Comment** / **Jump** actions from raw-editor selections plus editor-preview selections for Markdown, LaTeX, and code/text/diff previews, alongside optional inline `[an: ...]` toggles when you want comments reflected in the document text
@@ -34,7 +34,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
   - shows/hides annotation markers in preview
   - strips markers before send (optional)
   - saves `.annotated.md`
-- Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi
+- Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi, with copy buttons for code blocks and blockquotes
 - Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
 - Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace

@@ -196,6 +196,14 @@ interface StudioTraceAssistantEntry {
 	stopReason: string | null;
 }
 
+interface StudioTraceImage {
+	id: string;
+	mimeType: string;
+	data: string;
+	byteLength: number | null;
+	label: string | null;
+}
+
 interface StudioTraceToolEntry {
 	id: string;
 	type: "tool";
@@ -204,6 +212,7 @@ interface StudioTraceToolEntry {
 	label: string | null;
 	argsSummary: string | null;
 	output: string;
+	images: StudioTraceImage[];
 	startedAt: number;
 	updatedAt: number;
 	status: StudioTraceEntryStatus;
@@ -345,6 +354,11 @@ const MAX_PREPARED_PDF_EXPORTS = 8;
 const MAX_PREPARED_HTML_EXPORTS = 8;
 const STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES = 80;
 const STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS = 20_000;
+const STUDIO_TRACE_IMAGE_MAX_COUNT = 8;
+const STUDIO_TRACE_IMAGE_MAX_BASE64_CHARS = 2_500_000;
+const STUDIO_TRACE_SNAPSHOT_MAX_IMAGES = 12;
+const STUDIO_TRACE_SNAPSHOT_MAX_IMAGE_BASE64_CHARS = 6_000_000;
+const STUDIO_TRACE_IMAGE_SAFE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_STUDIO_TRACE_SNAPSHOTS = RESPONSE_HISTORY_LIMIT;
 const TRANSIENT_STUDIO_DOCUMENT_TTL_MS = 30 * 60 * 1000;
 const MAX_TRANSIENT_STUDIO_DOCUMENTS = 16;
@@ -6649,9 +6663,44 @@ function truncateStudioTraceSnapshotText(text: string, maxChars = STUDIO_TRACE_S
 	};
 }
 
+function copyStudioTraceImagesForSnapshot(
+	images: StudioTraceImage[] | undefined,
+	budget: { remainingImages: number; remainingBase64Chars: number },
+): { images: StudioTraceImage[]; omitted: number } {
+	const copied: StudioTraceImage[] = [];
+	let omitted = 0;
+	for (const image of Array.isArray(images) ? images : []) {
+		if (!image || typeof image !== "object") continue;
+		const mimeType = normalizeStudioTraceImageMimeType(image.mimeType);
+		const data = typeof image.data === "string" ? image.data : "";
+		if (!data || !isStudioTraceSafeImageMimeType(mimeType)) {
+			omitted += 1;
+			continue;
+		}
+		if (budget.remainingImages <= 0 || data.length > budget.remainingBase64Chars) {
+			omitted += 1;
+			continue;
+		}
+		copied.push({
+			id: typeof image.id === "string" && image.id.trim() ? image.id : `trace-image-snapshot-${copied.length + 1}`,
+			mimeType,
+			data,
+			byteLength: typeof image.byteLength === "number" && Number.isFinite(image.byteLength) ? image.byteLength : estimateStudioTraceBase64ByteLength(data),
+			label: typeof image.label === "string" && image.label.trim() ? image.label : null,
+		});
+		budget.remainingImages -= 1;
+		budget.remainingBase64Chars -= data.length;
+	}
+	return { images: copied, omitted };
+}
+
 function createStudioTraceSnapshot(source: StudioTraceState): { traceState: StudioTraceState; truncated: boolean } {
 	let truncated = false;
 	const sourceEntries = Array.isArray(source.entries) ? source.entries : [];
+	const imageBudget = {
+		remainingImages: STUDIO_TRACE_SNAPSHOT_MAX_IMAGES,
+		remainingBase64Chars: STUDIO_TRACE_SNAPSHOT_MAX_IMAGE_BASE64_CHARS,
+	};
 	const entries = sourceEntries.slice(-STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES).map((entry) => {
 		if (entry.type === "assistant") {
 			const thinking = truncateStudioTraceSnapshotText(entry.thinking);
@@ -6665,11 +6714,16 @@ function createStudioTraceSnapshot(source: StudioTraceState): { traceState: Stud
 		}
 		const argsSummary = truncateStudioTraceSnapshotText(entry.argsSummary ?? "");
 		const output = truncateStudioTraceSnapshotText(entry.output);
-		truncated = truncated || argsSummary.truncated || output.truncated;
+		const snapshotImages = copyStudioTraceImagesForSnapshot(entry.images, imageBudget);
+		truncated = truncated || argsSummary.truncated || output.truncated || snapshotImages.omitted > 0;
+		const omittedImageNote = snapshotImages.omitted > 0
+			? `[${snapshotImages.omitted} image preview${snapshotImages.omitted === 1 ? "" : "s"} omitted from saved Working view to keep history bounded.]`
+			: "";
 		return {
 			...entry,
 			argsSummary: argsSummary.text || null,
-			output: output.text,
+			output: [output.text, omittedImageNote].filter(Boolean).join("\n"),
+			images: snapshotImages.images,
 		};
 	});
 	if (sourceEntries.length > entries.length) truncated = true;
@@ -6706,29 +6760,102 @@ function sanitizeStudioTraceOutputText(text: string): string {
 		.replace(/\b[A-Za-z0-9+/]{3000,}={0,2}\b/g, "[base64 data omitted]");
 }
 
+function normalizeStudioTraceImageMimeType(value: unknown): string {
+	return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function getStudioTraceImageMimeType(block: unknown): string {
+	if (!block || typeof block !== "object") return "";
+	const payload = block as Record<string, unknown>;
+	const source = payload.source && typeof payload.source === "object" ? payload.source as Record<string, unknown> : null;
+	return normalizeStudioTraceImageMimeType(
+		payload.mimeType
+			?? payload.mediaType
+			?? payload.media_type
+			?? source?.mimeType
+			?? source?.mediaType
+			?? source?.media_type,
+	);
+}
+
 function isStudioTraceImageBlock(block: unknown): boolean {
 	if (!block || typeof block !== "object") return false;
 	const payload = block as Record<string, unknown>;
 	const type = typeof payload.type === "string" ? payload.type.toLowerCase() : "";
 	if (type.includes("image")) return true;
-	const mime = typeof payload.mimeType === "string"
-		? payload.mimeType
-		: (typeof payload.media_type === "string" ? payload.media_type : "");
-	if (mime.toLowerCase().startsWith("image/")) return true;
-	const source = payload.source && typeof payload.source === "object" ? payload.source as Record<string, unknown> : null;
-	const sourceMime = source && typeof source.media_type === "string" ? source.media_type : "";
-	return sourceMime.toLowerCase().startsWith("image/");
+	return getStudioTraceImageMimeType(block).startsWith("image/");
 }
 
-function describeStudioTraceImageBlock(block: unknown): string {
-	const payload = (block && typeof block === "object") ? block as Record<string, unknown> : {};
+function isStudioTraceSafeImageMimeType(mimeType: string): boolean {
+	return STUDIO_TRACE_IMAGE_SAFE_MIME_TYPES.has(normalizeStudioTraceImageMimeType(mimeType));
+}
+
+function getStudioTraceImageData(block: unknown): string | null {
+	if (!block || typeof block !== "object") return null;
+	const payload = block as Record<string, unknown>;
+	if (typeof payload.data === "string") return payload.data;
 	const source = payload.source && typeof payload.source === "object" ? payload.source as Record<string, unknown> : null;
-	const mime = typeof payload.mimeType === "string"
-		? payload.mimeType
-		: (typeof payload.media_type === "string"
-			? payload.media_type
-			: (source && typeof source.media_type === "string" ? source.media_type : "image"));
-	return `[Image: ${mime || "image"} output omitted from Working view]`;
+	if (source && typeof source.data === "string") return source.data;
+	return null;
+}
+
+function normalizeStudioTraceBase64Data(data: string): string | null {
+	const compact = String(data || "").replace(/\s+/g, "");
+	if (!compact || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) return null;
+	return compact;
+}
+
+function estimateStudioTraceBase64ByteLength(data: string): number | null {
+	const compact = normalizeStudioTraceBase64Data(data);
+	if (!compact) return null;
+	const padding = compact.endsWith("==") ? 2 : (compact.endsWith("=") ? 1 : 0);
+	return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
+}
+
+function formatStudioTraceByteSize(bytes: number | null): string {
+	if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return "unknown size";
+	if (bytes < 1024) return `${Math.round(bytes)} B`;
+	const kib = bytes / 1024;
+	if (kib < 1024) return `${kib.toFixed(kib >= 100 ? 0 : 1).replace(/\.0$/, "")} KB`;
+	const mib = kib / 1024;
+	return `${mib.toFixed(mib >= 100 ? 0 : 1).replace(/\.0$/, "")} MB`;
+}
+
+function describeStudioTraceImageBlock(block: unknown, reason?: string): string {
+	const mime = getStudioTraceImageMimeType(block) || "image";
+	return `[Image: ${mime}${reason ? ` ${reason}` : ""}]`;
+}
+
+function collectStudioTraceImageBlock(block: unknown, images: StudioTraceImage[]): string {
+	const mimeType = getStudioTraceImageMimeType(block) || "image/unknown";
+	if (!isStudioTraceSafeImageMimeType(mimeType)) {
+		return describeStudioTraceImageBlock(block, "omitted from Working view: unsupported image type");
+	}
+	if (images.length >= STUDIO_TRACE_IMAGE_MAX_COUNT) {
+		return describeStudioTraceImageBlock(block, "omitted from Working view: image count limit reached");
+	}
+	const data = getStudioTraceImageData(block);
+	const normalizedData = data ? normalizeStudioTraceBase64Data(data) : null;
+	if (!normalizedData) {
+		return describeStudioTraceImageBlock(block, "omitted from Working view: no base64 data");
+	}
+	if (normalizedData.length > STUDIO_TRACE_IMAGE_MAX_BASE64_CHARS) {
+		const estimatedBytes = estimateStudioTraceBase64ByteLength(normalizedData);
+		return describeStudioTraceImageBlock(block, `omitted from Working view: ${formatStudioTraceByteSize(estimatedBytes)} exceeds image preview limit`);
+	}
+	const payload = (block && typeof block === "object") ? block as Record<string, unknown> : {};
+	const hash = createHash("sha256").update(mimeType).update(normalizedData).digest("hex").slice(0, 16);
+	const image: StudioTraceImage = {
+		id: `trace-image-${hash}-${images.length + 1}`,
+		mimeType,
+		data: normalizedData,
+		byteLength: estimateStudioTraceBase64ByteLength(normalizedData),
+		label: typeof payload.label === "string" && payload.label.trim()
+			? payload.label.trim()
+			: (typeof payload.alt === "string" && payload.alt.trim() ? payload.alt.trim() : null),
+	};
+	images.push(image);
+	return "";
 }
 
 function stringifyStudioTraceObject(value: unknown): string {
@@ -6745,19 +6872,19 @@ function stringifyStudioTraceObject(value: unknown): string {
 	}
 }
 
-function formatStudioTraceOutput(result: unknown): string {
+function formatStudioTraceOutputPart(result: unknown, images: StudioTraceImage[]): string {
 	if (result == null) return "";
 	if (typeof result === "string") return sanitizeStudioTraceOutputText(result);
 	if (Array.isArray(result)) {
-		return result.map((item) => formatStudioTraceOutput(item)).filter(Boolean).join("\n");
+		return result.map((item) => formatStudioTraceOutputPart(item, images)).filter(Boolean).join("\n");
 	}
 	if (typeof result === "object") {
-		if (isStudioTraceImageBlock(result)) return describeStudioTraceImageBlock(result);
+		if (isStudioTraceImageBlock(result)) return collectStudioTraceImageBlock(result, images);
 		const payload = result as { content?: Array<{ type?: string; text?: string }> };
 		if (Array.isArray(payload.content)) {
 			return payload.content
 				.map((block) => {
-					if (isStudioTraceImageBlock(block)) return describeStudioTraceImageBlock(block);
+					if (isStudioTraceImageBlock(block)) return collectStudioTraceImageBlock(block, images);
 					if (block && block.type === "text" && typeof block.text === "string") return sanitizeStudioTraceOutputText(block.text);
 					return stringifyStudioTraceObject(block);
 				})
@@ -6767,6 +6894,18 @@ function formatStudioTraceOutput(result: unknown): string {
 		return stringifyStudioTraceObject(result);
 	}
 	return sanitizeStudioTraceOutputText(String(result));
+}
+
+function formatStudioTraceToolResult(result: unknown): { output: string; images: StudioTraceImage[] } {
+	const images: StudioTraceImage[] = [];
+	return {
+		output: formatStudioTraceOutputPart(result, images),
+		images,
+	};
+}
+
+function formatStudioTraceOutput(result: unknown): string {
+	return formatStudioTraceToolResult(result).output;
 }
 
 function summarizeStudioTraceToolArgs(toolName: string, args: unknown): string | null {
@@ -8151,6 +8290,7 @@ export default function (pi: ExtensionAPI) {
 			label: deriveToolActivityLabel(toolName, args),
 			argsSummary: summarizeStudioTraceToolArgs(toolName, args),
 			output: "",
+			images: [],
 			startedAt: now,
 			updatedAt: now,
 			status: "pending",
@@ -8168,9 +8308,11 @@ export default function (pi: ExtensionAPI) {
 		output: string,
 		status: StudioTraceEntryStatus,
 		isError: boolean,
+		images?: StudioTraceImage[],
 	) => {
 		const entry = ensureStudioTraceToolEntry(toolCallId, toolName, args);
 		entry.output = output;
+		if (Array.isArray(images)) entry.images = images;
 		entry.status = status;
 		entry.isError = isError;
 		entry.updatedAt = Date.now();
@@ -10233,25 +10375,29 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_execution_update", async (event) => {
 		if (!agentBusy) return;
+		const formatted = formatStudioTraceToolResult(event.partialResult);
 		updateStudioTraceToolEntry(
 			event.toolCallId,
 			event.toolName,
 			event.args,
-			formatStudioTraceOutput(event.partialResult),
+			formatted.output,
 			"streaming",
 			false,
+			formatted.images,
 		);
 	});
 
 	pi.on("tool_execution_end", async (event) => {
 		if (!agentBusy) return;
+		const formatted = formatStudioTraceToolResult(event.result);
 		updateStudioTraceToolEntry(
 			event.toolCallId,
 			event.toolName,
 			undefined,
-			formatStudioTraceOutput(event.result),
+			formatted.output,
 			event.isError ? "error" : "complete",
 			Boolean(event.isError),
+			formatted.images,
 		);
 		emitDebugEvent("tool_execution_end", { toolName: event.toolName, activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
 		// Keep tool phase visible until the next tool call, assistant response phase,

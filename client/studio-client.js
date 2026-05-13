@@ -214,6 +214,7 @@
       const traceExpandedOutputs = new Set();
       const TRACE_OUTPUT_PREVIEW_MAX_LINES = 50;
       const TRACE_OUTPUT_PREVIEW_MAX_CHARS = 8000;
+      const TRACE_IMAGE_SAFE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
       let studioRunChainActive = false;
       let queuedSteeringCount = 0;
       let agentBusyFromServer = false;
@@ -287,6 +288,37 @@
           : "pending";
       }
 
+      function normalizeTraceImageMimeType(value) {
+        return typeof value === "string" ? value.trim().toLowerCase() : "";
+      }
+
+      function isTraceImageSafeMimeType(mimeType) {
+        return TRACE_IMAGE_SAFE_MIME_TYPES.has(normalizeTraceImageMimeType(mimeType));
+      }
+
+      function normalizeTraceImage(image, fallbackIndex) {
+        if (!image || typeof image !== "object") return null;
+        const mimeType = normalizeTraceImageMimeType(image.mimeType);
+        if (!isTraceImageSafeMimeType(mimeType)) return null;
+        const data = typeof image.data === "string" ? image.data.replace(/\s+/g, "") : "";
+        if (!data || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return null;
+        const byteLength = parseFiniteNumber(image.byteLength);
+        return {
+          id: typeof image.id === "string" && image.id.trim() ? image.id.trim() : ("trace-image-" + fallbackIndex),
+          mimeType,
+          data,
+          byteLength: byteLength == null ? estimateTraceImageByteLength(data) : byteLength,
+          label: parseNonEmptyString(image.label),
+        };
+      }
+
+      function estimateTraceImageByteLength(data) {
+        const compact = String(data || "").replace(/\s+/g, "");
+        if (!compact) return null;
+        const padding = compact.endsWith("==") ? 2 : (compact.endsWith("=") ? 1 : 0);
+        return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
+      }
+
       function normalizeTraceEntry(entry, fallbackIndex) {
         if (!entry || typeof entry !== "object") return null;
         if (entry.type === "assistant") {
@@ -310,6 +342,9 @@
             label: parseNonEmptyString(entry.label),
             argsSummary: parseNonEmptyString(entry.argsSummary),
             output: typeof entry.output === "string" ? entry.output : "",
+            images: Array.isArray(entry.images)
+              ? entry.images.map((image, imageIndex) => normalizeTraceImage(image, imageIndex)).filter(Boolean)
+              : [],
             startedAt: parseFiniteNumber(entry.startedAt) || Date.now(),
             updatedAt: parseFiniteNumber(entry.updatedAt) || Date.now(),
             status: normalizeTraceEntryStatus(entry.status),
@@ -542,6 +577,22 @@
         });
       }
 
+      function formatTraceImageSize(byteLength) {
+        if (typeof byteLength !== "number" || !Number.isFinite(byteLength) || byteLength < 0) return "unknown size";
+        if (byteLength < 1024) return formatNumber(byteLength) + " B";
+        if (byteLength < 1024 * 1024) return (byteLength / 1024).toFixed(byteLength >= 100 * 1024 ? 0 : 1).replace(/\.0$/, "") + " KB";
+        return (byteLength / (1024 * 1024)).toFixed(byteLength >= 100 * 1024 * 1024 ? 0 : 1).replace(/\.0$/, "") + " MB";
+      }
+
+      function describeTraceImageForText(image) {
+        if (!image || typeof image !== "object") return "";
+        const parts = [];
+        if (image.label) parts.push(String(image.label));
+        parts.push(String(image.mimeType || "image"));
+        parts.push(formatTraceImageSize(image.byteLength));
+        return parts.filter(Boolean).join(" — ");
+      }
+
       function buildVisibleWorkingText(filterOverride) {
         const filter = normalizeTraceFilter(filterOverride || traceFilter);
         const entries = getTraceEntriesForFilter(filter);
@@ -575,6 +626,12 @@
           }
           if (String(entry.output || "").trim()) {
             parts.push("Output:\n" + String(entry.output || "").trim());
+          }
+          const imageSummaries = Array.isArray(entry.images)
+            ? entry.images.map(describeTraceImageForText).filter(Boolean)
+            : [];
+          if (imageSummaries.length) {
+            parts.push("Images:\n" + imageSummaries.map((summary) => "- " + summary).join("\n"));
           }
           return parts.join("\n\n").trim();
         }).filter(Boolean).join("\n\n---\n\n");
@@ -4267,6 +4324,78 @@
         return String(text || "").replace(/\r\n/g, "\n").replace(/\u200b/g, "");
       }
 
+      function getCopyableBlockquoteText(blockEl) {
+        const clone = blockEl && typeof blockEl.cloneNode === "function" ? blockEl.cloneNode(true) : null;
+        const sourceEl = clone && typeof clone.querySelectorAll === "function" ? clone : blockEl;
+        if (!sourceEl) return "";
+        if (typeof sourceEl.querySelectorAll === "function") {
+          Array.from(sourceEl.querySelectorAll(".studio-copy-block-btn")).forEach((buttonEl) => {
+            if (buttonEl && buttonEl.parentNode) buttonEl.parentNode.removeChild(buttonEl);
+          });
+        }
+
+        const blockTags = new Set(["ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DIV", "FIGCAPTION", "FIGURE", "FOOTER", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "LI", "OL", "P", "PRE", "SECTION", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL"]);
+        const isElementBlock = (node) => node && node.nodeType === 1 && blockTags.has(String(node.tagName || "").toUpperCase());
+
+        const collectInlineText = (node) => {
+          if (!node) return "";
+          if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || "";
+          if (node.nodeType !== Node.ELEMENT_NODE) return "";
+          const tag = String(node.tagName || "").toUpperCase();
+          if (tag === "SCRIPT" || tag === "STYLE" || tag === "BUTTON") return "";
+          if (tag === "BR") return "\n";
+          const childText = Array.from(node.childNodes || []).map(collectInlineText).join("");
+          return isElementBlock(node) ? childText.trim() : childText;
+        };
+
+        const collectBlocks = (node) => {
+          if (!node) return [];
+          const parts = [];
+          let inlineBuffer = "";
+          const flushInline = () => {
+            const text = inlineBuffer.replace(/[ \t]+\n/g, "\n").trim();
+            if (text) parts.push(text);
+            inlineBuffer = "";
+          };
+
+          Array.from(node.childNodes || []).forEach((child) => {
+            if (child.nodeType === Node.TEXT_NODE) {
+              inlineBuffer += child.nodeValue || "";
+              return;
+            }
+            if (child.nodeType !== Node.ELEMENT_NODE) return;
+            const tag = String(child.tagName || "").toUpperCase();
+            if (tag === "SCRIPT" || tag === "STYLE" || tag === "BUTTON") return;
+            if (tag === "BR") {
+              inlineBuffer += "\n";
+              return;
+            }
+            if (isElementBlock(child)) {
+              flushInline();
+              if (tag === "UL" || tag === "OL") {
+                Array.from(child.children || []).forEach((item, itemIndex) => {
+                  if (!item || String(item.tagName || "").toUpperCase() !== "LI") return;
+                  const prefix = tag === "OL" ? (String(itemIndex + 1) + ". ") : "- ";
+                  const itemText = collectInlineText(item).trim();
+                  if (itemText) parts.push(prefix + itemText);
+                });
+                return;
+              }
+              const blockText = tag === "BLOCKQUOTE"
+                ? collectBlocks(child).join("\n\n").trim()
+                : collectInlineText(child).trim();
+              if (blockText) parts.push(blockText);
+              return;
+            }
+            inlineBuffer += collectInlineText(child);
+          });
+          flushInline();
+          return parts;
+        };
+
+        return normalizeCopyableBlockText(collectBlocks(sourceEl).join("\n\n")).trim();
+      }
+
       function getCopyablePreviewBlockText(blockEl) {
         if (!blockEl || typeof blockEl.querySelectorAll !== "function") return "";
         if (blockEl.classList && blockEl.classList.contains("preview-code-lines")) {
@@ -4275,6 +4404,10 @@
               .map((lineEl) => lineEl && typeof lineEl.textContent === "string" ? lineEl.textContent : "")
               .join("\n"),
           );
+        }
+
+        if (blockEl.matches && blockEl.matches("blockquote")) {
+          return getCopyableBlockquoteText(blockEl);
         }
 
         const codeEl = typeof blockEl.querySelector === "function"
@@ -4334,7 +4467,7 @@
 
       function decorateCopyablePreviewBlocks(targetEl) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
-        const blocks = Array.from(targetEl.querySelectorAll("div.sourceCode, pre, .preview-code-lines"));
+        const blocks = Array.from(targetEl.querySelectorAll("div.sourceCode, pre, .preview-code-lines, blockquote"));
         blocks.forEach((blockEl) => {
           if (!blockEl || !(blockEl instanceof Element)) return;
           if (blockEl.dataset && blockEl.dataset.studioCopyDecorated === "1") return;
@@ -4572,6 +4705,23 @@
           + "</div>";
       }
 
+      function renderTraceImages(images) {
+        const normalizedImages = Array.isArray(images)
+          ? images.map((image, index) => normalizeTraceImage(image, index)).filter(Boolean)
+          : [];
+        if (!normalizedImages.length) return "";
+        const cards = normalizedImages.map((image) => {
+          const src = "data:" + image.mimeType + ";base64," + image.data;
+          const caption = describeTraceImageForText(image);
+          const alt = image.label || ("Working output image: " + image.mimeType);
+          return "<figure class='trace-image-card'>"
+            + "<img src='" + escapeHtml(src) + "' alt='" + escapeHtml(alt) + "' loading='lazy' decoding='async' />"
+            + "<figcaption class='trace-image-caption'>" + escapeHtml(caption) + "</figcaption>"
+            + "</figure>";
+        }).join("");
+        return "<div class='trace-image-gallery'>" + cards + "</div>";
+      }
+
       function buildTracePanelHtml() {
         const state = traceState || createEmptyTraceState();
         const filter = normalizeTraceFilter(traceFilter);
@@ -4665,8 +4815,12 @@
           const argsSummary = entry.argsSummary
             ? "<div class='trace-section'><div class='trace-section-label'>Input</div>" + renderTraceOutput(entry.argsSummary, entry.id + ":input") + "</div>"
             : "";
-          const output = entry.output
-            ? "<div class='trace-section'><div class='trace-section-label'>Output</div>" + renderTraceOutput(entry.output, entry.id + ":output") + "</div>"
+          const imageOutput = renderTraceImages(entry.images);
+          const outputPieces = [];
+          if (entry.output) outputPieces.push(renderTraceOutput(entry.output, entry.id + ":output"));
+          if (imageOutput) outputPieces.push(imageOutput);
+          const output = outputPieces.length
+            ? "<div class='trace-section'><div class='trace-section-label'>Output</div>" + outputPieces.join("") + "</div>"
             : "<div class='trace-empty-inline'>No output yet.</div>";
           const toolStatusLabel = entry.isError
             ? "Error"

@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-05-14
+
+### Added
+- Working view now renders image outputs from tools such as `read`, including bounded image previews in saved Working history.
+- Rendered blockquotes now have hover/focus copy buttons that copy the quote text without Markdown `>` markers.
+
 ## [0.8.3] — 2026-05-13
 
 ### Changed
