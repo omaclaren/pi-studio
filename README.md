@@ -1,6 +1,6 @@
 # pi-studio
 
-Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace for working with prompts, responses, live working details, Markdown and LaTeX documents, code files, and other common text-based files side by side. Annotate responses and files, add local comments, write, edit, and run prompts, browse prompt and response history, request critiques, and use live preview for code, Markdown, and LaTeX.
+Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace for working with prompts, responses, live working details, Markdown and LaTeX documents, interactive HTML previews, code files, and other common text-based files side by side. Annotate responses and files, add local comments, write, edit, and run prompts, browse prompt and response history, request critiques, and use live preview for code, Markdown, LaTeX, and interactive HTML.
 
 ## Quick demo
 
@@ -35,10 +35,10 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
   - strips markers before send (optional)
   - saves `.annotated.md`
 - Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi
-- Renders straight, unfenced HTML artifacts in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
+- Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
 - Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
-- Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML, preserving authored HTML artifacts as HTML
+- Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML, preserving authored HTML previews as HTML
 - Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf` or `/studio-html <path>` to `<name>.studio.html`; without a path, those commands export the last model response to a timestamped file
 - Shows model/session/context usage in the footer, plus a compact-context action
 

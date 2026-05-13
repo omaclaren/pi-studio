@@ -2711,7 +2711,7 @@
           record.shell.classList.toggle("is-height-capped", capped);
         }
         if (record.detail) {
-          record.detail.textContent = "HTML artifact";
+          record.detail.textContent = "HTML preview";
         }
       }
 
@@ -2719,7 +2719,7 @@
 
       function renderHtmlArtifactPreview(targetEl, html, pane, options) {
         if (!targetEl) return;
-        const title = options && options.title ? String(options.title) : "HTML artifact preview";
+        const title = options && options.title ? String(options.title) : "HTML preview";
         const previewId = "html_artifact_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
         pruneDisconnectedHtmlArtifactFrames();
         clearPreviewJumpHighlight(targetEl);
@@ -2736,7 +2736,7 @@
         label.textContent = title;
         const detail = document.createElement("span");
         detail.className = "studio-html-artifact-detail";
-        detail.textContent = "HTML artifact";
+        detail.textContent = "HTML preview";
 
         const tools = document.createElement("span");
         tools.className = "studio-html-artifact-tools";
@@ -2783,10 +2783,10 @@
           });
           return button;
         };
-        const zoomOutBtn = makeZoomButton("−", "Zoom out HTML artifact", () => setArtifactZoom(artifactZoom - HTML_ARTIFACT_ZOOM_STEP));
-        const zoomResetBtn = makeZoomButton("100%", "Reset HTML artifact zoom", () => setArtifactZoom(1));
+        const zoomOutBtn = makeZoomButton("−", "Zoom out HTML preview", () => setArtifactZoom(artifactZoom - HTML_ARTIFACT_ZOOM_STEP));
+        const zoomResetBtn = makeZoomButton("100%", "Reset HTML preview zoom", () => setArtifactZoom(1));
         zoomResetBtn.classList.add("studio-html-artifact-zoom-reset");
-        const zoomInBtn = makeZoomButton("+", "Zoom in HTML artifact", () => setArtifactZoom(artifactZoom + HTML_ARTIFACT_ZOOM_STEP));
+        const zoomInBtn = makeZoomButton("+", "Zoom in HTML preview", () => setArtifactZoom(artifactZoom + HTML_ARTIFACT_ZOOM_STEP));
         zoomControls.appendChild(zoomOutBtn);
         zoomControls.appendChild(zoomResetBtn);
         zoomControls.appendChild(zoomInBtn);
@@ -3882,7 +3882,7 @@
 
         const htmlArtifactSource = getRightPaneHtmlArtifactSource();
         if (htmlArtifactSource) {
-          setStatus("PDF export does not support HTML artifacts yet. Export as HTML or use the browser print dialog inside the artifact.", "warning");
+          setStatus("PDF export does not support interactive HTML previews yet. Export as HTML or use the browser print dialog inside the preview.", "warning");
           return;
         }
 
@@ -4400,7 +4400,7 @@
         if (editorView !== "preview") return;
         const text = prepareEditorTextForPreview(sourceTextEl.value || "");
         if (isHtmlArtifactPreviewText(text, editorLanguage)) {
-          renderHtmlArtifactPreview(sourcePreviewEl, text, "source", { title: "Editor HTML artifact preview" });
+          renderHtmlArtifactPreview(sourcePreviewEl, text, "source", { title: "Editor HTML preview" });
           return;
         }
         if (supportsCodePreviewCommentsForCurrentEditor()) {
@@ -4672,7 +4672,7 @@
             return;
           }
           if (isHtmlArtifactPreviewText(editorText, editorLanguage)) {
-            renderHtmlArtifactPreview(critiqueViewEl, editorText, "response", { title: "Editor HTML artifact preview" });
+            renderHtmlArtifactPreview(critiqueViewEl, editorText, "response", { title: "Editor HTML preview" });
             return;
           }
           if (supportsCodePreviewCommentsForCurrentEditor()) {
@@ -4696,7 +4696,7 @@
 
         if (rightView === "preview") {
           if (isHtmlArtifactPreviewText(markdown, "")) {
-            renderHtmlArtifactPreview(critiqueViewEl, markdown, "response", { title: "Response HTML artifact preview" });
+            renderHtmlArtifactPreview(critiqueViewEl, markdown, "response", { title: "Response HTML preview" });
             return;
           }
           const nonce = ++responsePreviewRenderNonce;
@@ -4777,7 +4777,7 @@
           } else if (!canExportPreview) {
             exportPdfBtn.title = "Nothing to export yet.";
           } else if (isHtmlArtifactPreview) {
-            exportPdfBtn.title = "This is an HTML artifact preview. Export as HTML; PDF export is not available yet.";
+            exportPdfBtn.title = "This is an interactive HTML preview. Export as HTML; PDF export is not available yet.";
           } else {
             exportPdfBtn.title = "Choose PDF or HTML and export the current right-pane preview.";
           }
@@ -4785,18 +4785,18 @@
         if (exportPreviewPdfBtn) {
           exportPreviewPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview || isHtmlArtifactPreview;
           exportPreviewPdfBtn.title = isHtmlArtifactPreview
-            ? "HTML artifact PDF export is not available yet."
+            ? "Interactive HTML preview PDF export is not available yet."
             : "Export the current right-pane preview as PDF.";
         }
         if (exportPreviewHtmlBtn) {
           exportPreviewHtmlBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
           exportPreviewHtmlBtn.title = isHtmlArtifactPreview
-            ? "Export the authored HTML artifact."
+            ? "Export the authored HTML preview."
             : "Export the current right-pane preview as standalone HTML.";
         }
         if (exportPreviewControlsEl) {
           exportPreviewControlsEl.title = canExportPreview
-            ? (isHtmlArtifactPreview ? "Export this HTML artifact." : "Choose a format and export the current right-pane preview.")
+            ? (isHtmlArtifactPreview ? "Export this HTML preview." : "Choose a format and export the current right-pane preview.")
             : "Switch right pane to a non-empty preview before exporting.";
         }
         if (!canExportPreview || previewExportInProgress) {
