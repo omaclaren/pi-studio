@@ -3457,6 +3457,49 @@ function normalizeStudioMarkdownFencedBlocks(markdown: string): string {
 	return out.join("\n");
 }
 
+interface StudioYamlFrontMatterSplit {
+	frontMatter: string;
+	body: string;
+}
+
+function splitStudioYamlFrontMatter(markdown: string): StudioYamlFrontMatterSplit | null {
+	const source = String(markdown ?? "");
+	const match = source.match(/^(\uFEFF?---[ \t]*(?:\r?\n)[\s\S]*?(?:\r?\n)---[ \t]*(?:\r?\n|$))([\s\S]*)$/);
+	if (!match) return null;
+	return {
+		frontMatter: match[1] ?? "",
+		body: match[2] ?? "",
+	};
+}
+
+function mapStudioMarkdownBodyPreservingYamlFrontMatter(markdown: string, transformBody: (body: string) => string): string {
+	const source = String(markdown ?? "");
+	const split = splitStudioYamlFrontMatter(source);
+	if (!split) return transformBody(source);
+	return `${split.frontMatter}${transformBody(split.body)}`;
+}
+
+function stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(markdown: string): string {
+	return mapStudioMarkdownBodyPreservingYamlFrontMatter(markdown, (body) => stripStudioMarkdownHtmlComments(body));
+}
+
+function hasStudioYamlHeaderIncludes(markdown: string): boolean {
+	const split = splitStudioYamlFrontMatter(markdown);
+	if (!split) return false;
+	return /^\s*header-includes\s*:/im.test(split.frontMatter);
+}
+
+function prepareStudioMarkdownForPandoc(markdown: string, options?: { preserveLiteralLatexCommands?: boolean }): string {
+	const shouldPreserveLiteralLatexCommands = options?.preserveLiteralLatexCommands !== false;
+	return mapStudioMarkdownBodyPreservingYamlFrontMatter(markdown, (body) => {
+		const normalizedMath = normalizeMathDelimiters(body);
+		const latexReady = shouldPreserveLiteralLatexCommands
+			? preserveLiteralLatexCommandsInMarkdown(normalizedMath)
+			: normalizedMath;
+		return normalizeObsidianImages(latexReady);
+	});
+}
+
 function hasStudioMarkdownDiffFence(markdown: string): boolean {
 	const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
 
@@ -4300,8 +4343,10 @@ function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLan
 	const annotationReadySource = !effectiveEditorLanguage || effectiveEditorLanguage === "markdown" || effectiveEditorLanguage === "latex"
 		? replaceStudioAnnotationMarkersForPdf(source)
 		: source;
-	const commentStrippedSource = stripStudioMarkdownHtmlComments(annotationReadySource);
-	return normalizeObsidianImages(preserveLiteralLatexCommandsInMarkdown(normalizeMathDelimiters(commentStrippedSource)));
+	const commentStrippedSource = stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(annotationReadySource);
+	return prepareStudioMarkdownForPandoc(commentStrippedSource, {
+		preserveLiteralLatexCommands: !hasStudioYamlHeaderIncludes(annotationReadySource),
+	});
 }
 
 function stripMathMlAnnotationTags(html: string): string {
@@ -4559,7 +4604,7 @@ function decorateStudioPandocSyntaxHtml(html: string): string {
 
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const markdownWithoutHtmlComments = isLatex ? markdown : stripStudioMarkdownHtmlComments(markdown);
+	const markdownWithoutHtmlComments = isLatex ? markdown : stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(markdown);
 	const markdownWithPreviewPageBreaks = isLatex ? markdownWithoutHtmlComments : replaceStudioPreviewPageBreakCommands(markdownWithoutHtmlComments);
 	const latexSubfigurePreviewTransform = isLatex
 		? preprocessStudioLatexSubfiguresForPreview(markdownWithPreviewPageBreaks)
@@ -4580,7 +4625,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	}
 	const normalizedMarkdown = isLatex
 		? sourceWithResolvedRefs
-		: normalizeStudioMarkdownFencedBlocks(normalizeObsidianImages(preserveLiteralLatexCommandsInMarkdown(normalizeMathDelimiters(sourceWithResolvedRefs))));
+		: normalizeStudioMarkdownFencedBlocks(prepareStudioMarkdownForPandoc(sourceWithResolvedRefs));
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
 
 	let renderedHtml = await new Promise<string>((resolve, reject) => {
@@ -5501,6 +5546,8 @@ async function renderStudioPdfWithPandoc(
 		await mkdir(tempDir, { recursive: true });
 		await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions), "utf-8");
 
+		const hasYamlHeaderIncludesForPdf = inputFormat !== "latex" && hasStudioYamlHeaderIncludes(markdownForPdf);
+		const headerIncludeArgs = hasYamlHeaderIncludesForPdf ? [] : ["--include-in-header", preamblePath];
 		const args = [
 			"-f", inputFormat,
 			"-o", outputPath,
@@ -5508,7 +5555,7 @@ async function renderStudioPdfWithPandoc(
 			...buildStudioPdfPandocVariableArgs(pdfOptions, inputFormat !== "latex"),
 			"-V", "urlcolor=blue",
 			"-V", "linkcolor=blue",
-			"--include-in-header", preamblePath,
+			...headerIncludeArgs,
 			...bibliographyArgs,
 		];
 		if (resourcePath) args.push(`--resource-path=${resourcePath}`);
@@ -5652,6 +5699,8 @@ async function renderStudioPdfWithPandoc(
 		return { pdf: rendered.pdf, warning: mermaidPrepared.warning ?? rendered.warning };
 	}
 
+	const hasYamlHeaderIncludesForPdf = !isLatex && hasStudioYamlHeaderIncludes(markdownForPdf);
+	const headerIncludeArgs = hasYamlHeaderIncludesForPdf ? [] : ["--include-in-header", preamblePath];
 	const args = [
 		"-f", inputFormat,
 		"-o", outputPath,
@@ -5659,7 +5708,7 @@ async function renderStudioPdfWithPandoc(
 		...buildStudioPdfPandocVariableArgs(pdfOptions, !isLatex),
 		"-V", "urlcolor=blue",
 		"-V", "linkcolor=blue",
-		"--include-in-header", preamblePath,
+		...headerIncludeArgs,
 		...bibliographyArgs,
 	];
 	if (resourcePath) args.push(`--resource-path=${resourcePath}`);
@@ -8599,9 +8648,10 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const resourceDir = resolveStudioCompanionResourceDir(msg.path, msg.resourceDir, studioCwd);
+			const hasContent = msg.content.trim().length > 0;
 			const document: InitialStudioDocument = {
 				text: msg.content,
-				label: buildStudioCompanionLabel(msg.label),
+				label: hasContent ? buildStudioCompanionLabel(msg.label) : "blank companion editor",
 				source: "blank",
 				draftId: createStudioDraftId(),
 				resourceDir,
@@ -8614,7 +8664,9 @@ export default function (pi: ExtensionAPI) {
 				requestId: msg.requestId,
 				url,
 				relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
-				message: "Companion editor is ready with a detached copy of the current editor text.",
+				message: hasContent
+					? "Companion editor is ready with a detached copy of the current editor text."
+					: "Blank companion editor is ready.",
 			});
 			return;
 		}

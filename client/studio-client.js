@@ -1954,6 +1954,51 @@
         updatePaneFocusButtons();
       }
 
+      function snapshotStudioScrollablePositions() {
+        return [sourceTextEl, sourcePreviewEl, critiqueViewEl]
+          .filter((el) => el && typeof el.scrollTop === "number" && typeof el.scrollLeft === "number")
+          .map((el) => ({ el, top: el.scrollTop, left: el.scrollLeft }));
+      }
+
+      function restoreStudioScrollablePositions(snapshot) {
+        if (!Array.isArray(snapshot)) return;
+        snapshot.forEach((entry) => {
+          const el = entry && entry.el;
+          if (!el || !el.isConnected) return;
+          if (typeof entry.top === "number") el.scrollTop = entry.top;
+          if (typeof entry.left === "number") el.scrollLeft = entry.left;
+        });
+        syncEditorHighlightScroll();
+      }
+
+      function scheduleStudioScrollablePositionRestore(snapshot) {
+        if (!Array.isArray(snapshot) || snapshot.length === 0) return;
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+        window.setTimeout(() => restoreStudioScrollablePositions(snapshot), 0);
+        schedule(() => {
+          restoreStudioScrollablePositions(snapshot);
+          schedule(() => restoreStudioScrollablePositions(snapshot));
+        });
+      }
+
+      function shouldPreserveScrollForPaneActivationEvent(event) {
+        const target = event && event.target;
+        if (!(target instanceof Element)) return true;
+        if (target.closest("button, select, input, a, [role='button'], .studio-copy-block-btn, .preview-comment-add, .preview-comment-jump")) {
+          return false;
+        }
+        return true;
+      }
+
+      function activatePaneFromInteraction(nextPane, event) {
+        const shouldPreserveScroll = shouldPreserveScrollForPaneActivationEvent(event);
+        const snapshot = shouldPreserveScroll ? snapshotStudioScrollablePositions() : [];
+        setActivePane(nextPane);
+        if (shouldPreserveScroll) scheduleStudioScrollablePositionRestore(snapshot);
+      }
+
       function setActivePane(nextPane) {
         activePane = nextPane === "right" ? "right" : "left";
 
@@ -11114,9 +11159,12 @@
           setWsState("Ready");
           const targetUrl = resolveCompanionEditorTargetUrl(message);
           const opened = navigatePendingCompanionWindow(responseRequestId, targetUrl);
+          const readyMessage = typeof message.message === "string" && message.message.trim()
+            ? message.message.trim()
+            : "Opened companion editor with a detached copy of the current editor text.";
           setStatus(
             opened
-              ? "Opened companion editor with a detached copy of the current editor text."
+              ? readyMessage
               : (targetUrl ? "Companion editor ready: " + targetUrl : "Companion editor is ready, but Studio did not receive a URL."),
             opened ? "success" : "warning",
           );
@@ -11578,13 +11626,13 @@
       }
 
       if (leftPaneEl) {
-        leftPaneEl.addEventListener("mousedown", () => setActivePane("left"));
-        leftPaneEl.addEventListener("focusin", () => setActivePane("left"));
+        leftPaneEl.addEventListener("mousedown", (event) => activatePaneFromInteraction("left", event));
+        leftPaneEl.addEventListener("focusin", (event) => activatePaneFromInteraction("left", event));
       }
 
       if (rightPaneEl) {
-        rightPaneEl.addEventListener("mousedown", () => setActivePane("right"));
-        rightPaneEl.addEventListener("focusin", () => setActivePane("right"));
+        rightPaneEl.addEventListener("mousedown", (event) => activatePaneFromInteraction("right", event));
+        rightPaneEl.addEventListener("focusin", (event) => activatePaneFromInteraction("right", event));
       }
 
       if (leftFocusBtn) {
@@ -12074,10 +12122,6 @@
       if (openCompanionBtn) {
         openCompanionBtn.addEventListener("click", () => {
           const content = sourceTextEl.value;
-          if (!content.trim()) {
-            setStatus("Editor is empty. Nothing to copy into a companion view.", "warning");
-            return;
-          }
 
           const requestId = beginUiAction("open_editor_only");
           if (!requestId) return;

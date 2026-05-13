@@ -4,8 +4,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-05-13
+
 ### Changed
 - Updated package, README, and UI wording to describe the feature as interactive HTML preview.
+
+### Fixed
+- **Open new editor** now opens a blank companion editor when the current editor is empty.
+- PDF export now preserves Pandoc YAML front matter while applying Studio Markdown transforms and lets Markdown documents with `header-includes` control their own LaTeX preamble, fixing exports that use YAML-defined commands such as `\firstpageletterhead`.
+- Reduced scroll snap-back after using browser Find by preserving Studio pane scroll positions during pane activation.
 
 ## [0.8.2] — 2026-05-13
 
