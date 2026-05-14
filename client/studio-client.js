@@ -107,6 +107,8 @@
       const loadGitDiffBtn = document.getElementById("loadGitDiffBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
       const queueSteerBtn = document.getElementById("queueSteerBtn");
+      const sendReplBtn = document.getElementById("sendReplBtn");
+      const replSendModeSelect = document.getElementById("replSendModeSelect");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
       const saveAnnotatedBtn = document.getElementById("saveAnnotatedBtn");
       const stripAnnotationsBtn = document.getElementById("stripAnnotationsBtn");
@@ -215,6 +217,47 @@
       const TRACE_OUTPUT_PREVIEW_MAX_LINES = 50;
       const TRACE_OUTPUT_PREVIEW_MAX_CHARS = 8000;
       const TRACE_IMAGE_SAFE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+      const REPL_POLL_INTERVAL_MS = 1000;
+      const REPL_TRANSCRIPT_MAX_CHARS = 200_000;
+      const REPL_JOURNAL_OUTPUT_MAX_CHARS = 80_000;
+      const REPL_JOURNAL_MAX_ENTRIES = 80;
+      const EDITOR_TAB_TEXT = "  ";
+      let replTmuxAvailable = null;
+      let replSessions = [];
+      let replActiveSessionName = "";
+      let replRuntime = (() => {
+        try {
+          return (window.localStorage && window.localStorage.getItem("piStudio.replRuntime")) || "python";
+        } catch {
+          return "python";
+        }
+      })();
+      let replTranscript = "";
+      let replError = "";
+      let replMessage = "";
+      let replCapturedAt = 0;
+      let replFollow = true;
+      let replPollTimer = null;
+      let replBusy = false;
+      let replSendMode = (() => {
+        try {
+          return (window.localStorage && window.localStorage.getItem("piStudio.replSendMode")) || "scratch";
+        } catch {
+          return "scratch";
+        }
+      })();
+      let replJournalEntries = [];
+      let activeReplJournalEntryId = "";
+      let replJournalCollapsed = (() => {
+        try {
+          const stored = window.localStorage ? window.localStorage.getItem("piStudio.replJournalCollapsed") : null;
+          if (stored === "false") return false;
+          if (stored === "true") return true;
+          return true;
+        } catch {
+          return true;
+        }
+      })();
       let studioRunChainActive = false;
       let queuedSteeringCount = 0;
       let agentBusyFromServer = false;
@@ -745,6 +788,641 @@
         setStatus("Loaded visible working into editor.", "success");
       }
 
+      function normalizeReplRuntime(value) {
+        const runtime = String(value || "").trim().toLowerCase();
+        return runtime === "shell" || runtime === "python" || runtime === "ipython" || runtime === "julia" || runtime === "r" || runtime === "ghci" || runtime === "clojure"
+          ? runtime
+          : "python";
+      }
+
+      function normalizeReplSession(session) {
+        if (!session || typeof session !== "object") return null;
+        const sessionName = typeof session.sessionName === "string" && session.sessionName.trim() ? session.sessionName.trim() : "";
+        if (!sessionName) return null;
+        return {
+          sessionName,
+          target: typeof session.target === "string" ? session.target : (sessionName + ":0.0"),
+          runtime: typeof session.runtime === "string" ? session.runtime : "unknown",
+          label: typeof session.label === "string" && session.label.trim() ? session.label.trim() : sessionName,
+          source: typeof session.source === "string" ? session.source : "tmux",
+        };
+      }
+
+      function setReplRuntime(runtime) {
+        replRuntime = normalizeReplRuntime(runtime);
+        try {
+          if (window.localStorage) window.localStorage.setItem("piStudio.replRuntime", replRuntime);
+        } catch {
+          // Ignore storage failures.
+        }
+      }
+
+      function normalizeReplSendMode(value) {
+        return String(value || "").trim().toLowerCase() === "literate" ? "literate" : "scratch";
+      }
+
+      function setReplSendMode(mode) {
+        replSendMode = normalizeReplSendMode(mode);
+        if (replSendModeSelect) replSendModeSelect.value = replSendMode;
+        try {
+          if (window.localStorage) window.localStorage.setItem("piStudio.replSendMode", replSendMode);
+        } catch {
+          // Ignore storage failures.
+        }
+      }
+
+      function setReplJournalCollapsed(collapsed) {
+        replJournalCollapsed = Boolean(collapsed);
+        try {
+          if (window.localStorage) window.localStorage.setItem("piStudio.replJournalCollapsed", replJournalCollapsed ? "true" : "false");
+        } catch {
+          // Ignore storage failures.
+        }
+        renderReplViewIfActive({ force: true });
+      }
+
+      function setReplSessions(sessions) {
+        replSessions = Array.isArray(sessions)
+          ? sessions.map(normalizeReplSession).filter(Boolean)
+          : [];
+        if (replActiveSessionName && !replSessions.some((session) => session.sessionName === replActiveSessionName)) {
+          replActiveSessionName = replSessions[0] ? replSessions[0].sessionName : "";
+        }
+      }
+
+      function getActiveReplSession() {
+        return replSessions.find((session) => session.sessionName === replActiveSessionName) || null;
+      }
+
+      function buildActiveReplPromptContext() {
+        if (rightView !== "repl") return "";
+        const session = getActiveReplSession();
+        if (!session) return "";
+        const runtime = session.runtime && session.runtime !== "unknown" ? session.runtime : "unknown";
+        return [
+          "[Studio active REPL]",
+          "The right pane is mirroring an active tmux-backed REPL session.",
+          "If the user refers to the active REPL, send code to this session rather than inventing a separate one.",
+          "Session name: " + session.sessionName,
+          "tmux target: " + (session.target || (session.sessionName + ":0.0")),
+          "runtime: " + runtime,
+          "Suggested shell command for direct interaction: tmux paste-buffer/send-keys targeting " + (session.target || (session.sessionName + ":0.0")),
+          "Prefer existing REPL tools when they target this same session; otherwise use tmux directly.",
+          "[/Studio active REPL]",
+        ].join("\n");
+      }
+
+      function prepareEditorTextForRunRequest(text) {
+        const prepared = prepareEditorTextForSend(text);
+        const replContext = buildActiveReplPromptContext();
+        return replContext ? (replContext + "\n\n" + prepared) : prepared;
+      }
+
+      function setActiveReplSession(sessionName) {
+        const name = String(sessionName || "").trim();
+        if (!name) {
+          replActiveSessionName = "";
+          return;
+        }
+        replActiveSessionName = name;
+      }
+
+      function trimReplTranscript(text) {
+        const value = String(text || "");
+        if (value.length <= REPL_TRANSCRIPT_MAX_CHARS) return value;
+        return "… " + formatCompactNumber(value.length - REPL_TRANSCRIPT_MAX_CHARS) + " earlier chars omitted …\n" + value.slice(value.length - REPL_TRANSCRIPT_MAX_CHARS);
+      }
+
+      function requestReplList() {
+        if (wsState === "Disconnected") return false;
+        return sendMessage({ type: "repl_list_request" });
+      }
+
+      function requestReplCapture() {
+        if (wsState === "Disconnected") return false;
+        if (replActiveSessionName) {
+          return sendMessage({ type: "repl_capture_request", sessionName: replActiveSessionName });
+        }
+        return sendMessage({ type: "repl_list_request" });
+      }
+
+      function isReplControlFocused() {
+        const activeEl = document.activeElement;
+        return activeEl instanceof Element && Boolean(activeEl.closest(".repl-controls"));
+      }
+
+      function renderReplViewIfActive(options) {
+        if (rightView !== "repl") return;
+        if ((!options || options.force !== true) && isReplControlFocused()) return;
+        if (traceRenderRaf !== null) return;
+        traceRenderRaf = window.requestAnimationFrame(() => {
+          traceRenderRaf = null;
+          refreshResponseUi();
+        });
+      }
+
+      function startReplPolling() {
+        if (rightView !== "repl") return;
+        if (replPollTimer !== null) return;
+        requestReplCapture();
+        replPollTimer = window.setInterval(() => {
+          if (rightView !== "repl") {
+            stopReplPolling();
+            return;
+          }
+          requestReplCapture();
+        }, REPL_POLL_INTERVAL_MS);
+      }
+
+      function stopReplPolling() {
+        if (replPollTimer !== null) {
+          window.clearInterval(replPollTimer);
+          replPollTimer = null;
+        }
+      }
+
+      function getActiveReplRuntime() {
+        const session = getActiveReplSession();
+        if (session && session.runtime && session.runtime !== "unknown") return normalizeReplRuntime(session.runtime);
+        return normalizeReplRuntime(replRuntime);
+      }
+
+      function getEditorSelectionRange() {
+        const raw = String(sourceTextEl.value || "");
+        const start = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : 0;
+        const end = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : start;
+        const safeStart = Math.max(0, Math.min(start, raw.length));
+        const safeEnd = Math.max(safeStart, Math.min(end, raw.length));
+        return { raw, start: safeStart, end: safeEnd, selected: safeEnd > safeStart ? raw.slice(safeStart, safeEnd) : "" };
+      }
+
+      function normalizeMarkdownFenceLanguage(info) {
+        let value = String(info || "").trim();
+        if (!value) return "";
+        let first = "";
+        if (value.startsWith("{")) {
+          const closeIndex = value.indexOf("}");
+          const inner = closeIndex >= 0 ? value.slice(1, closeIndex) : value.slice(1);
+          first = inner.split(/[\s,]+/)[0] || "";
+        } else {
+          first = value.split(/\s+/)[0] || "";
+        }
+        first = first.replace(/^\./, "").trim().toLowerCase();
+        if (first === "py") return "python";
+        if (first === "jl") return "julia";
+        if (first === "sh" || first === "zsh" || first === "fish") return "shell";
+        if (first === "bash") return "shell";
+        if (first === "hs" || first === "haskell") return "ghci";
+        if (first === "clj" || first === "cljc") return "clojure";
+        return first;
+      }
+
+      function parseMarkdownCodeFences(markdown) {
+        const text = String(markdown || "");
+        const blocks = [];
+        let offset = 0;
+        let open = null;
+        while (offset <= text.length) {
+          const newlineIndex = text.indexOf("\n", offset);
+          const lineEnd = newlineIndex >= 0 ? newlineIndex : text.length;
+          const lineWithNewlineEnd = newlineIndex >= 0 ? newlineIndex + 1 : lineEnd;
+          const line = text.slice(offset, lineEnd);
+          if (!open) {
+            const openMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+            if (openMatch) {
+              const fence = openMatch[1] || "";
+              open = {
+                start: offset,
+                fence,
+                fenceChar: fence.charAt(0),
+                fenceLength: fence.length,
+                info: openMatch[2] || "",
+                contentStart: lineWithNewlineEnd,
+              };
+            }
+          } else {
+            const closePattern = new RegExp("^ {0,3}" + open.fenceChar + "{" + open.fenceLength + ",}[ \\t]*$");
+            if (closePattern.test(line)) {
+              blocks.push({
+                start: open.start,
+                end: lineWithNewlineEnd,
+                contentStart: open.contentStart,
+                contentEnd: offset,
+                info: open.info,
+                language: normalizeMarkdownFenceLanguage(open.info),
+                code: text.slice(open.contentStart, offset),
+              });
+              open = null;
+            }
+          }
+          if (newlineIndex < 0) break;
+          offset = lineWithNewlineEnd;
+        }
+        return blocks;
+      }
+
+      function isFenceLanguageCompatibleWithRuntime(language, runtime) {
+        const lang = normalizeMarkdownFenceLanguage(language);
+        if (!lang) return true;
+        const activeRuntime = normalizeReplRuntime(runtime || getActiveReplRuntime());
+        if (activeRuntime === "python" || activeRuntime === "ipython") return lang === "python" || lang === "ipython";
+        if (activeRuntime === "r") return lang === "r";
+        if (activeRuntime === "julia") return lang === "julia";
+        if (activeRuntime === "shell") return lang === "shell" || lang === "bash" || lang === "sh";
+        if (activeRuntime === "ghci") return lang === "ghci" || lang === "haskell";
+        if (activeRuntime === "clojure") return lang === "clojure";
+        return true;
+      }
+
+      function stripFencedBlocksFromMarkdown(markdown, blocks) {
+        const text = String(markdown || "");
+        const ranges = Array.isArray(blocks) ? blocks : parseMarkdownCodeFences(text);
+        if (!ranges.length) return text.trim();
+        let cursor = 0;
+        const pieces = [];
+        ranges.forEach((block) => {
+          pieces.push(text.slice(cursor, block.start));
+          cursor = block.end;
+        });
+        pieces.push(text.slice(cursor));
+        return pieces.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+      }
+
+      function getCurrentMarkdownCodeFence(markdown, caretOffset) {
+        const text = String(markdown || "");
+        const safeCaret = Math.max(0, Math.min(Math.floor(Number(caretOffset) || 0), text.length));
+        return parseMarkdownCodeFences(text).find((block) => safeCaret >= block.contentStart && safeCaret <= block.contentEnd) || null;
+      }
+
+      function unwrapSingleMarkdownCodeFenceForReplSend(text) {
+        const source = String(text || "");
+        const blocks = parseMarkdownCodeFences(source);
+        if (blocks.length !== 1) return null;
+        const block = blocks[0];
+        if (source.slice(0, block.start).trim() || source.slice(block.end).trim()) return null;
+        if (!isFenceLanguageCompatibleWithRuntime(block.language, getActiveReplRuntime())) return null;
+        const code = String(block.code || "").trimEnd();
+        if (!code.trim()) return null;
+        return {
+          code,
+          label: "single " + (block.language || getActiveReplRuntime()) + " chunk",
+        };
+      }
+
+      function buildScratchReplSendPayload() {
+        const range = getEditorSelectionRange();
+        const selected = range.selected;
+        const source = selected || range.raw;
+        const unwrapped = unwrapSingleMarkdownCodeFenceForReplSend(source);
+        return {
+          text: prepareEditorTextForSend(unwrapped ? unwrapped.code : source),
+          prose: "",
+          label: unwrapped ? unwrapped.label : (selected ? "selection" : "full editor"),
+          mode: "scratch",
+          noteOnly: false,
+          skippedChunks: 0,
+        };
+      }
+
+      function buildLiterateReplSendPayload() {
+        const range = getEditorSelectionRange();
+        const runtime = getActiveReplRuntime();
+        if (range.selected) {
+          const blocks = parseMarkdownCodeFences(range.selected);
+          if (blocks.length) {
+            const compatibleBlocks = blocks.filter((block) => isFenceLanguageCompatibleWithRuntime(block.language, runtime));
+            const code = compatibleBlocks.map((block) => String(block.code || "").trimEnd()).filter((chunk) => chunk.trim()).join("\n\n");
+            const prose = stripFencedBlocksFromMarkdown(range.selected, blocks);
+            if (code.trim()) {
+              return {
+                text: prepareEditorTextForSend(code),
+                prose,
+                label: "selection · " + compatibleBlocks.length + " code chunk" + (compatibleBlocks.length === 1 ? "" : "s"),
+                mode: "literate",
+                noteOnly: false,
+                skippedChunks: Math.max(0, blocks.length - compatibleBlocks.length),
+              };
+            }
+            if (prose.trim()) {
+              return {
+                text: "",
+                prose,
+                label: "selected prose",
+                mode: "literate",
+                noteOnly: true,
+                skippedChunks: blocks.length,
+              };
+            }
+            return { error: "Selected code chunks do not match the active REPL runtime." };
+          }
+          return {
+            text: prepareEditorTextForSend(range.selected),
+            prose: "",
+            label: "selection",
+            mode: "literate",
+            noteOnly: false,
+            skippedChunks: 0,
+          };
+        }
+
+        const currentBlock = getCurrentMarkdownCodeFence(range.raw, range.start);
+        if (currentBlock) {
+          if (!isFenceLanguageCompatibleWithRuntime(currentBlock.language, runtime)) {
+            return { error: "Current code chunk is marked " + (currentBlock.language || "unknown") + ", but the active REPL is " + runtime + "." };
+          }
+          return {
+            text: prepareEditorTextForSend(String(currentBlock.code || "").trimEnd()),
+            prose: "",
+            label: "current " + (currentBlock.language || runtime) + " chunk",
+            mode: "literate",
+            noteOnly: false,
+            skippedChunks: 0,
+          };
+        }
+
+        const allBlocks = parseMarkdownCodeFences(range.raw);
+        if (allBlocks.length) {
+          return { error: "Place the cursor inside a code chunk, select text, or use Run all chunks. Switch send mode to Scratch to send the full editor." };
+        }
+
+        return {
+          text: prepareEditorTextForSend(range.raw),
+          prose: "",
+          label: "full editor",
+          mode: "literate",
+          noteOnly: false,
+          skippedChunks: 0,
+        };
+      }
+
+      function buildAllChunksReplSendPayload() {
+        const range = getEditorSelectionRange();
+        const runtime = getActiveReplRuntime();
+        const blocks = parseMarkdownCodeFences(range.raw);
+        if (!blocks.length) return { error: "No fenced code chunks found in the editor." };
+        const compatibleBlocks = blocks.filter((block) => isFenceLanguageCompatibleWithRuntime(block.language, runtime));
+        const code = compatibleBlocks.map((block) => String(block.code || "").trimEnd()).filter((chunk) => chunk.trim()).join("\n\n");
+        if (!code.trim()) return { error: "No code chunks match the active REPL runtime." };
+        return {
+          text: prepareEditorTextForSend(code),
+          prose: "",
+          label: "all " + runtime + " chunks · " + compatibleBlocks.length + " of " + blocks.length,
+          mode: "literate",
+          noteOnly: false,
+          skippedChunks: Math.max(0, blocks.length - compatibleBlocks.length),
+        };
+      }
+
+      function getSelectedOrCurrentParagraphForReplNote() {
+        const range = getEditorSelectionRange();
+        if (range.selected.trim()) return range.selected.trim();
+        const before = range.raw.lastIndexOf("\n\n", Math.max(0, range.start - 1));
+        const after = range.raw.indexOf("\n\n", range.start);
+        const start = before >= 0 ? before + 2 : 0;
+        const end = after >= 0 ? after : range.raw.length;
+        return range.raw.slice(start, end).trim();
+      }
+
+      function trimReplJournalOutput(text) {
+        const value = String(text || "").trimEnd();
+        if (value.length <= REPL_JOURNAL_OUTPUT_MAX_CHARS) return value;
+        return "… " + formatCompactNumber(value.length - REPL_JOURNAL_OUTPUT_MAX_CHARS) + " earlier chars omitted …\n" + value.slice(value.length - REPL_JOURNAL_OUTPUT_MAX_CHARS);
+      }
+
+      function createReplJournalEntry(details) {
+        return {
+          id: "repl-journal-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8),
+          requestId: details.requestId || "",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          sessionName: details.sessionName || "",
+          runtime: details.runtime || getActiveReplRuntime(),
+          label: details.label || "REPL send",
+          mode: details.mode || replSendMode,
+          prose: String(details.prose || ""),
+          code: String(details.code || ""),
+          output: String(details.output || ""),
+          beforeTranscript: String(details.beforeTranscript || ""),
+          status: details.status || "sent",
+          skippedChunks: Math.max(0, Math.floor(Number(details.skippedChunks) || 0)),
+        };
+      }
+
+      function addReplJournalEntry(details) {
+        const entry = createReplJournalEntry(details || {});
+        replJournalEntries = [...replJournalEntries, entry].slice(-REPL_JOURNAL_MAX_ENTRIES);
+        return entry;
+      }
+
+      function extractReplTranscriptDelta(before, after) {
+        const previous = String(before || "");
+        const current = String(after || "");
+        if (!current) return "";
+        if (!previous) return current;
+        const directIndex = current.indexOf(previous);
+        if (directIndex >= 0) return current.slice(directIndex + previous.length).replace(/^\s+/, "");
+        const previousLines = previous.split("\n");
+        const maxSuffixLines = Math.min(24, previousLines.length);
+        for (let count = maxSuffixLines; count >= 1; count -= 1) {
+          const suffix = previousLines.slice(previousLines.length - count).join("\n");
+          if (!suffix.trim()) continue;
+          const suffixIndex = current.indexOf(suffix);
+          if (suffixIndex >= 0) return current.slice(suffixIndex + suffix.length).replace(/^\s+/, "");
+        }
+        return current;
+      }
+
+      function updateActiveReplJournalEntryFromTranscript(sessionName, transcript) {
+        if (!activeReplJournalEntryId) return;
+        const entryIndex = replJournalEntries.findIndex((entry) => entry.id === activeReplJournalEntryId);
+        if (entryIndex < 0) return;
+        const entry = replJournalEntries[entryIndex];
+        if (entry.sessionName && sessionName && entry.sessionName !== sessionName) return;
+        const delta = trimReplJournalOutput(extractReplTranscriptDelta(entry.beforeTranscript, transcript));
+        if (!delta.trim()) return;
+        replJournalEntries = replJournalEntries.map((candidate) => candidate.id === entry.id
+          ? { ...candidate, output: delta, status: "captured", updatedAt: Date.now() }
+          : candidate);
+      }
+
+      function getMarkdownFenceForText(text, language) {
+        const value = String(text || "");
+        let fence = "```";
+        while (value.includes(fence)) fence += "`";
+        return fence + (language ? language : "") + "\n" + value.replace(/\s+$/, "") + "\n" + fence;
+      }
+
+      function buildReplJournalMarkdown() {
+        const lines = ["# Studio REPL journal", "", "Generated: " + new Date().toLocaleString(), ""];
+        if (!replJournalEntries.length) {
+          lines.push("_No journal entries yet._");
+          return lines.join("\n");
+        }
+        replJournalEntries.forEach((entry, index) => {
+          lines.push("## " + (index + 1) + ". " + (entry.label || "REPL entry"));
+          lines.push("");
+          lines.push("- Time: " + new Date(entry.createdAt || Date.now()).toLocaleString());
+          if (entry.runtime) lines.push("- Runtime: " + entry.runtime);
+          if (entry.sessionName) lines.push("- Session: `" + entry.sessionName + "`");
+          if (entry.skippedChunks) lines.push("- Skipped chunks: " + entry.skippedChunks);
+          lines.push("");
+          if (String(entry.prose || "").trim()) {
+            lines.push(String(entry.prose).trim());
+            lines.push("");
+          }
+          if (String(entry.code || "").trim()) {
+            lines.push(getMarkdownFenceForText(entry.code, entry.runtime === "ipython" ? "python" : entry.runtime));
+            lines.push("");
+          }
+          if (String(entry.output || "").trim()) {
+            lines.push("Output:");
+            lines.push("");
+            lines.push(getMarkdownFenceForText(entry.output, "text"));
+            lines.push("");
+          }
+        });
+        return lines.join("\n").replace(/\n{4,}/g, "\n\n\n").trimEnd() + "\n";
+      }
+
+      async function copyReplJournalToClipboard() {
+        if (!replJournalEntries.length) {
+          setStatus("No REPL journal entries to copy yet.", "warning");
+          return;
+        }
+        if (await writeTextToClipboard(buildReplJournalMarkdown())) {
+          setStatus("Copied REPL journal as Markdown.", "success");
+        } else {
+          setStatus("Clipboard write failed.", "warning");
+        }
+      }
+
+      function exportReplJournalMarkdown() {
+        if (!replJournalEntries.length) {
+          setStatus("No REPL journal entries to export yet.", "warning");
+          return;
+        }
+        const blob = new Blob([buildReplJournalMarkdown()], { type: "text/markdown;charset=utf-8" });
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        link.href = blobUrl;
+        link.download = "studio-repl-journal-" + stamp + ".md";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+        setStatus("Exported REPL journal Markdown.", "success");
+      }
+
+      function clearReplJournal() {
+        replJournalEntries = [];
+        activeReplJournalEntryId = "";
+        setStatus("Cleared REPL journal.", "success");
+        renderReplViewIfActive({ force: true });
+      }
+
+      function loadReplJournalIntoEditor() {
+        if (!replJournalEntries.length) {
+          setStatus("No REPL journal entries to load yet.", "warning");
+          return;
+        }
+        const markdown = buildReplJournalMarkdown();
+        setEditorText(markdown, { preserveScroll: false, preserveSelection: false });
+        setSourceState({ source: "blank", label: "REPL journal", path: null });
+        setEditorLanguage("markdown");
+        setStatus("Loaded REPL journal into editor.", "success");
+      }
+
+      function addSelectedReplJournalNote() {
+        const note = getSelectedOrCurrentParagraphForReplNote();
+        if (!note.trim()) {
+          setStatus("Select prose or place the cursor in a paragraph to journal a note.", "warning");
+          return;
+        }
+        addReplJournalEntry({
+          label: "note",
+          prose: note,
+          status: "note",
+          mode: "literate",
+          sessionName: replActiveSessionName,
+          runtime: getActiveReplRuntime(),
+        });
+        setStatus("Added note to REPL journal.", "success");
+        renderReplViewIfActive({ force: true });
+      }
+
+      function sendReplPayload(payload) {
+        const session = getActiveReplSession();
+        if (!session) {
+          setStatus("Start or select a REPL session first.", "warning");
+          return;
+        }
+        if (!payload || payload.error) {
+          setStatus(payload && payload.error ? payload.error : "Nothing to send to REPL.", "warning");
+          return;
+        }
+        if (payload.noteOnly) {
+          if (String(payload.prose || "").trim()) {
+            addReplJournalEntry({
+              label: payload.label || "note",
+              prose: payload.prose,
+              status: "note",
+              mode: payload.mode || "literate",
+              sessionName: session.sessionName,
+              runtime: getActiveReplRuntime(),
+              skippedChunks: payload.skippedChunks,
+            });
+            setStatus("Added prose to REPL journal.", "success");
+            renderReplViewIfActive({ force: true });
+          } else {
+            setStatus("No code or prose found to send.", "warning");
+          }
+          return;
+        }
+        const text = String(payload.text || "");
+        if (!text.trim()) {
+          setStatus("Editor text is empty.", "warning");
+          return;
+        }
+        const requestId = makeRequestId();
+        const journalEntry = addReplJournalEntry({
+          requestId,
+          sessionName: session.sessionName,
+          runtime: getActiveReplRuntime(),
+          label: payload.label,
+          mode: payload.mode,
+          prose: payload.prose,
+          code: text,
+          beforeTranscript: replTranscript,
+          status: "sending",
+          skippedChunks: payload.skippedChunks,
+        });
+        activeReplJournalEntryId = journalEntry.id;
+        replBusy = true;
+        syncActionButtons();
+        renderReplViewIfActive({ force: true });
+        const skippedSuffix = payload.skippedChunks ? " (skipped " + payload.skippedChunks + " incompatible chunk" + (payload.skippedChunks === 1 ? "" : "s") + ")" : "";
+        setStatus("Sending " + (payload.label || "editor text") + " to REPL…" + skippedSuffix, "info");
+        if (!sendMessage({ type: "repl_send_request", requestId, sessionName: session.sessionName, text })) {
+          replBusy = false;
+          replJournalEntries = replJournalEntries.map((entry) => entry.id === journalEntry.id ? { ...entry, status: "error" } : entry);
+          syncActionButtons();
+        }
+      }
+
+      function sendEditorTextToRepl(options) {
+        const action = options && options.action ? options.action : "default";
+        if (action === "all-chunks") {
+          sendReplPayload(buildAllChunksReplSendPayload());
+          return;
+        }
+        if (action === "note") {
+          addSelectedReplJournalNote();
+          return;
+        }
+        sendReplPayload(replSendMode === "literate" ? buildLiterateReplSendPayload() : buildScratchReplSendPayload());
+      }
+
       function renderTraceViewIfActive() {
         if (rightView !== "trace") return;
         if (traceRenderRaf !== null) return;
@@ -1209,6 +1887,8 @@
         const actionLineOneEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         if (!isEditorOnlyMode && sendRunBtn) actionLineOneEl.appendChild(sendRunBtn);
         if (!isEditorOnlyMode && queueSteerBtn) actionLineOneEl.appendChild(queueSteerBtn);
+        if (!isEditorOnlyMode && sendReplBtn) actionLineOneEl.appendChild(sendReplBtn);
+        if (!isEditorOnlyMode && replSendModeSelect) actionLineOneEl.appendChild(replSendModeSelect);
         const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         actionLineTwoEl.appendChild(copyDraftBtn);
         if (openCompanionBtn) actionLineTwoEl.appendChild(openCompanionBtn);
@@ -2204,6 +2884,23 @@
           key === "Enter"
           && (event.metaKey || event.ctrlKey)
           && !event.altKey
+          && event.shiftKey
+          && activePane === "left"
+          && !isEditorOnlyMode
+        ) {
+          event.preventDefault();
+          if (sendReplBtn && !sendReplBtn.hidden && !sendReplBtn.disabled) {
+            sendReplBtn.click();
+          } else {
+            setStatus("Open REPL view and start/select a session before sending to REPL.", "warning");
+          }
+          return;
+        }
+
+        if (
+          key === "Enter"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
           && !event.shiftKey
           && activePane === "left"
           && !isEditorOnlyMode
@@ -2509,6 +3206,18 @@
             + (entryCount ? (" · " + entryCount + " entr" + (entryCount === 1 ? "y" : "ies")) : "")
             + (context.summary && context.summary.truncated ? " · truncated" : "")
             + (time ? (" · " + time) : "");
+          return;
+        }
+
+        if (rightView === "repl") {
+          const session = getActiveReplSession();
+          if (replTmuxAvailable === false) {
+            referenceBadgeEl.textContent = "REPL: tmux unavailable";
+            return;
+          }
+          referenceBadgeEl.textContent = session
+            ? ("REPL: " + session.label + (replCapturedAt ? (" · updated " + formatReferenceTime(replCapturedAt)) : ""))
+            : "REPL: no session selected";
           return;
         }
 
@@ -3702,8 +4411,13 @@
       }
 
       function handleTracePaneScroll() {
-        if (rightView !== "trace") return;
-        traceAutoScroll = shouldStickTraceToBottom();
+        if (rightView === "trace") {
+          traceAutoScroll = shouldStickTraceToBottom();
+          return;
+        }
+        if (rightView === "repl") {
+          replFollow = shouldStickTraceToBottom();
+        }
       }
 
       async function handleTracePaneClick(event) {
@@ -3744,10 +4458,129 @@
         }
       }
 
+      function handleReplPaneClick(event) {
+        if (rightView !== "repl") return;
+        const target = event.target;
+        const actionBtn = target instanceof Element ? target.closest("[data-repl-action]") : null;
+        if (!actionBtn) return;
+        event.preventDefault();
+        const action = actionBtn.getAttribute("data-repl-action") || "";
+        if (action === "start" || action === "new-session") {
+          const requestId = makeRequestId();
+          replBusy = true;
+          replError = "";
+          replMessage = (action === "new-session" ? "Starting new " : "Starting ") + replRuntime + " REPL…";
+          syncActionButtons();
+          renderReplViewIfActive({ force: true });
+          if (!sendMessage({ type: "repl_start_request", requestId, runtime: replRuntime, newSession: action === "new-session" })) {
+            replBusy = false;
+            syncActionButtons();
+          }
+          return;
+        }
+        if (action === "stop-session") {
+          const session = getActiveReplSession();
+          if (!session) {
+            setStatus("Start or select a REPL session first.", "warning");
+            return;
+          }
+          const requestId = makeRequestId();
+          replBusy = true;
+          replError = "";
+          replMessage = "Stopping " + session.sessionName + "…";
+          syncActionButtons();
+          renderReplViewIfActive({ force: true });
+          if (!sendMessage({ type: "repl_stop_request", requestId, sessionName: session.sessionName })) {
+            replBusy = false;
+            syncActionButtons();
+          }
+          return;
+        }
+        if (action === "interrupt") {
+          const session = getActiveReplSession();
+          if (!session) {
+            setStatus("Start or select a REPL session first.", "warning");
+            return;
+          }
+          const requestId = makeRequestId();
+          replBusy = true;
+          replError = "";
+          replMessage = "Interrupting REPL…";
+          syncActionButtons();
+          renderReplViewIfActive({ force: true });
+          if (!sendMessage({ type: "repl_interrupt_request", requestId, sessionName: session.sessionName })) {
+            replBusy = false;
+            syncActionButtons();
+          }
+          return;
+        }
+        if (action === "run-all-chunks") {
+          sendEditorTextToRepl({ action: "all-chunks" });
+          return;
+        }
+        if (action === "journal-note") {
+          sendEditorTextToRepl({ action: "note" });
+          return;
+        }
+        if (action === "journal-toggle") {
+          setReplJournalCollapsed(!replJournalCollapsed);
+          return;
+        }
+        if (action === "load-journal") {
+          loadReplJournalIntoEditor();
+          return;
+        }
+        if (action === "copy-journal") {
+          void copyReplJournalToClipboard();
+          return;
+        }
+        if (action === "export-journal") {
+          exportReplJournalMarkdown();
+          return;
+        }
+        if (action === "clear-journal") {
+          clearReplJournal();
+          return;
+        }
+        if (action === "refresh") {
+          replError = "";
+          replMessage = "";
+          requestReplCapture();
+          return;
+        }
+        if (action === "follow") {
+          replFollow = !replFollow;
+          renderReplViewIfActive({ force: true });
+        }
+      }
+
+      function handleReplPaneChange(event) {
+        if (rightView !== "repl") return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const runtimeSelect = target.closest("[data-repl-runtime]");
+        if (runtimeSelect && "value" in runtimeSelect) {
+          setReplRuntime(runtimeSelect.value);
+          renderReplViewIfActive({ force: true });
+          return;
+        }
+        const sessionSelect = target.closest("[data-repl-session]");
+        if (sessionSelect && "value" in sessionSelect) {
+          setActiveReplSession(sessionSelect.value);
+          replError = "";
+          replMessage = "";
+          replFollow = true;
+          requestReplCapture();
+          renderReplViewIfActive({ force: true });
+        }
+      }
+
       function attachResponsePaneInteractionHandlers() {
         if (!critiqueViewEl) return;
         critiqueViewEl.addEventListener("scroll", handleTracePaneScroll);
         critiqueViewEl.addEventListener("click", handleTracePaneClick);
+        critiqueViewEl.addEventListener("click", handleReplPaneClick);
+        critiqueViewEl.addEventListener("change", handleReplPaneChange);
       }
 
       function replaceResponsePaneWithClone() {
@@ -3976,35 +4809,42 @@
           return;
         }
 
+        const exportingReplJournal = rightView === "repl";
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
-        if (!rightPaneShowsPreview) {
-          setStatus("Switch right pane to Response (Preview) or Editor (Preview) to export PDF.", "warning");
+        if (!rightPaneShowsPreview && !exportingReplJournal) {
+          setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL journal to export PDF.", "warning");
+          return;
+        }
+        if (exportingReplJournal && !replJournalEntries.length) {
+          setStatus("No REPL journal entries to export yet.", "warning");
           return;
         }
 
-        const htmlArtifactSource = getRightPaneHtmlArtifactSource();
+        const htmlArtifactSource = exportingReplJournal ? "" : getRightPaneHtmlArtifactSource();
         if (htmlArtifactSource) {
           setStatus("PDF export does not support interactive HTML previews yet. Export as HTML or use the browser print dialog inside the preview.", "warning");
           return;
         }
 
-        const markdown = rightView === "editor-preview"
-          ? prepareEditorTextForPdfExport(sourceTextEl.value)
-          : prepareEditorTextForPreview(latestResponseMarkdown);
+        const markdown = exportingReplJournal
+          ? buildReplJournalMarkdown()
+          : (rightView === "editor-preview"
+            ? prepareEditorTextForPdfExport(sourceTextEl.value)
+            : prepareEditorTextForPreview(latestResponseMarkdown));
         if (!markdown || !markdown.trim()) {
           setStatus("Nothing to export yet.", "warning");
           return;
         }
 
         const effectivePath = getEffectiveSavePath();
-        const sourcePath = effectivePath || sourceState.path || "";
+        const sourcePath = exportingReplJournal ? "" : (effectivePath || sourceState.path || "");
         const resourceDir = (!sourcePath && resourceDirInput) ? resourceDirInput.value.trim() : "";
         const isEditorPreview = rightView === "editor-preview";
         const editorPdfLanguage = isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "";
         const isLatex = isEditorPreview
           ? editorPdfLanguage === "latex"
           : /\\documentclass\b|\\begin\{document\}/.test(markdown);
-        let filenameHint = isEditorPreview ? "studio-editor-preview.pdf" : "studio-response-preview.pdf";
+        let filenameHint = exportingReplJournal ? "studio-repl-journal.pdf" : (isEditorPreview ? "studio-editor-preview.pdf" : "studio-response-preview.pdf");
         if (sourcePath) {
           const baseName = sourcePath.split(/[\\/]/).pop() || "studio";
           const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
@@ -4141,31 +4981,36 @@
           return;
         }
 
+        const exportingReplJournal = rightView === "repl";
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
-        if (!rightPaneShowsPreview) {
-          setStatus("Switch right pane to Response (Preview) or Editor (Preview) to export HTML.", "warning");
+        if (!rightPaneShowsPreview && !exportingReplJournal) {
+          setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL journal to export HTML.", "warning");
+          return;
+        }
+        if (exportingReplJournal && !replJournalEntries.length) {
+          setStatus("No REPL journal entries to export yet.", "warning");
           return;
         }
 
-        const htmlArtifactSource = getRightPaneHtmlArtifactSource();
-        const markdown = htmlArtifactSource || (rightView === "editor-preview"
+        const htmlArtifactSource = exportingReplJournal ? "" : getRightPaneHtmlArtifactSource();
+        const markdown = exportingReplJournal ? buildReplJournalMarkdown() : (htmlArtifactSource || (rightView === "editor-preview"
           ? prepareEditorTextForHtmlExport(sourceTextEl.value)
-          : prepareEditorTextForPreview(latestResponseMarkdown));
+          : prepareEditorTextForPreview(latestResponseMarkdown)));
         if (!markdown || !markdown.trim()) {
           setStatus("Nothing to export yet.", "warning");
           return;
         }
 
         const effectivePath = getEffectiveSavePath();
-        const sourcePath = effectivePath || sourceState.path || "";
+        const sourcePath = exportingReplJournal ? "" : (effectivePath || sourceState.path || "");
         const resourceDir = (!sourcePath && resourceDirInput) ? resourceDirInput.value.trim() : "";
         const isEditorPreview = rightView === "editor-preview";
         const editorHtmlLanguage = htmlArtifactSource ? "html" : (isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "");
         const isLatex = htmlArtifactSource ? false : (isEditorPreview
           ? editorHtmlLanguage === "latex"
           : /\\documentclass\b|\\begin\{document\}/.test(markdown));
-        let filenameHint = isEditorPreview ? "studio-editor-preview.html" : "studio-response-preview.html";
-        let titleHint = isEditorPreview ? "Studio editor preview" : "Studio response preview";
+        let filenameHint = exportingReplJournal ? "studio-repl-journal.html" : (isEditorPreview ? "studio-editor-preview.html" : "studio-response-preview.html");
+        let titleHint = exportingReplJournal ? "Studio REPL journal" : (isEditorPreview ? "Studio editor preview" : "Studio response preview");
         if (sourcePath) {
           const baseName = sourcePath.split(/[\\/]/).pop() || "studio";
           const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
@@ -4722,6 +5567,165 @@
         return "<div class='trace-image-gallery'>" + cards + "</div>";
       }
 
+      function getReplRuntimeHighlightLanguage(runtime) {
+        const normalized = normalizeReplRuntime(runtime || getActiveReplRuntime());
+        if (normalized === "shell") return "bash";
+        if (normalized === "ipython") return "python";
+        if (normalized === "python" || normalized === "julia" || normalized === "r") return normalized;
+        return "text";
+      }
+
+      function renderHighlightedReplCode(text, runtime) {
+        const source = String(text || "");
+        const language = getReplRuntimeHighlightLanguage(runtime);
+        if (!source.trim() || language === "text") return escapeHtml(source);
+        return highlightCode(source, language, "preview");
+      }
+
+      function renderHighlightedReplTranscriptLine(line, runtime) {
+        const source = String(line || "");
+        const normalized = normalizeReplRuntime(runtime || getActiveReplRuntime());
+        const language = getReplRuntimeHighlightLanguage(normalized);
+        let match = null;
+        if (normalized === "python" || normalized === "ipython") {
+          match = source.match(/^(\s*(?:>>>|\.\.\.|In \[\d+\]:|\.\.\.?:)\s?)(.*)$/);
+        } else if (normalized === "r") {
+          match = source.match(/^(\s*(?:>|\+)\s?)(.*)$/);
+        } else if (normalized === "julia") {
+          match = source.match(/^(\s*julia>\s?)(.*)$/);
+        } else if (normalized === "shell") {
+          match = source.match(/^(.+(?:[$%#])\s+)(.+)$/);
+        } else if (normalized === "ghci") {
+          match = source.match(/^(\s*(?:ghci>|[A-Za-z0-9_.]+>)\s?)(.*)$/);
+        } else if (normalized === "clojure") {
+          match = source.match(/^(\s*(?:[A-Za-z0-9_.-]+=>)\s?)(.*)$/);
+        }
+        if (!match || !String(match[2] || "").trim() || language === "text") return escapeHtml(source);
+        return "<span class='repl-prompt'>" + escapeHtml(match[1] || "") + "</span>" + highlightCodeLine(match[2] || "", language, "preview");
+      }
+
+      function renderReplTranscriptHtml(transcript, runtime) {
+        const source = String(transcript || "");
+        const lines = source.replace(/\r\n/g, "\n").split("\n");
+        const body = lines.map((line) => renderHighlightedReplTranscriptLine(line, runtime)).join("\n");
+        return "<pre class='repl-transcript repl-transcript-highlight'>" + body + "</pre>";
+      }
+
+      function buildReplJournalHtml() {
+        const hasEntries = replJournalEntries.length > 0;
+        const entryCount = replJournalEntries.length;
+        const collapsedClass = replJournalCollapsed ? " is-collapsed" : "";
+        const actions = "<div class='repl-journal-actions'>"
+          + "<button type='button' data-repl-action='journal-toggle' aria-expanded='" + (replJournalCollapsed ? "false" : "true") + "'>" + (replJournalCollapsed ? "Show journal" : "Hide journal") + "</button>"
+          + "<button type='button' data-repl-action='load-journal'" + (hasEntries ? "" : " disabled") + ">Load in editor</button>"
+          + "<button type='button' data-repl-action='copy-journal'" + (hasEntries ? "" : " disabled") + ">Copy journal</button>"
+          + "<button type='button' data-repl-action='export-journal'" + (hasEntries ? "" : " disabled") + ">Export .md</button>"
+          + "<button type='button' data-repl-action='clear-journal'" + (hasEntries ? "" : " disabled") + ">Clear</button>"
+          + "</div>";
+        const summaryText = hasEntries
+          ? (entryCount + " journal entr" + (entryCount === 1 ? "y" : "ies") + ". Export is Markdown.")
+          : "Runs and notes you send from Studio will appear here.";
+        if (replJournalCollapsed || !hasEntries) {
+          return "<section class='repl-journal repl-journal-compact" + collapsedClass + "'>"
+            + "<div class='repl-journal-compact-row'>"
+            + "<div class='repl-journal-compact-title'><span class='repl-journal-chip'>Journal</span><span>" + escapeHtml(summaryText) + "</span></div>"
+            + actions
+            + "</div>"
+            + "</section>";
+        }
+        const omitted = Math.max(0, replJournalEntries.length - 12);
+        const cards = replJournalEntries.slice(-12).map((entry) => {
+          const time = formatReferenceTime(entry.createdAt) || "journal";
+          const code = String(entry.code || "").trim()
+            ? "<div class='repl-journal-section'><div class='repl-journal-label'>Code</div><pre class='repl-journal-code response-markdown-highlight'>" + renderHighlightedReplCode(entry.code, entry.runtime) + "</pre></div>"
+            : "";
+          const prose = String(entry.prose || "").trim()
+            ? "<div class='repl-journal-section'><div class='repl-journal-label'>Note</div><div class='repl-journal-prose'>" + escapeHtml(entry.prose) + "</div></div>"
+            : "";
+          const output = String(entry.output || "").trim()
+            ? "<div class='repl-journal-section'><div class='repl-journal-label'>Output</div><pre class='repl-journal-output'>" + escapeHtml(trimReplJournalOutput(entry.output)) + "</pre></div>"
+            : "";
+          const skipped = entry.skippedChunks ? "<span class='trace-card-meta'>skipped " + escapeHtml(String(entry.skippedChunks)) + "</span>" : "";
+          return "<article class='repl-journal-card'>"
+            + "<div class='repl-journal-card-header'>"
+            + "<span class='trace-kind-badge'>" + escapeHtml(entry.mode === "literate" ? "Literate" : (entry.status === "note" ? "Note" : "Scratch")) + "</span>"
+            + "<span class='trace-card-title'>" + escapeHtml(entry.label || "REPL entry") + "</span>"
+            + "<span class='trace-card-meta'>" + escapeHtml(time) + "</span>"
+            + (entry.runtime ? "<span class='trace-card-meta'>" + escapeHtml(entry.runtime) + "</span>" : "")
+            + skipped
+            + "</div>"
+            + prose
+            + code
+            + (output || "<div class='trace-empty-inline'>" + escapeHtml(entry.status === "note" ? "Journal note only." : "Waiting for captured output…") + "</div>")
+            + "</article>";
+        }).join("");
+        return "<section class='repl-journal'>"
+          + "<div class='repl-journal-header'><div><h3>Journal</h3><p>Side log of notes, code sends, and captured output. Separate from the live REPL transcript.</p></div>" + actions + "</div>"
+          + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
+          + "<div class='repl-journal-list'>" + cards + "</div>"
+          + "</section>";
+      }
+
+      function buildReplPanelHtml() {
+        const runtimeOptions = [
+          ["shell", "Shell"],
+          ["python", "Python"],
+          ["ipython", "IPython"],
+          ["julia", "Julia"],
+          ["r", "R"],
+          ["ghci", "GHCi"],
+          ["clojure", "Clojure"],
+        ].map(([value, label]) => "<option value='" + escapeHtml(value) + "'" + (replRuntime === value ? " selected" : "") + ">" + escapeHtml(label) + "</option>").join("");
+        const sessionOptions = replSessions.length
+          ? replSessions.map((session) => "<option value='" + escapeHtml(session.sessionName) + "'" + (session.sessionName === replActiveSessionName ? " selected" : "") + ">" + escapeHtml(session.label || session.sessionName) + "</option>").join("")
+          : "<option value=''>No REPL sessions</option>";
+        const activeSession = getActiveReplSession();
+        const statusLabel = replTmuxAvailable === false
+          ? "tmux missing"
+          : (activeSession ? "Mirroring" : "Idle");
+        const captured = replCapturedAt ? formatReferenceTime(replCapturedAt) : "";
+        const transcript = trimReplTranscript(replTranscript);
+        const emptyMessage = replTmuxAvailable === false
+          ? "tmux is not available. Install tmux to use Studio REPL sessions."
+          : (activeSession ? "No REPL output captured yet." : "Start a REPL session, or attach to a detected pi-repl session, to mirror it here.");
+        const body = transcript
+          ? renderReplTranscriptHtml(transcript, activeSession ? activeSession.runtime : replRuntime)
+          : "<div class='repl-empty'>" + escapeHtml(emptyMessage) + "</div>";
+        const canSendToActiveSession = Boolean(activeSession) && !replBusy && replTmuxAvailable !== false;
+        const canStopActiveSession = Boolean(activeSession && activeSession.source === "studio" && !replBusy && replTmuxAvailable !== false);
+        return "<div class='repl-panel'>"
+          + "<div class='repl-toolbar'>"
+          + "<div class='repl-summary'>"
+          + "<span class='trace-summary-badge'>REPL</span>"
+          + "<span class='trace-summary-status trace-status-" + (activeSession ? "running" : "idle") + "'>" + escapeHtml(statusLabel) + "</span>"
+          + (activeSession ? "<span class='trace-summary-meta'>" + escapeHtml(activeSession.sessionName) + "</span>" : "")
+          + (captured ? "<span class='trace-summary-meta'>Updated " + escapeHtml(captured) + "</span>" : "")
+          + "</div>"
+          + "<div class='repl-controls'>"
+          + "<label class='repl-control-label'>Runtime <select data-repl-runtime aria-label='REPL runtime'>" + runtimeOptions + "</select></label>"
+          + "<button type='button' data-repl-action='start'" + (replBusy || replTmuxAvailable === false ? " disabled" : "") + " title='Start or attach to the default session for this runtime.'>Start</button>"
+          + "<label class='repl-control-label'>Session <select data-repl-session aria-label='REPL session'" + (replSessions.length ? "" : " disabled") + ">" + sessionOptions + "</select></label>"
+          + "<details class='repl-more-controls'>"
+          + "<summary title='More REPL actions'>More</summary>"
+          + "<div class='repl-more-menu'>"
+          + "<button type='button' data-repl-action='new-session'" + (replBusy || replTmuxAvailable === false ? " disabled" : "") + " title='Start a new additional session for this runtime.'>New session</button>"
+          + "<button type='button' data-repl-action='stop-session'" + (canStopActiveSession ? "" : " disabled") + " title='Stop the selected Studio-owned REPL session.'>Stop session</button>"
+          + "<button type='button' data-repl-action='interrupt'" + (activeSession && !replBusy ? "" : " disabled") + " title='Send Ctrl+C to the active REPL session.'>Interrupt</button>"
+          + "<button type='button' data-repl-action='run-all-chunks'" + (canSendToActiveSession ? "" : " disabled") + " title='Literate mode: send all fenced code chunks matching the active REPL runtime.'>Run all chunks</button>"
+          + "<button type='button' data-repl-action='journal-note' title='Add the selected prose/current paragraph to the literate journal without sending it to the runtime.'>Journal note</button>"
+          + "<button type='button' data-repl-action='refresh'>Refresh</button>"
+          + "<button type='button' data-repl-action='follow'>Follow: " + (replFollow ? "On" : "Off") + "</button>"
+          + "</div>"
+          + "</details>"
+          + "</div>"
+          + "</div>"
+          + (replMessage ? "<div class='repl-notice repl-notice-info'>" + escapeHtml(replMessage) + "</div>" : "")
+          + (replError ? "<div class='repl-notice repl-notice-error'>" + escapeHtml(replError) + "</div>" : "")
+          + body
+          + buildReplJournalHtml()
+          + "</div>";
+      }
+
       function buildTracePanelHtml() {
         const state = traceState || createEmptyTraceState();
         const filter = normalizeTraceFilter(traceFilter);
@@ -4856,9 +5860,29 @@
         scheduleResponsePaneRepaintNudge();
       }
 
+      function renderReplView() {
+        if (!critiqueViewEl) return;
+        const shouldStick = replFollow || shouldStickTraceToBottom();
+        const previousScrollTop = critiqueViewEl.scrollTop;
+        finishPreviewRender(critiqueViewEl);
+        critiqueViewEl.innerHTML = buildReplPanelHtml();
+        critiqueViewEl.classList.remove("response-scroll-resetting");
+        if (shouldStick) {
+          critiqueViewEl.scrollTop = critiqueViewEl.scrollHeight;
+        } else {
+          critiqueViewEl.scrollTop = previousScrollTop;
+        }
+        scheduleResponsePaneRepaintNudge();
+      }
+
       function renderActiveResult() {
         if (rightView === "trace") {
           renderTraceView();
+          return;
+        }
+
+        if (rightView === "repl") {
+          renderReplView();
           return;
         }
 
@@ -4936,10 +5960,10 @@
           : normalizeForCompare(sourceTextEl.value);
         const responseLoaded = hasResponse && normalizedEditor === latestResponseNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
-        const showingTrace = rightView === "trace";
+        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl";
 
         if (responseWrapEl) {
-          responseWrapEl.hidden = showingTrace;
+          responseWrapEl.hidden = showingAuxiliaryRightPane;
         }
 
         const critiqueNotes = isCritiqueResponse ? latestCritiqueNotes : "";
@@ -4962,21 +5986,30 @@
         copyResponseBtn.textContent = "Copy response text";
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
-        const exportText = rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown;
-        const canExportPreview = rightPaneShowsPreview && Boolean(String(exportText || "").trim());
-        const htmlArtifactExportSource = canExportPreview ? getRightPaneHtmlArtifactSource() : "";
+        const exportingReplJournal = rightView === "repl";
+        const exportText = exportingReplJournal
+          ? (replJournalEntries.length ? buildReplJournalMarkdown() : "")
+          : (rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown);
+        const canExportPreview = (rightPaneShowsPreview || exportingReplJournal) && Boolean(String(exportText || "").trim());
+        const htmlArtifactExportSource = canExportPreview && !exportingReplJournal ? getRightPaneHtmlArtifactSource() : "";
         const isHtmlArtifactPreview = Boolean(htmlArtifactExportSource);
         if (exportPdfBtn) {
           exportPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
-          exportPdfBtn.textContent = previewExportInProgress ? "Exporting…" : "Export right preview";
+          exportPdfBtn.textContent = previewExportInProgress
+            ? "Exporting…"
+            : (exportingReplJournal ? "Export REPL journal" : "Export right preview");
           if (rightView === "trace") {
             exportPdfBtn.title = "Working view does not support preview export.";
+          } else if (exportingReplJournal && !replJournalEntries.length) {
+            exportPdfBtn.title = "No REPL journal entries to export yet.";
           } else if (rightView === "markdown") {
-            exportPdfBtn.title = "Switch right pane to Response (Preview) or Editor (Preview) to export.";
+            exportPdfBtn.title = "Switch right pane to Response (Preview), Editor (Preview), or REPL journal to export.";
           } else if (!canExportPreview) {
             exportPdfBtn.title = "Nothing to export yet.";
           } else if (isHtmlArtifactPreview) {
             exportPdfBtn.title = "This is an interactive HTML preview. Export as HTML; PDF export is not available yet.";
+          } else if (exportingReplJournal) {
+            exportPdfBtn.title = "Choose PDF or HTML and export the REPL journal.";
           } else {
             exportPdfBtn.title = "Choose PDF or HTML and export the current right-pane preview.";
           }
@@ -4985,18 +6018,20 @@
           exportPreviewPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview || isHtmlArtifactPreview;
           exportPreviewPdfBtn.title = isHtmlArtifactPreview
             ? "Interactive HTML preview PDF export is not available yet."
-            : "Export the current right-pane preview as PDF.";
+            : (exportingReplJournal ? "Export the REPL journal as PDF." : "Export the current right-pane preview as PDF.");
         }
         if (exportPreviewHtmlBtn) {
           exportPreviewHtmlBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
           exportPreviewHtmlBtn.title = isHtmlArtifactPreview
             ? "Export the authored HTML preview."
-            : "Export the current right-pane preview as standalone HTML.";
+            : (exportingReplJournal ? "Export the REPL journal as standalone HTML." : "Export the current right-pane preview as standalone HTML.");
         }
         if (exportPreviewControlsEl) {
           exportPreviewControlsEl.title = canExportPreview
-            ? (isHtmlArtifactPreview ? "Export this HTML preview." : "Choose a format and export the current right-pane preview.")
-            : "Switch right pane to a non-empty preview before exporting.";
+            ? (exportingReplJournal
+              ? "Choose a format and export the REPL journal."
+              : (isHtmlArtifactPreview ? "Export this HTML preview." : "Choose a format and export the current right-pane preview."))
+            : (exportingReplJournal ? "No REPL journal entries to export yet." : "Switch right pane to a non-empty preview before exporting.");
         }
         if (!canExportPreview || previewExportInProgress) {
           closeExportPreviewMenu();
@@ -5186,6 +6221,108 @@
         updateOutlineUi();
       }
 
+      function applySourceTextEdit(nextText, selectionStart, selectionEnd) {
+        const value = String(nextText || "");
+        sourceTextEl.value = value;
+        const maxIndex = value.length;
+        const safeStart = Math.max(0, Math.min(Math.floor(Number(selectionStart) || 0), maxIndex));
+        const safeEnd = Math.max(safeStart, Math.min(Math.floor(Number(selectionEnd) || safeStart), maxIndex));
+        sourceTextEl.setSelectionRange(safeStart, safeEnd);
+        sourceTextEl.dispatchEvent(new Event("input", { bubbles: true }));
+        syncEditorHighlightScroll();
+        if (editorView === "markdown") {
+          scheduleEditorLineNumberRender();
+        }
+      }
+
+      function getSourceTextLineEditBounds(text, selectionStart, selectionEnd) {
+        const source = String(text || "");
+        const safeStart = Math.max(0, Math.min(Math.floor(Number(selectionStart) || 0), source.length));
+        const safeEnd = Math.max(safeStart, Math.min(Math.floor(Number(selectionEnd) || safeStart), source.length));
+        const rangeEnd = safeEnd > safeStart && source.charAt(safeEnd - 1) === "\n" ? safeEnd - 1 : safeEnd;
+        const lineStart = source.lastIndexOf("\n", Math.max(0, safeStart - 1)) + 1;
+        const nextNewline = source.indexOf("\n", Math.max(lineStart, rangeEnd));
+        const lineEnd = nextNewline >= 0 ? nextNewline : source.length;
+        return { lineStart, lineEnd, selectionStart: safeStart, selectionEnd: safeEnd };
+      }
+
+      function countSourceTextLines(text) {
+        if (!text) return 1;
+        return String(text).split("\n").length;
+      }
+
+      function getSourceLineUnindentLength(line) {
+        const source = String(line || "");
+        if (source.startsWith(EDITOR_TAB_TEXT)) return EDITOR_TAB_TEXT.length;
+        if (source.startsWith("\t")) return 1;
+        const spaces = source.match(/^ +/);
+        return spaces ? Math.min(EDITOR_TAB_TEXT.length, spaces[0].length) : 0;
+      }
+
+      function getRemovedIndentBeforePosition(lineStart, removeLength, position) {
+        if (removeLength <= 0 || position <= lineStart) return 0;
+        if (position <= lineStart + removeLength) return position - lineStart;
+        return removeLength;
+      }
+
+      function indentSourceTextSelection() {
+        const source = String(sourceTextEl.value || "");
+        const start = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : source.length;
+        const end = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : start;
+        const selected = source.slice(Math.min(start, end), Math.max(start, end));
+        if (start === end || !selected.includes("\n")) {
+          const before = source.slice(0, Math.min(start, end));
+          const after = source.slice(Math.max(start, end));
+          const nextCaret = before.length + EDITOR_TAB_TEXT.length;
+          applySourceTextEdit(before + EDITOR_TAB_TEXT + after, nextCaret, nextCaret);
+          return;
+        }
+
+        const bounds = getSourceTextLineEditBounds(source, start, end);
+        const segment = source.slice(bounds.lineStart, bounds.lineEnd);
+        const lineCount = countSourceTextLines(segment);
+        const replacement = segment.replace(/^/gm, EDITOR_TAB_TEXT);
+        const next = source.slice(0, bounds.lineStart) + replacement + source.slice(bounds.lineEnd);
+        const nextStart = bounds.selectionStart + (bounds.lineStart < bounds.selectionStart ? EDITOR_TAB_TEXT.length : 0);
+        const nextEnd = bounds.selectionEnd + (lineCount * EDITOR_TAB_TEXT.length);
+        applySourceTextEdit(next, nextStart, nextEnd);
+      }
+
+      function unindentSourceTextSelection() {
+        const source = String(sourceTextEl.value || "");
+        const start = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : source.length;
+        const end = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : start;
+        const bounds = getSourceTextLineEditBounds(source, start, end);
+        const segment = source.slice(bounds.lineStart, bounds.lineEnd);
+        const lines = segment.split("\n");
+        let absoluteLineStart = bounds.lineStart;
+        let removedBeforeStart = 0;
+        let removedBeforeEnd = 0;
+        const nextLines = lines.map((line, index) => {
+          const removeLength = getSourceLineUnindentLength(line);
+          removedBeforeStart += getRemovedIndentBeforePosition(absoluteLineStart, removeLength, bounds.selectionStart);
+          removedBeforeEnd += getRemovedIndentBeforePosition(absoluteLineStart, removeLength, bounds.selectionEnd);
+          absoluteLineStart += line.length + (index < lines.length - 1 ? 1 : 0);
+          return removeLength > 0 ? line.slice(removeLength) : line;
+        });
+        const replacement = nextLines.join("\n");
+        if (replacement === segment) return;
+        const next = source.slice(0, bounds.lineStart) + replacement + source.slice(bounds.lineEnd);
+        const nextStart = Math.max(bounds.lineStart, bounds.selectionStart - removedBeforeStart);
+        const nextEnd = Math.max(nextStart, bounds.selectionEnd - removedBeforeEnd);
+        applySourceTextEdit(next, nextStart, nextEnd);
+      }
+
+      function handleSourceTextTabKey(event) {
+        if (!event || event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) return;
+        event.preventDefault();
+        if (event.shiftKey) {
+          unindentSourceTextSelection();
+        } else {
+          indentSourceTextSelection();
+        }
+      }
+
       function setEditorView(nextView) {
         editorView = nextView === "preview" ? "preview" : "markdown";
         editorViewSelect.value = editorView;
@@ -5227,10 +6364,18 @@
           ? "preview"
           : (nextView === "editor-preview"
             ? "editor-preview"
-            : ((nextView === "trace" || nextView === "thinking") ? "trace" : "markdown"));
+            : (nextView === "repl"
+              ? "repl"
+              : ((nextView === "trace" || nextView === "thinking") ? "trace" : "markdown")));
         rightViewSelect.value = rightView;
         if (rightView === "trace" && previousView !== "trace") {
           traceAutoScroll = true;
+        }
+        if (rightView === "repl" && previousView !== "repl") {
+          replFollow = true;
+          startReplPolling();
+        } else if (rightView !== "repl" && previousView === "repl") {
+          stopReplPolling();
         }
 
         if (rightView !== "editor-preview" && responseEditorPreviewTimer) {
@@ -10679,6 +11824,14 @@
             queueSteerBtn.classList.remove("request-stop-active");
             queueSteerBtn.title = "Queue steering is unavailable in editor-only mode.";
           }
+          if (sendReplBtn) {
+            sendReplBtn.hidden = true;
+            sendReplBtn.disabled = true;
+          }
+          if (replSendModeSelect) {
+            replSendModeSelect.hidden = true;
+            replSendModeSelect.disabled = true;
+          }
           if (critiqueBtn) {
             critiqueBtn.textContent = "Critique text";
             critiqueBtn.classList.remove("request-stop-active");
@@ -10693,11 +11846,14 @@
           sendRunBtn.textContent = directIsStop ? "Stop" : "Run editor text";
           sendRunBtn.classList.toggle("request-stop-active", directIsStop);
           sendRunBtn.disabled = wsState === "Disconnected" || (!directIsStop && (uiBusy || critiqueIsStop));
+          const replHint = rightView === "repl" && getActiveReplSession()
+            ? " Includes active REPL identity for prompts that refer to it."
+            : "";
           sendRunBtn.title = directIsStop
             ? "Stop the active run. Shortcut: Esc."
             : (annotationsEnabled
-              ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc."
-              : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc.");
+              ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + replHint
+              : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + replHint);
         }
 
         if (queueSteerBtn) {
@@ -10709,6 +11865,25 @@
               ? "Queue the current editor text as a steering message for the active run. Shortcut: Cmd/Ctrl+Enter."
               : "Queue the current editor text as a steering message for the active run after stripping [an: ...] markers. Shortcut: Cmd/Ctrl+Enter.")
             : "Queue steering is available while Run editor text is active.";
+        }
+
+        if (sendReplBtn) {
+          const hasSession = Boolean(getActiveReplSession());
+          sendReplBtn.hidden = rightView !== "repl";
+          sendReplBtn.disabled = wsState === "Disconnected" || uiBusy || replBusy || !hasSession;
+          sendReplBtn.title = hasSession
+            ? (replSendMode === "literate"
+              ? "Literate send: selected code/prose, or the current fenced code chunk. Shortcut: Cmd/Ctrl+Shift+Enter."
+              : "Scratch send: selection, or full editor if no selection. Shortcut: Cmd/Ctrl+Shift+Enter.")
+            : "Start or select a REPL session in the right pane first.";
+        }
+        if (replSendModeSelect) {
+          replSendModeSelect.hidden = rightView !== "repl";
+          replSendModeSelect.disabled = wsState === "Disconnected" || uiBusy || replBusy;
+          replSendModeSelect.value = replSendMode;
+          replSendModeSelect.title = replSendMode === "literate"
+            ? "Literate send: Send to REPL uses the selection/current fenced code chunk."
+            : "Scratch send: Send to REPL uses the selection, or full editor if no selection.";
         }
 
         if (critiqueBtn) {
@@ -11022,6 +12197,63 @@
               replaceTraceState(normalizedSnapshot);
             }
           }
+          return;
+        }
+
+        if (message.type === "repl_state") {
+          replTmuxAvailable = typeof message.tmuxAvailable === "boolean" ? message.tmuxAvailable : replTmuxAvailable;
+          setReplSessions(message.sessions);
+          if (typeof message.activeSessionName === "string" && message.activeSessionName.trim()) {
+            setActiveReplSession(message.activeSessionName);
+          }
+          if (typeof message.transcript === "string") replTranscript = trimReplTranscript(message.transcript);
+          if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
+          replError = typeof message.replError === "string" ? message.replError : (typeof message.captureError === "string" ? message.captureError : "");
+          replMessage = typeof message.replMessage === "string" ? message.replMessage : "";
+          replBusy = false;
+          syncActionButtons();
+          renderReplViewIfActive();
+          updateReferenceBadge();
+          return;
+        }
+
+        if (message.type === "repl_capture") {
+          if (message.session) {
+            const session = normalizeReplSession(message.session);
+            if (session && !replSessions.some((candidate) => candidate.sessionName === session.sessionName)) {
+              replSessions = [...replSessions, session];
+            }
+          }
+          if (typeof message.activeSessionName === "string" && message.activeSessionName.trim()) {
+            setActiveReplSession(message.activeSessionName);
+          }
+          if (typeof message.transcript === "string") {
+            replTranscript = trimReplTranscript(message.transcript);
+            updateActiveReplJournalEntryFromTranscript(
+              typeof message.activeSessionName === "string" && message.activeSessionName.trim() ? message.activeSessionName : replActiveSessionName,
+              replTranscript
+            );
+          }
+          if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
+          replError = typeof message.replError === "string" ? message.replError : "";
+          if (typeof message.replMessage === "string") replMessage = message.replMessage;
+          replBusy = false;
+          syncActionButtons();
+          renderReplViewIfActive();
+          updateReferenceBadge();
+          return;
+        }
+
+        if (message.type === "repl_send_ack") {
+          replBusy = false;
+          replMessage = typeof message.message === "string" ? message.message : "Sent editor text to REPL.";
+          replError = "";
+          if (typeof message.requestId === "string") {
+            replJournalEntries = replJournalEntries.map((entry) => entry.requestId === message.requestId ? { ...entry, status: "sent", updatedAt: Date.now() } : entry);
+          }
+          setStatus(replMessage, "success");
+          syncActionButtons();
+          renderReplViewIfActive({ force: true });
           return;
         }
 
@@ -11424,6 +12656,14 @@
           }
           if (typeof message.requestId === "string") {
             clearArmedTitleAttention(message.requestId);
+          }
+          if (replBusy) {
+            replBusy = false;
+            replError = typeof message.message === "string" ? message.message : "REPL request failed.";
+            if (typeof message.requestId === "string") {
+              replJournalEntries = replJournalEntries.map((entry) => entry.requestId === message.requestId ? { ...entry, status: "error", output: replError, updatedAt: Date.now() } : entry);
+            }
+            renderReplViewIfActive({ force: true });
           }
           stickyStudioKind = null;
           setBusy(false);
@@ -11977,6 +13217,8 @@
         requestLatestResponse();
       });
 
+      sourceTextEl.addEventListener("keydown", handleSourceTextTabKey);
+
       sourceTextEl.addEventListener("input", () => {
         if (activePreviewCommentSelection) {
           clearPreviewCommentSelection();
@@ -12348,7 +13590,7 @@
           return;
         }
 
-        const prepared = prepareEditorTextForSend(sourceTextEl.value);
+        const prepared = prepareEditorTextForRunRequest(sourceTextEl.value);
         if (!prepared.trim()) {
           setStatus("Editor is empty. Nothing to run.", "warning");
           return;
@@ -12372,7 +13614,7 @@
 
       if (queueSteerBtn) {
         queueSteerBtn.addEventListener("click", () => {
-          const prepared = prepareEditorTextForSend(sourceTextEl.value);
+          const prepared = prepareEditorTextForRunRequest(sourceTextEl.value);
           if (!prepared.trim()) {
             setStatus("Editor is empty. Nothing to queue.", "warning");
             return;
@@ -12391,6 +13633,20 @@
           });
           if (!sent) return;
           setStatus("Queueing steering…", "warning");
+        });
+      }
+
+      if (sendReplBtn) {
+        sendReplBtn.addEventListener("click", () => {
+          sendEditorTextToRepl();
+        });
+      }
+
+      if (replSendModeSelect) {
+        replSendModeSelect.addEventListener("change", () => {
+          setReplSendMode(replSendModeSelect.value);
+          syncActionButtons();
+          renderReplViewIfActive({ force: true });
         });
       }
 
@@ -12812,6 +14068,7 @@
       const storedAnnotationsEnabled = readStoredAnnotationsEnabled();
       const initialAnnotationsEnabled = storedAnnotationsEnabled ?? Boolean(annotationModeSelect ? annotationModeSelect.value !== "off" : true);
       setAnnotationsEnabled(initialAnnotationsEnabled, { silent: true });
+      setReplSendMode(replSendMode);
 
       setEditorView(editorView);
       setRightView(rightView);

@@ -1,6 +1,6 @@
 # pi-studio
 
-Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace for working with prompts, responses, live working details, Markdown and LaTeX documents, interactive HTML previews, code files, and other common text-based files side by side. Annotate responses and files, add local comments, write, edit, and run prompts, browse prompt and response history, request critiques, and use live preview for code, Markdown, LaTeX, and interactive HTML.
+Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace for working with prompts, responses, live working details, Markdown and LaTeX documents, interactive HTML previews, code files, REPL sessions, and other common text-based files side by side. Annotate responses and files, add local comments, write, edit, run prompts, send code to a REPL, browse prompt and response history, request critiques, and use live preview for code, Markdown, LaTeX, and interactive HTML.
 
 ## Quick demo
 
@@ -22,6 +22,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces; the editor toolbar can open a detached copy of the current editor text as a companion view
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
 - Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available
+- Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with Scratch/Literate send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/new/stop/interrupt controls, lightweight transcript highlighting, and a Markdown journal that can be loaded into the editor or exported as Markdown/PDF/HTML
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
 - Includes a docked **Outline** rail for navigating document structure in the current editor text, with clickable entries that jump in the raw editor and reveal matching preview locations when available
 - Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with transient **Comment** / **Jump** actions from raw-editor selections plus editor-preview selections for Markdown, LaTeX, and code/text/diff previews, alongside optional inline `[an: ...]` toggles when you want comments reflected in the document text
@@ -105,6 +106,7 @@ caption: Optional caption
 - Studio is designed as a complement to terminal pi, not a replacement.
 - Installing pi-studio makes the optional `pi-studio-dark` and `pi-studio-light` themes available in pi's theme selector; it does not change your active theme.
 - Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack. Use `PI_STUDIO_FONT_UI` or `PI_STUDIO_FONT_PROSE` to override the Studio UI or rendered-preview font stacks.
+- The optional REPL view requires `tmux`. Studio can start and stop Studio-owned `pi-studio-repl-*` sessions and can mirror detected `pi-repl-*` sessions, but it will not stop external `pi-repl-*` sessions.
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
   - `brew install pandoc`
   - install TeX Live/MacTeX for PDF export

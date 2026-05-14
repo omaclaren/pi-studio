@@ -35,6 +35,7 @@ type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 type StudioPromptMode = "response" | "run" | "effective";
 type StudioPromptTriggerKind = "run" | "steer";
+type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure";
 
 const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
@@ -109,6 +110,14 @@ interface StudioContextUsageSnapshot {
 	tokens: number | null;
 	contextWindow: number | null;
 	percent: number | null;
+}
+
+interface StudioReplSessionInfo {
+	sessionName: string;
+	target: string;
+	runtime: StudioReplRuntime | "unknown";
+	label: string;
+	source: "studio" | "pi-repl" | "tmux";
 }
 
 interface PreparedStudioPdfExport {
@@ -267,6 +276,41 @@ interface SendRunRequestMessage {
 	text: string;
 }
 
+interface ReplListRequestMessage {
+	type: "repl_list_request";
+}
+
+interface ReplCaptureRequestMessage {
+	type: "repl_capture_request";
+	sessionName?: string;
+}
+
+interface ReplStartRequestMessage {
+	type: "repl_start_request";
+	requestId: string;
+	runtime: StudioReplRuntime;
+	newSession?: boolean;
+}
+
+interface ReplStopRequestMessage {
+	type: "repl_stop_request";
+	requestId: string;
+	sessionName: string;
+}
+
+interface ReplSendRequestMessage {
+	type: "repl_send_request";
+	requestId: string;
+	sessionName: string;
+	text: string;
+}
+
+interface ReplInterruptRequestMessage {
+	type: "repl_interrupt_request";
+	requestId: string;
+	sessionName: string;
+}
+
 interface CompactRequestMessage {
 	type: "compact_request";
 	requestId: string;
@@ -331,6 +375,12 @@ type IncomingStudioMessage =
 	| CritiqueRequestMessage
 	| AnnotationRequestMessage
 	| SendRunRequestMessage
+	| ReplListRequestMessage
+	| ReplCaptureRequestMessage
+	| ReplStartRequestMessage
+	| ReplStopRequestMessage
+	| ReplSendRequestMessage
+	| ReplInterruptRequestMessage
 	| CompactRequestMessage
 	| SaveAsRequestMessage
 	| SaveOverRequestMessage
@@ -359,6 +409,17 @@ const STUDIO_TRACE_IMAGE_MAX_BASE64_CHARS = 2_500_000;
 const STUDIO_TRACE_SNAPSHOT_MAX_IMAGES = 12;
 const STUDIO_TRACE_SNAPSHOT_MAX_IMAGE_BASE64_CHARS = 6_000_000;
 const STUDIO_TRACE_IMAGE_SAFE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const STUDIO_REPL_CAPTURE_LINES = 800;
+const STUDIO_REPL_SEND_MAX_CHARS = 200_000;
+const STUDIO_REPL_RUNTIME_LABELS: Record<StudioReplRuntime, string> = {
+	shell: "Shell",
+	python: "Python",
+	ipython: "IPython",
+	julia: "Julia",
+	r: "R",
+	ghci: "GHCi",
+	clojure: "Clojure",
+};
 const MAX_STUDIO_TRACE_SNAPSHOTS = RESPONSE_HISTORY_LIMIT;
 const TRANSIENT_STUDIO_DOCUMENT_TTL_MS = 30 * 60 * 1000;
 const MAX_TRANSIENT_STUDIO_DOCUMENTS = 16;
@@ -6411,6 +6472,54 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
+	if (msg.type === "repl_list_request") {
+		return { type: "repl_list_request" };
+	}
+
+	if (msg.type === "repl_capture_request") {
+		return {
+			type: "repl_capture_request",
+			sessionName: typeof msg.sessionName === "string" ? msg.sessionName : undefined,
+		};
+	}
+
+	if (msg.type === "repl_start_request" && typeof msg.requestId === "string") {
+		const runtime = normalizeStudioReplRuntime(msg.runtime);
+		if (runtime) {
+			return {
+				type: "repl_start_request",
+				requestId: msg.requestId,
+				runtime,
+				newSession: Boolean(msg.newSession),
+			};
+		}
+	}
+
+	if (msg.type === "repl_stop_request" && typeof msg.requestId === "string" && typeof msg.sessionName === "string") {
+		return {
+			type: "repl_stop_request",
+			requestId: msg.requestId,
+			sessionName: msg.sessionName,
+		};
+	}
+
+	if (msg.type === "repl_send_request" && typeof msg.requestId === "string" && typeof msg.sessionName === "string" && typeof msg.text === "string") {
+		return {
+			type: "repl_send_request",
+			requestId: msg.requestId,
+			sessionName: msg.sessionName,
+			text: msg.text,
+		};
+	}
+
+	if (msg.type === "repl_interrupt_request" && typeof msg.requestId === "string" && typeof msg.sessionName === "string") {
+		return {
+			type: "repl_interrupt_request",
+			requestId: msg.requestId,
+			sessionName: msg.sessionName,
+		};
+	}
+
 	if (
 		msg.type === "compact_request" &&
 		typeof msg.requestId === "string" &&
@@ -6932,6 +7041,218 @@ function summarizeStudioTraceToolArgs(toolName: string, args: unknown): string |
 	}
 }
 
+function isStudioReplRuntime(value: unknown): value is StudioReplRuntime {
+	return value === "shell"
+		|| value === "python"
+		|| value === "ipython"
+		|| value === "julia"
+		|| value === "r"
+		|| value === "ghci"
+		|| value === "clojure";
+}
+
+function normalizeStudioReplRuntime(value: unknown): StudioReplRuntime | null {
+	const normalized = String(value || "").trim().toLowerCase();
+	if (normalized === "r") return "r";
+	return isStudioReplRuntime(normalized) ? normalized : null;
+}
+
+function getStudioReplRuntimeCommand(runtime: StudioReplRuntime): string {
+	if (runtime === "shell") return String(process.env.SHELL || "bash").trim() || "bash";
+	if (runtime === "python") return "python3";
+	if (runtime === "ipython") return "ipython";
+	if (runtime === "julia") return "julia";
+	if (runtime === "r") return "R";
+	if (runtime === "ghci") return "ghci";
+	return "clojure";
+}
+
+function getStudioReplSessionName(runtime: StudioReplRuntime): string {
+	return `pi-studio-repl-${runtime}`;
+}
+
+function getNewStudioReplSessionName(runtime: StudioReplRuntime): string {
+	const suffix = `${Date.now().toString(36)}-${randomUUID().slice(0, 6)}`;
+	return `pi-studio-repl-${runtime}-${suffix}`;
+}
+
+function getStudioReplPaneTarget(sessionName: string): string {
+	return `${sessionName}:0.0`;
+}
+
+function inferStudioReplSessionRuntime(sessionName: string): { runtime: StudioReplRuntime | "unknown"; source: StudioReplSessionInfo["source"] } {
+	const studioMatch = sessionName.match(/^pi-studio-repl-([a-z0-9-]+)$/i);
+	if (studioMatch) {
+		const raw = (studioMatch[1] || "").toLowerCase();
+		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "r"] as StudioReplRuntime[])
+			.find((candidate) => raw === candidate || raw.startsWith(`${candidate}-`));
+		return { runtime: runtime ?? "unknown", source: "studio" };
+	}
+	const piReplMatch = sessionName.match(/^pi-repl-([a-z0-9-]+)$/i);
+	if (piReplMatch) {
+		const raw = piReplMatch[1]?.toLowerCase() || "";
+		const runtime = raw === "python" ? "python" : normalizeStudioReplRuntime(raw);
+		return { runtime: runtime ?? "unknown", source: "pi-repl" };
+	}
+	return { runtime: "unknown", source: "tmux" };
+}
+
+function shouldShowStudioReplTmuxSession(sessionName: string): boolean {
+	return /^pi-studio-repl-/i.test(sessionName) || /^pi-repl-/i.test(sessionName);
+}
+
+function formatStudioReplSessionLabel(sessionName: string, runtime: StudioReplRuntime | "unknown", source: StudioReplSessionInfo["source"]): string {
+	const runtimeLabel = runtime === "unknown" ? "REPL" : STUDIO_REPL_RUNTIME_LABELS[runtime];
+	if (source === "pi-repl") return `${runtimeLabel} (${sessionName})`;
+	if (source === "studio") return `${runtimeLabel} (${sessionName})`;
+	return sessionName;
+}
+
+function isTmuxAvailable(): boolean {
+	const result = spawnSync("tmux", ["-V"], { encoding: "utf8", timeout: 3_000 });
+	return result.status === 0;
+}
+
+function runStudioTmux(args: string[], options?: { cwd?: string; input?: string; timeout?: number }): { ok: true; stdout: string; stderr: string } | { ok: false; message: string; stdout: string; stderr: string } {
+	const result = spawnSync("tmux", args, {
+		cwd: options?.cwd,
+		input: options?.input,
+		encoding: "utf8",
+		timeout: options?.timeout ?? 5_000,
+		maxBuffer: 10 * 1024 * 1024,
+	});
+	const stdout = typeof result.stdout === "string" ? result.stdout : "";
+	const stderr = typeof result.stderr === "string" ? result.stderr : "";
+	if (result.error) {
+		const message = result.error.message || String(result.error);
+		return { ok: false, message, stdout, stderr };
+	}
+	if (result.status !== 0) {
+		return { ok: false, message: (stderr || stdout || `tmux exited with code ${result.status}`).trim(), stdout, stderr };
+	}
+	return { ok: true, stdout, stderr };
+}
+
+function listStudioReplSessions(): { tmuxAvailable: boolean; sessions: StudioReplSessionInfo[]; error?: string } {
+	if (!isTmuxAvailable()) return { tmuxAvailable: false, sessions: [], error: "tmux is not available." };
+	const result = runStudioTmux(["list-sessions", "-F", "#{session_name}"], { timeout: 3_000 });
+	if (!result.ok) {
+		const message = result.message.toLowerCase().includes("no server running") ? "No tmux sessions are running." : result.message;
+		return { tmuxAvailable: true, sessions: [], error: message };
+	}
+	const sessions = result.stdout
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.filter(shouldShowStudioReplTmuxSession)
+		.map((sessionName) => {
+			const inferred = inferStudioReplSessionRuntime(sessionName);
+			return {
+				sessionName,
+				target: getStudioReplPaneTarget(sessionName),
+				runtime: inferred.runtime,
+				label: formatStudioReplSessionLabel(sessionName, inferred.runtime, inferred.source),
+				source: inferred.source,
+			};
+		});
+	return { tmuxAvailable: true, sessions };
+}
+
+function captureStudioReplSession(sessionName: string): { ok: true; transcript: string; session: StudioReplSessionInfo } | { ok: false; message: string } {
+	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
+	const inferred = inferStudioReplSessionRuntime(sessionName);
+	const session: StudioReplSessionInfo = {
+		sessionName,
+		target: getStudioReplPaneTarget(sessionName),
+		runtime: inferred.runtime,
+		label: formatStudioReplSessionLabel(sessionName, inferred.runtime, inferred.source),
+		source: inferred.source,
+	};
+	const result = runStudioTmux(["capture-pane", "-p", "-t", session.target, "-S", `-${STUDIO_REPL_CAPTURE_LINES}`], { timeout: 3_000 });
+	if (!result.ok) return { ok: false, message: result.message };
+	return { ok: true, transcript: result.stdout.replace(/[\t ]+$/gm, "").trimEnd(), session };
+}
+
+function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, options?: { newSession?: boolean }): { ok: true; session: StudioReplSessionInfo; message: string } | { ok: false; message: string } {
+	if (!isTmuxAvailable()) return { ok: false, message: "tmux is not available. Install tmux to use Studio REPL sessions." };
+	const sessionName = options?.newSession ? getNewStudioReplSessionName(runtime) : getStudioReplSessionName(runtime);
+	const existing = runStudioTmux(["has-session", "-t", sessionName], { timeout: 3_000 });
+	if (existing.ok) {
+		const inferred = inferStudioReplSessionRuntime(sessionName);
+		return {
+			ok: true,
+			session: {
+				sessionName,
+				target: getStudioReplPaneTarget(sessionName),
+				runtime: inferred.runtime,
+				label: formatStudioReplSessionLabel(sessionName, inferred.runtime, inferred.source),
+				source: inferred.source,
+			},
+			message: `${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL is already running.`,
+		};
+	}
+	const command = getStudioReplRuntimeCommand(runtime);
+	const result = runStudioTmux(["new-session", "-d", "-s", sessionName, "-c", cwd || process.cwd(), command], { timeout: 5_000 });
+	if (!result.ok) return { ok: false, message: result.message || `Failed to start ${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL.` };
+	return {
+		ok: true,
+		session: {
+			sessionName,
+			target: getStudioReplPaneTarget(sessionName),
+			runtime,
+			label: formatStudioReplSessionLabel(sessionName, runtime, "studio"),
+			source: "studio",
+		},
+		message: `Started ${options?.newSession ? "new " : ""}${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL.`,
+	};
+}
+
+function stopStudioReplSession(sessionName: string): { ok: true; message: string } | { ok: false; message: string } {
+	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
+	const inferred = inferStudioReplSessionRuntime(sessionName);
+	if (inferred.source !== "studio") {
+		return { ok: false, message: "Studio can only stop Studio-owned REPL sessions. Use tmux or pi-repl to stop external sessions." };
+	}
+	const result = runStudioTmux(["kill-session", "-t", sessionName], { timeout: 5_000 });
+	if (!result.ok) return { ok: false, message: result.message || "Failed to stop REPL session." };
+	return { ok: true, message: `Stopped ${sessionName}.` };
+}
+
+function prepareTextForStudioReplSend(sessionName: string, source: string): string {
+	const normalized = String(source || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	const runtime = inferStudioReplSessionRuntime(sessionName).runtime;
+	if ((runtime === "python" || runtime === "ipython") && normalized.includes("\n")) {
+		// The standard Python prompt needs a final blank line to close pasted suites
+		// such as `for`/`if`/`def` blocks. Without it the prompt can remain in
+		// continuation mode, making the next send look like an unexpected indent.
+		return `${normalized.replace(/\n+$/, "")}\n\n`;
+	}
+	return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+}
+
+function sendTextToStudioReplSession(sessionName: string, text: string): { ok: true; message: string } | { ok: false; message: string } {
+	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
+	const source = String(text || "");
+	if (!source.trim()) return { ok: false, message: "Editor text is empty." };
+	if (source.length > STUDIO_REPL_SEND_MAX_CHARS) {
+		return { ok: false, message: `REPL input is too large (${source.length} chars; max ${STUDIO_REPL_SEND_MAX_CHARS}).` };
+	}
+	const bufferName = `pi-studio-repl-${randomUUID().replace(/-/g, "")}`;
+	const input = prepareTextForStudioReplSend(sessionName, source);
+	const loadResult = runStudioTmux(["load-buffer", "-b", bufferName, "-"], { input, timeout: 5_000 });
+	if (!loadResult.ok) return { ok: false, message: loadResult.message || "Failed to load text into tmux buffer." };
+	const pasteResult = runStudioTmux(["paste-buffer", "-d", "-b", bufferName, "-t", getStudioReplPaneTarget(sessionName)], { timeout: 5_000 });
+	if (!pasteResult.ok) return { ok: false, message: pasteResult.message || "Failed to paste text into REPL session." };
+	return { ok: true, message: `Sent ${source.length} chars to ${sessionName}.` };
+}
+
+function interruptStudioReplSession(sessionName: string): { ok: true; message: string } | { ok: false; message: string } {
+	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
+	const result = runStudioTmux(["send-keys", "-t", getStudioReplPaneTarget(sessionName), "C-c"], { timeout: 5_000 });
+	if (!result.ok) return { ok: false, message: result.message || "Failed to interrupt REPL session." };
+	return { ok: true, message: `Interrupted ${sessionName}.` };
+}
+
 function isAllowedOrigin(_origin: string | undefined, _port: number): boolean {
 	// For local-only studio, token auth is the primary guard. In practice,
 	// browser origin headers can vary (or be omitted) across wrappers/browsers,
@@ -7422,6 +7743,11 @@ ${cssVarsBlock}
             <div class="source-actions-row">
               <button id="sendRunBtn" type="button" title="Run editor text. While a direct run is active, this button becomes Stop. Cmd/Ctrl+Enter queues steering from the current editor text. Stop the active request with Esc.">Run editor text</button>
               <button id="queueSteerBtn" type="button" title="Queue steering is available while Run editor text is active." disabled>Queue steering</button>
+              <button id="sendReplBtn" type="button" hidden title="Send the current selection, or the full editor text, to the active REPL session shown in the right pane.">Send to REPL</button>
+              <select id="replSendModeSelect" hidden aria-label="REPL send mode" title="Choose how Send to REPL interprets the editor text.">
+                <option value="scratch" selected>Scratch send</option>
+                <option value="literate">Literate send</option>
+              </select>
               <button id="copyDraftBtn" type="button" title="Copy the current editor text to the clipboard.">Copy text</button>
               <button id="openCompanionBtn" type="button" title="Open a detached copy of the current editor text in a new editor-only Studio tab.">Open new editor</button>
               <button id="sendEditorBtn" type="button">Send to pi editor</button>
@@ -7564,6 +7890,7 @@ ${cssVarsBlock}
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
             <option value="trace">Working</option>
+            <option value="repl">REPL</option>
           </select>
         </div>
         <div class="section-header-actions">
@@ -7701,6 +8028,7 @@ export default function (pi: ExtensionAPI) {
 		contextWindow: null,
 		percent: null,
 	};
+	let studioReplActiveSessionName: string | null = null;
 	let compactInProgress = false;
 	let compactRequestId: string | null = null;
 
@@ -8134,6 +8462,57 @@ export default function (pi: ExtensionAPI) {
 				// Ignore transport errors; close handler will clean up
 			}
 		}
+	};
+
+	const sendReplStateToClient = (client: WebSocket, extra?: Record<string, unknown>) => {
+		const state = listStudioReplSessions();
+		if (studioReplActiveSessionName && !state.sessions.some((session) => session.sessionName === studioReplActiveSessionName)) {
+			studioReplActiveSessionName = state.sessions[0]?.sessionName ?? null;
+		} else if (!studioReplActiveSessionName && state.sessions.length > 0) {
+			studioReplActiveSessionName = state.sessions[0].sessionName;
+		}
+		sendToClient(client, {
+			type: "repl_state",
+			tmuxAvailable: state.tmuxAvailable,
+			sessions: state.sessions,
+			activeSessionName: studioReplActiveSessionName,
+			error: state.error ?? null,
+			...extra,
+		});
+	};
+
+	const sendReplCaptureToClient = (client: WebSocket, sessionName?: string | null, extra?: Record<string, unknown>) => {
+		const targetSession = (typeof sessionName === "string" && sessionName.trim())
+			? sessionName.trim()
+			: studioReplActiveSessionName;
+		if (!targetSession) {
+			sendReplStateToClient(client, {
+				transcript: "",
+				capturedAt: Date.now(),
+				...extra,
+			});
+			return;
+		}
+		const captured = captureStudioReplSession(targetSession);
+		if (!captured.ok) {
+			sendReplStateToClient(client, {
+				activeSessionName: targetSession,
+				transcript: "",
+				captureError: captured.message,
+				capturedAt: Date.now(),
+				...extra,
+			});
+			return;
+		}
+		studioReplActiveSessionName = captured.session.sessionName;
+		sendToClient(client, {
+			type: "repl_capture",
+			session: captured.session,
+			activeSessionName: captured.session.sessionName,
+			transcript: captured.transcript,
+			capturedAt: Date.now(),
+			...extra,
+		});
 	};
 
 	const emitDebugEvent = (event: string, details?: Record<string, unknown>) => {
@@ -8957,6 +9336,82 @@ export default function (pi: ExtensionAPI) {
 					message: `Failed to send editor text to model: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
+			return;
+		}
+
+		if (msg.type === "repl_list_request") {
+			sendReplStateToClient(client);
+			return;
+		}
+
+		if (msg.type === "repl_capture_request") {
+			sendReplCaptureToClient(client, msg.sessionName ?? null);
+			return;
+		}
+
+		if (msg.type === "repl_start_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			const started = startStudioReplSession(msg.runtime, studioCwd, { newSession: msg.newSession });
+			if (!started.ok) {
+				sendReplStateToClient(client, { requestId: msg.requestId, replError: started.message });
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: started.message });
+				return;
+			}
+			studioReplActiveSessionName = started.session.sessionName;
+			sendReplStateToClient(client, { requestId: msg.requestId, replMessage: started.message });
+			sendReplCaptureToClient(client, started.session.sessionName, { requestId: msg.requestId, replMessage: started.message });
+			return;
+		}
+
+		if (msg.type === "repl_stop_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			const stopped = stopStudioReplSession(msg.sessionName);
+			if (!stopped.ok) {
+				sendReplStateToClient(client, { requestId: msg.requestId, replError: stopped.message });
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: stopped.message });
+				return;
+			}
+			if (studioReplActiveSessionName === msg.sessionName) studioReplActiveSessionName = null;
+			sendReplStateToClient(client, { requestId: msg.requestId, replMessage: stopped.message, transcript: "", capturedAt: Date.now() });
+			return;
+		}
+
+		if (msg.type === "repl_send_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			const sent = sendTextToStudioReplSession(msg.sessionName, msg.text);
+			if (!sent.ok) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: sent.message });
+				sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId, replError: sent.message });
+				return;
+			}
+			studioReplActiveSessionName = msg.sessionName;
+			sendToClient(client, { type: "repl_send_ack", requestId: msg.requestId, sessionName: msg.sessionName, message: sent.message });
+			setTimeout(() => sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId }), 150);
+			return;
+		}
+
+		if (msg.type === "repl_interrupt_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			const interrupted = interruptStudioReplSession(msg.sessionName);
+			if (!interrupted.ok) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: interrupted.message });
+				sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId, replError: interrupted.message });
+				return;
+			}
+			studioReplActiveSessionName = msg.sessionName;
+			sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId, replMessage: interrupted.message });
 			return;
 		}
 

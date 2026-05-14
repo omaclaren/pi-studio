@@ -4,6 +4,24 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-05-14
+
+### Added
+- Added an optional tmux-backed **REPL** right-pane view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions.
+- Added **Send to REPL** with `Cmd/Ctrl+Shift+Enter`, sending the editor selection or full editor text in Scratch mode.
+- Added Literate send mode for Markdown documents, including current/selected fenced-code chunk sending, explicit **Run all chunks**, prose journaling, and runtime-compatible chunk filtering.
+- Added a compact REPL journal that records notes, sent code, runtime/session metadata, and captured output, with copy, Markdown export, load-into-editor, and PDF/HTML export support.
+- Added Studio-owned REPL session controls for start/attach, creating additional sessions of the same runtime, stopping sessions, and interrupting stuck prompts.
+- Added lightweight syntax highlighting for REPL transcript prompt input and journal code entries.
+
+### Changed
+- **Run editor text** now includes active REPL identity when the REPL pane is active so prompts can refer to “the active REPL”.
+- The REPL toolbar keeps common controls visible and tucks advanced/session/literate actions under **More**.
+
+### Fixed
+- Python/IPython multiline sends now include a final blank line so pasted suites such as `for` blocks execute cleanly.
+- The editor now handles `Tab` / `Shift+Tab` for indentation while focused.
+
 ## [0.8.4] — 2026-05-14
 
 ### Added
