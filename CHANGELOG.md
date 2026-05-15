@@ -4,6 +4,21 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-05-15
+
+### Added
+- Added `studio_repl_status` and `studio_repl_send` tools so the agent can inspect and send code to the active Studio REPL without improvising raw tmux commands.
+
+### Changed
+- Studio REPL sends for Python/IPython, Julia, R, GHCi, and Clojure now use runtime-specific control files instead of pasting multiline code directly, reducing quoting and indentation failures.
+- The REPL pane now treats **REPL Studio** as the clean primary interaction record, with the raw tmux mirror secondary and collapsed by default.
+- Renamed Scratch send to Raw send, alongside Literate send, and clarified that **Add note** records prose through the Literate send workflow.
+- REPL polling now skips UI re-renders when the captured transcript/session state has not changed, reducing hover flicker in the REPL controls.
+- REPL Studio entries now use a compact terminal-style prompt/output layout instead of card-style Code/Output sections, include startup banner text when available, and `studio_repl_send` broadcasts the actual submitted code so Pi-driven REPL work appears in the clean record.
+- Reduced REPL pane chrome by hiding duplicate session status lines, avoiding prominent implementation-detail send notices, and moving REPL Studio export/edit actions below the main REPL Studio box.
+- REPL Studio entries are now persisted in browser local storage so the clean record survives page refreshes while the Studio server/session is still running.
+- **Run editor text** active-REPL context now tells the agent to use `studio_repl_send` for code execution.
+
 ## [0.9.0] — 2026-05-14
 
 ### Added

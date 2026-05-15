@@ -1,6 +1,6 @@
 {
   "name": "pi-studio",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Two-pane browser workspace for pi with prompt/response editing, annotations, critiques, prompt/response history, live previews, and tmux-backed REPL/literate REPL workflows",
   "type": "module",
   "license": "MIT",
@@ -43,12 +43,13 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
+    "@sinclair/typebox": "^0.34.49",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0",
     "@types/node": "^24.3.0",
     "@types/ws": "^8.18.1",
-    "typescript": "^5.7.3",
-    "@earendil-works/pi-coding-agent": "^0.74.0"
+    "typescript": "^5.7.3"
   }
 }
