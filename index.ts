@@ -415,6 +415,11 @@ const STUDIO_REPL_SEND_MAX_CHARS = 200_000;
 const STUDIO_REPL_SEND_DEFAULT_TIMEOUT_MS = 20_000;
 const STUDIO_REPL_SEND_MAX_TIMEOUT_MS = 120_000;
 const STUDIO_REPL_CONTROL_ROOT = join(tmpdir(), "pi-studio-repl");
+const STUDIO_SUBPROCESS_OUTPUT_MAX_BYTES = 2_000_000;
+const STUDIO_PANDOC_TIMEOUT_MS = readStudioPositiveEnvMs("PI_STUDIO_PANDOC_TIMEOUT_MS", 120_000, 5_000, 15 * 60_000);
+const STUDIO_LATEX_TIMEOUT_MS = readStudioPositiveEnvMs("PI_STUDIO_LATEX_TIMEOUT_MS", 120_000, 5_000, 15 * 60_000);
+const STUDIO_MERMAID_TIMEOUT_MS = readStudioPositiveEnvMs("PI_STUDIO_MERMAID_TIMEOUT_MS", 60_000, 5_000, 10 * 60_000);
+const STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES = readStudioPositiveEnvMs("PI_STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES", 50_000_000, 1_000_000, 500_000_000);
 const STUDIO_REPL_RUNTIME_LABELS: Record<StudioReplRuntime, string> = {
 	shell: "Shell",
 	python: "Python",
@@ -445,6 +450,151 @@ const STUDIO_PROMPT_METADATA_CUSTOM_TYPE = "pi-studio/direct-prompt";
 const STUDIO_DEFAULT_SCRATCHPAD_DOCUMENT_KEY = "doc:blank:blank";
 const STUDIO_PERSISTENT_STATE_DIR = join(getAgentDir(), "pi-studio");
 const STUDIO_PERSISTENT_STATE_PATH = join(STUDIO_PERSISTENT_STATE_DIR, "local-state.json");
+
+type StudioSubprocessResult = {
+	code: number | null;
+	signal: NodeJS.Signals | null;
+	stdout: string;
+	stderr: string;
+	stdoutTruncated: boolean;
+	stderrTruncated: boolean;
+};
+
+type StudioSubprocessOptions = {
+	cwd?: string;
+	input?: string;
+	timeoutMs?: number;
+	stdoutMaxBytes?: number;
+	stderrMaxBytes?: number;
+	notFoundMessage?: string;
+	notFoundError?: () => Error;
+	label?: string;
+};
+
+function readStudioPositiveEnvMs(name: string, fallback: number, min: number, max: number): number {
+	const parsed = Number.parseInt(String(process.env[name] ?? ""), 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+	return Math.max(min, Math.min(max, parsed));
+}
+
+function appendStudioSubprocessChunk(chunks: Buffer[], chunk: Buffer | string, state: { bytes: number; truncated: boolean }, maxBytes = STUDIO_SUBPROCESS_OUTPUT_MAX_BYTES): void {
+	if (state.bytes >= maxBytes) {
+		state.truncated = true;
+		return;
+	}
+	const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+	const remaining = maxBytes - state.bytes;
+	if (buffer.length <= remaining) {
+		chunks.push(buffer);
+		state.bytes += buffer.length;
+		return;
+	}
+	chunks.push(buffer.subarray(0, remaining));
+	state.bytes += remaining;
+	state.truncated = true;
+}
+
+function finalizeStudioSubprocessOutput(chunks: Buffer[], truncated: boolean): string {
+	const value = Buffer.concat(chunks).toString("utf-8").trim();
+	return truncated ? `${value}\n[output truncated by Studio]`.trim() : value;
+}
+
+function runStudioSubprocess(command: string, args: string[], options: StudioSubprocessOptions = {}): Promise<StudioSubprocessResult> {
+	return new Promise((resolvePromise, rejectPromise) => {
+		const timeoutMs = Math.max(1_000, Math.floor(options.timeoutMs ?? STUDIO_PANDOC_TIMEOUT_MS));
+		const child = spawn(command, args, {
+			cwd: options.cwd,
+			stdio: [typeof options.input === "string" ? "pipe" : "ignore", "pipe", "pipe"],
+		});
+		const stdoutChunks: Buffer[] = [];
+		const stderrChunks: Buffer[] = [];
+		const stdoutMaxBytes = Math.max(1, Math.floor(options.stdoutMaxBytes ?? STUDIO_SUBPROCESS_OUTPUT_MAX_BYTES));
+		const stderrMaxBytes = Math.max(1, Math.floor(options.stderrMaxBytes ?? STUDIO_SUBPROCESS_OUTPUT_MAX_BYTES));
+		const stdoutState = { bytes: 0, truncated: false };
+		const stderrState = { bytes: 0, truncated: false };
+		let settled = false;
+		let timedOut = false;
+		let killTimer: NodeJS.Timeout | null = null;
+
+		const cleanup = () => {
+			clearTimeout(timeoutTimer);
+			if (killTimer) clearTimeout(killTimer);
+		};
+		const fail = (error: Error) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			rejectPromise(error);
+		};
+		const succeed = (result: StudioSubprocessResult) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolvePromise(result);
+		};
+		const label = options.label || basename(command) || command;
+		const timeoutTimer = setTimeout(() => {
+			timedOut = true;
+			try { child.kill("SIGTERM"); } catch {}
+			killTimer = setTimeout(() => {
+				try { child.kill("SIGKILL"); } catch {}
+			}, 2_000);
+		}, timeoutMs);
+
+		child.stdout?.on("data", (chunk: Buffer | string) => appendStudioSubprocessChunk(stdoutChunks, chunk, stdoutState, stdoutMaxBytes));
+		child.stderr?.on("data", (chunk: Buffer | string) => appendStudioSubprocessChunk(stderrChunks, chunk, stderrState, stderrMaxBytes));
+
+		child.once("error", (error) => {
+			const errno = error as NodeJS.ErrnoException;
+			if (errno.code === "ENOENT") {
+				fail(options.notFoundError ? options.notFoundError() : new Error(options.notFoundMessage || `${command} was not found.`));
+				return;
+			}
+			fail(error);
+		});
+
+		child.once("close", (code, signal) => {
+			if (timedOut) {
+				fail(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s.`));
+				return;
+			}
+			succeed({
+				code,
+				signal,
+				stdout: finalizeStudioSubprocessOutput(stdoutChunks, stdoutState.truncated),
+				stderr: finalizeStudioSubprocessOutput(stderrChunks, stderrState.truncated),
+				stdoutTruncated: stdoutState.truncated,
+				stderrTruncated: stderrState.truncated,
+			});
+		});
+
+		if (typeof options.input === "string") {
+			child.stdin?.end(options.input);
+		}
+	});
+}
+
+function buildStudioPandocPdfEngineOptArgs(pdfEngine: string): string[] {
+	const engineName = basename(String(pdfEngine || "")).toLowerCase();
+	if (!/^(?:pdf|xe|lua)?latex$/.test(engineName)) return [];
+	return [
+		"--pdf-engine-opt=-interaction=nonstopmode",
+		"--pdf-engine-opt=-halt-on-error",
+		"--pdf-engine-opt=-file-line-error",
+	];
+}
+
+const STUDIO_PANDOC_HTML_FRAGMENT_TEMPLATE = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>pi Studio preview</title>
+</head>
+<body>
+$body$
+</body>
+</html>
+`;
 
 let studioPersistentStateCache: StudioPersistentState | null = null;
 let studioPersistentStateQueue: Promise<void> = Promise.resolve();
@@ -4484,46 +4634,17 @@ async function renderStudioMermaidDiagramForPdf(source: string, workDir: string,
 	const outputPath = join(workDir, `mermaid-diagram-${blockNumber}.pdf`);
 
 	await writeFile(inputPath, source, "utf-8");
-	await new Promise<void>((resolve, reject) => {
-		const args = ["-i", inputPath, "-o", outputPath, "-t", mermaidTheme, "-f"];
-		const child = spawn(mermaidCommand, args, { stdio: ["ignore", "ignore", "pipe"] });
-		const stderrChunks: Buffer[] = [];
-		let settled = false;
-
-		const fail = (error: Error) => {
-			if (settled) return;
-			settled = true;
-			reject(error);
-		};
-
-		child.stderr.on("data", (chunk: Buffer | string) => {
-			stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-		});
-
-		child.once("error", (error) => {
-			const errno = error as NodeJS.ErrnoException;
-			if (errno.code === "ENOENT") {
-				fail(
-					new MermaidCliMissingError(
-						"Mermaid CLI (mmdc) not found. Install with `npm install -g @mermaid-js/mermaid-cli` or set MERMAID_CLI_PATH.",
-					),
-				);
-				return;
-			}
-			fail(error);
-		});
-
-		child.once("close", (code) => {
-			if (settled) return;
-			settled = true;
-			if (code === 0) {
-				resolve();
-				return;
-			}
-			const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-			reject(new Error(`Mermaid CLI failed with exit code ${code}${stderr ? `: ${stderr}` : ""}`));
-		});
+	const args = ["-i", inputPath, "-o", outputPath, "-t", mermaidTheme, "-f"];
+	const result = await runStudioSubprocess(mermaidCommand, args, {
+		timeoutMs: STUDIO_MERMAID_TIMEOUT_MS,
+		label: "Mermaid CLI",
+		notFoundError: () => new MermaidCliMissingError(
+			"Mermaid CLI (mmdc) not found. Install with `npm install -g @mermaid-js/mermaid-cli` or set MERMAID_CLI_PATH.",
+		),
 	});
+	if (result.code !== 0) {
+		throw new Error(`Mermaid CLI failed with exit code ${result.code}${result.stderr ? `: ${result.stderr}` : ""}`);
+	}
 
 	return outputPath;
 }
@@ -4708,82 +4829,67 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
 	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
+	let htmlTemplateDir: string | null = null;
 	if (resourcePath) {
 		args.push(`--resource-path=${resourcePath}`);
-		// Embed images as data URIs so they render in the browser preview
-		args.push("--embed-resources", "--standalone");
+		// Embed images as data URIs so browser previews and exported HTML keep local figures.
+		// A minimal template prevents Pandoc's standalone default CSS/title block from leaking
+		// into Studio's own standalone export wrapper.
+		htmlTemplateDir = join(tmpdir(), `pi-studio-pandoc-html-${randomUUID()}`);
+		await mkdir(htmlTemplateDir, { recursive: true });
+		const htmlTemplatePath = join(htmlTemplateDir, "template.html");
+		await writeFile(htmlTemplatePath, STUDIO_PANDOC_HTML_FRAGMENT_TEMPLATE, "utf-8");
+		args.push("--embed-resources", "--standalone", `--template=${htmlTemplatePath}`);
 	}
 	const normalizedMarkdown = isLatex
 		? sourceWithResolvedRefs
 		: normalizeStudioMarkdownFencedBlocks(prepareStudioMarkdownForPandoc(sourceWithResolvedRefs));
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
 
-	let renderedHtml = await new Promise<string>((resolve, reject) => {
-		const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
-		const stdoutChunks: Buffer[] = [];
-		const stderrChunks: Buffer[] = [];
-		let settled = false;
-
-		const fail = (error: Error) => {
-			if (settled) return;
-			settled = true;
-			reject(error);
-		};
-
-		const succeed = (html: string) => {
-			if (settled) return;
-			settled = true;
-			resolve(html);
-		};
-
-		child.stdout.on("data", (chunk: Buffer | string) => {
-			stdoutChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+	let pandocResult: StudioSubprocessResult;
+	try {
+		pandocResult = await runStudioSubprocess(pandocCommand, args, {
+			cwd: pandocWorkingDir,
+			input: normalizedMarkdown,
+			timeoutMs: STUDIO_PANDOC_TIMEOUT_MS,
+			stdoutMaxBytes: STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES,
+			label: "pandoc HTML render",
+			notFoundMessage: "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary.",
 		});
-		child.stderr.on("data", (chunk: Buffer | string) => {
-			stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-		});
+	} finally {
+		if (htmlTemplateDir) {
+			await rm(htmlTemplateDir, { recursive: true, force: true }).catch(() => undefined);
+		}
+	}
+	if (pandocResult.code !== 0) {
+		throw new Error(`pandoc failed with exit code ${pandocResult.code}${pandocResult.stderr ? `: ${pandocResult.stderr}` : ""}`);
+	}
+	if (pandocResult.stdoutTruncated) {
+		throw new Error(`pandoc HTML output exceeded ${Math.round(STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES / 1_000_000)} MB. Reduce embedded assets or set PI_STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES higher.`);
+	}
 
-		child.once("error", (error) => {
-			const errno = error as NodeJS.ErrnoException;
-			if (errno.code === "ENOENT") {
-				fail(new Error("pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."));
-				return;
-			}
-			fail(error);
-		});
-
-		child.once("close", (code) => {
-			if (settled) return;
-			if (code === 0) {
-				let html = Buffer.concat(stdoutChunks).toString("utf-8");
-				// When --standalone was used, extract only the <body> content
-				if (resourcePath) {
-					const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-					if (bodyMatch) html = bodyMatch[1];
-				}
-				if (isLatex) {
-					html = decorateStudioLatexRenderedHtml(
-						html,
-						sourcePath,
-						resourcePath,
-						latexSubfigurePreviewTransform.subfigureGroups,
-						latexAlgorithmPreviewTransform.algorithmBlocks,
-					);
-				} else {
-					html = decorateStudioPreviewPageBreakHtml(html);
-				}
-				html = decorateStudioPandocSyntaxHtml(html);
-				succeed(stripMathMlAnnotationTags(html));
-				return;
-			}
-			const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-			fail(new Error(`pandoc failed with exit code ${code}${stderr ? `: ${stderr}` : ""}`));
-		});
-
-		child.stdin.end(normalizedMarkdown);
-	});
-
-	return renderedHtml;
+	let renderedHtml = pandocResult.stdout;
+	// When --standalone was used for --embed-resources, extract only the <body> content.
+	if (resourcePath) {
+		const bodyMatch = renderedHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+		if (!bodyMatch) {
+			throw new Error("pandoc HTML render did not include a complete body element.");
+		}
+		renderedHtml = bodyMatch[1];
+	}
+	if (isLatex) {
+		renderedHtml = decorateStudioLatexRenderedHtml(
+			renderedHtml,
+			sourcePath,
+			resourcePath,
+			latexSubfigurePreviewTransform.subfigureGroups,
+			latexAlgorithmPreviewTransform.algorithmBlocks,
+		);
+	} else {
+		renderedHtml = decorateStudioPreviewPageBreakHtml(renderedHtml);
+	}
+	renderedHtml = decorateStudioPandocSyntaxHtml(renderedHtml);
+	return stripMathMlAnnotationTags(renderedHtml);
 }
 
 function escapeStudioRegExpLiteral(text: string): string {
@@ -5175,54 +5281,22 @@ ${literalPdfConfig.fontSizeCommand}\\section*{${title.replace(/[{}\\]/g, "").tri
 	await writeFile(texPath, texDocument, "utf-8");
 
 	try {
-		await new Promise<void>((resolve, reject) => {
-			const child = spawn(pdfEngine, [
-				"-interaction=nonstopmode",
-				"-halt-on-error",
-				"input.tex",
-			], { stdio: ["ignore", "pipe", "pipe"], cwd: tempDir });
-			const stdoutChunks: Buffer[] = [];
-			const stderrChunks: Buffer[] = [];
-			let settled = false;
-
-			const fail = (error: Error) => {
-				if (settled) return;
-				settled = true;
-				reject(error);
-			};
-
-			child.stdout.on("data", (chunk: Buffer | string) => {
-				stdoutChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-			});
-			child.stderr.on("data", (chunk: Buffer | string) => {
-				stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-			});
-
-			child.once("error", (error) => {
-				const errno = error as NodeJS.ErrnoException;
-				if (errno.code === "ENOENT") {
-					fail(new Error(
-						`${pdfEngine} was not found. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE.`,
-					));
-					return;
-				}
-				fail(error);
-			});
-
-			child.once("close", (code) => {
-				if (settled) return;
-				if (code === 0) {
-					settled = true;
-					resolve();
-					return;
-				}
-				const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
-				const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-				const errorMatch = stdout.match(/^! .+$/m);
-				const hint = errorMatch ? `: ${errorMatch[0]}` : (stderr ? `: ${stderr}` : "");
-				fail(new Error(`${pdfEngine} literal-text PDF export failed with exit code ${code}${hint}`));
-			});
+		const latexResult = await runStudioSubprocess(pdfEngine, [
+			"-interaction=nonstopmode",
+			"-halt-on-error",
+			"-file-line-error",
+			"input.tex",
+		], {
+			cwd: tempDir,
+			timeoutMs: STUDIO_LATEX_TIMEOUT_MS,
+			label: `${pdfEngine} literal-text PDF export`,
+			notFoundMessage: `${pdfEngine} was not found. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE.`,
 		});
+		if (latexResult.code !== 0) {
+			const errorMatch = latexResult.stdout.match(/^! .+$/m);
+			const hint = errorMatch ? `: ${errorMatch[0]}` : (latexResult.stderr ? `: ${latexResult.stderr}` : "");
+			throw new Error(`${pdfEngine} literal-text PDF export failed with exit code ${latexResult.code}${hint}`);
+		}
 
 		return await readFile(outputPath);
 	} finally {
@@ -5484,46 +5558,18 @@ async function renderStudioPdfFromGeneratedLatex(
 	const pandocSource = inputFormat === "latex" ? markdown : normalizeStudioMarkdownFencedBlocks(markdown);
 
 	try {
-		await new Promise<void>((resolve, reject) => {
-			const child = spawn(pandocCommand, pandocArgs, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
-			const stderrChunks: Buffer[] = [];
-			let settled = false;
-
-			const fail = (error: Error) => {
-				if (settled) return;
-				settled = true;
-				reject(error);
-			};
-
-			child.stderr.on("data", (chunk: Buffer | string) => {
-				stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-			});
-
-			child.once("error", (error) => {
-				const errno = error as NodeJS.ErrnoException;
-				if (errno.code === "ENOENT") {
-					const commandHint = pandocCommand === "pandoc"
-						? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
-						: `${pandocCommand} was not found. Check PANDOC_PATH.`;
-					fail(new Error(commandHint));
-					return;
-				}
-				fail(error);
-			});
-
-			child.once("close", (code) => {
-				if (settled) return;
-				if (code === 0) {
-					settled = true;
-					resolve();
-					return;
-				}
-				const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-				fail(new Error(`pandoc LaTeX generation failed with exit code ${code}${stderr ? `: ${stderr}` : ""}`));
-			});
-
-			child.stdin.end(pandocSource);
+		const pandocResult = await runStudioSubprocess(pandocCommand, pandocArgs, {
+			cwd: pandocWorkingDir,
+			input: pandocSource,
+			timeoutMs: STUDIO_PANDOC_TIMEOUT_MS,
+			label: "pandoc LaTeX generation",
+			notFoundMessage: pandocCommand === "pandoc"
+				? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
+				: `${pandocCommand} was not found. Check PANDOC_PATH.`,
 		});
+		if (pandocResult.code !== 0) {
+			throw new Error(`pandoc LaTeX generation failed with exit code ${pandocResult.code}${pandocResult.stderr ? `: ${pandocResult.stderr}` : ""}`);
+		}
 
 		const generatedLatex = await readFile(latexPath, "utf-8");
 		const injectedLatex = injectStudioLatexPdfSubfigureBlocks(generatedLatex, subfigureGroups, sourcePath, resourcePath);
@@ -5534,55 +5580,23 @@ async function renderStudioPdfFromGeneratedLatex(
 		const normalizedLatex = normalizeStudioGeneratedFigureCaptions(alignedReadyLatex);
 		await writeFile(latexPath, normalizedLatex, "utf-8");
 
-		await new Promise<void>((resolve, reject) => {
-			const child = spawn(pdfEngine, [
-				"-interaction=nonstopmode",
-				"-halt-on-error",
-				`-output-directory=${tempDir}`,
-				latexPath,
-			], { stdio: ["ignore", "pipe", "pipe"], cwd: pandocWorkingDir });
-			const stdoutChunks: Buffer[] = [];
-			const stderrChunks: Buffer[] = [];
-			let settled = false;
-
-			const fail = (error: Error) => {
-				if (settled) return;
-				settled = true;
-				reject(error);
-			};
-
-			child.stdout.on("data", (chunk: Buffer | string) => {
-				stdoutChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-			});
-			child.stderr.on("data", (chunk: Buffer | string) => {
-				stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-			});
-
-			child.once("error", (error) => {
-				const errno = error as NodeJS.ErrnoException;
-				if (errno.code === "ENOENT") {
-					fail(new Error(
-						`${pdfEngine} was not found. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE.`,
-					));
-					return;
-				}
-				fail(error);
-			});
-
-			child.once("close", (code) => {
-				if (settled) return;
-				if (code === 0) {
-					settled = true;
-					resolve();
-					return;
-				}
-				const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
-				const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-				const errorMatch = stdout.match(/^! .+$/m);
-				const hint = errorMatch ? `: ${errorMatch[0]}` : (stderr ? `: ${stderr}` : "");
-				fail(new Error(`${pdfEngine} PDF export failed with exit code ${code}${hint}`));
-			});
+		const latexResult = await runStudioSubprocess(pdfEngine, [
+			"-interaction=nonstopmode",
+			"-halt-on-error",
+			"-file-line-error",
+			`-output-directory=${tempDir}`,
+			latexPath,
+		], {
+			cwd: pandocWorkingDir,
+			timeoutMs: STUDIO_LATEX_TIMEOUT_MS,
+			label: `${pdfEngine} PDF export`,
+			notFoundMessage: `${pdfEngine} was not found. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE.`,
 		});
+		if (latexResult.code !== 0) {
+			const errorMatch = latexResult.stdout.match(/^! .+$/m);
+			const hint = errorMatch ? `: ${errorMatch[0]}` : (latexResult.stderr ? `: ${latexResult.stderr}` : "");
+			throw new Error(`${pdfEngine} PDF export failed with exit code ${latexResult.code}${hint}`);
+		}
 
 		return { pdf: await readFile(outputPath) };
 	} finally {
@@ -5642,6 +5656,7 @@ async function renderStudioPdfWithPandoc(
 			"-f", inputFormat,
 			"-o", outputPath,
 			`--pdf-engine=${pdfEngine}`,
+			...buildStudioPandocPdfEngineOptArgs(pdfEngine),
 			...buildStudioPdfPandocVariableArgs(pdfOptions, inputFormat !== "latex"),
 			"-V", "urlcolor=blue",
 			"-V", "linkcolor=blue",
@@ -5651,49 +5666,22 @@ async function renderStudioPdfWithPandoc(
 		if (resourcePath) args.push(`--resource-path=${resourcePath}`);
 
 		try {
-			await new Promise<void>((resolve, reject) => {
-				const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
-				const stderrChunks: Buffer[] = [];
-				let settled = false;
-
-				const fail = (error: Error) => {
-					if (settled) return;
-					settled = true;
-					reject(error);
-				};
-
-				child.stderr.on("data", (chunk: Buffer | string) => {
-					stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-				});
-
-				child.once("error", (error) => {
-					const errno = error as NodeJS.ErrnoException;
-					if (errno.code === "ENOENT") {
-						const commandHint = pandocCommand === "pandoc"
-							? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
-							: `${pandocCommand} was not found. Check PANDOC_PATH.`;
-						fail(new Error(commandHint));
-						return;
-					}
-					fail(error);
-				});
-
-				child.once("close", (code) => {
-					if (settled) return;
-					if (code === 0) {
-						settled = true;
-						resolve();
-						return;
-					}
-					const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-					const hint = stderr.includes("not found") || stderr.includes("xelatex") || stderr.includes("pdflatex")
-						? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
-						: "";
-					fail(new Error(`pandoc PDF export failed with exit code ${code}${stderr ? `: ${stderr}` : ""}${hint}`));
-				});
-
-				child.stdin.end(pandocSource);
+			const pandocResult = await runStudioSubprocess(pandocCommand, args, {
+				cwd: pandocWorkingDir,
+				input: pandocSource,
+				timeoutMs: STUDIO_PANDOC_TIMEOUT_MS,
+				label: "pandoc PDF export",
+				notFoundMessage: pandocCommand === "pandoc"
+					? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
+					: `${pandocCommand} was not found. Check PANDOC_PATH.`,
 			});
+			if (pandocResult.code !== 0) {
+				const stderr = pandocResult.stderr;
+				const hint = stderr.includes("not found") || stderr.includes("xelatex") || stderr.includes("pdflatex")
+					? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
+					: "";
+				throw new Error(`pandoc PDF export failed with exit code ${pandocResult.code}${stderr ? `: ${stderr}` : ""}${hint}`);
+			}
 
 			return { pdf: await readFile(outputPath), warning };
 		} finally {
@@ -5795,6 +5783,7 @@ async function renderStudioPdfWithPandoc(
 		"-f", inputFormat,
 		"-o", outputPath,
 		`--pdf-engine=${pdfEngine}`,
+		...buildStudioPandocPdfEngineOptArgs(pdfEngine),
 		...buildStudioPdfPandocVariableArgs(pdfOptions, !isLatex),
 		"-V", "urlcolor=blue",
 		"-V", "linkcolor=blue",
@@ -5805,49 +5794,22 @@ async function renderStudioPdfWithPandoc(
 	const pandocSource = isLatex ? markdownForPdf : normalizeStudioMarkdownFencedBlocks(markdownForPdf);
 
 	try {
-		await new Promise<void>((resolve, reject) => {
-			const child = spawn(pandocCommand, args, { stdio: ["pipe", "pipe", "pipe"], cwd: pandocWorkingDir });
-			const stderrChunks: Buffer[] = [];
-			let settled = false;
-
-			const fail = (error: Error) => {
-				if (settled) return;
-				settled = true;
-				reject(error);
-			};
-
-			child.stderr.on("data", (chunk: Buffer | string) => {
-				stderrChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-			});
-
-			child.once("error", (error) => {
-				const errno = error as NodeJS.ErrnoException;
-				if (errno.code === "ENOENT") {
-					const commandHint = pandocCommand === "pandoc"
-						? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
-						: `${pandocCommand} was not found. Check PANDOC_PATH.`;
-					fail(new Error(commandHint));
-					return;
-				}
-				fail(error);
-			});
-
-			child.once("close", (code) => {
-				if (settled) return;
-				if (code === 0) {
-					settled = true;
-					resolve();
-					return;
-				}
-				const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-				const hint = stderr.includes("not found") || stderr.includes("xelatex") || stderr.includes("pdflatex")
-					? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
-					: "";
-				fail(new Error(`pandoc PDF export failed with exit code ${code}${stderr ? `: ${stderr}` : ""}${hint}`));
-			});
-
-			child.stdin.end(pandocSource);
+		const pandocResult = await runStudioSubprocess(pandocCommand, args, {
+			cwd: pandocWorkingDir,
+			input: pandocSource,
+			timeoutMs: STUDIO_PANDOC_TIMEOUT_MS,
+			label: "pandoc PDF export",
+			notFoundMessage: pandocCommand === "pandoc"
+				? "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary."
+				: `${pandocCommand} was not found. Check PANDOC_PATH.`,
 		});
+		if (pandocResult.code !== 0) {
+			const stderr = pandocResult.stderr;
+			const hint = stderr.includes("not found") || stderr.includes("xelatex") || stderr.includes("pdflatex")
+				? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
+				: "";
+			throw new Error(`pandoc PDF export failed with exit code ${pandocResult.code}${stderr ? `: ${stderr}` : ""}${hint}`);
+		}
 
 		return { pdf: await readFile(outputPath), warning: mermaidPrepared.warning };
 	} finally {
@@ -8006,6 +7968,7 @@ ${cssVarsBlock}
       <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
+      <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls.">⊙ Zen</button>
     </div>
   </header>
 
@@ -11864,6 +11827,7 @@ export default function (pi: ExtensionAPI) {
 				const outputPath = buildStudioResponseExportOutputPath(ctx.cwd, "pdf");
 
 				try {
+					ctx.ui.notify("Exporting last response Studio PDF…", "info");
 					const { pdf, warning } = await renderStudioPdfWithPandoc(
 						response.markdown,
 						isLatex,
@@ -11921,6 +11885,7 @@ export default function (pi: ExtensionAPI) {
 			const outputPath = buildStudioPdfOutputPath(file.resolvedPath);
 
 			try {
+				ctx.ui.notify(`Exporting Studio PDF: ${outputPath}`, "info");
 				const { pdf, warning } = await renderStudioPdfWithPandoc(
 					file.text,
 					isLatex,

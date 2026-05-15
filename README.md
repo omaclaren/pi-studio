@@ -20,6 +20,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 
 - Opens a two-pane browser workspace: **Editor** (left) + **Response/Working/Editor Preview** (right)
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces; the editor toolbar can open a detached copy of the current editor text as a companion view
+- Includes a global **⊙ Zen** mode for hiding secondary Studio chrome without changing the current left/right pane layout
 - Runs editor text directly, or asks for structured critique (auto/writing/code focus)
 - Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available
 - Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with Raw/Literate send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/new/stop/interrupt controls, a compact refresh-persistent **REPL Studio** record of user and Pi-sent code, a secondary raw tmux mirror, agent-facing `studio_repl_status` / `studio_repl_send` tools, and Markdown/PDF/HTML export
@@ -37,7 +38,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
   - saves `.annotated.md`
 - Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi, with copy buttons for code blocks and blockquotes
 - Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
-- Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks
+- Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks, with a Focus action for temporarily enlarging the embedded viewer
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
 - Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML, preserving authored HTML previews as HTML
 - Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf` or `/studio-html <path>` to `<name>.studio.html`; without a path, those commands export the last model response to a timestamped file
@@ -110,6 +111,7 @@ caption: Optional caption
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
   - `brew install pandoc`
   - install TeX Live/MacTeX for PDF export
+- Export subprocess timeouts default to bounded values and can be tuned with `PI_STUDIO_PANDOC_TIMEOUT_MS`, `PI_STUDIO_LATEX_TIMEOUT_MS`, `PI_STUDIO_MERMAID_TIMEOUT_MS`, and `PI_STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES` for unusually large embedded-asset HTML exports.
 - Mermaid diagrams in exported PDFs may also require Mermaid CLI (`mmdc` / `@mermaid-js/mermaid-cli`) when you want diagram blocks rendered as diagrams rather than left as code.
 
 ## License

@@ -59,6 +59,30 @@
       flex-wrap: wrap;
     }
 
+    .zen-mode-btn {
+      font-weight: inherit;
+      white-space: nowrap;
+    }
+
+    body.studio-zen-mode > header {
+      padding: 8px 12px;
+    }
+
+    body.studio-zen-mode .app-subtitle {
+      display: none;
+    }
+
+    body.studio-zen-mode > header .controls > :not(#zenModeBtn) {
+      display: none !important;
+    }
+
+    body.studio-zen-mode #zenModeBtn {
+      background: var(--panel);
+      border-color: var(--control-border);
+      color: var(--text);
+      font-weight: inherit;
+    }
+
     .export-preview-controls {
       position: relative;
       display: inline-flex;
@@ -463,6 +487,11 @@
 
     .reference-meta .source-badge {
       background: var(--reference-badge-bg, var(--panel));
+    }
+
+    body.studio-zen-mode .reference-meta,
+    body.studio-zen-mode #responseActions {
+      display: none !important;
     }
 
     body.studio-ui-refresh #rightPane .reference-meta .source-badge {
@@ -1479,6 +1508,14 @@
       font-size: 12px;
     }
 
+    .rendered-markdown .studio-pdf-card-title-group {
+      min-width: 0;
+      flex: 1 1 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .rendered-markdown .studio-pdf-card-title {
       min-width: 0;
       overflow: hidden;
@@ -1488,10 +1525,70 @@
       color: var(--text);
     }
 
-    .rendered-markdown .studio-pdf-card-link {
+    .rendered-markdown .studio-pdf-card-actions {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .rendered-markdown .studio-pdf-card-link,
+    .rendered-markdown .studio-pdf-card-action {
       flex: 0 0 auto;
       font-size: 12px;
       font-weight: 600;
+    }
+
+    .rendered-markdown a.studio-pdf-card-link {
+      min-height: 29px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 7px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: var(--studio-info-text, var(--muted));
+      text-decoration: none;
+      line-height: 1.2;
+    }
+
+    .rendered-markdown a.studio-pdf-card-link:hover,
+    .rendered-markdown a.studio-pdf-card-link:focus-visible {
+      background: var(--panel);
+      color: var(--text);
+      border-color: var(--control-border);
+      text-decoration: none;
+    }
+
+    .rendered-markdown button.studio-pdf-card-action {
+      min-height: 0;
+      padding: 3px 7px;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--studio-info-text, var(--muted));
+      border-color: transparent;
+      line-height: 1.2;
+    }
+
+    .rendered-markdown button.studio-pdf-card-action:not(:disabled):hover,
+    .rendered-markdown button.studio-pdf-card-action:focus-visible {
+      background: var(--panel);
+      color: var(--text);
+      border-color: var(--control-border);
+    }
+
+    .rendered-markdown button.studio-pdf-card-focus {
+      width: 29px;
+      min-width: 29px;
+      min-height: 29px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .rendered-markdown button.studio-pdf-card-focus .studio-refresh-icon {
+      width: 15px;
+      height: 15px;
     }
 
     .rendered-markdown .studio-pdf-card-caption {
@@ -1510,6 +1607,162 @@
       display: block;
       width: 100%;
       min-height: 240px;
+      border: 0;
+      background: #fff;
+    }
+
+    body.studio-pdf-focus-open {
+      overflow: hidden;
+    }
+
+    .studio-pdf-focus-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(12px, 2.4vw, 28px);
+      background: var(--backdrop-bg);
+      backdrop-filter: blur(3px);
+    }
+
+    .studio-pdf-focus-overlay[hidden] {
+      display: none !important;
+    }
+
+    .studio-pdf-focus-dialog {
+      width: min(96vw, 1440px);
+      height: min(92vh, 1080px);
+      min-height: 420px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: 0 24px 70px var(--shadow-color);
+      overflow: hidden;
+    }
+
+    .studio-pdf-focus-dialog:fullscreen {
+      width: 100vw;
+      height: 100vh;
+      border-radius: 0;
+      border: 0;
+    }
+
+    .studio-pdf-focus-header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--panel-border);
+      background: var(--panel-2);
+    }
+
+    .studio-pdf-focus-title-group {
+      min-width: 0;
+      flex: 1 1 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .studio-pdf-focus-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .studio-pdf-focus-actions {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .studio-pdf-focus-link,
+    .studio-pdf-focus-btn {
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .studio-pdf-focus-link {
+      min-height: 29px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 8px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--studio-info-text, var(--muted));
+      text-decoration: none;
+    }
+
+    .studio-pdf-focus-link:hover,
+    .studio-pdf-focus-link:focus-visible {
+      background: var(--panel);
+      border-color: var(--control-border);
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .studio-pdf-focus-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      border-radius: 8px;
+      background: transparent;
+      border-color: transparent;
+      color: var(--studio-info-text, var(--muted));
+    }
+
+    .studio-pdf-focus-btn:not(:disabled):hover,
+    .studio-pdf-focus-btn:focus-visible {
+      background: var(--panel);
+      border-color: var(--control-border);
+      color: var(--text);
+    }
+
+    .studio-pdf-focus-btn .studio-refresh-icon {
+      width: 14px;
+      height: 14px;
+    }
+
+    .studio-pdf-focus-fullscreen,
+    .studio-pdf-focus-close {
+      width: 29px;
+      min-width: 29px;
+      min-height: 29px;
+      padding: 0;
+      justify-content: center;
+      gap: 0;
+    }
+
+    .studio-pdf-focus-fullscreen .studio-refresh-icon,
+    .studio-pdf-focus-close .studio-refresh-icon {
+      width: 15px;
+      height: 15px;
+    }
+
+    .studio-pdf-focus-frame-slot {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+    }
+
+    .studio-pdf-focus-frame {
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      height: auto !important;
       border: 0;
       background: #fff;
     }
@@ -2666,6 +2919,18 @@
       background: var(--panel);
     }
 
+    body.studio-zen-mode footer {
+      min-height: 28px;
+      padding: 5px 12px;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "status";
+    }
+
+    body.studio-zen-mode .footer-meta,
+    body.studio-zen-mode .shortcut-hint {
+      display: none !important;
+    }
+
     body.scratchpad-open {
       overflow: hidden;
     }
@@ -3097,6 +3362,10 @@
       gap: 5px;
     }
 
+    body.studio-ui-refresh.studio-zen-mode > header {
+      padding: 7px 12px;
+    }
+
     body.studio-ui-refresh > header button,
     body.studio-ui-refresh > header .file-label,
     body.studio-ui-refresh #responseActions button,
@@ -3210,7 +3479,7 @@
       flex: 0 0 1px;
     }
 
-    body.studio-ui-refresh .studio-refresh-icon {
+    .studio-refresh-icon {
       width: 15px;
       height: 15px;
       stroke: currentColor;
@@ -3348,6 +3617,21 @@
       font-weight: 500;
       padding: 5px 8px;
       border-radius: 8px;
+    }
+
+    body.studio-zen-mode #reviewNotesBtn,
+    body.studio-zen-mode #outlineBtn,
+    body.studio-zen-mode #scratchpadBtn,
+    body.studio-zen-mode #exportPreviewControls,
+    body.studio-zen-mode #exportPdfBtn,
+    body.studio-zen-mode .studio-refresh-tool-tab,
+    body.studio-zen-mode .studio-refresh-toolbar-state,
+    body.studio-zen-mode .studio-refresh-toolbar-actions .studio-refresh-action-line:nth-child(n+2),
+    body.studio-zen-mode .source-actions-row:nth-child(n+2),
+    body.studio-zen-mode #copyDraftBtn,
+    body.studio-zen-mode #openCompanionBtn,
+    body.studio-zen-mode #sendEditorBtn {
+      display: none !important;
     }
 
     body.studio-ui-refresh #reviewNotesBtn,

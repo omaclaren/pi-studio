@@ -4,6 +4,17 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-05-16
+
+### Added
+- Added a global **⊙ Zen** / **Exit Zen** toggle that hides secondary Studio chrome while preserving the current pane layout and panel focus state.
+- Added a Focus action for explicit `studio-pdf` preview cards, opening the embedded PDF in a larger Studio overlay with optional browser fullscreen.
+
+### Fixed
+- HTML export no longer lets Pandoc's standalone template/CSS leak into the exported document for local-resource previews, fixing narrow/mobile-like exports for larger documents with embedded assets.
+- HTML/PDF export subprocess handling now uses bounded output capture and explicit timeout paths without truncating successful embedded-asset HTML renders.
+- PDF Focus now works from response previews before the same card has been rendered in editor preview, and its controls use theme-consistent focus/fullscreen icons.
+
 ## [0.9.1] — 2026-05-15
 
 ### Added

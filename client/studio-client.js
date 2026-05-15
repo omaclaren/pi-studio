@@ -104,6 +104,7 @@
       const sendEditorBtn = document.getElementById("sendEditorBtn");
       const openCompanionBtn = document.getElementById("openCompanionBtn");
       const getEditorBtn = document.getElementById("getEditorBtn");
+      const zenModeBtn = document.getElementById("zenModeBtn");
       const loadGitDiffBtn = document.getElementById("loadGitDiffBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
       const queueSteerBtn = document.getElementById("queueSteerBtn");
@@ -180,6 +181,16 @@
       let statusLevel = "";
       let reconnectTimer = null;
       let reconnectAttempt = 0;
+      let studioPdfFocusOverlayEl = null;
+      let studioPdfFocusDialogEl = null;
+      let studioPdfFocusFrameSlotEl = null;
+      let studioPdfFocusFrameEl = null;
+      let studioPdfFocusTitleEl = null;
+      let studioPdfFocusOpenLinkEl = null;
+      let studioPdfFocusFullscreenBtn = null;
+      let studioPdfFocusCloseBtn = null;
+      let studioPdfFocusLastFocusedEl = null;
+      let studioPdfFocusMovedFrameState = null;
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
@@ -221,6 +232,8 @@
       const REPL_TRANSCRIPT_MAX_CHARS = 200_000;
       const REPL_JOURNAL_OUTPUT_MAX_CHARS = 80_000;
       const REPL_JOURNAL_MAX_ENTRIES = 80;
+      const PDF_EXPORT_FETCH_TIMEOUT_MS = 180_000;
+      const HTML_EXPORT_FETCH_TIMEOUT_MS = 180_000;
       const EDITOR_TAB_TEXT = "  ";
       let replTmuxAvailable = null;
       let replSessions = [];
@@ -1667,6 +1680,7 @@
       let lineNumbersRenderRaf = null;
       let annotationsEnabled = true;
       const STUDIO_UI_REFRESH_STORAGE_KEY = "piStudio.uiRefresh";
+      const STUDIO_ZEN_MODE_STORAGE_KEY = "piStudio.zenMode";
       const studioUiRefreshEnabled = readStudioUiRefreshEnabled();
       const EDITOR_FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 15, 16, 18];
       const RESPONSE_FONT_SIZE_OPTIONS = [11, 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16, 18, 20];
@@ -1675,8 +1689,12 @@
       let editorFontSize = DEFAULT_EDITOR_FONT_SIZE;
       let responseFontSize = DEFAULT_RESPONSE_FONT_SIZE;
       let studioUiRefreshUi = null;
+      let studioZenModeEnabled = readStudioZenModeEnabled();
       if (studioUiRefreshEnabled && document.body) {
         document.body.classList.add("studio-ui-refresh");
+      }
+      if (studioZenModeEnabled && document.body) {
+        document.body.classList.add("studio-zen-mode");
       }
       let scratchpadText = "";
       let scratchpadReturnFocusEl = null;
@@ -1719,6 +1737,46 @@
         return true;
       }
 
+      function readStudioZenModeEnabled() {
+        const normalize = (value) => String(value == null ? "" : value).trim().toLowerCase();
+        const isTruthy = (value) => ["1", "true", "yes", "on", "zen"].indexOf(normalize(value)) !== -1;
+        const isFalsey = (value) => ["0", "false", "no", "off"].indexOf(normalize(value)) !== -1;
+        const queryValue = initialQueryParams.has("zen") ? initialQueryParams.get("zen") : null;
+        if (queryValue !== null) {
+          const normalizedQuery = normalize(queryValue);
+          const enabled = isTruthy(queryValue) || (!isFalsey(queryValue) && normalizedQuery !== "");
+          try {
+            window.localStorage && window.localStorage.setItem(STUDIO_ZEN_MODE_STORAGE_KEY, enabled ? "1" : "0");
+          } catch {}
+          return enabled;
+        }
+        try {
+          const stored = window.localStorage ? window.localStorage.getItem(STUDIO_ZEN_MODE_STORAGE_KEY) : null;
+          if (stored === null) return false;
+          return isTruthy(stored) || (!isFalsey(stored) && normalize(stored) !== "");
+        } catch {
+          return false;
+        }
+      }
+
+      function syncStudioZenModeUi() {
+        if (document.body) document.body.classList.toggle("studio-zen-mode", studioZenModeEnabled);
+        if (!zenModeBtn) return;
+        zenModeBtn.textContent = studioZenModeEnabled ? "Exit Zen" : "⊙ Zen";
+        zenModeBtn.title = studioZenModeEnabled ? "Show full Studio controls." : "Hide secondary Studio controls.";
+        zenModeBtn.setAttribute("aria-pressed", studioZenModeEnabled ? "true" : "false");
+      }
+
+      function setStudioZenMode(enabled) {
+        studioZenModeEnabled = Boolean(enabled);
+        try {
+          window.localStorage && window.localStorage.setItem(STUDIO_ZEN_MODE_STORAGE_KEY, studioZenModeEnabled ? "1" : "0");
+        } catch {}
+        closeStudioUiRefreshMenus();
+        closeExportPreviewMenu();
+        syncStudioZenModeUi();
+      }
+
       function makeStudioUiRefreshElement(tagName, className, text) {
         const element = document.createElement(tagName);
         if (className) element.className = className;
@@ -1735,9 +1793,16 @@
         svg.setAttribute("viewBox", "0 0 24 24");
         svg.setAttribute("aria-hidden", "true");
         svg.classList.add("studio-refresh-icon");
-        const paths = kind === "focus-exit"
-          ? ["M4 4l6 6", "M10 4v6H4", "M20 20l-6-6", "M14 20v-6h6"]
-          : ["M14 4h6v6", "M20 4l-6 6", "M10 20H4v-6", "M4 20l6-6"];
+        let paths;
+        if (kind === "focus-exit") {
+          paths = ["M4 4l6 6", "M10 4v6H4", "M20 20l-6-6", "M14 20v-6h6"];
+        } else if (kind === "fullscreen") {
+          paths = ["M8 4H4v4", "M16 4h4v4", "M20 16v4h-4", "M4 16v4h4"];
+        } else if (kind === "fullscreen-exit") {
+          paths = ["M9 5v4H5", "M15 5v4h4", "M19 15h-4v4", "M5 15h4v4"];
+        } else {
+          paths = ["M14 4h6v6", "M20 4l-6 6", "M10 20H4v-6", "M4 20l6-6"];
+        }
         for (const d of paths) {
           const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
           path.setAttribute("d", d);
@@ -2098,6 +2163,7 @@
 
       setupStudioUiRefreshToggleButton();
       setupStudioUiRefreshPrototype();
+      syncStudioZenModeUi();
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;
       if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
         throw new Error("Studio annotation helpers failed to load.");
@@ -2979,6 +3045,18 @@
           && typeof outlineDialogEl.contains === "function"
           && outlineDialogEl.contains(event.target)
         );
+        const pdfFocusOwnsEvent = Boolean(
+          studioPdfFocusDialogEl
+          && event.target
+          && typeof studioPdfFocusDialogEl.contains === "function"
+          && studioPdfFocusDialogEl.contains(event.target)
+        );
+
+        if (isStudioPdfFocusOpen() && plainEscape) {
+          event.preventDefault();
+          closeStudioPdfFocusViewer();
+          return;
+        }
 
         if (isScratchpadOpen() && plainEscape) {
           event.preventDefault();
@@ -2998,7 +3076,7 @@
           return;
         }
 
-        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent) {
+        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || pdfFocusOwnsEvent) {
           return;
         }
 
@@ -3847,50 +3925,316 @@
         return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
       }
 
-      function buildStudioPdfResourceUrl(options) {
+      function isStudioPdfFocusOpen() {
+        return Boolean(studioPdfFocusOverlayEl && studioPdfFocusOverlayEl.hidden === false);
+      }
+
+      function ensureStudioPdfFocusViewer() {
+        if (studioPdfFocusOverlayEl) return studioPdfFocusOverlayEl;
+
+        const overlay = document.createElement("div");
+        overlay.className = "studio-pdf-focus-overlay";
+        overlay.hidden = true;
+        overlay.setAttribute("role", "dialog");
+        overlay.setAttribute("aria-modal", "true");
+        overlay.setAttribute("aria-labelledby", "studioPdfFocusTitle");
+
+        const dialog = document.createElement("div");
+        dialog.className = "studio-pdf-focus-dialog";
+
+        const header = document.createElement("div");
+        header.className = "studio-pdf-focus-header";
+
+        const titleGroup = document.createElement("div");
+        titleGroup.className = "studio-pdf-focus-title-group";
+
+        const closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.className = "studio-pdf-focus-btn studio-pdf-focus-close";
+        closeBtn.title = "Exit PDF focus view.";
+        closeBtn.setAttribute("aria-label", "Exit PDF focus view");
+        closeBtn.appendChild(makeStudioUiRefreshIcon("focus-exit"));
+        closeBtn.addEventListener("click", () => closeStudioPdfFocusViewer());
+        titleGroup.appendChild(closeBtn);
+
+        const titleEl = document.createElement("div");
+        titleEl.id = "studioPdfFocusTitle";
+        titleEl.className = "studio-pdf-focus-title";
+        titleEl.textContent = "PDF preview";
+        titleGroup.appendChild(titleEl);
+        header.appendChild(titleGroup);
+
+        const actions = document.createElement("div");
+        actions.className = "studio-pdf-focus-actions";
+
+        const openLink = document.createElement("a");
+        openLink.className = "studio-pdf-focus-link";
+        openLink.target = "_blank";
+        openLink.rel = "noopener noreferrer";
+        openLink.textContent = "Open PDF";
+        actions.appendChild(openLink);
+
+        const fullscreenBtn = document.createElement("button");
+        fullscreenBtn.type = "button";
+        fullscreenBtn.className = "studio-pdf-focus-btn studio-pdf-focus-fullscreen";
+        fullscreenBtn.addEventListener("click", async () => {
+          const isFullscreen = Boolean(document.fullscreenElement && studioPdfFocusDialogEl && document.fullscreenElement === studioPdfFocusDialogEl);
+          if (isFullscreen) {
+            try {
+              if (typeof document.exitFullscreen === "function") await document.exitFullscreen();
+            } catch (error) {
+              setStatus("Could not exit PDF fullscreen: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+            } finally {
+              syncStudioPdfFocusFullscreenButton();
+            }
+            return;
+          }
+          if (!studioPdfFocusDialogEl || typeof studioPdfFocusDialogEl.requestFullscreen !== "function") {
+            setStatus("Browser fullscreen is not available for this PDF viewer.", "warning");
+            return;
+          }
+          try {
+            await studioPdfFocusDialogEl.requestFullscreen();
+          } catch (error) {
+            setStatus("Could not enter PDF fullscreen: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+          } finally {
+            syncStudioPdfFocusFullscreenButton();
+          }
+        });
+        actions.appendChild(fullscreenBtn);
+
+        header.appendChild(actions);
+        dialog.appendChild(header);
+
+        const frameSlot = document.createElement("div");
+        frameSlot.className = "studio-pdf-focus-frame-slot";
+        const frame = document.createElement("iframe");
+        frame.className = "studio-pdf-focus-frame";
+        frame.title = "PDF focus viewer";
+        frame.loading = "eager";
+        frameSlot.appendChild(frame);
+        dialog.appendChild(frameSlot);
+
+        overlay.appendChild(dialog);
+        overlay.addEventListener("click", (event) => {
+          if (event.target === overlay) closeStudioPdfFocusViewer();
+        });
+        document.addEventListener("fullscreenchange", syncStudioPdfFocusFullscreenButton);
+
+        document.body.appendChild(overlay);
+        studioPdfFocusOverlayEl = overlay;
+        studioPdfFocusDialogEl = dialog;
+        studioPdfFocusFrameSlotEl = frameSlot;
+        studioPdfFocusFrameEl = frame;
+        studioPdfFocusTitleEl = titleEl;
+        studioPdfFocusOpenLinkEl = openLink;
+        studioPdfFocusFullscreenBtn = fullscreenBtn;
+        studioPdfFocusCloseBtn = closeBtn;
+        syncStudioPdfFocusFullscreenButton();
+        return overlay;
+      }
+
+      function openStudioPdfFocusViewer(viewerUrl, title, sourceFrame) {
+        const src = String(viewerUrl || "").trim();
+        if (!src) return;
+        ensureStudioPdfFocusViewer();
+        studioPdfFocusLastFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        if (studioPdfFocusTitleEl) studioPdfFocusTitleEl.textContent = String(title || "PDF preview").trim() || "PDF preview";
+        if (studioPdfFocusOpenLinkEl) studioPdfFocusOpenLinkEl.href = src;
+        setStudioPdfFocusFrameSource(src, title, sourceFrame);
+        if (document.body) document.body.classList.add("studio-pdf-focus-open");
+        if (studioPdfFocusOverlayEl) studioPdfFocusOverlayEl.hidden = false;
+        syncStudioPdfFocusFullscreenButton();
+        closeStudioUiRefreshMenus();
+        closeExportPreviewMenu();
+        window.setTimeout(() => {
+          if (studioPdfFocusCloseBtn && typeof studioPdfFocusCloseBtn.focus === "function") {
+            studioPdfFocusCloseBtn.focus();
+          }
+        }, 0);
+      }
+
+      function closeStudioPdfFocusViewer() {
+        if (!isStudioPdfFocusOpen()) return false;
+        if (document.fullscreenElement && studioPdfFocusDialogEl && studioPdfFocusDialogEl.contains(document.fullscreenElement)) {
+          try {
+            const exitResult = document.exitFullscreen && document.exitFullscreen();
+            if (exitResult && typeof exitResult.catch === "function") exitResult.catch(() => {});
+          } catch {}
+        }
+        if (studioPdfFocusOverlayEl) studioPdfFocusOverlayEl.hidden = true;
+        restoreStudioPdfFocusMovedFrame();
+        if (studioPdfFocusFrameEl) studioPdfFocusFrameEl.src = "about:blank";
+        if (document.body) document.body.classList.remove("studio-pdf-focus-open");
+        syncStudioPdfFocusFullscreenButton();
+        const focusTarget = studioPdfFocusLastFocusedEl;
+        studioPdfFocusLastFocusedEl = null;
+        if (focusTarget && typeof focusTarget.focus === "function" && document.contains(focusTarget)) {
+          window.setTimeout(() => focusTarget.focus(), 0);
+        }
+        return true;
+      }
+
+      function buildStudioPdfResourceUrl(options, useEditorResourceContext) {
         const token = getToken();
         if (!token) return "";
         const pdfPath = String(options && options.path ? options.path : "").trim();
         if (!pdfPath) return "";
         const effectivePath = getEffectiveSavePath();
-        const sourcePath = effectivePath || sourceState.path || "";
+        const sourcePath = useEditorResourceContext ? (effectivePath || sourceState.path || "") : "";
+        const resourceDir = resourceDirInput && resourceDirInput.value.trim() ? resourceDirInput.value.trim() : "";
         const params = new URLSearchParams({ token, path: pdfPath });
         if (sourcePath) {
           params.set("sourcePath", sourcePath);
-        } else if (resourceDirInput && resourceDirInput.value.trim()) {
-          params.set("resourceDir", resourceDirInput.value.trim());
+        } else if (resourceDir) {
+          params.set("resourceDir", resourceDir);
         }
         return "/pdf-resource?" + params.toString();
       }
 
-      function createStudioPdfCard(block) {
+      function syncStudioPdfFocusFullscreenButton() {
+        if (!studioPdfFocusFullscreenBtn) return;
+        const isFullscreen = Boolean(document.fullscreenElement && studioPdfFocusDialogEl && document.fullscreenElement === studioPdfFocusDialogEl);
+        studioPdfFocusFullscreenBtn.replaceChildren(makeStudioUiRefreshIcon(isFullscreen ? "fullscreen-exit" : "fullscreen"));
+        const label = isFullscreen ? "Exit fullscreen" : "Fullscreen";
+        studioPdfFocusFullscreenBtn.title = isFullscreen
+          ? "Exit browser fullscreen and keep the PDF focus viewer open."
+          : "Ask the browser to make this PDF viewer fullscreen.";
+        studioPdfFocusFullscreenBtn.setAttribute("aria-label", label);
+        studioPdfFocusFullscreenBtn.setAttribute("aria-pressed", isFullscreen ? "true" : "false");
+      }
+
+      function restoreStudioPdfFocusMovedFrame() {
+        const state = studioPdfFocusMovedFrameState;
+        studioPdfFocusMovedFrameState = null;
+        if (!state || !state.frame) return;
+        const frame = state.frame;
+        frame.className = state.className;
+        frame.style.cssText = state.styleCssText;
+        if (state.title !== null) frame.setAttribute("title", state.title);
+        else frame.removeAttribute("title");
+        if (state.placeholder && state.placeholder.parentNode) {
+          state.placeholder.parentNode.insertBefore(frame, state.placeholder);
+          state.placeholder.remove();
+        } else if (state.parent && state.parent.isConnected) {
+          state.parent.insertBefore(frame, state.nextSibling && state.nextSibling.parentNode === state.parent ? state.nextSibling : null);
+        }
+      }
+
+      function setStudioPdfFocusFrameSource(src, title, sourceFrame) {
+        if (!studioPdfFocusFrameSlotEl || !studioPdfFocusFrameEl) return;
+        restoreStudioPdfFocusMovedFrame();
+        const sourceIframe = sourceFrame instanceof HTMLIFrameElement ? sourceFrame : null;
+        if (sourceIframe && sourceIframe.isConnected) {
+          const placeholder = document.createElement("span");
+          placeholder.hidden = true;
+          const parent = sourceIframe.parentNode;
+          parent && parent.insertBefore(placeholder, sourceIframe);
+          studioPdfFocusMovedFrameState = {
+            frame: sourceIframe,
+            parent,
+            nextSibling: placeholder.nextSibling,
+            placeholder,
+            className: sourceIframe.className,
+            styleCssText: sourceIframe.style.cssText,
+            title: sourceIframe.getAttribute("title"),
+          };
+          if (studioPdfFocusFrameEl.parentNode) studioPdfFocusFrameEl.parentNode.removeChild(studioPdfFocusFrameEl);
+          sourceIframe.classList.add("studio-pdf-focus-frame");
+          sourceIframe.style.height = "auto";
+          sourceIframe.style.flex = "1 1 auto";
+          sourceIframe.title = String(title || "PDF focus viewer").trim() || "PDF focus viewer";
+          studioPdfFocusFrameSlotEl.appendChild(sourceIframe);
+          return;
+        }
+        if (!studioPdfFocusFrameEl.parentNode) studioPdfFocusFrameSlotEl.appendChild(studioPdfFocusFrameEl);
+        studioPdfFocusFrameEl.src = src;
+        studioPdfFocusFrameEl.title = String(title || "PDF focus viewer").trim() || "PDF focus viewer";
+      }
+
+      function openStudioPdfFocusFromButton(buttonEl) {
+        if (!buttonEl) return false;
+        const card = buttonEl.closest && buttonEl.closest(".studio-pdf-card");
+        const viewerUrl = String(buttonEl.dataset && buttonEl.dataset.studioPdfViewerUrl ? buttonEl.dataset.studioPdfViewerUrl : "").trim()
+          || String(card && card.dataset ? (card.dataset.studioPdfViewerUrl || "") : "").trim();
+        const title = String(buttonEl.dataset && buttonEl.dataset.studioPdfTitle ? buttonEl.dataset.studioPdfTitle : "").trim()
+          || String(card && card.dataset ? (card.dataset.studioPdfTitle || "") : "").trim()
+          || "PDF preview";
+        const sourceFrame = card && typeof card.querySelector === "function" ? card.querySelector("iframe.studio-pdf-frame") : null;
+        if (!viewerUrl) return false;
+        openStudioPdfFocusViewer(viewerUrl, title, sourceFrame);
+        return true;
+      }
+
+      function handleStudioPdfFocusButtonClick(event) {
+        const target = event && event.target;
+        const buttonEl = target instanceof Element ? target.closest(".studio-pdf-card-focus") : null;
+        if (!buttonEl) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") {
+          event.stopImmediatePropagation();
+        }
+        if (!openStudioPdfFocusFromButton(buttonEl)) {
+          setStatus("Could not open PDF focus view for this card.", "warning");
+        }
+      }
+
+      function createStudioPdfCard(block, useEditorResourceContext) {
         const options = block && block.options ? block.options : {};
         const path = String(options.path || "").trim();
         const title = String(options.title || path || "Embedded PDF").trim();
         const caption = String(options.caption || "").trim();
         const height = normalizeStudioPdfHeight(options.height);
         const page = normalizeStudioPdfPage(options.page);
-        const resourceUrl = buildStudioPdfResourceUrl(options);
+        const resourceUrl = buildStudioPdfResourceUrl(options, useEditorResourceContext);
         const viewerUrl = resourceUrl && page ? resourceUrl + "#page=" + encodeURIComponent(String(page)) : resourceUrl;
 
         const card = document.createElement("figure");
         card.className = "studio-pdf-card";
+        if (card.dataset) {
+          card.dataset.studioPdfViewerUrl = viewerUrl || "";
+          card.dataset.studioPdfTitle = title;
+        }
 
         const header = document.createElement("figcaption");
         header.className = "studio-pdf-card-header";
+
+        const titleGroup = document.createElement("div");
+        titleGroup.className = "studio-pdf-card-title-group";
+        if (resourceUrl) {
+          const focusBtn = document.createElement("button");
+          focusBtn.type = "button";
+          focusBtn.className = "studio-pdf-card-action studio-pdf-card-focus";
+          focusBtn.title = "Open this PDF in a larger Studio overlay.";
+          focusBtn.setAttribute("aria-label", "Focus PDF");
+          if (focusBtn.dataset) {
+            focusBtn.dataset.studioPdfViewerUrl = viewerUrl;
+            focusBtn.dataset.studioPdfTitle = title;
+          }
+          focusBtn.appendChild(makeStudioUiRefreshIcon("focus"));
+          focusBtn.addEventListener("click", handleStudioPdfFocusButtonClick);
+          titleGroup.appendChild(focusBtn);
+        }
         const label = document.createElement("div");
         label.className = "studio-pdf-card-title";
         label.textContent = title;
-        header.appendChild(label);
+        titleGroup.appendChild(label);
+        header.appendChild(titleGroup);
 
         if (resourceUrl) {
+          const actions = document.createElement("div");
+          actions.className = "studio-pdf-card-actions";
+
           const openLink = document.createElement("a");
-          openLink.className = "studio-pdf-card-link";
+          openLink.className = "studio-pdf-card-link studio-pdf-card-action";
           openLink.href = viewerUrl;
           openLink.target = "_blank";
           openLink.rel = "noopener noreferrer";
           openLink.textContent = "Open PDF";
-          header.appendChild(openLink);
+          actions.appendChild(openLink);
+
+          header.appendChild(actions);
         }
         card.appendChild(header);
 
@@ -3919,7 +4263,7 @@
         return card;
       }
 
-      function renderStudioPdfBlocksInElement(targetEl, blocks) {
+      function renderStudioPdfBlocksInElement(targetEl, blocks, useEditorResourceContext) {
         if (!targetEl || !Array.isArray(blocks) || blocks.length === 0) return;
         const candidates = Array.from(targetEl.querySelectorAll("p, pre, div"));
         blocks.forEach((block) => {
@@ -3927,7 +4271,7 @@
           if (!placeholder) return;
           const match = candidates.find((el) => String(el.textContent || "").trim() === placeholder);
           if (match && match.parentNode) {
-            match.replaceWith(createStudioPdfCard(block));
+            match.replaceWith(createStudioPdfCard(block, useEditorResourceContext));
           }
         });
       }
@@ -4952,6 +5296,22 @@
         return "";
       }
 
+      async function fetchWithTimeout(url, options, timeoutMs, timeoutLabel) {
+        if (typeof AbortController === "undefined") return fetch(url, options);
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || PDF_EXPORT_FETCH_TIMEOUT_MS));
+        try {
+          return await fetch(url, { ...(options || {}), signal: controller.signal });
+        } catch (error) {
+          if (error && error.name === "AbortError") {
+            throw new Error((timeoutLabel || "Request") + " timed out. Try a smaller export or check the PDF toolchain.");
+          }
+          throw error;
+        } finally {
+          window.clearTimeout(timer);
+        }
+      }
+
       async function exportRightPanePdf() {
         if (uiBusy || previewExportInProgress) {
           setStatus("Studio is busy.", "warning");
@@ -5011,7 +5371,7 @@
         setStatus("Exporting PDF…", "warning");
 
         try {
-          const response = await fetch("/export-pdf?token=" + encodeURIComponent(token), {
+          const response = await fetchWithTimeout("/export-pdf?token=" + encodeURIComponent(token), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -5024,7 +5384,7 @@
               editorPdfLanguage: editorPdfLanguage,
               filenameHint: filenameHint,
             }),
-          });
+          }, PDF_EXPORT_FETCH_TIMEOUT_MS, "PDF export");
 
           const contentType = String(response.headers.get("content-type") || "").toLowerCase();
           if (!response.ok) {
@@ -5178,7 +5538,7 @@
         setStatus("Exporting HTML…", "warning");
 
         try {
-          const response = await fetch("/export-html?token=" + encodeURIComponent(token), {
+          const response = await fetchWithTimeout("/export-html?token=" + encodeURIComponent(token), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -5192,7 +5552,7 @@
               filenameHint: filenameHint,
               title: titleHint,
             }),
-          });
+          }, HTML_EXPORT_FETCH_TIMEOUT_MS, "HTML export");
 
           const contentType = String(response.headers.get("content-type") || "").toLowerCase();
           if (!response.ok) {
@@ -5521,7 +5881,7 @@
           clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown, previewFallbackOptions);
-          renderStudioPdfBlocksInElement(targetEl, pdfPrepared.blocks);
+          renderStudioPdfBlocksInElement(targetEl, pdfPrepared.blocks, previewingEditorText);
           applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
           await renderAnnotationMathInElement(targetEl);
           decoratePdfEmbeds(targetEl);
@@ -13876,6 +14236,12 @@
         });
       }
 
+      if (zenModeBtn) {
+        zenModeBtn.addEventListener("click", () => {
+          setStudioZenMode(!studioZenModeEnabled);
+        });
+      }
+
       sendRunBtn.addEventListener("click", () => {
         if (getAbortablePendingKind() === "direct") {
           requestCancelForPendingRequest("direct");
@@ -14056,6 +14422,13 @@
           focusReviewNoteInPanel(noteId);
         });
       }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        const focusBtn = target instanceof Element ? target.closest(".studio-pdf-card-focus") : null;
+        if (!focusBtn) return;
+        handleStudioPdfFocusButtonClick(event);
+      }, true);
 
       document.addEventListener("click", (event) => {
         const target = event.target;
