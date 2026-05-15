@@ -3329,7 +3329,7 @@
       }
     }
 
-    /* Default refreshed Studio layout. Classic layout remains available with ?uiRefresh=0 or the footer UI switch. */
+    /* Default Studio layout. The legacy classic layout remains available only via ?uiRefresh=0. */
     body.studio-ui-refresh {
       --studio-editor-font-size: 12px;
       --studio-editor-line-number-font-size: 11px;

@@ -1679,7 +1679,6 @@
       let lineNumbersEnabled = false;
       let lineNumbersRenderRaf = null;
       let annotationsEnabled = true;
-      const STUDIO_UI_REFRESH_STORAGE_KEY = "piStudio.uiRefresh";
       const STUDIO_ZEN_MODE_STORAGE_KEY = "piStudio.zenMode";
       const studioUiRefreshEnabled = readStudioUiRefreshEnabled();
       const EDITOR_FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 15, 16, 18];
@@ -1724,16 +1723,8 @@
         const isFalsey = (value) => ["0", "false", "no", "off", "classic"].indexOf(normalize(value)) !== -1;
         if (queryValue !== null) {
           const normalizedQuery = normalize(queryValue);
-          const enabled = isTruthy(queryValue) || (!isFalsey(queryValue) && normalizedQuery !== "");
-          try {
-            window.localStorage && window.localStorage.setItem(STUDIO_UI_REFRESH_STORAGE_KEY, enabled ? "1" : "0");
-          } catch {}
-          return enabled;
+          return isTruthy(queryValue) || (!isFalsey(queryValue) && normalizedQuery !== "");
         }
-        try {
-          const stored = window.localStorage ? window.localStorage.getItem(STUDIO_UI_REFRESH_STORAGE_KEY) : null;
-          if (stored !== null) return stored !== "0" && !isFalsey(stored);
-        } catch {}
         return true;
       }
 
@@ -1762,7 +1753,7 @@
       function syncStudioZenModeUi() {
         if (document.body) document.body.classList.toggle("studio-zen-mode", studioZenModeEnabled);
         if (!zenModeBtn) return;
-        zenModeBtn.textContent = studioZenModeEnabled ? "Exit Zen" : "⊙ Zen";
+        zenModeBtn.textContent = studioZenModeEnabled ? "Exit Zen" : "Zen";
         zenModeBtn.title = studioZenModeEnabled ? "Show full Studio controls." : "Hide secondary Studio controls.";
         zenModeBtn.setAttribute("aria-pressed", studioZenModeEnabled ? "true" : "false");
       }
@@ -2001,37 +1992,6 @@
         return { name, anchor: anchorEl, button: buttonEl, menu: menuEl };
       }
 
-      function setStudioUiRefreshPreference(enabled) {
-        try {
-          window.localStorage && window.localStorage.setItem(STUDIO_UI_REFRESH_STORAGE_KEY, enabled ? "1" : "0");
-        } catch {}
-        try {
-          const url = new URL(window.location.href);
-          url.searchParams.set("uiRefresh", enabled ? "1" : "0");
-          window.location.assign(url.toString());
-        } catch {
-          window.location.reload();
-        }
-      }
-
-      function setupStudioUiRefreshToggleButton() {
-        if (!footerMetaEl || document.getElementById("studioUiRefreshToggleBtn")) return;
-        const button = makeStudioUiRefreshElement("button", "footer-compact-btn studio-ui-refresh-toggle", studioUiRefreshEnabled ? "UI: Fresh" : "UI: Classic");
-        button.id = "studioUiRefreshToggleBtn";
-        button.type = "button";
-        button.title = studioUiRefreshEnabled
-          ? "Switch Studio to the classic layout."
-          : "Switch Studio to the refreshed layout.";
-        button.addEventListener("click", () => {
-          setStudioUiRefreshPreference(!studioUiRefreshEnabled);
-        });
-        if (compactBtn && compactBtn.parentNode === footerMetaEl) {
-          compactBtn.insertAdjacentElement("afterend", button);
-        } else {
-          footerMetaEl.appendChild(button);
-        }
-      }
-
       function setupStudioUiRefreshPrototype() {
         if (!studioUiRefreshEnabled || studioUiRefreshUi) return;
         const leftHeaderEl = document.getElementById("leftSectionHeader");
@@ -2161,7 +2121,6 @@
         syncStudioUiRefreshSummaries();
       }
 
-      setupStudioUiRefreshToggleButton();
       setupStudioUiRefreshPrototype();
       syncStudioZenModeUi();
       const annotationHelpers = globalThis.PiStudioAnnotationHelpers;

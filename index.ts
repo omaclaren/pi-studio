@@ -7968,7 +7968,7 @@ ${cssVarsBlock}
       <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
-      <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls.">⊙ Zen</button>
+      <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls.">Zen</button>
     </div>
   </header>
 

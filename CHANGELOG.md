@@ -4,10 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-05-16
+
+### Changed
+- Simplified the global Zen button label to text-only (`Zen` / `Exit Zen`).
+- Removed the visible Fresh/Classic UI toggle; Studio now keeps the refreshed UI by default, with the legacy layout still available only via `?uiRefresh=0` for now.
+
 ## [0.9.2] — 2026-05-16
 
 ### Added
-- Added a global **⊙ Zen** / **Exit Zen** toggle that hides secondary Studio chrome while preserving the current pane layout and panel focus state.
+- Added a global **Zen** / **Exit Zen** toggle that hides secondary Studio chrome while preserving the current pane layout and panel focus state.
 - Added a Focus action for explicit `studio-pdf` preview cards, opening the embedded PDF in a larger Studio overlay with optional browser fullscreen.
 
 ### Fixed
