@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-05-16
+
+### Added
+- Added first-cut Studio **Quiz me** support from the Review menu, with editor/selection scope, audience angle, quiz thinking controls, one-question-at-a-time answer checking, tutor discussion, Markdown/math-rendered cards, and minimize/resume behavior.
+
 ## [0.9.3] — 2026-05-16
 
 ### Changed

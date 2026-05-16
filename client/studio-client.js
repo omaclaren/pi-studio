@@ -77,6 +77,7 @@
       const pullLatestBtn = document.getElementById("pullLatestBtn");
       const insertHeaderBtn = document.getElementById("insertHeaderBtn");
       const critiqueBtn = document.getElementById("critiqueBtn");
+      const quizBtn = document.getElementById("quizBtn");
       const lensSelect = document.getElementById("lensSelect");
       const fileInput = document.getElementById("fileInput");
       const resourceDirBtn = document.getElementById("resourceDirBtn");
@@ -235,6 +236,31 @@
       const PDF_EXPORT_FETCH_TIMEOUT_MS = 180_000;
       const HTML_EXPORT_FETCH_TIMEOUT_MS = 180_000;
       const EDITOR_TAB_TEXT = "  ";
+      const QUIZ_DEFAULT_COUNT = 5;
+      const QUIZ_ANGLES = ["general", "scientist", "mathematician", "statistician", "developer", "reviewer"];
+      const QUIZ_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
+      let quizOverlayEl = null;
+      let quizDialogEl = null;
+      let quizPreviewRenderNonce = 0;
+      const quizMarkdownRenderCache = new Map();
+      let quizState = {
+        open: false,
+        requestId: null,
+        pending: false,
+        sourceText: "",
+        sourceLabel: "Studio editor",
+        scope: "editor",
+        angle: "general",
+        thinking: "minimal",
+        questionCount: QUIZ_DEFAULT_COUNT,
+        cards: [],
+        index: 0,
+        answer: "",
+        feedback: null,
+        discussion: [],
+        status: "",
+        error: "",
+      };
       let replTmuxAvailable = null;
       let replSessions = [];
       let replActiveSessionName = "";
@@ -2002,7 +2028,7 @@
         if (!isEditorOnlyMode && critiqueBtn && lensSelect) {
           const reviewButton = makeStudioUiRefreshElement("button", "studio-refresh-tool-tab studio-refresh-review-btn", "Review");
           reviewMenu = makeStudioUiRefreshMenu(reviewButton, "review", "studio-refresh-review-anchor");
-          appendStudioUiRefreshMenuSection(reviewMenu.menu, "Action", [critiqueBtn]);
+          appendStudioUiRefreshMenuSection(reviewMenu.menu, "Action", [critiqueBtn, quizBtn]);
           appendStudioUiRefreshMenuSection(reviewMenu.menu, "Setting", [lensSelect]);
         }
 
@@ -3010,6 +3036,18 @@
           && typeof studioPdfFocusDialogEl.contains === "function"
           && studioPdfFocusDialogEl.contains(event.target)
         );
+        const quizOwnsEvent = Boolean(
+          quizDialogEl
+          && event.target
+          && typeof quizDialogEl.contains === "function"
+          && quizDialogEl.contains(event.target)
+        );
+
+        if (isQuizOpen() && plainEscape) {
+          event.preventDefault();
+          minimizeQuizOverlay();
+          return;
+        }
 
         if (isStudioPdfFocusOpen() && plainEscape) {
           event.preventDefault();
@@ -3035,7 +3073,7 @@
           return;
         }
 
-        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || pdfFocusOwnsEvent) {
+        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || pdfFocusOwnsEvent || quizOwnsEvent) {
           return;
         }
 
@@ -7270,6 +7308,645 @@
 
       function makeStudioDraftId() {
         return "draft_" + makeRequestId();
+      }
+
+      function normalizeQuizAngle(angle) {
+        const value = String(angle || "").trim().toLowerCase();
+        return QUIZ_ANGLES.includes(value) ? value : "general";
+      }
+
+      function getQuizAngleLabel(angle) {
+        switch (normalizeQuizAngle(angle)) {
+          case "scientist": return "Scientist";
+          case "mathematician": return "Mathematician";
+          case "statistician": return "Statistician";
+          case "developer": return "Developer";
+          case "reviewer": return "Reviewer";
+          default: return "General";
+        }
+      }
+
+      function normalizeQuizThinking(thinking) {
+        const value = String(thinking || "").trim().toLowerCase();
+        return QUIZ_THINKING_LEVELS.includes(value) ? value : "minimal";
+      }
+
+      function getQuizThinkingLabel(thinking) {
+        switch (normalizeQuizThinking(thinking)) {
+          case "off": return "Off";
+          case "low": return "Low";
+          case "medium": return "Medium";
+          case "high": return "High";
+          default: return "Minimal";
+        }
+      }
+
+      function getQuizKindLabel(kind) {
+        const value = String(kind || "").trim().toLowerCase();
+        if (!value) return "";
+        return value
+          .split(/[-_\s]+/)
+          .filter(Boolean)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(" ");
+      }
+
+      function getQuizModelLabel() {
+        const label = String(modelLabel || "").trim();
+        const withoutThinking = label.replace(/\s*\((?:off|minimal|low|medium|high|xhigh)\)\s*$/i, "").trim();
+        return withoutThinking || label || "current Pi model";
+      }
+
+      function shouldRenderQuizMarkdownPreview() {
+        const lang = normalizeFenceLanguage(editorLanguage || "");
+        return !lang || lang === "markdown" || lang === "latex";
+      }
+
+      function renderQuizMarkdownBlockHtml(markdown, className) {
+        const source = String(markdown || "");
+        return "<div class='studio-quiz-markdown-body rendered-markdown " + escapeHtml(className || "") + "' data-quiz-markdown='" + escapeHtml(source) + "'>"
+          + "<div class='studio-quiz-markdown-fallback'>" + escapeHtml(source) + "</div>"
+          + "</div>";
+      }
+
+      function restoreQuizScrollTop(scrollTop) {
+        const scrollEl = getQuizScrollContainer();
+        if (!scrollEl) return;
+        scrollEl.scrollTop = Math.max(0, Number(scrollTop) || 0);
+      }
+
+      function restoreQuizScrollTopSoon(scrollTop) {
+        restoreQuizScrollTop(scrollTop);
+        window.requestAnimationFrame(() => restoreQuizScrollTop(scrollTop));
+      }
+
+      function isQuizScrollNearBottom(scrollEl) {
+        if (!scrollEl) return false;
+        return (scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop) < 80;
+      }
+
+      function scrollQuizToBottom() {
+        const scrollEl = getQuizScrollContainer();
+        if (!scrollEl) return;
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
+
+      function revealQuizTarget(selector) {
+        if (!quizDialogEl || !selector) return false;
+        const scrollEl = getQuizScrollContainer();
+        const target = quizDialogEl.querySelector(selector);
+        if (!scrollEl || !(target instanceof HTMLElement)) return false;
+        const targetTop = target.offsetTop;
+        const targetBottom = targetTop + target.offsetHeight;
+        const visibleTop = scrollEl.scrollTop;
+        const visibleBottom = visibleTop + scrollEl.clientHeight;
+        if (targetTop >= visibleTop + 12 && targetBottom <= visibleBottom - 12) return true;
+        scrollEl.scrollTop = Math.max(0, targetTop - 18);
+        return true;
+      }
+
+      function applyQuizScrollIntent(options, fallbackScrollTop, wasNearBottom) {
+        const opts = options && typeof options === "object" ? options : {};
+        if (opts.scrollToBottom || (opts.followBottomIfNearBottom && wasNearBottom)) {
+          scrollQuizToBottom();
+          return;
+        }
+        if (opts.revealSelector && revealQuizTarget(opts.revealSelector)) {
+          return;
+        }
+        if (opts.preserveScroll) restoreQuizScrollTop(fallbackScrollTop);
+      }
+
+      function applyQuizScrollIntentSoon(options, fallbackScrollTop, wasNearBottom) {
+        applyQuizScrollIntent(options, fallbackScrollTop, wasNearBottom);
+        window.requestAnimationFrame(() => applyQuizScrollIntent(options, fallbackScrollTop, wasNearBottom));
+      }
+
+      function trimQuizMarkdownRenderCache() {
+        while (quizMarkdownRenderCache.size > 80) {
+          const firstKey = quizMarkdownRenderCache.keys().next().value;
+          if (!firstKey) break;
+          quizMarkdownRenderCache.delete(firstKey);
+        }
+      }
+
+      async function renderQuizMarkdownToHtml(markdown) {
+        const source = String(markdown || "");
+        const cacheKey = String(editorLanguage || "markdown") + "\n" + source;
+        if (quizMarkdownRenderCache.has(cacheKey)) return quizMarkdownRenderCache.get(cacheKey);
+        const renderedHtml = await renderMarkdownWithPandoc(source, { includeEditorLanguage: true });
+        const sanitized = sanitizeRenderedHtml(renderedHtml, source, { stripMarkdownHtmlComments: editorLanguage !== "latex" });
+        quizMarkdownRenderCache.set(cacheKey, sanitized);
+        trimQuizMarkdownRenderCache();
+        return sanitized;
+      }
+
+      async function renderQuizMarkdownFields(nonce, options) {
+        const opts = options && typeof options === "object" ? options : {};
+        const fallbackScrollTop = Number(opts.fallbackScrollTop) || 0;
+        const wasNearBottom = Boolean(opts.wasNearBottom);
+        if (!quizDialogEl || !shouldRenderQuizMarkdownPreview()) {
+          applyQuizScrollIntentSoon(opts, fallbackScrollTop, wasNearBottom);
+          return;
+        }
+        const targets = Array.from(quizDialogEl.querySelectorAll("[data-quiz-markdown]")).filter((target) => target instanceof HTMLElement);
+        const preserveScroll = Boolean(opts.preserveScroll || opts.revealSelector || opts.scrollToBottom || opts.followBottomIfNearBottom);
+        for (const target of targets) {
+          const markdown = target.getAttribute("data-quiz-markdown") || "";
+          if (!markdown.trim()) continue;
+          const scrollEl = preserveScroll ? getQuizScrollContainer() : null;
+          const scrollTop = scrollEl ? scrollEl.scrollTop : fallbackScrollTop;
+          try {
+            const html = await renderQuizMarkdownToHtml(markdown);
+            if (nonce !== quizPreviewRenderNonce || !quizDialogEl || !quizDialogEl.contains(target)) return;
+            target.innerHTML = html;
+            await renderAnnotationMathInElement(target);
+            decoratePdfEmbeds(target);
+            await renderPdfPreviewsInElement(target);
+            await renderMermaidInElement(target);
+            await renderMathFallbackInElement(target);
+            decorateCopyablePreviewBlocks(target);
+            if (preserveScroll) restoreQuizScrollTopSoon(scrollTop);
+          } catch (error) {
+            console.error("Quiz markdown preview render failed:", error);
+            target.classList.add("studio-quiz-markdown-render-failed");
+          }
+        }
+        applyQuizScrollIntentSoon(opts, fallbackScrollTop, wasNearBottom);
+      }
+
+      function isQuizOpen() {
+        return Boolean(quizOverlayEl && !quizOverlayEl.hidden);
+      }
+
+      function getQuizCurrentCard() {
+        if (!Array.isArray(quizState.cards) || quizState.cards.length === 0) return null;
+        const index = Math.max(0, Math.min(quizState.index || 0, quizState.cards.length - 1));
+        return quizState.cards[index] || null;
+      }
+
+      function getQuizSourceLabel(scope) {
+        const base = sourceState && sourceState.label ? sourceState.label : "Studio editor";
+        return scope === "selection" ? base + " selection" : base;
+      }
+
+      function ensureQuizOverlay() {
+        if (quizOverlayEl && quizDialogEl) return quizOverlayEl;
+        quizOverlayEl = document.createElement("div");
+        quizOverlayEl.className = "studio-quiz-overlay";
+        quizOverlayEl.setAttribute("role", "presentation");
+        quizOverlayEl.hidden = true;
+        quizOverlayEl.innerHTML = "<div class='studio-quiz-dialog' role='dialog' aria-modal='true' aria-label='Studio quiz'></div>";
+        document.body.appendChild(quizOverlayEl);
+        quizDialogEl = quizOverlayEl.querySelector(".studio-quiz-dialog");
+        quizOverlayEl.addEventListener("click", (event) => {
+          if (event.target === quizOverlayEl) closeQuizOverlay();
+        });
+        quizDialogEl.addEventListener("input", (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (target.matches("[data-quiz-input='answer']")) {
+            const card = getQuizCurrentCard();
+            if (card) card.answer = target.value;
+            quizState.answer = target.value;
+          }
+        });
+        quizDialogEl.addEventListener("click", (event) => {
+          const target = event.target instanceof Element ? event.target.closest("[data-quiz-action]") : null;
+          if (!target) return;
+          event.preventDefault();
+          handleQuizAction(target.getAttribute("data-quiz-action") || "");
+        });
+        quizDialogEl.addEventListener("keydown", handleQuizKeydown);
+        return quizOverlayEl;
+      }
+
+      function resetQuizStateFromEditor() {
+        const previousAngle = normalizeQuizAngle(quizState.angle);
+        const previousThinking = normalizeQuizThinking(quizState.thinking);
+        const previousCount = quizState.questionCount || QUIZ_DEFAULT_COUNT;
+        const selection = getEditorSelectionRange();
+        const hasSelection = Boolean(selection.selected && selection.selected.trim());
+        const scope = hasSelection ? "selection" : "editor";
+        quizState = {
+          open: true,
+          requestId: null,
+          pending: false,
+          sourceText: hasSelection ? selection.selected : selection.raw,
+          sourceLabel: getQuizSourceLabel(scope),
+          scope,
+          angle: previousAngle,
+          thinking: previousThinking,
+          questionCount: previousCount,
+          cards: [],
+          index: 0,
+          answer: "",
+          feedback: null,
+          discussion: [],
+          status: "",
+          error: "",
+        };
+      }
+
+      function hasResumableQuiz() {
+        return Boolean(
+          quizState.pending ||
+          (Array.isArray(quizState.cards) && quizState.cards.length > 0) ||
+          (quizState.sourceText && (quizState.status || quizState.error))
+        );
+      }
+
+      function openQuizOverlay() {
+        ensureQuizOverlay();
+        if (!hasResumableQuiz()) {
+          resetQuizStateFromEditor();
+        } else {
+          quizState.open = true;
+        }
+        quizOverlayEl.hidden = false;
+        document.body.classList.add("studio-quiz-open");
+        renderQuizOverlay();
+      }
+
+      function closeQuizOverlay() {
+        if (!quizOverlayEl) return;
+        quizOverlayEl.hidden = true;
+        document.body.classList.remove("studio-quiz-open");
+        quizState.open = false;
+        syncActionButtons();
+      }
+
+      function minimizeQuizOverlay() {
+        closeQuizOverlay();
+        setStatus("Quiz minimized — use Review → Quiz me to resume.", "success");
+      }
+
+      function handleQuizKeydown(event) {
+        if (!event) return;
+        const key = typeof event.key === "string" ? event.key : "";
+        const plainEscape = key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+        const submitShortcut = key === "Enter" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
+        if (plainEscape) {
+          event.preventDefault();
+          event.stopPropagation();
+          minimizeQuizOverlay();
+          return;
+        }
+        if (submitShortcut) {
+          event.preventDefault();
+          event.stopPropagation();
+          const card = getQuizCurrentCard();
+          if (!card) {
+            startQuizRequest();
+            return;
+          }
+          if (!card.feedback) {
+            checkQuizAnswer();
+            return;
+          }
+          const promptEl = quizDialogEl ? quizDialogEl.querySelector("[data-quiz-field='discussion']") : null;
+          const prompt = promptEl ? String(promptEl.value || "").trim() : "";
+          if (prompt) {
+            discussQuizCard();
+          } else if (quizState.index < quizState.cards.length - 1) {
+            quizState.index = Math.min(quizState.cards.length - 1, (quizState.index || 0) + 1);
+            quizState.error = "";
+            quizState.status = "";
+            renderQuizOverlay();
+          }
+          return;
+        }
+        event.stopPropagation();
+      }
+
+      function renderQuizOption(value, selected, label) {
+        return "<option value='" + escapeHtml(value) + "'" + (value === selected ? " selected" : "") + ">" + escapeHtml(label) + "</option>";
+      }
+
+      function renderQuizSetupHtml() {
+        const scope = quizState.scope === "selection" ? "selection" : "editor";
+        const angle = normalizeQuizAngle(quizState.angle);
+        const thinking = normalizeQuizThinking(quizState.thinking);
+        const count = Math.max(1, Math.min(8, Math.floor(Number(quizState.questionCount) || QUIZ_DEFAULT_COUNT)));
+        const selection = getEditorSelectionRange();
+        const hasSelection = Boolean(selection.selected && selection.selected.trim());
+        return "<div class='studio-quiz-setup'>"
+          + "<p class='studio-quiz-copy'>A short active-recall loop: answer one question, check it, ask about the card if useful, then move on.</p>"
+          + "<div class='studio-quiz-fields'>"
+          + "<label>Scope<select data-quiz-field='scope'>"
+          + renderQuizOption("editor", scope, "Editor")
+          + (hasSelection ? renderQuizOption("selection", scope, "Selection") : "")
+          + "</select></label>"
+          + "<label>Angle<select data-quiz-field='angle'>"
+          + QUIZ_ANGLES.map((candidate) => renderQuizOption(candidate, angle, getQuizAngleLabel(candidate))).join("")
+          + "</select></label>"
+          + "<label>Thinking<select data-quiz-field='thinking'>"
+          + QUIZ_THINKING_LEVELS.map((candidate) => renderQuizOption(candidate, thinking, getQuizThinkingLabel(candidate))).join("")
+          + "</select></label>"
+          + "<label>Questions<input data-quiz-field='count' type='number' min='1' max='8' value='" + String(count) + "'></label>"
+          + "</div>"
+          + "<div class='studio-quiz-source-note'>Source: " + escapeHtml(getQuizSourceLabel(scope)) + " · " + escapeHtml(String((scope === "selection" ? selection.selected : selection.raw).trim().length)) + " chars · Studio model: " + escapeHtml(getQuizModelLabel()) + "</div>"
+          + (quizState.error ? "<div class='studio-quiz-error'>" + escapeHtml(quizState.error) + "</div>" : "")
+          + (quizState.status ? "<div class='studio-quiz-status'>" + escapeHtml(quizState.status) + "</div>" : "")
+          + "<div class='studio-quiz-actions'><button data-quiz-action='start' type='button'" + (quizState.pending ? " disabled" : "") + ">" + (quizState.pending ? "Generating…" : "Start quiz") + "</button></div>"
+          + "</div>";
+      }
+
+      function getQuizScrollContainer() {
+        if (!quizDialogEl) return null;
+        return quizDialogEl.querySelector(".studio-quiz-card, .studio-quiz-setup");
+      }
+
+      function renderQuizCardHtml() {
+        const card = getQuizCurrentCard();
+        if (!card) return renderQuizSetupHtml();
+        const total = quizState.cards.length;
+        const index = Math.max(0, Math.min(quizState.index || 0, total - 1));
+        const feedback = card.feedback || null;
+        const answer = typeof card.answer === "string" ? card.answer : "";
+        const discussion = Array.isArray(card.discussion) ? card.discussion : [];
+        const scoreClass = feedback && feedback.score ? String(feedback.score).toLowerCase().replace(/[^a-z0-9_-]/g, "") : "";
+        const idealAnswer = feedback && feedback.idealAnswer ? feedback.idealAnswer : (card.idealAnswer || "");
+        const kindLabel = getQuizKindLabel(card.kind);
+        const cardMeta = [kindLabel, getQuizAngleLabel(quizState.angle), quizState.sourceLabel || "Studio editor"].filter(Boolean).join(" · ");
+        const renderMarkdown = shouldRenderQuizMarkdownPreview();
+        return "<div class='studio-quiz-card'>"
+          + "<div class='studio-quiz-meta'><span>Question " + String(index + 1) + " of " + String(total) + "</span><span>" + escapeHtml(cardMeta) + "</span></div>"
+          + (card.snippet ? (renderMarkdown ? renderQuizMarkdownBlockHtml(card.snippet, "studio-quiz-snippet") : "<pre class='studio-quiz-snippet'><code>" + escapeHtml(card.snippet) + "</code></pre>") : "")
+          + (renderMarkdown ? renderQuizMarkdownBlockHtml(card.question || "", "studio-quiz-question") : "<div class='studio-quiz-question'>" + escapeHtml(card.question || "") + "</div>")
+          + "<label class='studio-quiz-answer-label'>Your answer<textarea data-quiz-input='answer' rows='6' placeholder='Explain it in your own words…'" + (feedback ? " disabled" : "") + ">" + escapeHtml(answer) + "</textarea></label>"
+          + (feedback ? "<div class='studio-quiz-feedback studio-quiz-score-" + escapeHtml(scoreClass) + "'>"
+            + "<div class='studio-quiz-feedback-title'>" + escapeHtml(feedback.score || "feedback") + "</div>"
+            + (feedback.feedback ? renderQuizMarkdownBlockHtml(feedback.feedback, "studio-quiz-feedback-text") : "")
+            + (idealAnswer ? "<div class='studio-quiz-ideal'><strong>Stronger answer</strong>" + renderQuizMarkdownBlockHtml(idealAnswer, "studio-quiz-feedback-text") + "</div>" : "")
+            + (feedback.followUp ? "<div class='studio-quiz-follow-up'><strong>Suggested stretch question</strong>" + renderQuizMarkdownBlockHtml(feedback.followUp, "studio-quiz-feedback-text") + "</div>" : "")
+            + "</div>" : "")
+          + (discussion.length ? "<div class='studio-quiz-discussion'>" + discussion.map((entry) => "<div class='studio-quiz-discussion-entry studio-quiz-discussion-" + escapeHtml(entry.role || "assistant") + "'><strong>" + escapeHtml(entry.role === "user" ? "You" : "Tutor") + "</strong><p>" + escapeHtml(entry.text || "") + "</p></div>").join("") + "</div>" : "")
+          + (feedback ? "<div class='studio-quiz-discuss-row'><textarea data-quiz-field='discussion' rows='2' placeholder='Ask the tutor about this card…'></textarea><button data-quiz-action='discuss' type='button'" + (quizState.pending ? " disabled" : "") + ">Ask</button></div>" : "")
+          + (quizState.error ? "<div class='studio-quiz-error'>" + escapeHtml(quizState.error) + "</div>" : "")
+          + (quizState.status ? "<div class='studio-quiz-status'>" + escapeHtml(quizState.status) + "</div>" : "")
+          + "<div class='studio-quiz-actions studio-quiz-card-actions'>"
+          + "<button data-quiz-action='previous' type='button'" + (index <= 0 ? " disabled" : "") + ">Previous</button>"
+          + (feedback ? "<button data-quiz-action='next' type='button'" + (index >= total - 1 ? " disabled" : "") + ">Next</button>" : "<button data-quiz-action='check' type='button'" + (quizState.pending ? " disabled" : "") + ">" + (quizState.pending ? "Checking…" : "Check answer") + "</button>")
+          + "<button data-quiz-action='restart' type='button'>New quiz</button>"
+          + "</div>"
+          + "</div>";
+      }
+
+      function renderQuizOverlay(options) {
+        if (!quizDialogEl) return;
+        const scrollOptions = options && typeof options === "object" ? options : {};
+        const preserveScroll = Boolean(scrollOptions.preserveScroll || scrollOptions.revealSelector || scrollOptions.scrollToBottom || scrollOptions.followBottomIfNearBottom);
+        const previousScrollEl = getQuizScrollContainer();
+        const previousScrollTop = previousScrollEl ? previousScrollEl.scrollTop : 0;
+        const wasNearBottom = isQuizScrollNearBottom(previousScrollEl);
+        const bodyHtml = quizState.cards && quizState.cards.length ? renderQuizCardHtml() : renderQuizSetupHtml();
+        quizDialogEl.innerHTML = "<div class='studio-quiz-header'>"
+          + "<div><div class='studio-quiz-eyebrow'>Review</div><h2>Quiz me</h2></div>"
+          + "<div class='studio-quiz-header-actions'>"
+          + "<button class='studio-quiz-minimize' data-quiz-action='minimize' type='button'>Minimize</button>"
+          + "<button class='studio-quiz-close' data-quiz-action='close' type='button' aria-label='Close quiz'>Close</button>"
+          + "</div>"
+          + "</div>"
+          + bodyHtml;
+        if (preserveScroll) {
+          const nextScrollEl = getQuizScrollContainer();
+          if (nextScrollEl) {
+            nextScrollEl.scrollTop = previousScrollTop;
+            window.requestAnimationFrame(() => {
+              const rafScrollEl = getQuizScrollContainer();
+              if (rafScrollEl) rafScrollEl.scrollTop = previousScrollTop;
+            });
+          }
+        }
+        applyQuizScrollIntentSoon(scrollOptions, previousScrollTop, wasNearBottom);
+        const renderNonce = ++quizPreviewRenderNonce;
+        void renderQuizMarkdownFields(renderNonce, {
+          ...scrollOptions,
+          preserveScroll,
+          fallbackScrollTop: previousScrollTop,
+          wasNearBottom,
+        });
+      }
+
+      function readQuizSetupFields() {
+        if (!quizDialogEl) return;
+        const scopeEl = quizDialogEl.querySelector("[data-quiz-field='scope']");
+        const angleEl = quizDialogEl.querySelector("[data-quiz-field='angle']");
+        const thinkingEl = quizDialogEl.querySelector("[data-quiz-field='thinking']");
+        const countEl = quizDialogEl.querySelector("[data-quiz-field='count']");
+        const selection = getEditorSelectionRange();
+        const scope = scopeEl && scopeEl.value === "selection" && selection.selected.trim() ? "selection" : "editor";
+        quizState.scope = scope;
+        quizState.angle = normalizeQuizAngle(angleEl ? angleEl.value : quizState.angle);
+        quizState.thinking = normalizeQuizThinking(thinkingEl ? thinkingEl.value : quizState.thinking);
+        quizState.questionCount = Math.max(1, Math.min(8, Math.floor(Number(countEl ? countEl.value : quizState.questionCount) || QUIZ_DEFAULT_COUNT)));
+        quizState.sourceText = scope === "selection" ? selection.selected : selection.raw;
+        quizState.sourceLabel = getQuizSourceLabel(scope);
+      }
+
+      function startQuizRequest() {
+        readQuizSetupFields();
+        const sourceText = String(quizState.sourceText || "").trim();
+        if (!sourceText) {
+          quizState.error = "Quiz source is empty.";
+          renderQuizOverlay({ preserveScroll: true });
+          return;
+        }
+        const requestId = makeRequestId();
+        quizState.requestId = requestId;
+        quizState.pending = true;
+        quizState.error = "";
+        quizState.status = "Generating quiz…";
+        renderQuizOverlay({ preserveScroll: true });
+        if (!sendMessage({
+          type: "quiz_generate_request",
+          requestId,
+          sourceText,
+          sourceLabel: quizState.sourceLabel,
+          scope: quizState.scope,
+          angle: quizState.angle,
+          thinking: quizState.thinking,
+          questionCount: quizState.questionCount,
+        })) {
+          quizState.pending = false;
+          quizState.status = "";
+          quizState.error = "Not connected to Studio server.";
+          renderQuizOverlay({ preserveScroll: true });
+        }
+      }
+
+      function checkQuizAnswer() {
+        const card = getQuizCurrentCard();
+        if (!card) return;
+        const answer = String(card.answer || quizState.answer || "").trim();
+        if (!answer) {
+          quizState.error = "Write an answer first.";
+          renderQuizOverlay({ preserveScroll: true });
+          return;
+        }
+        const requestId = makeRequestId();
+        quizState.requestId = requestId;
+        quizState.pending = true;
+        quizState.error = "";
+        quizState.status = "Checking answer…";
+        renderQuizOverlay({ preserveScroll: true });
+        if (!sendMessage({
+          type: "quiz_answer_request",
+          requestId,
+          question: card.question || "",
+          snippet: card.snippet || "",
+          answer,
+          idealAnswer: card.idealAnswer || "",
+          angle: quizState.angle,
+          thinking: quizState.thinking,
+          sourceLabel: quizState.sourceLabel,
+        })) {
+          quizState.pending = false;
+          quizState.status = "";
+          quizState.error = "Not connected to Studio server.";
+          renderQuizOverlay({ preserveScroll: true });
+        }
+      }
+
+      function discussQuizCard() {
+        const card = getQuizCurrentCard();
+        if (!card || !quizDialogEl) return;
+        const promptEl = quizDialogEl.querySelector("[data-quiz-field='discussion']");
+        const prompt = promptEl ? String(promptEl.value || "").trim() : "";
+        if (!prompt) {
+          quizState.error = "Write a follow-up question first.";
+          renderQuizOverlay({ preserveScroll: true });
+          return;
+        }
+        const requestId = makeRequestId();
+        quizState.requestId = requestId;
+        quizState.pending = true;
+        quizState.error = "";
+        quizState.status = "Discussing…";
+        card.discussion = Array.isArray(card.discussion) ? card.discussion.concat([{ role: "user", text: prompt }]) : [{ role: "user", text: prompt }];
+        renderQuizOverlay({ preserveScroll: true });
+        if (!sendMessage({
+          type: "quiz_discuss_request",
+          requestId,
+          question: card.question || "",
+          snippet: card.snippet || "",
+          answer: card.answer || "",
+          feedback: card.feedback && card.feedback.feedback ? card.feedback.feedback : "",
+          prompt,
+          angle: quizState.angle,
+          thinking: quizState.thinking,
+          sourceLabel: quizState.sourceLabel,
+        })) {
+          quizState.pending = false;
+          quizState.status = "";
+          quizState.error = "Not connected to Studio server.";
+          renderQuizOverlay({ preserveScroll: true });
+        }
+      }
+
+      function handleQuizAction(action) {
+        if (action === "close") {
+          closeQuizOverlay();
+          return;
+        }
+        if (action === "minimize") {
+          minimizeQuizOverlay();
+          return;
+        }
+        if (action === "start") {
+          startQuizRequest();
+          return;
+        }
+        if (action === "check") {
+          checkQuizAnswer();
+          return;
+        }
+        if (action === "discuss") {
+          discussQuizCard();
+          return;
+        }
+        if (action === "previous") {
+          quizState.index = Math.max(0, (quizState.index || 0) - 1);
+          quizState.error = "";
+          quizState.status = "";
+          renderQuizOverlay();
+          return;
+        }
+        if (action === "next") {
+          quizState.index = Math.min(Math.max(0, quizState.cards.length - 1), (quizState.index || 0) + 1);
+          quizState.error = "";
+          quizState.status = "";
+          renderQuizOverlay();
+          return;
+        }
+        if (action === "restart") {
+          resetQuizStateFromEditor();
+          renderQuizOverlay();
+        }
+      }
+
+      function handleQuizServerMessage(message) {
+        if (!quizState.requestId || typeof message.requestId !== "string" || message.requestId !== quizState.requestId) return false;
+        if (message.type === "quiz_progress") {
+          quizState.pending = true;
+          quizState.status = typeof message.message === "string" ? message.message : "Working…";
+          quizState.error = "";
+          renderQuizOverlay({ preserveScroll: true });
+          return true;
+        }
+        if (message.type === "quiz_error") {
+          quizState.pending = false;
+          quizState.status = "";
+          quizState.error = typeof message.message === "string" ? message.message : "Quiz request failed.";
+          renderQuizOverlay({ preserveScroll: true });
+          return true;
+        }
+        if (message.type === "quiz_generated") {
+          const cards = Array.isArray(message.cards) ? message.cards : [];
+          quizState.pending = false;
+          quizState.status = "";
+          quizState.error = "";
+          quizState.cards = cards.map((card, index) => ({
+            id: typeof card.id === "string" ? card.id : "q" + String(index + 1),
+            kind: typeof card.kind === "string" ? card.kind : "",
+            snippet: typeof card.snippet === "string" ? card.snippet : "",
+            question: typeof card.question === "string" ? card.question : "",
+            idealAnswer: typeof card.idealAnswer === "string" ? card.idealAnswer : "",
+            answer: "",
+            feedback: null,
+            discussion: [],
+          })).filter((card) => card.question);
+          quizState.index = 0;
+          quizState.angle = normalizeQuizAngle(message.angle || quizState.angle);
+          quizState.thinking = normalizeQuizThinking(message.thinking || quizState.thinking);
+          quizState.sourceLabel = typeof message.sourceLabel === "string" ? message.sourceLabel : quizState.sourceLabel;
+          if (!quizState.cards.length) quizState.error = "No quiz questions were generated.";
+          renderQuizOverlay();
+          return true;
+        }
+        if (message.type === "quiz_feedback") {
+          const card = getQuizCurrentCard();
+          quizState.pending = false;
+          quizState.status = "";
+          quizState.error = "";
+          if (card) card.feedback = message.feedback || null;
+          renderQuizOverlay({ revealSelector: ".studio-quiz-feedback", followBottomIfNearBottom: true });
+          return true;
+        }
+        if (message.type === "quiz_discussion") {
+          const card = getQuizCurrentCard();
+          quizState.pending = false;
+          quizState.status = "";
+          quizState.error = "";
+          if (card) {
+            const answer = typeof message.answer === "string" ? message.answer : "";
+            card.discussion = Array.isArray(card.discussion) ? card.discussion.concat([{ role: "assistant", text: answer }]) : [{ role: "assistant", text: answer }];
+          }
+          renderQuizOverlay({ scrollToBottom: true });
+          return true;
+        }
+        return false;
       }
 
       function escapeHtml(text) {
@@ -12403,6 +13080,10 @@
             critiqueBtn.disabled = true;
             critiqueBtn.title = "Critique is unavailable in editor-only mode.";
           }
+          if (quizBtn) {
+            quizBtn.disabled = true;
+            quizBtn.title = "Quiz is unavailable in editor-only mode.";
+          }
           syncStudioUiRefreshReviewTrigger();
           return;
         }
@@ -12462,6 +13143,15 @@
               : (annotationsEnabled
                 ? "Critique text as-is (includes [an: ...] markers)."
                 : "Critique text with [an: ...] markers stripped."));
+        }
+        if (quizBtn) {
+          quizBtn.textContent = hasResumableQuiz() ? "Resume quiz" : "Quiz me";
+          quizBtn.disabled = wsState === "Disconnected" || uiBusy || canQueueSteering;
+          quizBtn.title = canQueueSteering
+            ? "Quiz is unavailable while Run editor text is active."
+            : (hasResumableQuiz()
+              ? "Resume the current Studio quiz."
+              : "Open an active quiz for the current editor selection or document.");
         }
         syncStudioUiRefreshReviewTrigger();
       }
@@ -12604,6 +13294,16 @@
         const contextChanged = applyContextUsageFromMessage(message);
         if (contextChanged) {
           updateFooterMeta();
+        }
+
+        if (
+          message.type === "quiz_progress" ||
+          message.type === "quiz_generated" ||
+          message.type === "quiz_feedback" ||
+          message.type === "quiz_discussion" ||
+          message.type === "quiz_error"
+        ) {
+          if (handleQuizServerMessage(message)) return;
         }
 
         if (message.type === "debug_event") {
@@ -13932,6 +14632,16 @@
           setBusy(false);
         }
       });
+
+      if (quizBtn) {
+        quizBtn.addEventListener("click", () => {
+          if (!hasResumableQuiz() && !String(sourceTextEl.value || "").trim()) {
+            setStatus("Add editor text before starting a quiz.", "warning");
+            return;
+          }
+          openQuizOverlay();
+        });
+      }
 
       loadResponseBtn.addEventListener("click", () => {
         if (!latestResponseMarkdown.trim()) {

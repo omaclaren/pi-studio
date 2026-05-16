@@ -21,7 +21,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Opens a two-pane browser workspace: **Editor** (left) + **Response/Working/Editor Preview** (right)
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you just want extra editing/preview surfaces; the editor toolbar can open a detached copy of the current editor text as a companion view
 - Includes a global **Zen** mode for hiding secondary Studio chrome without changing the current left/right pane layout
-- Runs editor text directly, or asks for structured critique (auto/writing/code focus)
+- Runs editor text directly, asks for structured critique (auto/writing/code focus), or opens **Quiz me** for a Studio-native active-recall loop over the current editor text or selection
 - Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available
 - Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with Raw/Literate send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/new/stop/interrupt controls, a compact refresh-persistent **REPL Studio** record of user and Pi-sent code, a secondary raw tmux mirror, agent-facing `studio_repl_status` / `studio_repl_send` tools, and Markdown/PDF/HTML export
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them

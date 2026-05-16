@@ -1767,6 +1767,281 @@
       background: #fff;
     }
 
+    body.studio-quiz-open {
+      overflow: hidden;
+    }
+
+    .studio-quiz-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 72;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(12px, 3vw, 28px);
+      background: var(--backdrop-bg);
+      backdrop-filter: blur(3px);
+    }
+
+    .studio-quiz-overlay[hidden] {
+      display: none !important;
+    }
+
+    .studio-quiz-dialog {
+      width: min(92vw, 900px);
+      max-height: min(90vh, 920px);
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: 0 24px 70px var(--shadow-color);
+      overflow: hidden;
+    }
+
+    .studio-quiz-header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--panel-border);
+      background: var(--panel-2);
+    }
+
+    .studio-quiz-eyebrow,
+    .studio-quiz-meta,
+    .studio-quiz-source-note,
+    .studio-quiz-status {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .studio-quiz-header h2 {
+      margin: 1px 0 0;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .studio-quiz-header-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .studio-quiz-minimize {
+      min-height: 30px;
+      padding: 4px 9px;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .studio-quiz-close {
+      min-height: 30px;
+      padding: 4px 9px;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .studio-quiz-setup,
+    .studio-quiz-card {
+      min-height: 0;
+      overflow: auto;
+      padding: 16px;
+    }
+
+    .studio-quiz-copy {
+      margin: 0 0 14px;
+      color: var(--text);
+    }
+
+    .studio-quiz-fields {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 130px 110px;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .studio-quiz-fields label,
+    .studio-quiz-answer-label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .studio-quiz-fields select,
+    .studio-quiz-fields input,
+    .studio-quiz-answer-label textarea,
+    .studio-quiz-discuss-row textarea {
+      width: 100%;
+      border: 1px solid var(--control-border);
+      border-radius: 10px;
+      background: var(--input-bg, var(--panel));
+      color: var(--text);
+      font: inherit;
+    }
+
+    .studio-quiz-fields select,
+    .studio-quiz-fields input {
+      min-height: 34px;
+      padding: 6px 8px;
+    }
+
+    .studio-quiz-answer-label textarea,
+    .studio-quiz-discuss-row textarea {
+      min-height: 96px;
+      padding: 10px;
+      resize: vertical;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .studio-quiz-discuss-row textarea {
+      min-height: 56px;
+    }
+
+    .studio-quiz-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .studio-quiz-snippet {
+      max-height: 220px;
+      overflow: auto;
+      margin: 0 0 14px;
+      padding: 12px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      background: var(--code-bg, var(--panel-2));
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+
+    .studio-quiz-snippet.rendered-markdown,
+    .studio-quiz-markdown-body {
+      white-space: normal;
+    }
+
+    .studio-quiz-markdown-body > :first-child {
+      margin-top: 0 !important;
+    }
+
+    .studio-quiz-markdown-body > :last-child {
+      margin-bottom: 0 !important;
+    }
+
+    .studio-quiz-markdown-body p,
+    .studio-quiz-markdown-body li {
+      white-space: normal;
+    }
+
+    .studio-quiz-markdown-body pre {
+      max-width: 100%;
+      overflow: auto;
+    }
+
+    .studio-quiz-markdown-fallback {
+      white-space: pre-wrap;
+    }
+
+    .studio-quiz-question {
+      margin: 0 0 14px;
+      font-size: 17px;
+      line-height: 1.4;
+      font-weight: 650;
+      color: var(--text);
+    }
+
+    .studio-quiz-feedback,
+    .studio-quiz-discussion {
+      margin-top: 14px;
+      padding: 12px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .studio-quiz-feedback-title {
+      margin-bottom: 6px;
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+
+    .studio-quiz-feedback p,
+    .studio-quiz-discussion p,
+    .studio-quiz-ideal p,
+    .studio-quiz-follow-up p {
+      margin: 4px 0 0;
+      white-space: pre-wrap;
+    }
+
+    .studio-quiz-discussion-entry + .studio-quiz-discussion-entry {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .studio-quiz-discuss-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+      margin-top: 12px;
+    }
+
+    .studio-quiz-error {
+      margin-top: 12px;
+      color: var(--error);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .studio-quiz-status {
+      margin-top: 12px;
+    }
+
+    .studio-quiz-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .studio-quiz-card-actions {
+      justify-content: space-between;
+    }
+
+    @media (max-width: 720px) {
+      .studio-quiz-fields,
+      .studio-quiz-discuss-row {
+        grid-template-columns: 1fr;
+      }
+
+      .studio-quiz-meta,
+      .studio-quiz-card-actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+    }
+
     .rendered-markdown .studio-html-artifact-shell {
       display: flex;
       flex-direction: column;
