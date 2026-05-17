@@ -237,6 +237,7 @@
       const HTML_EXPORT_FETCH_TIMEOUT_MS = 180_000;
       const EDITOR_TAB_TEXT = "  ";
       const QUIZ_DEFAULT_COUNT = 5;
+      const QUIZ_SCOPES = ["editor", "selection", "file", "folder", "repo"];
       const QUIZ_ANGLES = ["general", "scientist", "mathematician", "statistician", "developer", "reviewer"];
       const QUIZ_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
       let quizOverlayEl = null;
@@ -249,6 +250,11 @@
         pending: false,
         sourceText: "",
         sourceLabel: "Studio editor",
+        sourcePath: "",
+        contextPath: "",
+        resourceDir: "",
+        focusPrompt: "",
+        includeEditorContext: false,
         scope: "editor",
         angle: "general",
         thinking: "minimal",
@@ -7310,6 +7316,21 @@
         return "draft_" + makeRequestId();
       }
 
+      function normalizeQuizScope(scope) {
+        const value = String(scope || "").trim().toLowerCase();
+        return QUIZ_SCOPES.includes(value) ? value : "editor";
+      }
+
+      function getQuizScopeLabel(scope) {
+        switch (normalizeQuizScope(scope)) {
+          case "selection": return "Selection";
+          case "file": return "Current file";
+          case "folder": return "Folder";
+          case "repo": return "Repo";
+          default: return "Editor";
+        }
+      }
+
       function normalizeQuizAngle(angle) {
         const value = String(angle || "").trim().toLowerCase();
         return QUIZ_ANGLES.includes(value) ? value : "general";
@@ -7487,7 +7508,52 @@
 
       function getQuizSourceLabel(scope) {
         const base = sourceState && sourceState.label ? sourceState.label : "Studio editor";
-        return scope === "selection" ? base + " selection" : base;
+        const normalizedScope = normalizeQuizScope(scope);
+        if (normalizedScope === "selection") return base + " selection";
+        if (normalizedScope === "file") return base === "blank" ? "current file" : base;
+        if (normalizedScope === "folder") return "folder context";
+        if (normalizedScope === "repo") return "repo context";
+        return base;
+      }
+
+      function dirnameForDisplayPath(path) {
+        const value = String(path || "").replace(/\\/g, "/");
+        const index = value.lastIndexOf("/");
+        return index > 0 ? value.slice(0, index) : "";
+      }
+
+      function getCurrentResourceDirValue() {
+        return resourceDirInput ? String(resourceDirInput.value || "").trim() : "";
+      }
+
+      function getDefaultQuizContextPath(scope) {
+        const normalizedScope = normalizeQuizScope(scope);
+        const sourcePath = sourceState && sourceState.path ? String(sourceState.path) : "";
+        const resourceDir = getCurrentResourceDirValue();
+        if (normalizedScope === "file") return sourcePath || "";
+        if (normalizedScope === "folder") return resourceDir || dirnameForDisplayPath(sourcePath) || "";
+        if (normalizedScope === "repo") return sourcePath || resourceDir || "";
+        return "";
+      }
+
+      function isQuizContextScope(scope) {
+        const normalizedScope = normalizeQuizScope(scope);
+        return normalizedScope === "file" || normalizedScope === "folder" || normalizedScope === "repo";
+      }
+
+      function getQuizScopeFocusHint(scope) {
+        const normalizedScope = normalizeQuizScope(scope);
+        const focus = String(quizState.focusPrompt || "").toLowerCase();
+        const asksForCode = /\b(code|implementation|technical|source|actual code)\b/.test(focus);
+        const editorLang = normalizeFenceLanguage(editorLanguage || "");
+        const editorLooksLikeDoc = !editorLang || editorLang === "markdown" || editorLang === "latex";
+        if (asksForCode && (normalizedScope === "editor" || normalizedScope === "selection") && editorLooksLikeDoc) {
+          return "Focus guidance only applies to the selected scope. Choose Folder or Repo to include code files.";
+        }
+        if ((normalizedScope === "folder" || normalizedScope === "repo") && asksForCode) {
+          return "Code-focused guidance will prioritize source/test files over README and docs.";
+        }
+        return "";
       }
 
       function ensureQuizOverlay() {
@@ -7500,7 +7566,7 @@
         document.body.appendChild(quizOverlayEl);
         quizDialogEl = quizOverlayEl.querySelector(".studio-quiz-dialog");
         quizOverlayEl.addEventListener("click", (event) => {
-          if (event.target === quizOverlayEl) closeQuizOverlay();
+          if (event.target === quizOverlayEl) minimizeQuizOverlay();
         });
         quizDialogEl.addEventListener("input", (event) => {
           const target = event.target;
@@ -7510,12 +7576,28 @@
             if (card) card.answer = target.value;
             quizState.answer = target.value;
           }
+          if (target.matches("[data-quiz-field='contextPath']")) {
+            quizState.contextPath = target.value;
+          }
+          if (target.matches("[data-quiz-field='focusPrompt']")) {
+            quizState.focusPrompt = target.value;
+          }
+          if (target.matches("[data-quiz-field='includeEditorContext']")) {
+            quizState.includeEditorContext = Boolean(target.checked);
+          }
         });
         quizDialogEl.addEventListener("click", (event) => {
           const target = event.target instanceof Element ? event.target.closest("[data-quiz-action]") : null;
           if (!target) return;
           event.preventDefault();
           handleQuizAction(target.getAttribute("data-quiz-action") || "");
+        });
+        quizDialogEl.addEventListener("change", (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement) || !target.matches("[data-quiz-field]")) return;
+          if (target.matches("[data-quiz-field='contextPath']")) return;
+          readQuizSetupFields();
+          renderQuizOverlay({ preserveScroll: true });
         });
         quizDialogEl.addEventListener("keydown", handleQuizKeydown);
         return quizOverlayEl;
@@ -7524,16 +7606,25 @@
       function resetQuizStateFromEditor() {
         const previousAngle = normalizeQuizAngle(quizState.angle);
         const previousThinking = normalizeQuizThinking(quizState.thinking);
+        const previousFocusPrompt = String(quizState.focusPrompt || "");
+        const previousIncludeEditorContext = Boolean(quizState.includeEditorContext);
         const previousCount = quizState.questionCount || QUIZ_DEFAULT_COUNT;
         const selection = getEditorSelectionRange();
         const hasSelection = Boolean(selection.selected && selection.selected.trim());
         const scope = hasSelection ? "selection" : "editor";
+        const sourcePath = sourceState && sourceState.path ? String(sourceState.path) : "";
+        const resourceDir = getCurrentResourceDirValue();
         quizState = {
           open: true,
           requestId: null,
           pending: false,
           sourceText: hasSelection ? selection.selected : selection.raw,
           sourceLabel: getQuizSourceLabel(scope),
+          sourcePath,
+          contextPath: getDefaultQuizContextPath(scope),
+          resourceDir,
+          focusPrompt: previousFocusPrompt,
+          includeEditorContext: previousIncludeEditorContext,
           scope,
           angle: previousAngle,
           thinking: previousThinking,
@@ -7581,6 +7672,15 @@
         setStatus("Quiz minimized — use Review → Quiz me to resume.", "success");
       }
 
+      function endQuizOverlay() {
+        const hadResumableQuiz = hasResumableQuiz();
+        closeQuizOverlay();
+        resetQuizStateFromEditor();
+        quizState.open = false;
+        syncActionButtons();
+        if (hadResumableQuiz) setStatus("Quiz closed.", "success");
+      }
+
       function handleQuizKeydown(event) {
         if (!event) return;
         const key = typeof event.key === "string" ? event.key : "";
@@ -7624,18 +7724,25 @@
       }
 
       function renderQuizSetupHtml() {
-        const scope = quizState.scope === "selection" ? "selection" : "editor";
+        const scope = normalizeQuizScope(quizState.scope);
         const angle = normalizeQuizAngle(quizState.angle);
         const thinking = normalizeQuizThinking(quizState.thinking);
         const count = Math.max(1, Math.min(8, Math.floor(Number(quizState.questionCount) || QUIZ_DEFAULT_COUNT)));
         const selection = getEditorSelectionRange();
         const hasSelection = Boolean(selection.selected && selection.selected.trim());
+        const contextPath = String(quizState.contextPath || getDefaultQuizContextPath(scope) || "");
+        const includeEditorContext = Boolean(quizState.includeEditorContext);
+        const contextScope = isQuizContextScope(scope);
+        const contextScopeUsesEditor = scope === "file" || includeEditorContext;
+        const focusHint = getQuizScopeFocusHint(scope);
+        const scopeText = scope === "selection"
+          ? selection.selected
+          : ((scope === "editor" || contextScopeUsesEditor) ? selection.raw : "");
         return "<div class='studio-quiz-setup'>"
           + "<p class='studio-quiz-copy'>A short active-recall loop: answer one question, check it, ask about the card if useful, then move on.</p>"
           + "<div class='studio-quiz-fields'>"
           + "<label>Scope<select data-quiz-field='scope'>"
-          + renderQuizOption("editor", scope, "Editor")
-          + (hasSelection ? renderQuizOption("selection", scope, "Selection") : "")
+          + QUIZ_SCOPES.map((candidate) => candidate === "selection" && !hasSelection ? "" : renderQuizOption(candidate, scope, getQuizScopeLabel(candidate))).join("")
           + "</select></label>"
           + "<label>Angle<select data-quiz-field='angle'>"
           + QUIZ_ANGLES.map((candidate) => renderQuizOption(candidate, angle, getQuizAngleLabel(candidate))).join("")
@@ -7645,7 +7752,11 @@
           + "</select></label>"
           + "<label>Questions<input data-quiz-field='count' type='number' min='1' max='8' value='" + String(count) + "'></label>"
           + "</div>"
-          + "<div class='studio-quiz-source-note'>Source: " + escapeHtml(getQuizSourceLabel(scope)) + " · " + escapeHtml(String((scope === "selection" ? selection.selected : selection.raw).trim().length)) + " chars · Studio model: " + escapeHtml(getQuizModelLabel()) + "</div>"
+          + (contextScope ? "<label class='studio-quiz-context-path-label'>Context path<input data-quiz-field='contextPath' type='text' value='" + escapeHtml(contextPath) + "' placeholder='Folder, file, or repo path; blank uses Studio working directory'></label>" : "")
+          + ((scope === "folder" || scope === "repo") ? "<label class='studio-quiz-include-editor-label'><input data-quiz-field='includeEditorContext' type='checkbox'" + (includeEditorContext ? " checked" : "") + "> Include current editor text as an anchor</label>" : "")
+          + "<label class='studio-quiz-focus-label'>Focus guidance<textarea data-quiz-field='focusPrompt' rows='2' placeholder='Optional: e.g. focus on implementation details in code files; avoid README overview questions'>" + escapeHtml(quizState.focusPrompt || "") + "</textarea></label>"
+          + "<div class='studio-quiz-source-note'>Scope: " + escapeHtml(getQuizScopeLabel(scope)) + (scopeText.trim() ? " · " + escapeHtml(String(scopeText.trim().length)) + " active chars" : (scope === "folder" || scope === "repo" ? " · editor text excluded" : "")) + (contextScope && contextPath ? " · Context: " + escapeHtml(contextPath) : "") + " · Studio model: " + escapeHtml(getQuizModelLabel()) + "</div>"
+          + (focusHint ? "<div class='studio-quiz-hint'>" + escapeHtml(focusHint) + "</div>" : "")
           + (quizState.error ? "<div class='studio-quiz-error'>" + escapeHtml(quizState.error) + "</div>" : "")
           + (quizState.status ? "<div class='studio-quiz-status'>" + escapeHtml(quizState.status) + "</div>" : "")
           + "<div class='studio-quiz-actions'><button data-quiz-action='start' type='button'" + (quizState.pending ? " disabled" : "") + ">" + (quizState.pending ? "Generating…" : "Start quiz") + "</button></div>"
@@ -7705,7 +7816,7 @@
           + "<div><div class='studio-quiz-eyebrow'>Review</div><h2>Quiz me</h2></div>"
           + "<div class='studio-quiz-header-actions'>"
           + "<button class='studio-quiz-minimize' data-quiz-action='minimize' type='button'>Minimize</button>"
-          + "<button class='studio-quiz-close' data-quiz-action='close' type='button' aria-label='Close quiz'>Close</button>"
+          + "<button class='studio-quiz-close' data-quiz-action='close' type='button' aria-label='Close and discard quiz' title='Close and discard this quiz'>Close</button>"
           + "</div>"
           + "</div>"
           + bodyHtml;
@@ -7735,20 +7846,34 @@
         const angleEl = quizDialogEl.querySelector("[data-quiz-field='angle']");
         const thinkingEl = quizDialogEl.querySelector("[data-quiz-field='thinking']");
         const countEl = quizDialogEl.querySelector("[data-quiz-field='count']");
+        const contextPathEl = quizDialogEl.querySelector("[data-quiz-field='contextPath']");
+        const focusPromptEl = quizDialogEl.querySelector("[data-quiz-field='focusPrompt']");
+        const includeEditorContextEl = quizDialogEl.querySelector("[data-quiz-field='includeEditorContext']");
         const selection = getEditorSelectionRange();
-        const scope = scopeEl && scopeEl.value === "selection" && selection.selected.trim() ? "selection" : "editor";
+        let scope = normalizeQuizScope(scopeEl ? scopeEl.value : quizState.scope);
+        if (scope === "selection" && !selection.selected.trim()) scope = "editor";
+        const sourcePath = sourceState && sourceState.path ? String(sourceState.path) : "";
+        const resourceDir = getCurrentResourceDirValue();
         quizState.scope = scope;
         quizState.angle = normalizeQuizAngle(angleEl ? angleEl.value : quizState.angle);
         quizState.thinking = normalizeQuizThinking(thinkingEl ? thinkingEl.value : quizState.thinking);
         quizState.questionCount = Math.max(1, Math.min(8, Math.floor(Number(countEl ? countEl.value : quizState.questionCount) || QUIZ_DEFAULT_COUNT)));
-        quizState.sourceText = scope === "selection" ? selection.selected : selection.raw;
-        quizState.sourceLabel = getQuizSourceLabel(scope);
+        quizState.includeEditorContext = Boolean(includeEditorContextEl && includeEditorContextEl.checked);
+        const shouldSendEditorText = scope === "selection" || scope === "editor" || scope === "file" || quizState.includeEditorContext;
+        quizState.sourceText = scope === "selection" ? selection.selected : (shouldSendEditorText ? selection.raw : "");
+        quizState.sourceLabel = shouldSendEditorText ? (sourceState && sourceState.label ? sourceState.label : getQuizSourceLabel(scope)) : getQuizSourceLabel(scope);
+        quizState.sourcePath = sourcePath;
+        quizState.resourceDir = resourceDir;
+        quizState.contextPath = isQuizContextScope(scope)
+          ? String(contextPathEl ? contextPathEl.value : (quizState.contextPath || getDefaultQuizContextPath(scope)) || "").trim()
+          : "";
+        quizState.focusPrompt = String(focusPromptEl ? focusPromptEl.value : quizState.focusPrompt || "").trim();
       }
 
       function startQuizRequest() {
         readQuizSetupFields();
         const sourceText = String(quizState.sourceText || "").trim();
-        if (!sourceText) {
+        if (!sourceText && !isQuizContextScope(quizState.scope)) {
           quizState.error = "Quiz source is empty.";
           renderQuizOverlay({ preserveScroll: true });
           return;
@@ -7764,6 +7889,10 @@
           requestId,
           sourceText,
           sourceLabel: quizState.sourceLabel,
+          sourcePath: quizState.sourcePath || "",
+          contextPath: quizState.contextPath || "",
+          resourceDir: quizState.resourceDir || "",
+          focusPrompt: quizState.focusPrompt || "",
           scope: quizState.scope,
           angle: quizState.angle,
           thinking: quizState.thinking,
@@ -7847,7 +7976,7 @@
 
       function handleQuizAction(action) {
         if (action === "close") {
-          closeQuizOverlay();
+          endQuizOverlay();
           return;
         }
         if (action === "minimize") {
@@ -14635,10 +14764,6 @@
 
       if (quizBtn) {
         quizBtn.addEventListener("click", () => {
-          if (!hasResumableQuiz() && !String(sourceTextEl.value || "").trim()) {
-            setStatus("Add editor text before starting a quiz.", "warning");
-            return;
-          }
           openQuizOverlay();
         });
       }

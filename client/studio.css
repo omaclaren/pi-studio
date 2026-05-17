@@ -1813,6 +1813,7 @@
     .studio-quiz-eyebrow,
     .studio-quiz-meta,
     .studio-quiz-source-note,
+    .studio-quiz-hint,
     .studio-quiz-status {
       color: var(--muted);
       font-size: 12px;
@@ -1870,6 +1871,9 @@
     }
 
     .studio-quiz-fields label,
+    .studio-quiz-context-path-label,
+    .studio-quiz-focus-label,
+    .studio-quiz-include-editor-label,
     .studio-quiz-answer-label {
       display: flex;
       flex-direction: column;
@@ -1881,6 +1885,8 @@
 
     .studio-quiz-fields select,
     .studio-quiz-fields input,
+    .studio-quiz-context-path-label input,
+    .studio-quiz-focus-label textarea,
     .studio-quiz-answer-label textarea,
     .studio-quiz-discuss-row textarea {
       width: 100%;
@@ -1892,9 +1898,36 @@
     }
 
     .studio-quiz-fields select,
-    .studio-quiz-fields input {
+    .studio-quiz-fields input,
+    .studio-quiz-context-path-label input {
       min-height: 34px;
       padding: 6px 8px;
+    }
+
+    .studio-quiz-context-path-label,
+    .studio-quiz-focus-label {
+      margin: 0 0 10px;
+    }
+
+    .studio-quiz-include-editor-label {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+      font-weight: 500;
+    }
+
+    .studio-quiz-include-editor-label input {
+      width: auto;
+    }
+
+    .studio-quiz-focus-label textarea {
+      min-height: 54px;
+      padding: 8px;
+      resize: vertical;
+      font-size: 13px;
+      line-height: 1.4;
     }
 
     .studio-quiz-answer-label textarea,
@@ -2012,6 +2045,11 @@
       color: var(--error);
       font-size: 12px;
       font-weight: 600;
+    }
+
+    .studio-quiz-hint {
+      margin-top: 8px;
+      color: var(--warn);
     }
 
     .studio-quiz-status {

@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-05-17
+
+### Added
+- Expanded Studio **Quiz me** scope to current file, folder, and repo contexts, with bounded source collection, context path support, optional focus guidance, and code-focused source prioritisation for implementation-oriented quizzes.
+
+### Changed
+- Folder/repo quizzes now exclude the current editor text by default unless **Include current editor text as an anchor** is enabled.
+- Quiz generation and answer checking now retry malformed JSON responses with stricter JSON-only instructions and thinking disabled on retry, without adding new runtime dependencies.
+- **Close** now discards the active quiz, while **Minimize**, outside-click, and Escape preserve it for resume.
+
 ## [0.9.4] — 2026-05-16
 
 ### Added
