@@ -177,7 +177,8 @@
     }
 
     #sendRunBtn,
-    #queueSteerBtn {
+    #queueSteerBtn,
+    #sendReplBtn {
       min-width: 10rem;
       display: inline-flex;
       justify-content: center;
@@ -190,8 +191,9 @@
       align-items: center;
     }
 
-    #sendRunBtn:not(:disabled):not(.request-stop-active),
+    #sendRunBtn:not(:disabled):not(.request-stop-active):not(.repl-secondary-action),
     #queueSteerBtn:not(:disabled),
+    #sendReplBtn.repl-primary-action:not(:disabled),
     #loadResponseBtn:not(:disabled):not([hidden]) {
       background: var(--accent);
       border-color: var(--accent);
@@ -199,8 +201,9 @@
       font-weight: 600;
     }
 
-    #sendRunBtn:not(:disabled):not(.request-stop-active):hover,
+    #sendRunBtn:not(:disabled):not(.request-stop-active):not(.repl-secondary-action):hover,
     #queueSteerBtn:not(:disabled):hover,
+    #sendReplBtn.repl-primary-action:not(:disabled):hover,
     #loadResponseBtn:not(:disabled):not([hidden]):hover {
       filter: brightness(0.95);
     }
@@ -546,10 +549,31 @@
       min-width: 0;
     }
 
+    .source-actions-row[hidden],
+    .studio-refresh-action-line[hidden] {
+      display: none !important;
+    }
+
     .source-actions button,
     .source-actions select {
       padding: 6px 9px;
       font-size: 12px;
+    }
+
+    .source-actions select {
+      border-color: transparent;
+      background: transparent;
+    }
+
+    .source-actions select:not(:disabled):hover,
+    .source-actions select:focus {
+      border-color: transparent;
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
+    }
+
+    #sendReplBtn[hidden],
+    #replSendModeSelect[hidden] {
+      display: none !important;
     }
 
     .resource-dir-btn {
@@ -2780,11 +2804,11 @@
       cursor: pointer;
       user-select: none;
       list-style: none;
-      border: 1px solid var(--control-border);
+      border: 1px solid transparent;
       border-radius: 6px;
       padding: 4px 10px;
       color: var(--text);
-      background: var(--button-bg, var(--panel-2));
+      background: transparent;
     }
 
     .repl-more-controls summary::-webkit-details-marker {
@@ -2798,9 +2822,19 @@
       font-size: 11px;
     }
 
+    .repl-controls select {
+      border-color: transparent;
+      background: transparent;
+    }
+
+    .repl-controls select:not(:disabled):hover,
+    .repl-controls select:focus,
+    .repl-more-controls summary:hover,
+    .repl-more-controls summary:focus,
     .repl-more-controls[open] summary {
-      border-color: var(--accent);
-      background: var(--accent-soft);
+      border-color: transparent;
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
+      color: var(--text);
     }
 
     .repl-more-menu {
@@ -3815,11 +3849,15 @@
     }
 
     body.studio-ui-refresh #leftSectionHeader select:hover,
+    body.studio-ui-refresh #leftSectionHeader select:focus,
     body.studio-ui-refresh #leftSectionHeader button:not(:disabled):hover,
     body.studio-ui-refresh #rightSectionHeader select:hover,
+    body.studio-ui-refresh #rightSectionHeader select:focus,
     body.studio-ui-refresh #rightSectionHeader button:not(:disabled):hover,
     body.studio-ui-refresh .studio-refresh-toolbar button:not(:disabled):hover,
-    body.studio-ui-refresh .studio-refresh-toolbar select:not(:disabled):hover {
+    body.studio-ui-refresh .studio-refresh-toolbar select:not(:disabled):hover,
+    body.studio-ui-refresh .studio-refresh-toolbar select:focus {
+      border-color: transparent;
       background: var(--studio-header-action-hover-bg, var(--panel-2));
     }
 
@@ -3939,8 +3977,8 @@
     body.studio-zen-mode #exportPdfBtn,
     body.studio-zen-mode .studio-refresh-tool-tab,
     body.studio-zen-mode .studio-refresh-toolbar-state,
-    body.studio-zen-mode .studio-refresh-toolbar-actions .studio-refresh-action-line:nth-child(n+2),
-    body.studio-zen-mode .source-actions-row:nth-child(n+2),
+    body.studio-zen-mode .studio-refresh-toolbar-actions .studio-refresh-action-line:nth-child(n+3),
+    body.studio-zen-mode .source-actions-row:nth-child(n+3),
     body.studio-zen-mode #copyDraftBtn,
     body.studio-zen-mode #openCompanionBtn,
     body.studio-zen-mode #sendEditorBtn {
@@ -4097,13 +4135,13 @@
       font-size: 12px;
     }
 
-    body.studio-ui-refresh .studio-refresh-toolbar button:not(#sendRunBtn):not(#queueSteerBtn):not(.request-stop-active),
+    body.studio-ui-refresh .studio-refresh-toolbar button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active),
     body.studio-ui-refresh .studio-refresh-toolbar select {
       color: color-mix(in srgb, var(--text) 72%, var(--muted));
       font-weight: 500;
     }
 
-    body.studio-ui-refresh .studio-refresh-toolbar button:not(#sendRunBtn):not(#queueSteerBtn):not(.request-stop-active):hover,
+    body.studio-ui-refresh .studio-refresh-toolbar button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active):hover,
     body.studio-ui-refresh .studio-refresh-toolbar select:not(:disabled):hover {
       color: var(--text);
     }
@@ -4229,6 +4267,7 @@
 
     body.studio-ui-refresh #sendRunBtn,
     body.studio-ui-refresh #queueSteerBtn,
+    body.studio-ui-refresh #sendReplBtn,
     body.studio-ui-refresh #loadResponseBtn:not([hidden]) {
       height: 28px;
       min-height: 28px;
@@ -4239,7 +4278,8 @@
     }
 
     body.studio-ui-refresh #sendRunBtn,
-    body.studio-ui-refresh #queueSteerBtn {
+    body.studio-ui-refresh #queueSteerBtn,
+    body.studio-ui-refresh #sendReplBtn {
       min-width: 8.6rem;
     }
 

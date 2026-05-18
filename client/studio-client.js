@@ -292,27 +292,33 @@
           return "raw";
         }
       })();
+      function normalizeReplJournalEntry(entry) {
+        if (!entry || typeof entry !== "object") return null;
+        const normalized = {
+          id: typeof entry.id === "string" && entry.id ? entry.id : ("repl-journal-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8)),
+          requestId: typeof entry.requestId === "string" ? entry.requestId : "",
+          createdAt: typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt) ? entry.createdAt : Date.now(),
+          updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : Date.now(),
+          sessionName: typeof entry.sessionName === "string" ? entry.sessionName : "",
+          runtime: typeof entry.runtime === "string" ? entry.runtime : "python",
+          label: typeof entry.label === "string" ? entry.label : "REPL send",
+          mode: typeof entry.mode === "string" ? entry.mode : "raw",
+          prose: typeof entry.prose === "string" ? entry.prose : "",
+          code: typeof entry.code === "string" ? entry.code : "",
+          output: typeof entry.output === "string" ? entry.output : "",
+          beforeTranscript: "",
+          status: typeof entry.status === "string" ? entry.status : "sent",
+          skippedChunks: Math.max(0, Math.floor(Number(entry.skippedChunks) || 0)),
+        };
+        return (normalized.code.trim() || normalized.prose.trim() || normalized.output.trim()) ? normalized : null;
+      }
+
       function loadPersistedReplJournalEntries() {
         try {
           const raw = window.localStorage ? window.localStorage.getItem("piStudio.replStudioEntries.v1") : null;
           const parsed = raw ? JSON.parse(raw) : [];
           if (!Array.isArray(parsed)) return [];
-          return parsed.map((entry) => ({
-            id: typeof entry.id === "string" && entry.id ? entry.id : ("repl-journal-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8)),
-            requestId: typeof entry.requestId === "string" ? entry.requestId : "",
-            createdAt: typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt) ? entry.createdAt : Date.now(),
-            updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : Date.now(),
-            sessionName: typeof entry.sessionName === "string" ? entry.sessionName : "",
-            runtime: typeof entry.runtime === "string" ? entry.runtime : "python",
-            label: typeof entry.label === "string" ? entry.label : "REPL send",
-            mode: typeof entry.mode === "string" ? entry.mode : "raw",
-            prose: typeof entry.prose === "string" ? entry.prose : "",
-            code: typeof entry.code === "string" ? entry.code : "",
-            output: typeof entry.output === "string" ? entry.output : "",
-            beforeTranscript: "",
-            status: typeof entry.status === "string" ? entry.status : "sent",
-            skippedChunks: Math.max(0, Math.floor(Number(entry.skippedChunks) || 0)),
-          })).filter((entry) => entry.code.trim() || entry.prose.trim() || entry.output.trim()).slice(-REPL_JOURNAL_MAX_ENTRIES);
+          return parsed.map(normalizeReplJournalEntry).filter(Boolean).slice(-REPL_JOURNAL_MAX_ENTRIES);
         } catch {
           return [];
         }
@@ -340,6 +346,47 @@
         } catch {
           // Ignore local persistence failures.
         }
+      }
+
+      function mergeReplJournalEntries(entries) {
+        if (!Array.isArray(entries) || !entries.length) return false;
+        let changed = false;
+        const next = [...replJournalEntries];
+        for (const rawEntry of entries) {
+          const entry = normalizeReplJournalEntry(rawEntry);
+          if (!entry) continue;
+          const existingIndex = next.findIndex((candidate) => (
+            (entry.requestId && candidate.requestId === entry.requestId)
+            || candidate.id === entry.id
+          ));
+          if (existingIndex >= 0) {
+            const existing = next[existingIndex];
+            const merged = {
+              ...existing,
+              ...entry,
+              label: existing.label || entry.label,
+              mode: existing.mode || entry.mode,
+              prose: existing.prose || entry.prose,
+              beforeTranscript: existing.beforeTranscript || "",
+              createdAt: existing.createdAt || entry.createdAt,
+              updatedAt: Math.max(existing.updatedAt || 0, entry.updatedAt || 0),
+              skippedChunks: existing.skippedChunks || entry.skippedChunks,
+            };
+            if (JSON.stringify(existing) !== JSON.stringify(merged)) {
+              next[existingIndex] = merged;
+              changed = true;
+            }
+          } else {
+            next.push(entry);
+            changed = true;
+          }
+        }
+        if (!changed) return false;
+        replJournalEntries = next
+          .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+          .slice(-REPL_JOURNAL_MAX_ENTRIES);
+        persistReplJournalEntries();
+        return true;
       }
 
       let replJournalEntries = loadPersistedReplJournalEntries();
@@ -925,6 +972,27 @@
         return String(value || "").trim().toLowerCase() === "literate" ? "literate" : "raw";
       }
 
+      function isMacShortcutPlatform() {
+        try {
+          const platform = String((navigator && navigator.platform) || "");
+          return /Mac|iPhone|iPad|iPod/i.test(platform);
+        } catch {
+          return true;
+        }
+      }
+
+      function getStudioShortcutLabel(kind) {
+        const mac = isMacShortcutPlatform();
+        if (kind === "repl-send") return mac ? "⇧⌘↵" : "Ctrl+Shift+Enter";
+        if (kind === "run") return mac ? "⌘↵" : "Ctrl+Enter";
+        return "";
+      }
+
+      function withStudioShortcutLabel(label, kind) {
+        const shortcut = getStudioShortcutLabel(kind);
+        return shortcut ? (label + " " + shortcut) : label;
+      }
+
       function setReplSendMode(mode) {
         replSendMode = normalizeReplSendMode(mode);
         if (replSendModeSelect) replSendModeSelect.value = replSendMode;
@@ -1011,8 +1079,17 @@
       function setActiveReplSession(sessionName) {
         const name = String(sessionName || "").trim();
         if (!name) {
+          if (replActiveSessionName) {
+            replTranscript = "";
+            replCapturedAt = 0;
+          }
           replActiveSessionName = "";
           return;
+        }
+        if (replActiveSessionName && replActiveSessionName !== name) {
+          replTranscript = "";
+          replCapturedAt = 0;
+          activeReplJournalEntryId = "";
         }
         replActiveSessionName = name;
       }
@@ -1272,7 +1349,7 @@
 
         const allBlocks = parseMarkdownCodeFences(range.raw);
         if (allBlocks.length) {
-          return { error: "Place the cursor inside a code chunk, select text, or use Run all chunks. Switch send mode to Raw send to send the full editor." };
+          return buildAllChunksReplSendPayload();
         }
 
         return {
@@ -1410,6 +1487,24 @@
         return isEcho ? lines.slice(1).join("\n").replace(/^\s+/, "") : value;
       }
 
+      function stripStudioReplSubmissionEcho(delta) {
+        let value = String(delta || "").replace(/^\s+/, "");
+        // The raw mirror below remains raw; REPL Studio cards hide only the
+        // temp-file wrapper used to submit multiline snippets safely. The
+        // pi-studio-re fragment catches IPython's wrapped pi-studio-repl paths.
+        const submissionEchoPatterns = [
+          /^.*exec\(open\([\s\S]*?pi-studio-re[\s\S]*?globals\(\)\)\s*$/gm,
+          /^.*include\([\s\S]*?pi-studio-re[\s\S]*?\.jl"\)\s*$/gm,
+          /^.*source\([\s\S]*?pi-studio-re[\s\S]*?local\s*=\s*\.GlobalEnv\)\s*$/gm,
+          /^.*:script\s+[\s\S]*?pi-studio-re[\s\S]*?\.ghci"?\s*$/gm,
+          /^.*\(do\s+\(load-file\s+[\s\S]*?pi-studio-re[\s\S]*?:pi-studio\/silent\)\s*$/gm,
+        ];
+        for (const pattern of submissionEchoPatterns) {
+          value = value.replace(pattern, "");
+        }
+        return value.replace(/^(?:\s*\n)+/, "");
+      }
+
       function stripTrailingReplPromptsFromOutput(output) {
         const lines = String(output || "").replace(/\r\n/g, "\n").split("\n");
         while (lines.length > 0 && /^\s*(?:>>>|\.\.\.|In \[\d+\]:|julia>|>|\+|ghci>|Prelude>|\*?[A-Za-z0-9_.:]+>|[^\s>]+=>)\s*$/.test(lines[lines.length - 1] || "")) {
@@ -1426,7 +1521,10 @@
       }
 
       function cleanReplCapturedOutput(delta, entry) {
-        return trimReplJournalOutput(stripTrailingReplPromptsFromOutput(stripSubsequentReplInputsFromOutput(stripSubmittedCodeEchoFromReplDelta(delta, entry))));
+        const withoutSubmissionEcho = stripStudioReplSubmissionEcho(delta);
+        const withoutCodeEcho = stripSubmittedCodeEchoFromReplDelta(withoutSubmissionEcho, entry);
+        const withoutLaterInputs = stripSubsequentReplInputsFromOutput(withoutCodeEcho);
+        return trimReplJournalOutput(stripTrailingReplPromptsFromOutput(withoutLaterInputs));
       }
 
       function updateActiveReplJournalEntryFromTranscript(sessionName, transcript) {
@@ -1452,13 +1550,17 @@
         return fence + (language ? language : "") + "\n" + value.replace(/\s+$/, "") + "\n" + fence;
       }
 
-      function buildReplJournalMarkdown() {
-        const lines = ["# REPL Studio", "", "Generated: " + new Date().toLocaleString(), ""];
-        if (!replJournalEntries.length) {
-          lines.push("_No REPL Studio entries yet._");
+      function buildReplJournalMarkdown(entries) {
+        const visibleEntries = Array.isArray(entries) ? entries : getVisibleReplJournalEntries();
+        const sessionName = getActiveReplJournalSessionName();
+        const lines = ["# REPL Studio", "", "Generated: " + new Date().toLocaleString()];
+        if (sessionName) lines.push("Session: `" + sessionName + "`");
+        lines.push("");
+        if (!visibleEntries.length) {
+          lines.push(sessionName ? ("_No REPL Studio entries for `" + sessionName + "` yet._") : "_No REPL Studio entries yet._");
           return lines.join("\n");
         }
-        replJournalEntries.forEach((entry, index) => {
+        visibleEntries.forEach((entry, index) => {
           lines.push("## " + (index + 1) + ". " + (entry.label || "REPL entry"));
           lines.push("");
           lines.push("- Time: " + new Date(entry.createdAt || Date.now()).toLocaleString());
@@ -1485,53 +1587,62 @@
       }
 
       async function copyReplJournalToClipboard() {
-        if (!replJournalEntries.length) {
-          setStatus("No REPL Studio entries to copy yet.", "warning");
+        const entries = getVisibleReplJournalEntries();
+        if (!entries.length) {
+          setStatus("No REPL Studio entries to copy for this session yet.", "warning");
           return;
         }
-        if (await writeTextToClipboard(buildReplJournalMarkdown())) {
-          setStatus("Copied REPL Studio as Markdown.", "success");
+        if (await writeTextToClipboard(buildReplJournalMarkdown(entries))) {
+          setStatus("Copied REPL Studio session as Markdown.", "success");
         } else {
           setStatus("Clipboard write failed.", "warning");
         }
       }
 
       function exportReplJournalMarkdown() {
-        if (!replJournalEntries.length) {
-          setStatus("No REPL Studio entries to export yet.", "warning");
+        const entries = getVisibleReplJournalEntries();
+        if (!entries.length) {
+          setStatus("No REPL Studio entries to export for this session yet.", "warning");
           return;
         }
-        const blob = new Blob([buildReplJournalMarkdown()], { type: "text/markdown;charset=utf-8" });
+        const blob = new Blob([buildReplJournalMarkdown(entries)], { type: "text/markdown;charset=utf-8" });
         const blobUrl = URL.createObjectURL(blob);
         const link = document.createElement("a");
         const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const sessionSlug = getActiveReplJournalSessionName().replace(/[^-_.A-Za-z0-9]+/g, "-");
         link.href = blobUrl;
-        link.download = "repl-studio-" + stamp + ".md";
+        link.download = "repl-studio" + (sessionSlug ? "-" + sessionSlug : "") + "-" + stamp + ".md";
         document.body.appendChild(link);
         link.click();
         link.remove();
         window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-        setStatus("Exported REPL Studio Markdown.", "success");
+        setStatus("Exported REPL Studio session Markdown.", "success");
       }
 
       function clearReplJournal() {
-        replJournalEntries = [];
+        const sessionName = getActiveReplJournalSessionName();
+        if (sessionName) {
+          replJournalEntries = replJournalEntries.filter((entry) => entry.sessionName !== sessionName);
+        } else {
+          replJournalEntries = [];
+        }
         activeReplJournalEntryId = "";
         persistReplJournalEntries();
-        setStatus("Cleared REPL Studio.", "success");
+        setStatus(sessionName ? "Cleared REPL Studio for this session." : "Cleared REPL Studio.", "success");
         renderReplViewIfActive({ force: true });
       }
 
       function loadReplJournalIntoEditor() {
-        if (!replJournalEntries.length) {
-          setStatus("No REPL Studio entries to load yet.", "warning");
+        const entries = getVisibleReplJournalEntries();
+        if (!entries.length) {
+          setStatus("No REPL Studio entries to load for this session yet.", "warning");
           return;
         }
-        const markdown = buildReplJournalMarkdown();
+        const markdown = buildReplJournalMarkdown(entries);
         setEditorText(markdown, { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "blank", label: "REPL Studio", path: null });
         setEditorLanguage("markdown");
-        setStatus("Loaded REPL Studio into editor.", "success");
+        setStatus("Loaded REPL Studio session into editor.", "success");
       }
 
       function addSelectedReplJournalNote() {
@@ -2101,13 +2212,16 @@
         const actionLineOneEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         if (!isEditorOnlyMode && sendRunBtn) actionLineOneEl.appendChild(sendRunBtn);
         if (!isEditorOnlyMode && queueSteerBtn) actionLineOneEl.appendChild(queueSteerBtn);
-        if (!isEditorOnlyMode && sendReplBtn) actionLineOneEl.appendChild(sendReplBtn);
-        if (!isEditorOnlyMode && replSendModeSelect) actionLineOneEl.appendChild(replSendModeSelect);
+        const replActionLineEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line repl-action-line");
+        replActionLineEl.hidden = true;
+        if (!isEditorOnlyMode && sendReplBtn) replActionLineEl.appendChild(sendReplBtn);
+        if (!isEditorOnlyMode && replSendModeSelect) replActionLineEl.appendChild(replSendModeSelect);
         const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         actionLineTwoEl.appendChild(copyDraftBtn);
         if (openCompanionBtn) actionLineTwoEl.appendChild(openCompanionBtn);
         if (!isEditorOnlyMode && sendEditorBtn) actionLineTwoEl.appendChild(sendEditorBtn);
         if (actionLineOneEl.childNodes.length > 0) actionsEl.appendChild(actionLineOneEl);
+        if (replActionLineEl.childNodes.length > 0) actionsEl.appendChild(replActionLineEl);
         actionsEl.appendChild(actionLineTwoEl);
 
         const stateEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-state");
@@ -3125,6 +3239,7 @@
           && event.shiftKey
           && activePane === "left"
           && !isEditorOnlyMode
+          && rightView === "repl"
         ) {
           event.preventDefault();
           if (sendReplBtn && !sendReplBtn.hidden && !sendReplBtn.disabled) {
@@ -5012,6 +5127,18 @@
           }
           return;
         }
+        if (action === "copy-attach-command") {
+          const session = getActiveReplSession();
+          const text = getReplAttachCommand(session);
+          if (!text.trim()) {
+            setStatus("Start or select a REPL session first.", "warning");
+            return;
+          }
+          void writeTextToClipboard(text).then((ok) => {
+            setStatus(ok ? "Copied tmux attach command." : "Clipboard write failed.", ok ? "success" : "warning");
+          });
+          return;
+        }
         if (action === "run-all-chunks") {
           sendEditorTextToRepl({ action: "all-chunks" });
           return;
@@ -5333,8 +5460,9 @@
           setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL Studio to export PDF.", "warning");
           return;
         }
-        if (exportingReplJournal && !replJournalEntries.length) {
-          setStatus("No REPL Studio entries to export yet.", "warning");
+        const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
+        if (exportingReplJournal && !replJournalExportEntries.length) {
+          setStatus("No REPL Studio entries to export for this session yet.", "warning");
           return;
         }
 
@@ -5345,7 +5473,7 @@
         }
 
         const markdown = exportingReplJournal
-          ? buildReplJournalMarkdown()
+          ? buildReplJournalMarkdown(replJournalExportEntries)
           : (rightView === "editor-preview"
             ? prepareEditorTextForPdfExport(sourceTextEl.value)
             : prepareEditorTextForPreview(latestResponseMarkdown));
@@ -5505,13 +5633,14 @@
           setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL Studio to export HTML.", "warning");
           return;
         }
-        if (exportingReplJournal && !replJournalEntries.length) {
-          setStatus("No REPL Studio entries to export yet.", "warning");
+        const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
+        if (exportingReplJournal && !replJournalExportEntries.length) {
+          setStatus("No REPL Studio entries to export for this session yet.", "warning");
           return;
         }
 
         const htmlArtifactSource = exportingReplJournal ? "" : getRightPaneHtmlArtifactSource();
-        const markdown = exportingReplJournal ? buildReplJournalMarkdown() : (htmlArtifactSource || (rightView === "editor-preview"
+        const markdown = exportingReplJournal ? buildReplJournalMarkdown(replJournalExportEntries) : (htmlArtifactSource || (rightView === "editor-preview"
           ? prepareEditorTextForHtmlExport(sourceTextEl.value)
           : prepareEditorTextForPreview(latestResponseMarkdown)));
         if (!markdown || !markdown.trim()) {
@@ -6009,8 +6138,24 @@
         return remaining < 56;
       }
 
+      function getActiveReplJournalSessionName() {
+        return String(replActiveSessionName || "").trim();
+      }
+
+      function getVisibleReplJournalEntries() {
+        const sessionName = getActiveReplJournalSessionName();
+        if (!sessionName) return replJournalEntries;
+        return replJournalEntries.filter((entry) => entry.sessionName === sessionName);
+      }
+
+      function getHiddenReplJournalEntryCount() {
+        const sessionName = getActiveReplJournalSessionName();
+        if (!sessionName) return 0;
+        return replJournalEntries.filter((entry) => entry.sessionName && entry.sessionName !== sessionName).length;
+      }
+
       function isReplJournalExpanded() {
-        return rightView === "repl" && !replJournalCollapsed && replJournalEntries.length > 0;
+        return rightView === "repl" && !replJournalCollapsed && getVisibleReplJournalEntries().length > 0;
       }
 
       function shouldAutoStickReplView() {
@@ -6196,23 +6341,26 @@
 
       function buildReplStudioActionsHtml() {
         if (replJournalCollapsed) return "";
-        const hasEntries = replJournalEntries.length > 0;
+        const hasEntries = getVisibleReplJournalEntries().length > 0;
         const buttons = "<button type='button' data-repl-action='load-journal'" + (hasEntries ? "" : " disabled") + ">Load in editor</button>"
           + "<button type='button' data-repl-action='copy-journal'" + (hasEntries ? "" : " disabled") + ">Copy Markdown</button>"
           + "<button type='button' data-repl-action='export-journal'" + (hasEntries ? "" : " disabled") + ">Export .md</button>"
-          + "<button type='button' data-repl-action='clear-journal'" + (hasEntries ? "" : " disabled") + ">Clear</button>";
+          + "<button type='button' data-repl-action='clear-journal'" + (hasEntries ? "" : " disabled") + ">Clear session</button>";
         return "<div class='repl-studio-below-actions'><div class='repl-journal-actions'>" + buttons + "</div></div>";
       }
 
       function buildReplJournalHtml(transcript) {
-        const hasEntries = replJournalEntries.length > 0;
-        const entryCount = replJournalEntries.length;
+        const visibleEntries = getVisibleReplJournalEntries();
+        const hasEntries = visibleEntries.length > 0;
+        const entryCount = visibleEntries.length;
+        const hiddenEntryCount = getHiddenReplJournalEntryCount();
+        const sessionName = getActiveReplJournalSessionName();
         const collapsedClass = replJournalCollapsed ? " is-collapsed" : "";
         const toggleButton = "<button type='button' data-repl-action='journal-toggle' aria-expanded='" + (replJournalCollapsed ? "false" : "true") + "'>" + (replJournalCollapsed ? "Show REPL Studio" : "Hide REPL Studio") + "</button>";
         const toggleActions = "<div class='repl-journal-actions'>" + toggleButton + "</div>";
         const summaryText = hasEntries
-          ? (entryCount + " Studio entr" + (entryCount === 1 ? "y" : "ies") + ". Export is Markdown.")
-          : "Studio-sent code and notes will appear here.";
+          ? (entryCount + " Studio entr" + (entryCount === 1 ? "y" : "ies") + (sessionName ? " for " + sessionName : "") + ". Export is Markdown.")
+          : (sessionName ? "No Studio entries for " + sessionName + "." : "Studio-sent code and notes will appear here.");
         if (replJournalCollapsed) {
           return "<section class='repl-journal repl-journal-compact" + collapsedClass + "'>"
             + "<div class='repl-journal-compact-row'>"
@@ -6221,12 +6369,12 @@
             + "</div>"
             + "</section>";
         }
-        const omitted = Math.max(0, replJournalEntries.length - 12);
+        const omitted = Math.max(0, visibleEntries.length - 12);
         const bannerText = extractReplStudioBanner(transcript, getActiveReplRuntime());
         const banner = bannerText
           ? "<pre class='repl-studio-banner'>" + escapeHtml(bannerText) + "</pre>"
           : "";
-        const cards = replJournalEntries.slice(-12).map((entry) => {
+        const cards = visibleEntries.slice(-12).map((entry) => {
           const meta = buildReplStudioMeta(entry);
           const prompt = getReplStudioPrompt(entry.runtime);
           const codeText = String(entry.code || "").trimEnd();
@@ -6252,11 +6400,17 @@
             + pending
             + "</article>";
         }).join("");
+        const emptyText = sessionName
+          ? (String(transcript || "").trim()
+            ? "No REPL Studio entries for this tmux session yet. The raw tmux mirror below still has this session's history; send code from Studio to build a clean record."
+            : "No REPL Studio entries for this tmux session yet. Send code from the editor, or use More → Add note (Literate send) to record prose.")
+          : "No REPL Studio entries yet. Send code from the editor, or use More → Add note (Literate send) to record prose.";
         const terminalContent = banner
-          + (hasEntries ? cards : "<div class='repl-studio-empty'>No REPL Studio entries yet. Send code from the editor, or use More → Add note (Literate send) to record prose.</div>");
+          + (hasEntries ? cards : "<div class='repl-studio-empty'>" + escapeHtml(emptyText) + "</div>");
         return "<section class='repl-journal'>"
-          + "<div class='repl-journal-header'><div><h3>REPL Studio</h3><p>Clean collaborative Studio REPL record. The raw tmux mirror is available below.</p></div>" + toggleActions + "</div>"
-          + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
+          + "<div class='repl-journal-header'><div><h3>REPL Studio</h3><p>Clean collaborative Studio REPL record for the selected tmux session. The raw tmux mirror is available below.</p></div>" + toggleActions + "</div>"
+          + (hiddenEntryCount ? "<div class='repl-journal-omitted'>" + escapeHtml(String(hiddenEntryCount)) + " entr" + (hiddenEntryCount === 1 ? "y" : "ies") + " from other REPL sessions hidden.</div>" : "")
+          + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
           + "<div class='repl-journal-list'>" + terminalContent + "</div>"
           + "</section>";
       }
@@ -6282,6 +6436,11 @@
           + "<div class='repl-journal-header'><div><h3>Raw REPL mirror</h3><p>Best-effort tmux pane mirror. Useful for directly typed commands and debugging; REPL Studio above is the cleaner record.</p></div>" + actions + "</div>"
           + body
           + "</section>";
+      }
+
+      function getReplAttachCommand(session) {
+        if (!session || !session.sessionName) return "";
+        return "tmux attach -t " + String(session.sessionName || "");
       }
 
       function buildReplPanelHtml() {
@@ -6319,6 +6478,7 @@
           + "<button type='button' data-repl-action='new-session'" + (replBusy || replTmuxAvailable === false ? " disabled" : "") + " title='Start a new additional session for this runtime.'>New session</button>"
           + "<button type='button' data-repl-action='stop-session'" + (canStopActiveSession ? "" : " disabled") + " title='Stop the selected Studio-owned REPL session.'>Stop session</button>"
           + "<button type='button' data-repl-action='interrupt'" + (activeSession && !replBusy ? "" : " disabled") + " title='Send Ctrl+C to the active REPL session.'>Interrupt</button>"
+          + "<button type='button' data-repl-action='copy-attach-command'" + (activeSession ? "" : " disabled") + " title='Copy command for attaching to this tmux session in a terminal.'>Copy attach command</button>"
           + "<button type='button' data-repl-action='run-all-chunks'" + (canSendToActiveSession ? "" : " disabled") + " title='Literate send: send all fenced code chunks matching the active REPL runtime.'>Run all chunks</button>"
           + "<button type='button' data-repl-action='journal-note' title='Add the selected prose/current paragraph to REPL Studio (Literate send) without sending it to the runtime.'>Add note</button>"
           + "<button type='button' data-repl-action='refresh'>Refresh</button>"
@@ -6596,8 +6756,9 @@
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         const exportingReplJournal = rightView === "repl";
+        const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
         const exportText = exportingReplJournal
-          ? (replJournalEntries.length ? buildReplJournalMarkdown() : "")
+          ? (replJournalExportEntries.length ? buildReplJournalMarkdown(replJournalExportEntries) : "")
           : (rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown);
         const canExportPreview = (rightPaneShowsPreview || exportingReplJournal) && Boolean(String(exportText || "").trim());
         const htmlArtifactExportSource = canExportPreview && !exportingReplJournal ? getRightPaneHtmlArtifactSource() : "";
@@ -6609,8 +6770,8 @@
             : (exportingReplJournal ? "Export REPL Studio" : "Export right preview");
           if (rightView === "trace") {
             exportPdfBtn.title = "Working view does not support preview export.";
-          } else if (exportingReplJournal && !replJournalEntries.length) {
-            exportPdfBtn.title = "No REPL Studio entries to export yet.";
+          } else if (exportingReplJournal && !replJournalExportEntries.length) {
+            exportPdfBtn.title = "No REPL Studio entries to export for this session yet.";
           } else if (rightView === "markdown") {
             exportPdfBtn.title = "Switch right pane to Response (Preview), Editor (Preview), or REPL Studio to export.";
           } else if (!canExportPreview) {
@@ -6640,7 +6801,7 @@
             ? (exportingReplJournal
               ? "Choose a format and export REPL Studio."
               : (isHtmlArtifactPreview ? "Export this HTML preview." : "Choose a format and export the current right-pane preview."))
-            : (exportingReplJournal ? "No REPL Studio entries to export yet." : "Switch right pane to a non-empty preview before exporting.");
+            : (exportingReplJournal ? "No REPL Studio entries to export for this session yet." : "Switch right pane to a non-empty preview before exporting.");
         }
         if (!canExportPreview || previewExportInProgress) {
           closeExportPreviewMenu();
@@ -13185,7 +13346,7 @@
         if (isEditorOnlyMode) {
           if (sendRunBtn) {
             sendRunBtn.textContent = "Run editor text";
-            sendRunBtn.classList.remove("request-stop-active");
+            sendRunBtn.classList.remove("request-stop-active", "repl-secondary-action");
             sendRunBtn.disabled = true;
             sendRunBtn.title = "Run is unavailable in editor-only mode.";
           }
@@ -13198,6 +13359,9 @@
           if (sendReplBtn) {
             sendReplBtn.hidden = true;
             sendReplBtn.disabled = true;
+            sendReplBtn.classList.remove("repl-primary-action");
+            const replActionLine = sendReplBtn.closest(".repl-action-line");
+            if (replActionLine instanceof HTMLElement) replActionLine.hidden = true;
           }
           if (replSendModeSelect) {
             replSendModeSelect.hidden = true;
@@ -13218,11 +13382,12 @@
         }
 
         if (sendRunBtn) {
-          sendRunBtn.textContent = directIsStop ? "Stop" : "Run editor text";
+          sendRunBtn.textContent = directIsStop ? "Stop" : (rightView === "repl" ? withStudioShortcutLabel("Run editor text", "run") : "Run editor text");
           sendRunBtn.classList.toggle("request-stop-active", directIsStop);
+          sendRunBtn.classList.toggle("repl-secondary-action", rightView === "repl" && !directIsStop);
           sendRunBtn.disabled = wsState === "Disconnected" || (!directIsStop && (uiBusy || critiqueIsStop));
           const replHint = rightView === "repl" && getActiveReplSession()
-            ? " Includes active REPL identity for prompts that refer to it."
+            ? " Sends text to Pi, not the REPL; use Send chunk/selection or Send to REPL to execute code in the active REPL."
             : "";
           sendRunBtn.title = directIsStop
             ? "Stop the active run. Shortcut: Esc."
@@ -13242,22 +13407,27 @@
             : "Queue steering is available while Run editor text is active.";
         }
 
+        const hasReplSession = Boolean(getActiveReplSession());
         if (sendReplBtn) {
-          const hasSession = Boolean(getActiveReplSession());
-          sendReplBtn.hidden = rightView !== "repl";
-          sendReplBtn.disabled = wsState === "Disconnected" || uiBusy || replBusy || !hasSession;
-          sendReplBtn.title = hasSession
+          const showReplSend = rightView === "repl";
+          sendReplBtn.hidden = !showReplSend;
+          sendReplBtn.disabled = !showReplSend || wsState === "Disconnected" || uiBusy || replBusy || !hasReplSession;
+          sendReplBtn.classList.toggle("repl-primary-action", showReplSend);
+          sendReplBtn.textContent = showReplSend ? withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send") : "Send to REPL";
+          sendReplBtn.title = hasReplSession
             ? (replSendMode === "literate"
-              ? "Literate send: selected code/prose, or the current fenced code chunk. Shortcut: Cmd/Ctrl+Shift+Enter."
+              ? "Literate send: selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk. Shortcut: Cmd/Ctrl+Shift+Enter."
               : "Raw send: selection, or full editor if no selection. Shortcut: Cmd/Ctrl+Shift+Enter.")
             : "Start or select a REPL session in the right pane first.";
+          const replActionLine = sendReplBtn.closest(".repl-action-line");
+          if (replActionLine instanceof HTMLElement) replActionLine.hidden = !showReplSend;
         }
         if (replSendModeSelect) {
           replSendModeSelect.hidden = rightView !== "repl";
           replSendModeSelect.disabled = wsState === "Disconnected" || uiBusy || replBusy;
           replSendModeSelect.value = replSendMode;
           replSendModeSelect.title = replSendMode === "literate"
-            ? "Literate send: Send to REPL uses the selection/current fenced code chunk."
+            ? "Literate send: Send to REPL uses the selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk."
             : "Raw send: Send to REPL uses the selection, or full editor if no selection.";
         }
 
@@ -13607,6 +13777,7 @@
           if (typeof message.activeSessionName === "string" && message.activeSessionName.trim()) {
             setActiveReplSession(message.activeSessionName);
           }
+          const journalChanged = mergeReplJournalEntries(message.journalEntries);
           if (typeof message.transcript === "string") replTranscript = trimReplTranscript(message.transcript);
           if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
           replError = typeof message.replError === "string" ? message.replError : (typeof message.captureError === "string" ? message.captureError : "");
@@ -13621,6 +13792,7 @@
             || previousTranscript !== replTranscript
             || previousError !== replError
             || previousMessage !== replMessage
+            || journalChanged
             || (!previousCapturedAt && replCapturedAt);
           if (viewChanged) renderReplViewIfActive();
           updateReferenceBadge();
@@ -13632,9 +13804,10 @@
             setActiveReplSession(message.sessionName);
           }
           const changed = recordReplToolSend(message);
+          const journalChanged = mergeReplJournalEntries(message.journalEntries);
           if (typeof message.transcript === "string") replTranscript = trimReplTranscript(message.transcript);
           if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
-          if (changed) renderReplViewIfActive({ force: true });
+          if (changed || journalChanged) renderReplViewIfActive({ force: true });
           updateReferenceBadge();
           return;
         }
@@ -13657,13 +13830,13 @@
           if (typeof message.activeSessionName === "string" && message.activeSessionName.trim()) {
             setActiveReplSession(message.activeSessionName);
           }
-          let journalChanged = false;
+          let journalChanged = mergeReplJournalEntries(message.journalEntries);
           if (typeof message.transcript === "string") {
             replTranscript = trimReplTranscript(message.transcript);
             journalChanged = updateActiveReplJournalEntryFromTranscript(
               typeof message.activeSessionName === "string" && message.activeSessionName.trim() ? message.activeSessionName : replActiveSessionName,
               replTranscript
-            );
+            ) || journalChanged;
           }
           if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
           replError = typeof message.replError === "string" ? message.replError : "";
@@ -13686,6 +13859,7 @@
           replBusy = false;
           replMessage = "";
           replError = "";
+          mergeReplJournalEntries(message.journalEntries);
           if (typeof message.requestId === "string") {
             replJournalEntries = replJournalEntries.map((entry) => entry.requestId === message.requestId ? { ...entry, status: "sent", updatedAt: Date.now() } : entry);
             persistReplJournalEntries();

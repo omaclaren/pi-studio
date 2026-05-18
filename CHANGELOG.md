@@ -4,6 +4,21 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.6] — 2026-05-19
+
+### Changed
+- Cleaned up Studio REPL output handling: the raw tmux mirror now remains raw while REPL Studio and `studio_repl_send` results hide Studio's temp-file submission wrappers.
+- Made REPL Studio session-scoped, so switching between Python, R, Julia, and other tmux sessions no longer mixes their clean records, and reloads can recover Studio-sent entries while the Studio server is still running.
+- Refined Literate send so **Send selection/chunks** runs the selection, current fenced chunk, or all compatible chunks when the cursor is outside a chunk.
+- Reworked REPL-mode editor controls so REPL send actions sit on their own row, show their shortcut, and **Run editor text** is visually secondary because it sends to Pi rather than the REPL.
+- Normalised dropdown/menu styling in the refreshed UI so selects and custom menu triggers use neutral hover/open states instead of inconsistent accent borders or fills.
+
+### Added
+- Added **More → Copy attach command** in the REPL pane to copy a `tmux attach -t <session>` command for the active REPL session.
+
+### Fixed
+- R REPL parse errors no longer expose Studio's internal `.__pi_studio_code` parse wrapper.
+
 ## [0.9.5] — 2026-05-17
 
 ### Added
