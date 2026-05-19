@@ -2456,6 +2456,39 @@
       overflow-x: auto;
     }
 
+    .rendered-markdown .mermaid-source-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin: 0 0 4px;
+      pointer-events: none;
+    }
+
+    .rendered-markdown .mermaid-source-toolbar .studio-copy-mermaid-source-btn {
+      position: static;
+      top: auto;
+      right: auto;
+      z-index: auto;
+      padding: 2px 7px;
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+      font-size: 11px;
+      opacity: 0.38;
+      pointer-events: auto;
+    }
+
+    .rendered-markdown .mermaid-container:hover > .studio-copy-block-btn {
+      opacity: 0.38;
+    }
+
+    .rendered-markdown .mermaid-source-toolbar .studio-copy-mermaid-source-btn:hover,
+    .rendered-markdown .mermaid-source-toolbar .studio-copy-mermaid-source-btn:focus-visible {
+      opacity: 1;
+      color: var(--text);
+      border-color: var(--control-border);
+      background: var(--panel);
+    }
+
     .rendered-markdown .mermaid-container svg {
       max-width: 100%;
       height: auto;

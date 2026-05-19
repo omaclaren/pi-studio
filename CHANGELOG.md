@@ -4,6 +4,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.11] — 2026-05-19
+
+### Added
+- Render TeX math inside sandboxed interactive HTML previews through Studio's existing Pandoc/MathML pipeline without enabling network scripts.
+- Added a **Copy source** button to rendered Mermaid diagrams.
+
+### Fixed
+- Made same-document section links scroll correctly inside sandboxed interactive HTML previews.
+
 ## [0.9.10] — 2026-05-19
 
 ### Added

@@ -64,6 +64,19 @@ interface StudioPromptDescriptor {
 	promptTriggerText: string | null;
 }
 
+interface StudioHtmlPreviewMathRenderItem {
+	mathId: string;
+	tex: string;
+	display: boolean;
+}
+
+interface StudioHtmlPreviewMathRenderResult {
+	mathId: string;
+	ok: boolean;
+	html?: string;
+	error?: string;
+}
+
 interface ActiveStudioRequest extends StudioPromptDescriptor {
 	id: string;
 	kind: StudioRequestKind;
@@ -460,6 +473,9 @@ const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
 const PDF_EXPORT_MAX_CHARS = 400_000;
 const HTML_EXPORT_MAX_CHARS = 400_000;
+const HTML_PREVIEW_MATH_RENDER_MAX_ITEMS = 250;
+const HTML_PREVIEW_MATH_RENDER_ITEM_MAX_CHARS = 8_000;
+const HTML_PREVIEW_MATH_RENDER_TOTAL_MAX_CHARS = 120_000;
 const STUDIO_QUIZ_SOURCE_MAX_CHARS = 80_000;
 const STUDIO_QUIZ_CONTEXT_FILE_MAX_CHARS = 14_000;
 const STUDIO_QUIZ_CONTEXT_MAX_FILES = 18;
@@ -4897,6 +4913,72 @@ function stripMathMlAnnotationTags(html: string): string {
 			.replace(/<annotation\b[\s\S]*?<\/annotation>/gi, "");
 		const texAttr = texSource ? ` data-tex-source="${escapeStudioHtmlText(texSource)}"` : "";
 		return `<math${attrs}${texAttr}>${cleanedInner}</math>`;
+	});
+}
+
+function normalizeStudioHtmlPreviewMathForPandoc(tex: string): string {
+	return String(tex ?? "")
+		.replace(/\r\n/g, "\n")
+		.replace(/\\rm\s*\{([^{}]+)\}/g, "\\mathrm{$1}")
+		.replace(/\\rm\s+([A-Za-z]+)(?=[^A-Za-z]|$)/g, "\\mathrm{$1}");
+}
+
+function getStudioHtmlPreviewMathWrapperId(index: number): string {
+	return `studio-html-preview-math-${Math.max(0, Math.floor(index))}`;
+}
+
+function buildStudioHtmlPreviewMathPandocSource(items: StudioHtmlPreviewMathRenderItem[]): string {
+	return items.map((item, index) => {
+		const wrapperId = getStudioHtmlPreviewMathWrapperId(index);
+		const tex = normalizeStudioHtmlPreviewMathForPandoc(item.tex);
+		const mathSource = item.display ? `\\[\n${tex}\n\\]` : `\\(${tex}\\)`;
+		return `:::: {#${wrapperId} .studio-html-preview-math-render-item}\n${mathSource}\n::::`;
+	}).join("\n\n");
+}
+
+function extractStudioHtmlPreviewMathHtml(renderedHtml: string, wrapperId: string): string {
+	const idPattern = escapeStudioRegExpLiteral(wrapperId);
+	const wrapperPattern = new RegExp(`<div\\b(?=[^>]*\\bid="${idPattern}")[^>]*>([\\s\\S]*?)<\\/div>`, "i");
+	const wrapperMatch = String(renderedHtml ?? "").match(wrapperPattern);
+	const wrapperHtml = wrapperMatch ? String(wrapperMatch[1] ?? "") : "";
+	const mathMatch = wrapperHtml.match(/<math\b[\s\S]*?<\/math>/i);
+	return mathMatch ? stripMathMlAnnotationTags(mathMatch[0]) : "";
+}
+
+async function renderStudioHtmlPreviewMathWithPandoc(items: StudioHtmlPreviewMathRenderItem[]): Promise<StudioHtmlPreviewMathRenderResult[]> {
+	if (items.length === 0) return [];
+	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
+	const inputFormat = "markdown+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash";
+	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none"];
+	const source = buildStudioHtmlPreviewMathPandocSource(items);
+	const pandocResult = await runStudioSubprocess(pandocCommand, args, {
+		input: source,
+		timeoutMs: STUDIO_PANDOC_TIMEOUT_MS,
+		stdoutMaxBytes: Math.min(STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES, 10_000_000),
+		label: "pandoc HTML preview math render",
+		notFoundMessage: "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary.",
+	});
+	if (pandocResult.code !== 0) {
+		throw new Error(`pandoc math render failed with exit code ${pandocResult.code}${pandocResult.stderr ? `: ${pandocResult.stderr}` : ""}`);
+	}
+	if (pandocResult.stdoutTruncated) {
+		throw new Error("pandoc math render output exceeded Studio's size limit.");
+	}
+
+	return items.map((item, index) => {
+		const html = extractStudioHtmlPreviewMathHtml(pandocResult.stdout, getStudioHtmlPreviewMathWrapperId(index));
+		if (!html) {
+			return {
+				mathId: item.mathId,
+				ok: false,
+				error: "Pandoc did not render this expression as MathML.",
+			};
+		}
+		return {
+			mathId: item.mathId,
+			ok: true,
+			html,
+		};
 	});
 }
 
@@ -11479,6 +11561,84 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const handleRenderMathRequest = async (req: IncomingMessage, res: ServerResponse) => {
+		let rawBody = "";
+		try {
+			rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const status = message.includes("exceeds") ? 413 : 400;
+			respondJson(res, status, { ok: false, error: message });
+			return;
+		}
+
+		let parsedBody: unknown;
+		try {
+			parsedBody = rawBody ? JSON.parse(rawBody) : {};
+		} catch {
+			respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+			return;
+		}
+
+		const rawItems =
+			parsedBody && typeof parsedBody === "object" && Array.isArray((parsedBody as { items?: unknown }).items)
+				? (parsedBody as { items: unknown[] }).items
+				: null;
+		if (!rawItems) {
+			respondJson(res, 400, { ok: false, error: "Missing math items array in request body." });
+			return;
+		}
+		if (rawItems.length > HTML_PREVIEW_MATH_RENDER_MAX_ITEMS) {
+			respondJson(res, 413, {
+				ok: false,
+				error: `HTML preview math render accepts at most ${HTML_PREVIEW_MATH_RENDER_MAX_ITEMS} items per request.`,
+			});
+			return;
+		}
+
+		const items: StudioHtmlPreviewMathRenderItem[] = [];
+		let totalChars = 0;
+		for (const rawItem of rawItems) {
+			const item = rawItem && typeof rawItem === "object" ? rawItem as { mathId?: unknown; tex?: unknown; display?: unknown } : null;
+			const mathId = typeof item?.mathId === "string" ? item.mathId.trim() : "";
+			const tex = typeof item?.tex === "string" ? item.tex : "";
+			if (!mathId || !tex.trim()) continue;
+			if (mathId.length > 160) {
+				respondJson(res, 400, { ok: false, error: "Math item id is too long." });
+				return;
+			}
+			if (tex.length > HTML_PREVIEW_MATH_RENDER_ITEM_MAX_CHARS) {
+				respondJson(res, 413, {
+					ok: false,
+					error: `A math expression exceeds ${HTML_PREVIEW_MATH_RENDER_ITEM_MAX_CHARS} characters.`,
+				});
+				return;
+			}
+			totalChars += tex.length;
+			if (totalChars > HTML_PREVIEW_MATH_RENDER_TOTAL_MAX_CHARS) {
+				respondJson(res, 413, {
+					ok: false,
+					error: `Math render text exceeds ${HTML_PREVIEW_MATH_RENDER_TOTAL_MAX_CHARS} characters.`,
+				});
+				return;
+			}
+			items.push({ mathId, tex, display: Boolean(item?.display) });
+		}
+
+		if (items.length === 0) {
+			respondJson(res, 400, { ok: false, error: "No valid math items to render." });
+			return;
+		}
+
+		try {
+			const results = await renderStudioHtmlPreviewMathWithPandoc(items);
+			respondJson(res, 200, { ok: true, renderer: "pandoc", results });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			respondJson(res, 500, { ok: false, error: `Math render failed: ${message}` });
+		}
+	};
+
 	const handleExportPdfRequest = async (req: IncomingMessage, res: ServerResponse) => {
 		let rawBody = "";
 		try {
@@ -11839,6 +11999,29 @@ export default function (pi: ExtensionAPI) {
 				respondJson(res, 500, {
 					ok: false,
 					error: `Preview render failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
+		if (requestUrl.pathname === "/render-math") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			const method = (req.method ?? "GET").toUpperCase();
+			if (method !== "POST") {
+				res.setHeader("Allow", "POST");
+				respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+				return;
+			}
+
+			void handleRenderMathRequest(req, res).catch((error) => {
+				respondJson(res, 500, {
+					ok: false,
+					error: `Math render failed: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			});
 			return;

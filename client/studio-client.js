@@ -245,6 +245,7 @@
       const REPL_JOURNAL_MAX_ENTRIES = 80;
       const PDF_EXPORT_FETCH_TIMEOUT_MS = 180_000;
       const HTML_EXPORT_FETCH_TIMEOUT_MS = 180_000;
+      const HTML_ARTIFACT_MATH_RENDER_FETCH_TIMEOUT_MS = 30_000;
       const EDITOR_TAB_TEXT = "  ";
       const QUIZ_DEFAULT_COUNT = 5;
       const QUIZ_SCOPES = ["editor", "selection", "file", "folder", "repo"];
@@ -3968,6 +3969,11 @@
           + "      root ? root.offsetHeight : 0\n"
           + "    ));\n"
           + "  }\n"
+          + "  function getScrollTop() {\n"
+          + "    const body = document.body;\n"
+          + "    const root = document.documentElement;\n"
+          + "    return window.scrollY || (root ? root.scrollTop : 0) || (body ? body.scrollTop : 0) || 0;\n"
+          + "  }\n"
           + "  function sendHeight() {\n"
           + "    scheduled = false;\n"
           + "    const height = measureHeight();\n"
@@ -3980,13 +3986,243 @@
           + "    scheduled = true;\n"
           + "    requestAnimationFrame(sendHeight);\n"
           + "  }\n"
+          + "  function decodeFragment(value) {\n"
+          + "    const text = String(value || '').replace(/^#/, '');\n"
+          + "    try { return decodeURIComponent(text); } catch { return text; }\n"
+          + "  }\n"
+          + "  function findNamedFragmentTarget(fragment) {\n"
+          + "    const decoded = decodeFragment(fragment);\n"
+          + "    if (!decoded) return document.documentElement || document.body;\n"
+          + "    return document.getElementById(decoded) || document.getElementsByName(decoded)[0] || null;\n"
+          + "  }\n"
+          + "  function postFragmentScroll(target) {\n"
+          + "    if (!target || typeof target.getBoundingClientRect !== 'function') return;\n"
+          + "    const rect = target.getBoundingClientRect();\n"
+          + "    const scrollTop = getScrollTop();\n"
+          + "    try {\n"
+          + "      parent.postMessage({ type: 'pi-studio-html-artifact-fragment', id: PREVIEW_ID, targetTop: Math.max(0, rect.top + scrollTop), scrollTop, viewportHeight: window.innerHeight || 0, documentHeight: measureHeight() }, '*');\n"
+          + "    } catch {}\n"
+          + "  }\n"
+          + "  function scrollFragmentIntoView(fragment, options) {\n"
+          + "    const target = findNamedFragmentTarget(fragment);\n"
+          + "    if (!target) return false;\n"
+          + "    const behavior = options && options.smooth === false ? 'auto' : 'smooth';\n"
+          + "    try { target.scrollIntoView({ block: 'start', inline: 'nearest', behavior }); } catch { try { target.scrollIntoView(true); } catch {} }\n"
+          + "    postFragmentScroll(target);\n"
+          + "    setTimeout(() => postFragmentScroll(target), 80);\n"
+          + "    setTimeout(() => postFragmentScroll(target), 300);\n"
+          + "    return true;\n"
+          + "  }\n"
+          + "  function getAnchorFromClickTarget(target) {\n"
+          + "    let node = target;\n"
+          + "    if (node && node.nodeType === 3) node = node.parentElement;\n"
+          + "    return node && typeof node.closest === 'function' ? node.closest('a[href]') : null;\n"
+          + "  }\n"
+          + "  function getSameDocumentFragment(anchor) {\n"
+          + "    if (!anchor || typeof anchor.getAttribute !== 'function') return null;\n"
+          + "    if (anchor.hasAttribute('download')) return null;\n"
+          + "    const target = String(anchor.getAttribute('target') || '').trim().toLowerCase();\n"
+          + "    if (target && target !== '_self') return null;\n"
+          + "    const rawHref = String(anchor.getAttribute('href') || '').trim();\n"
+          + "    if (!rawHref) return null;\n"
+          + "    if (rawHref.charAt(0) === '#') return rawHref.slice(1);\n"
+          + "    const hashIndex = rawHref.indexOf('#');\n"
+          + "    if (hashIndex < 0) return null;\n"
+          + "    const beforeHash = rawHref.slice(0, hashIndex);\n"
+          + "    const currentWithoutHash = String(window.location && window.location.href || '').split('#')[0];\n"
+          + "    if (!beforeHash || beforeHash === currentWithoutHash || beforeHash === 'about:srcdoc') return rawHref.slice(hashIndex + 1);\n"
+          + "    return null;\n"
+          + "  }\n"
+          + "  function writeFragmentHistory(fragment) {\n"
+          + "    try {\n"
+          + "      if (history && typeof history.pushState === 'function') {\n"
+          + "        history.pushState(null, '', fragment ? '#' + encodeURIComponent(decodeFragment(fragment)) : '#');\n"
+          + "      }\n"
+          + "    } catch {}\n"
+          + "  }\n"
+          + "  function handleFragmentAnchorClick(event) {\n"
+          + "    if (!event || event.defaultPrevented) return;\n"
+          + "    if (typeof event.button === 'number' && event.button !== 0) return;\n"
+          + "    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;\n"
+          + "    const anchor = getAnchorFromClickTarget(event.target);\n"
+          + "    const fragment = getSameDocumentFragment(anchor);\n"
+          + "    if (fragment == null) return;\n"
+          + "    if (!scrollFragmentIntoView(fragment)) return;\n"
+          + "    event.preventDefault();\n"
+          + "    writeFragmentHistory(fragment);\n"
+          + "  }\n"
+          + "  const htmlMathPlaceholders = new Map();\n"
+          + "  let htmlMathSerial = 0;\n"
+          + "  let htmlMathScanScheduled = false;\n"
+          + "  function delimiterListIncludes(list, start, end) {\n"
+          + "    if (!Array.isArray(list)) return false;\n"
+          + "    return list.some((entry) => Array.isArray(entry) && entry[0] === start && entry[1] === end);\n"
+          + "  }\n"
+          + "  function getHtmlMathDelimiterConfig() {\n"
+          + "    const mathJax = window.MathJax && typeof window.MathJax === 'object' ? window.MathJax : null;\n"
+          + "    const tex = mathJax && mathJax.tex && typeof mathJax.tex === 'object' ? mathJax.tex : null;\n"
+          + "    return {\n"
+          + "      inlineDollar: Boolean(tex && delimiterListIncludes(tex.inlineMath, '$', '$')),\n"
+          + "      displayDollar: Boolean(tex && delimiterListIncludes(tex.displayMath, '$$', '$$')),\n"
+          + "    };\n"
+          + "  }\n"
+          + "  function isEscapedAt(text, index) {\n"
+          + "    let count = 0;\n"
+          + "    let pos = index - 1;\n"
+          + "    while (pos >= 0 && text.charAt(pos) === '\\\\') { count += 1; pos -= 1; }\n"
+          + "    return count % 2 === 1;\n"
+          + "  }\n"
+          + "  function findUnescapedDelimiter(text, delimiter, fromIndex) {\n"
+          + "    let index = Math.max(0, Number(fromIndex) || 0);\n"
+          + "    while (index < text.length) {\n"
+          + "      index = text.indexOf(delimiter, index);\n"
+          + "      if (index < 0) return -1;\n"
+          + "      if (!isEscapedAt(text, index)) return index;\n"
+          + "      index += Math.max(1, delimiter.length);\n"
+          + "    }\n"
+          + "    return -1;\n"
+          + "  }\n"
+          + "  function textMightContainMath(text, config) {\n"
+          + "    if (!text) return false;\n"
+          + "    if (text.indexOf('\\\\(') !== -1 || text.indexOf('\\\\[') !== -1) return true;\n"
+          + "    return Boolean((config.inlineDollar || config.displayDollar) && text.indexOf('$') !== -1);\n"
+          + "  }\n"
+          + "  function findNextMathSegment(text, startIndex, config) {\n"
+          + "    for (let index = startIndex; index < text.length; index += 1) {\n"
+          + "      if (text.startsWith('\\\\(', index)) {\n"
+          + "        const end = findUnescapedDelimiter(text, '\\\\)', index + 2);\n"
+          + "        if (end > index + 2) return { start: index, end: end + 2, tex: text.slice(index + 2, end).trim(), display: false };\n"
+          + "      }\n"
+          + "      if (text.startsWith('\\\\[', index)) {\n"
+          + "        const end = findUnescapedDelimiter(text, '\\\\]', index + 2);\n"
+          + "        if (end > index + 2) return { start: index, end: end + 2, tex: text.slice(index + 2, end).trim(), display: true };\n"
+          + "      }\n"
+          + "      if (config.displayDollar && text.startsWith('$$', index) && !isEscapedAt(text, index)) {\n"
+          + "        const end = findUnescapedDelimiter(text, '$$', index + 2);\n"
+          + "        if (end > index + 2) return { start: index, end: end + 2, tex: text.slice(index + 2, end).trim(), display: true };\n"
+          + "      }\n"
+          + "      if (config.inlineDollar && text.charAt(index) === '$' && text.charAt(index + 1) !== '$' && !isEscapedAt(text, index)) {\n"
+          + "        const end = findUnescapedDelimiter(text, '$', index + 1);\n"
+          + "        if (end > index + 1) return { start: index, end: end + 1, tex: text.slice(index + 1, end).trim(), display: false };\n"
+          + "      }\n"
+          + "    }\n"
+          + "    return null;\n"
+          + "  }\n"
+          + "  function parseHtmlMathSegments(text, config, maxCount) {\n"
+          + "    const segments = [];\n"
+          + "    let index = 0;\n"
+          + "    const maxSegments = Math.max(1, Number(maxCount) || 1);\n"
+          + "    while (index < text.length && segments.length < maxSegments) {\n"
+          + "      const segment = findNextMathSegment(text, index, config);\n"
+          + "      if (!segment) break;\n"
+          + "      if (segment.tex) segments.push(segment);\n"
+          + "      index = Math.max(segment.end, segment.start + 1);\n"
+          + "    }\n"
+          + "    return segments;\n"
+          + "  }\n"
+          + "  function shouldSkipHtmlMathTextNode(node) {\n"
+          + "    let el = node && node.parentElement;\n"
+          + "    while (el) {\n"
+          + "      const tag = el.tagName ? el.tagName.toLowerCase() : '';\n"
+          + "      if (['script', 'style', 'textarea', 'pre', 'code', 'math', 'svg', 'mjx-container'].indexOf(tag) !== -1) return true;\n"
+          + "      if (el.classList && (el.classList.contains('pi-studio-html-math') || el.classList.contains('MathJax'))) return true;\n"
+          + "      el = el.parentElement;\n"
+          + "    }\n"
+          + "    return false;\n"
+          + "  }\n"
+          + "  function replaceTextNodeWithHtmlMathPlaceholders(node, segments) {\n"
+          + "    if (!node || !node.parentNode || !segments || segments.length === 0) return [];\n"
+          + "    const text = String(node.nodeValue || '');\n"
+          + "    const fragment = document.createDocumentFragment();\n"
+          + "    const items = [];\n"
+          + "    let index = 0;\n"
+          + "    segments.forEach((segment) => {\n"
+          + "      if (segment.start > index) fragment.appendChild(document.createTextNode(text.slice(index, segment.start)));\n"
+          + "      const mathId = PREVIEW_ID + '_math_' + (++htmlMathSerial).toString(36);\n"
+          + "      const span = document.createElement('span');\n"
+          + "      span.className = 'pi-studio-html-math pi-studio-html-math-' + (segment.display ? 'display' : 'inline');\n"
+          + "      span.setAttribute('data-pi-studio-html-math-id', mathId);\n"
+          + "      span.setAttribute('aria-busy', 'true');\n"
+          + "      span.textContent = text.slice(segment.start, segment.end);\n"
+          + "      htmlMathPlaceholders.set(mathId, span);\n"
+          + "      items.push({ mathId, tex: segment.tex, display: Boolean(segment.display) });\n"
+          + "      fragment.appendChild(span);\n"
+          + "      index = segment.end;\n"
+          + "    });\n"
+          + "    if (index < text.length) fragment.appendChild(document.createTextNode(text.slice(index)));\n"
+          + "    node.parentNode.replaceChild(fragment, node);\n"
+          + "    return items;\n"
+          + "  }\n"
+          + "  function applyRenderedHtmlMath(results) {\n"
+          + "    if (!Array.isArray(results)) return;\n"
+          + "    results.forEach((result) => {\n"
+          + "      if (!result || typeof result !== 'object') return;\n"
+          + "      const mathId = typeof result.mathId === 'string' ? result.mathId : '';\n"
+          + "      const placeholder = mathId ? htmlMathPlaceholders.get(mathId) : null;\n"
+          + "      if (!placeholder || !placeholder.isConnected) return;\n"
+          + "      placeholder.removeAttribute('aria-busy');\n"
+          + "      if (result.ok === true && typeof result.html === 'string' && result.html.trim()) {\n"
+          + "        placeholder.innerHTML = result.html;\n"
+          + "        placeholder.classList.add('pi-studio-html-math-rendered');\n"
+          + "      } else {\n"
+          + "        placeholder.classList.add('pi-studio-html-math-failed');\n"
+          + "        if (typeof result.error === 'string' && result.error) placeholder.title = result.error;\n"
+          + "      }\n"
+          + "      htmlMathPlaceholders.delete(mathId);\n"
+          + "    });\n"
+          + "    scheduleHeight();\n"
+          + "  }\n"
+          + "  function runHtmlMathRenderScan() {\n"
+          + "    htmlMathScanScheduled = false;\n"
+          + "    if (!document.body || typeof document.createTreeWalker !== 'function') return;\n"
+          + "    const nodeFilterApi = typeof NodeFilter !== 'undefined' ? NodeFilter : { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 };\n"
+          + "    const config = getHtmlMathDelimiterConfig();\n"
+          + "    const nodes = [];\n"
+          + "    const walker = document.createTreeWalker(document.body, nodeFilterApi.SHOW_TEXT, {\n"
+          + "      acceptNode(node) {\n"
+          + "        const text = String(node && node.nodeValue || '');\n"
+          + "        if (!textMightContainMath(text, config)) return nodeFilterApi.FILTER_REJECT;\n"
+          + "        if (shouldSkipHtmlMathTextNode(node)) return nodeFilterApi.FILTER_REJECT;\n"
+          + "        return nodeFilterApi.FILTER_ACCEPT;\n"
+          + "      }\n"
+          + "    });\n"
+          + "    while (walker.nextNode()) nodes.push(walker.currentNode);\n"
+          + "    const items = [];\n"
+          + "    for (const node of nodes) {\n"
+          + "      const remaining = 250 - items.length;\n"
+          + "      if (remaining <= 0) break;\n"
+          + "      const text = String(node && node.nodeValue || '');\n"
+          + "      const segments = parseHtmlMathSegments(text, config, remaining);\n"
+          + "      if (segments.length === 0) continue;\n"
+          + "      items.push(...replaceTextNodeWithHtmlMathPlaceholders(node, segments));\n"
+          + "    }\n"
+          + "    if (items.length > 0) {\n"
+          + "      try { parent.postMessage({ type: 'pi-studio-html-artifact-render-math', id: PREVIEW_ID, items }, '*'); } catch {}\n"
+          + "    }\n"
+          + "  }\n"
+          + "  function scheduleHtmlMathRenderScan() {\n"
+          + "    if (htmlMathScanScheduled) return;\n"
+          + "    htmlMathScanScheduled = true;\n"
+          + "    requestAnimationFrame(runHtmlMathRenderScan);\n"
+          + "  }\n"
           + "  window.addEventListener('message', (event) => {\n"
           + "    const data = event && event.data;\n"
-          + "    if (!data || typeof data !== 'object') return;\n"
-          + "    if (data.type !== 'pi-studio-html-artifact-zoom' || data.id !== PREVIEW_ID) return;\n"
-          + "    applyZoom(data.zoom);\n"
+          + "    if (!data || typeof data !== 'object' || data.id !== PREVIEW_ID) return;\n"
+          + "    if (data.type === 'pi-studio-html-artifact-zoom') {\n"
+          + "      applyZoom(data.zoom);\n"
+          + "      return;\n"
+          + "    }\n"
+          + "    if (data.type === 'pi-studio-html-artifact-math-rendered') {\n"
+          + "      applyRenderedHtmlMath(data.results);\n"
+          + "    }\n"
           + "  });\n"
-          + "  window.addEventListener('load', scheduleHeight);\n"
+          + "  document.addEventListener('click', handleFragmentAnchorClick);\n"
+          + "  document.addEventListener('DOMContentLoaded', scheduleHtmlMathRenderScan);\n"
+          + "  window.addEventListener('hashchange', () => {\n"
+          + "    const hash = String(window.location && window.location.hash || '');\n"
+          + "    if (hash) scrollFragmentIntoView(hash.slice(1), { smooth: false });\n"
+          + "  });\n"
+          + "  window.addEventListener('load', () => { scheduleHeight(); scheduleHtmlMathRenderScan(); });\n"
           + "  window.addEventListener('resize', scheduleHeight);\n"
           + "  if (typeof ResizeObserver === 'function') {\n"
           + "    const observer = new ResizeObserver(scheduleHeight);\n"
@@ -3994,20 +4230,32 @@
           + "    if (document.body) observer.observe(document.body);\n"
           + "  }\n"
           + "  if (typeof MutationObserver === 'function') {\n"
-          + "    const observer = new MutationObserver(scheduleHeight);\n"
+          + "    const observer = new MutationObserver(() => { scheduleHeight(); scheduleHtmlMathRenderScan(); });\n"
           + "    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });\n"
           + "  }\n"
           + "  scheduleHeight();\n"
           + "  setTimeout(scheduleHeight, 80);\n"
           + "  setTimeout(scheduleHeight, 350);\n"
+          + "  setTimeout(scheduleHtmlMathRenderScan, 0);\n"
+          + "  setTimeout(scheduleHtmlMathRenderScan, 120);\n"
+          + "  setTimeout(scheduleHtmlMathRenderScan, 500);\n"
           + "})();\n"
           + "<\/script>";
+      }
+
+      function buildHtmlArtifactPreviewMathStyle() {
+        return "<style data-pi-studio-html-preview-math>\n"
+          + ".pi-studio-html-math-display{display:block;margin:0.75em 0;overflow-x:auto;text-align:center;}\n"
+          + ".pi-studio-html-math-display>math{display:block;margin:0 auto;}\n"
+          + ".pi-studio-html-math-inline>math{vertical-align:-0.15em;}\n"
+          + "</style>\n";
       }
 
       function buildHtmlArtifactPreviewHeadMarkup(previewId) {
         return "<meta charset=\"utf-8\">\n"
           + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
           + "<meta http-equiv=\"Content-Security-Policy\" content=\"" + escapeHtml(HTML_ARTIFACT_PREVIEW_CSP) + "\">\n"
+          + buildHtmlArtifactPreviewMathStyle()
           + buildHtmlArtifactPreviewResizeScript(previewId);
       }
 
@@ -4067,7 +4315,161 @@
         }
       }
 
+      function handleHtmlArtifactFrameFragmentMessage(event) {
+        const data = event && event.data;
+        if (!data || typeof data !== "object" || data.type !== "pi-studio-html-artifact-fragment") return;
+        const id = typeof data.id === "string" ? data.id : "";
+        const record = id ? htmlArtifactFramesById.get(id) : null;
+        if (!record || !record.iframe || !record.iframe.isConnected) {
+          if (id) htmlArtifactFramesById.delete(id);
+          return;
+        }
+        if (event.source && record.iframe.contentWindow && event.source !== record.iframe.contentWindow) return;
+        if (record.shell && record.shell.classList && record.shell.classList.contains("is-focused")) return;
+
+        const scrollContainer = record.shell && typeof record.shell.closest === "function"
+          ? record.shell.closest(".panel-scroll")
+          : null;
+        const isCapped = Boolean(record.iframe.classList && record.iframe.classList.contains("is-height-capped"));
+        const documentHeight = Number(data.documentHeight);
+        const viewportHeight = Number(data.viewportHeight);
+        const isInternallyScrollable = isCapped
+          || (Number.isFinite(documentHeight) && Number.isFinite(viewportHeight) && documentHeight > viewportHeight + 2);
+        if (!scrollContainer || isInternallyScrollable) {
+          if (typeof record.iframe.scrollIntoView === "function") {
+            try {
+              record.iframe.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+            } catch {
+              record.iframe.scrollIntoView(false);
+            }
+          }
+          return;
+        }
+
+        const rawTargetTop = Number(data.targetTop);
+        const offsetInFrame = Number.isFinite(rawTargetTop) && rawTargetTop > 0 ? rawTargetTop : 0;
+        const iframeRect = record.iframe.getBoundingClientRect();
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const topPadding = 12;
+        const nextTop = Math.max(
+          0,
+          scrollContainer.scrollTop + iframeRect.top - containerRect.top + offsetInFrame - topPadding,
+        );
+        try {
+          scrollContainer.scrollTo({ top: nextTop, behavior: "smooth" });
+        } catch {
+          scrollContainer.scrollTop = nextTop;
+        }
+      }
+
+      function normalizeHtmlArtifactMathRenderItems(rawItems) {
+        if (!Array.isArray(rawItems)) return [];
+        return rawItems.slice(0, 250).map((item) => {
+          const raw = item && typeof item === "object" ? item : null;
+          const mathId = raw && typeof raw.mathId === "string" ? raw.mathId : "";
+          const tex = raw && typeof raw.tex === "string" ? raw.tex : "";
+          if (!mathId || !tex.trim()) return null;
+          return {
+            mathId,
+            tex,
+            display: Boolean(raw.display),
+          };
+        }).filter(Boolean);
+      }
+
+      async function fetchRenderedHtmlArtifactMath(items) {
+        const token = getToken();
+        if (!token) {
+          throw new Error("Missing Studio token in URL.");
+        }
+        const response = await fetchWithTimeout("/render-math?token=" + encodeURIComponent(token), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ items }),
+        }, HTML_ARTIFACT_MATH_RENDER_FETCH_TIMEOUT_MS, "HTML preview math render");
+
+        const rawBody = await response.text();
+        let payload = null;
+        try {
+          payload = rawBody ? JSON.parse(rawBody) : null;
+        } catch {
+          payload = null;
+        }
+        if (!response.ok) {
+          const message = payload && typeof payload.error === "string"
+            ? payload.error
+            : "HTML preview math render failed with HTTP " + response.status + ".";
+          throw new Error(message);
+        }
+        if (!payload || payload.ok !== true || !Array.isArray(payload.results)) {
+          throw new Error("HTML preview math renderer returned an invalid payload.");
+        }
+        return payload.results;
+      }
+
+      function postHtmlArtifactMathResults(record, results) {
+        if (!record || !record.iframe || !record.iframe.isConnected || !record.iframe.contentWindow) return;
+        try {
+          record.iframe.contentWindow.postMessage({
+            type: "pi-studio-html-artifact-math-rendered",
+            id: record.id || "",
+            results: Array.isArray(results) ? results : [],
+          }, "*");
+        } catch {
+          // Ignore iframe postMessage failures.
+        }
+      }
+
+      async function renderHtmlArtifactMathItems(record, items) {
+        if (!record || !Array.isArray(items) || items.length === 0) return;
+        if (record.detail) record.detail.textContent = "HTML preview · rendering math";
+        try {
+          const results = await fetchRenderedHtmlArtifactMath(items);
+          postHtmlArtifactMathResults(record, results);
+        } catch (error) {
+          console.error("HTML preview math render failed:", error);
+          postHtmlArtifactMathResults(record, items.map((item) => ({
+            mathId: item.mathId,
+            ok: false,
+            error: error && error.message ? error.message : String(error || "HTML preview math render failed."),
+          })));
+        } finally {
+          if (record.detail) record.detail.textContent = "HTML preview";
+        }
+      }
+
+      function handleHtmlArtifactFrameMathRenderMessage(event) {
+        const data = event && event.data;
+        if (!data || typeof data !== "object" || data.type !== "pi-studio-html-artifact-render-math") return;
+        const id = typeof data.id === "string" ? data.id : "";
+        const record = id ? htmlArtifactFramesById.get(id) : null;
+        if (!record || !record.iframe || !record.iframe.isConnected) {
+          if (id) htmlArtifactFramesById.delete(id);
+          return;
+        }
+        if (event.source && record.iframe.contentWindow && event.source !== record.iframe.contentWindow) return;
+        const items = normalizeHtmlArtifactMathRenderItems(data.items);
+        if (items.length === 0) return;
+
+        record.mathRenderBatchCount = Math.max(0, Number(record.mathRenderBatchCount) || 0) + 1;
+        record.mathRenderItemCount = Math.max(0, Number(record.mathRenderItemCount) || 0) + items.length;
+        if (record.mathRenderBatchCount > 24 || record.mathRenderItemCount > 1000) {
+          postHtmlArtifactMathResults(record, items.map((item) => ({
+            mathId: item.mathId,
+            ok: false,
+            error: "HTML preview math render limit reached.",
+          })));
+          return;
+        }
+
+        void renderHtmlArtifactMathItems(record, items);
+      }
+
       window.addEventListener("message", handleHtmlArtifactFrameSizeMessage);
+      window.addEventListener("message", handleHtmlArtifactFrameFragmentMessage);
+      window.addEventListener("message", handleHtmlArtifactFrameMathRenderMessage);
 
       function isStudioHtmlFocusOpen() {
         return Boolean(studioHtmlFocusOverlayEl && studioHtmlFocusOverlayEl.hidden === false && studioHtmlFocusShellEl);
@@ -4375,7 +4777,7 @@
         iframe.addEventListener("load", () => { postArtifactZoom(); });
         iframe.srcdoc = buildHtmlArtifactSrcdoc(html, previewId);
         shell.appendChild(iframe);
-        htmlArtifactFramesById.set(previewId, { iframe, shell, detail, zoomControls });
+        htmlArtifactFramesById.set(previewId, { id: previewId, iframe, shell, detail, zoomControls, mathRenderBatchCount: 0, mathRenderItemCount: 0 });
 
         targetEl.appendChild(shell);
 
@@ -5719,12 +6121,34 @@
           const source = codeEl ? codeEl.textContent : preEl.textContent;
 
           const wrapper = document.createElement("div");
-          wrapper.className = "mermaid-container";
+          wrapper.className = "mermaid-container studio-copyable-block";
+          if (wrapper.dataset) {
+            wrapper.dataset.mermaidSource = source || "";
+            wrapper.dataset.studioCopyDecorated = "1";
+          }
 
           const diagramEl = document.createElement("div");
           diagramEl.className = "mermaid";
           diagramEl.textContent = source || "";
 
+          const copyBtn = document.createElement("button");
+          copyBtn.type = "button";
+          copyBtn.className = "studio-copy-block-btn studio-copy-mermaid-source-btn";
+          copyBtn.textContent = "Copy source";
+          copyBtn.title = "Copy this Mermaid source to the clipboard.";
+          copyBtn.setAttribute("aria-label", "Copy Mermaid source to the clipboard");
+          copyBtn.addEventListener("pointerdown", (event) => {
+            event.stopPropagation();
+          });
+          copyBtn.addEventListener("mousedown", (event) => {
+            event.stopPropagation();
+          });
+
+          const toolbarEl = document.createElement("div");
+          toolbarEl.className = "mermaid-source-toolbar";
+          toolbarEl.appendChild(copyBtn);
+
+          wrapper.appendChild(toolbarEl);
           wrapper.appendChild(diagramEl);
           preEl.replaceWith(wrapper);
         });
@@ -6300,6 +6724,9 @@
 
       function getCopyablePreviewBlockText(blockEl) {
         if (!blockEl || typeof blockEl.querySelectorAll !== "function") return "";
+        if (blockEl.classList && blockEl.classList.contains("mermaid-container") && blockEl.dataset && typeof blockEl.dataset.mermaidSource === "string") {
+          return normalizeCopyableBlockText(blockEl.dataset.mermaidSource);
+        }
         if (blockEl.classList && blockEl.classList.contains("preview-code-lines")) {
           return normalizeCopyableBlockText(
             Array.from(blockEl.querySelectorAll(".preview-code-line-content"))
