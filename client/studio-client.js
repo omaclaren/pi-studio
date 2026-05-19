@@ -156,6 +156,7 @@
         ? "editor-only"
         : "full";
       const isEditorOnlyMode = studioMode === "editor-only";
+      const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
 
       const initialQueryParams = new URLSearchParams(window.location.search || "");
       const explicitDocumentIdentityFromUrl = initialQueryParams.has("docId")
@@ -846,16 +847,18 @@
       async function writeTextToClipboard(text) {
         const content = String(text || "");
 
-        try {
-          await fetchStudioJson("/clipboard", {
-            method: "POST",
-            body: JSON.stringify({ text: content }),
-          });
-          return true;
-        } catch {
-          // Fall back to browser clipboard APIs. The server-side clipboard path
-          // is most reliable for local Studio, but may be unavailable over SSH
-          // or on systems without a clipboard command.
+        if (!isSshStudioSession) {
+          try {
+            await fetchStudioJson("/clipboard", {
+              method: "POST",
+              body: JSON.stringify({ text: content }),
+            });
+            return true;
+          } catch {
+            // Fall back to browser clipboard APIs. The server-side clipboard path
+            // is most reliable for local Studio, but may be unavailable on systems
+            // without a clipboard command.
+          }
         }
 
         // Prefer a copy-event payload first. It runs synchronously inside the

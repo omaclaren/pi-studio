@@ -8646,6 +8646,7 @@ function buildStudioHtml(
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
+	const initialSshSession = isSshSession() ? "1" : "0";
 	const isEditorOnlyMode = studioMode === "editor-only";
 	const appTitle = isEditorOnlyMode ? "π Studio — Editor" : "π Studio";
 	const appSubtitle = isEditorOnlyMode ? "Editor Workspace" : "Editor & Response Workspace";
@@ -8664,7 +8665,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -11299,6 +11300,11 @@ export default function (pi: ExtensionAPI) {
 				: null;
 		if (text === null) {
 			respondJson(res, 400, { ok: false, error: "Missing clipboard text in request body." });
+			return;
+		}
+
+		if (isSshSession()) {
+			respondJson(res, 409, { ok: false, error: "Server clipboard is disabled for SSH Studio sessions; use the browser clipboard." });
 			return;
 		}
 

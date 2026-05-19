@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.9] — 2026-05-19
+
+### Fixed
+- In SSH-launched Studio sessions, copy actions now use the local browser clipboard instead of writing to the remote host clipboard.
+
 ## [0.9.8] — 2026-05-19
 
 ### Fixed
