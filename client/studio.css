@@ -3326,15 +3326,26 @@
       grid-area: hint;
       justify-self: end;
       align-self: center;
-      color: var(--studio-footer-text, var(--muted));
-      font-size: 11px;
-      white-space: nowrap;
-      text-align: right;
-      font-style: normal;
-      opacity: 0.86;
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--studio-footer-text, var(--muted));
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+      opacity: 0.9;
+    }
+
+    .shortcut-hint:not(:disabled):hover,
+    .shortcut-hint:focus-visible {
+      background: var(--panel-2);
+      border-color: var(--control-border);
+      color: var(--text);
+      opacity: 1;
     }
 
     .footer-compact-btn {
@@ -3369,7 +3380,8 @@
       overflow: hidden;
     }
 
-    .scratchpad-overlay {
+    .scratchpad-overlay,
+    .shortcuts-overlay {
       position: fixed;
       inset: 0;
       z-index: 50;
@@ -3381,8 +3393,26 @@
       backdrop-filter: blur(2px);
     }
 
-    .scratchpad-overlay[hidden] {
+    .scratchpad-overlay[hidden],
+    .shortcuts-overlay[hidden] {
       display: none !important;
+    }
+
+    .scratchpad-dialog,
+    .shortcuts-dialog {
+      width: min(860px, 100%);
+      max-height: min(82vh, 900px);
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: 0 18px 50px var(--shadow-color);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .shortcuts-dialog {
+      width: min(720px, 100%);
     }
 
     .scratchpad-dialog {
@@ -3397,7 +3427,8 @@
       overflow: hidden;
     }
 
-    .scratchpad-header {
+    .scratchpad-header,
+    .shortcuts-header {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
@@ -3407,18 +3438,21 @@
       background: var(--scratchpad-header-bg, var(--panel-2));
     }
 
-    .scratchpad-header > div {
+    .scratchpad-header > div,
+    .shortcuts-header > div {
       flex: 1 1 auto;
       min-width: 0;
     }
 
-    .scratchpad-header h2 {
+    .scratchpad-header h2,
+    .shortcuts-header h2 {
       margin: 0;
       font-size: 17px;
       font-weight: 600;
     }
 
-    .scratchpad-description {
+    .scratchpad-description,
+    .shortcuts-description {
       margin: 6px 0 0;
       font-size: 12px;
       line-height: 1.45;
@@ -3426,10 +3460,58 @@
       max-width: none;
     }
 
-    .scratchpad-close-btn {
+    .scratchpad-close-btn,
+    .shortcuts-close-btn {
       padding: 6px 10px;
       line-height: 1;
       flex: 0 0 auto;
+    }
+
+    .shortcuts-body {
+      display: grid;
+      gap: 14px;
+      padding: 16px 18px 18px;
+      overflow: auto;
+      background: var(--panel);
+    }
+
+    .shortcuts-group h3 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--studio-info-text, var(--muted));
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .shortcuts-group dl {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+    }
+
+    .shortcuts-group dl > div {
+      display: grid;
+      grid-template-columns: minmax(130px, max-content) minmax(0, 1fr);
+      gap: 12px;
+      align-items: baseline;
+      padding: 6px 0;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .shortcuts-group dt {
+      margin: 0;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .shortcuts-group dd {
+      margin: 0;
+      color: var(--studio-info-text, var(--muted));
+      font-size: 12px;
+      line-height: 1.35;
     }
 
     .scratchpad-textarea {

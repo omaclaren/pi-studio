@@ -8675,7 +8675,7 @@ ${cssVarsBlock}
       <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
-      <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls.">Zen</button>
+      <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>
     </div>
   </header>
 
@@ -8683,7 +8683,7 @@ ${cssVarsBlock}
     <section id="leftPane">
       <div id="leftSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="editorViewSelect" aria-label="Editor view mode">
+          <select id="editorViewSelect" aria-label="Editor view mode" title="Editor view mode. Shortcut: F7 when the editor pane is active; F6 switches panes.">
             <option value="markdown" selected>Editor (Raw)</option>
             <option value="preview">Editor (Preview)</option>
           </select>
@@ -8858,7 +8858,7 @@ ${cssVarsBlock}
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="rightViewSelect" aria-label="Response view mode">
+          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. Shortcut: F7 when the right pane is active; F6 switches panes.">
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
@@ -8929,8 +8929,49 @@ ${cssVarsBlock}
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
     <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text"><span id="footerMetaModel" class="footer-meta-part footer-meta-model">${initialModel}</span><span class="footer-meta-sep">·</span><span id="footerMetaTerminal" class="footer-meta-part footer-meta-terminal">${initialTerminal}</span><span class="footer-meta-sep">·</span><span id="footerMetaContext" class="footer-meta-part footer-meta-context">unknown</span></span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
-    <span class="shortcut-hint">Focus pane: F10 (or Cmd/Ctrl+Esc) to toggle · Save editor: Cmd/Ctrl+S · Run / queue steering: Cmd/Ctrl+Enter · Stop request: Esc</span>
+    <button id="shortcutsBtn" class="shortcut-hint" type="button" title="Show Studio keyboard shortcuts. Press ? when not editing text.">Shortcuts (?)</button>
   </footer>
+
+  <div id="shortcutsOverlay" class="shortcuts-overlay" hidden>
+    <div id="shortcutsDialog" class="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle">
+      <div class="shortcuts-header">
+        <div>
+          <h2 id="shortcutsTitle">Keyboard shortcuts</h2>
+          <p class="shortcuts-description">Studio navigation and high-frequency actions.</p>
+        </div>
+        <button id="shortcutsCloseBtn" class="shortcuts-close-btn" type="button" aria-label="Close keyboard shortcuts">Close</button>
+      </div>
+      <div class="shortcuts-body">
+        <section class="shortcuts-group">
+          <h3>Navigation</h3>
+          <dl>
+            <div><dt>F6</dt><dd>Switch between editor and right pane</dd></div>
+            <div><dt>F7 / Shift+F7</dt><dd>Cycle the active pane's view</dd></div>
+            <div><dt>F8</dt><dd>Focus editor text</dd></div>
+            <div><dt>Shift+F8</dt><dd>Focus right-pane content</dd></div>
+            <div><dt>F9</dt><dd>Toggle Zen mode</dd></div>
+            <div><dt>F10</dt><dd>Focus or unfocus the active pane</dd></div>
+            <div><dt>Esc</dt><dd>Close overlays, exit pane focus, or stop an active request</dd></div>
+            <div><dt>?</dt><dd>Show keyboard shortcuts when not editing text</dd></div>
+          </dl>
+        </section>
+        <section class="shortcuts-group">
+          <h3>Editor</h3>
+          <dl>
+            <div><dt>Cmd/Ctrl+S</dt><dd>Save editor</dd></div>
+            <div><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
+            <div><dt>Tab / Shift+Tab</dt><dd>Indent or unindent selected editor text</dd></div>
+          </dl>
+        </section>
+        <section class="shortcuts-group">
+          <h3>REPL</h3>
+          <dl>
+            <div><dt>Cmd/Ctrl+Shift+Enter</dt><dd>Send selection, chunks, or editor text to the active REPL when the right pane is REPL</dd></div>
+          </dl>
+        </section>
+      </div>
+    </div>
+  </div>
 
   <div id="scratchpadOverlay" class="scratchpad-overlay" hidden>
     <div id="scratchpadDialog" class="scratchpad-dialog" role="dialog" aria-modal="true" aria-labelledby="scratchpadTitle">

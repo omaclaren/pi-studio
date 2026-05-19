@@ -119,6 +119,10 @@
       const editorFontSizeSelect = document.getElementById("editorFontSizeSelect");
       const annotationModeSelect = document.getElementById("annotationModeSelect");
       const compactBtn = document.getElementById("compactBtn");
+      const shortcutsBtn = document.getElementById("shortcutsBtn");
+      const shortcutsOverlayEl = document.getElementById("shortcutsOverlay");
+      const shortcutsDialogEl = document.getElementById("shortcutsDialog");
+      const shortcutsCloseBtn = document.getElementById("shortcutsCloseBtn");
       const leftFocusBtn = document.getElementById("leftFocusBtn");
       const rightFocusBtn = document.getElementById("rightFocusBtn");
       const reviewNotesBtn = document.getElementById("reviewNotesBtn");
@@ -1905,7 +1909,7 @@
         if (document.body) document.body.classList.toggle("studio-zen-mode", studioZenModeEnabled);
         if (!zenModeBtn) return;
         zenModeBtn.textContent = studioZenModeEnabled ? "Exit Zen" : "Zen";
-        zenModeBtn.title = studioZenModeEnabled ? "Show full Studio controls." : "Hide secondary Studio controls.";
+        zenModeBtn.title = studioZenModeEnabled ? "Show full Studio controls. Shortcut: F9." : "Hide secondary Studio controls. Shortcut: F9.";
         zenModeBtn.setAttribute("aria-pressed", studioZenModeEnabled ? "true" : "false");
       }
 
@@ -3084,6 +3088,110 @@
         }
       }
 
+      function focusPaneViewControl(pane) {
+        const control = pane === "right" ? rightViewSelect : editorViewSelect;
+        if (!control || control.disabled || control.hidden) return false;
+        try {
+          control.focus({ preventScroll: true });
+        } catch {
+          try { control.focus(); } catch { return false; }
+        }
+        return true;
+      }
+
+      function activatePaneFromShortcut(nextPane) {
+        const pane = nextPane === "right" ? "right" : "left";
+        if (isEditorOnlyMode && pane === "right") {
+          setStatus("Only the editor pane is available in editor-only Studio.", "warning");
+          return;
+        }
+        const snapshot = snapshotStudioScrollablePositions();
+        setActivePane(pane);
+        scheduleStudioScrollablePositionRestore(snapshot);
+        focusPaneViewControl(pane);
+        setStatus("Active pane: " + paneLabel(pane) + ". F7 cycles this pane's view.");
+      }
+
+      function getSelectEnabledValues(selectEl) {
+        if (!selectEl || !selectEl.options) return [];
+        return Array.from(selectEl.options)
+          .filter((option) => option && !option.disabled)
+          .map((option) => option.value)
+          .filter((value) => typeof value === "string" && value);
+      }
+
+      function getCycledSelectValue(selectEl, currentValue, direction) {
+        const values = getSelectEnabledValues(selectEl);
+        if (!values.length) return null;
+        const currentIndex = values.indexOf(currentValue);
+        const startIndex = currentIndex >= 0 ? currentIndex : 0;
+        const step = direction < 0 ? -1 : 1;
+        return values[(startIndex + step + values.length) % values.length];
+      }
+
+      function focusEditorTextFromShortcut() {
+        const snapshot = snapshotStudioScrollablePositions();
+        setActivePane("left");
+        if (editorView !== "markdown") setEditorView("markdown");
+        scheduleStudioScrollablePositionRestore(snapshot);
+        window.setTimeout(() => {
+          if (sourceTextEl && typeof sourceTextEl.focus === "function") {
+            try {
+              sourceTextEl.focus({ preventScroll: true });
+            } catch {
+              try { sourceTextEl.focus(); } catch {}
+            }
+          }
+        }, 0);
+        setStatus("Editor text focused.");
+      }
+
+      function focusRightContentFromShortcut() {
+        if (isEditorOnlyMode) {
+          setStatus("Only the editor pane is available in editor-only Studio.", "warning");
+          return;
+        }
+        const snapshot = snapshotStudioScrollablePositions();
+        setActivePane("right");
+        scheduleStudioScrollablePositionRestore(snapshot);
+        window.setTimeout(() => {
+          if (critiqueViewEl && typeof critiqueViewEl.focus === "function") {
+            if (!critiqueViewEl.hasAttribute("tabindex")) critiqueViewEl.setAttribute("tabindex", "-1");
+            try {
+              critiqueViewEl.focus({ preventScroll: true });
+            } catch {
+              try { critiqueViewEl.focus(); } catch {}
+            }
+          }
+        }, 0);
+        setStatus("Right pane content focused.");
+      }
+
+      function cycleActivePaneView(direction) {
+        if (activePane === "right") {
+          if (isEditorOnlyMode || !rightViewSelect || rightViewSelect.disabled) {
+            setStatus("The right-pane view selector is unavailable.", "warning");
+            return;
+          }
+          const nextView = getCycledSelectValue(rightViewSelect, rightView, direction);
+          if (!nextView) return;
+          setRightView(nextView);
+          focusPaneViewControl("right");
+          setStatus("Right pane view: " + (rightViewSelect.selectedOptions && rightViewSelect.selectedOptions[0] ? rightViewSelect.selectedOptions[0].textContent : nextView) + ".");
+          return;
+        }
+
+        if (!editorViewSelect || editorViewSelect.disabled) {
+          setStatus("The editor view selector is unavailable.", "warning");
+          return;
+        }
+        const nextView = getCycledSelectValue(editorViewSelect, editorView, direction);
+        if (!nextView) return;
+        setEditorView(nextView);
+        focusPaneViewControl("left");
+        setStatus("Editor view: " + (editorViewSelect.selectedOptions && editorViewSelect.selectedOptions[0] ? editorViewSelect.selectedOptions[0].textContent : nextView) + ".");
+      }
+
       function paneLabel(pane) {
         if (pane === "right") {
           return "Response";
@@ -3131,6 +3239,17 @@
         return false;
       }
 
+      function isTextEntryShortcutTarget(target) {
+        if (!(target instanceof Element)) return false;
+        const editable = target.closest("input, textarea, select, [contenteditable]");
+        if (!editable) return false;
+        if (editable.hasAttribute && editable.hasAttribute("contenteditable")) {
+          const value = String(editable.getAttribute("contenteditable") || "").toLowerCase();
+          return value !== "false";
+        }
+        return true;
+      }
+
       function handlePaneShortcut(event) {
         if (!event || event.defaultPrevented) return;
 
@@ -3157,6 +3276,12 @@
           && event.target
           && typeof outlineDialogEl.contains === "function"
           && outlineDialogEl.contains(event.target)
+        );
+        const shortcutsOwnsEvent = Boolean(
+          shortcutsDialogEl
+          && event.target
+          && typeof shortcutsDialogEl.contains === "function"
+          && shortcutsDialogEl.contains(event.target)
         );
         const pdfFocusOwnsEvent = Boolean(
           studioPdfFocusDialogEl
@@ -3201,6 +3326,12 @@
           return;
         }
 
+        if (isShortcutsOpen() && plainEscape) {
+          event.preventDefault();
+          closeShortcuts();
+          return;
+        }
+
         if (isReviewNotesOpen() && plainEscape) {
           event.preventDefault();
           closeReviewNotes();
@@ -3213,7 +3344,46 @@
           return;
         }
 
-        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || pdfFocusOwnsEvent || htmlFocusOwnsEvent || quizOwnsEvent) {
+        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || shortcutsOwnsEvent || pdfFocusOwnsEvent || htmlFocusOwnsEvent || quizOwnsEvent) {
+          return;
+        }
+
+        if ((key === "?" || (key === "/" && event.shiftKey)) && !event.metaKey && !event.ctrlKey && !event.altKey && !isTextEntryShortcutTarget(event.target)) {
+          event.preventDefault();
+          toggleShortcuts();
+          return;
+        }
+
+        const isPaneSwitchShortcut = key === "F6" && !event.metaKey && !event.ctrlKey && !event.altKey;
+        if (isPaneSwitchShortcut) {
+          event.preventDefault();
+          activatePaneFromShortcut(activePane === "right" ? "left" : "right");
+          return;
+        }
+
+        const isViewCycleShortcut = key === "F7" && !event.metaKey && !event.ctrlKey && !event.altKey;
+        if (isViewCycleShortcut) {
+          event.preventDefault();
+          cycleActivePaneView(event.shiftKey ? -1 : 1);
+          return;
+        }
+
+        const isContentFocusShortcut = key === "F8" && !event.metaKey && !event.ctrlKey && !event.altKey;
+        if (isContentFocusShortcut) {
+          event.preventDefault();
+          if (event.shiftKey) {
+            focusRightContentFromShortcut();
+          } else {
+            focusEditorTextFromShortcut();
+          }
+          return;
+        }
+
+        const isZenModeShortcut = key === "F9" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+        if (isZenModeShortcut) {
+          event.preventDefault();
+          setStudioZenMode(!studioZenModeEnabled);
+          setStatus(studioZenModeEnabled ? "Zen mode on." : "Zen mode off.");
           return;
         }
 
@@ -9139,6 +9309,10 @@
         persistStoredToggle(ANNOTATION_MODE_STORAGE_KEY, enabled);
       }
 
+      function isShortcutsOpen() {
+        return Boolean(shortcutsOverlayEl && !shortcutsOverlayEl.hidden);
+      }
+
       function isScratchpadOpen() {
         return Boolean(scratchpadOverlayEl && !scratchpadOverlayEl.hidden);
       }
@@ -9152,7 +9326,7 @@
       }
 
       function syncModalOpenState() {
-        document.body.classList.toggle("scratchpad-open", isScratchpadOpen());
+        document.body.classList.toggle("scratchpad-open", isScratchpadOpen() || isShortcutsOpen());
       }
 
       function describeStudioDocument(state) {
@@ -13348,6 +13522,41 @@
         updateScratchpadUi();
       }
 
+      function closeShortcuts(options) {
+        if (!shortcutsOverlayEl || shortcutsOverlayEl.hidden) return;
+        shortcutsOverlayEl.hidden = true;
+        syncModalOpenState();
+        const focusTarget = options && Object.prototype.hasOwnProperty.call(options, "focusTarget")
+          ? options.focusTarget
+          : (shortcutsBtn || sourceTextEl);
+        if (focusTarget && typeof focusTarget.focus === "function") {
+          const schedule = typeof window.requestAnimationFrame === "function"
+            ? window.requestAnimationFrame.bind(window)
+            : (cb) => window.setTimeout(cb, 16);
+          schedule(() => focusTarget.focus());
+        }
+      }
+
+      function openShortcuts() {
+        if (!shortcutsOverlayEl) return;
+        if (isScratchpadOpen()) closeScratchpad({ focusTarget: null });
+        if (isReviewNotesOpen()) closeReviewNotes({ focusTarget: null });
+        if (isOutlineOpen()) closeOutline({ focusTarget: null });
+        shortcutsOverlayEl.hidden = false;
+        syncModalOpenState();
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (cb) => window.setTimeout(cb, 16);
+        schedule(() => {
+          if (shortcutsCloseBtn && typeof shortcutsCloseBtn.focus === "function") shortcutsCloseBtn.focus();
+        });
+      }
+
+      function toggleShortcuts() {
+        if (isShortcutsOpen()) closeShortcuts({ focusTarget: shortcutsBtn || sourceTextEl });
+        else openShortcuts();
+      }
+
       function closeScratchpad(options) {
         if (!scratchpadOverlayEl || scratchpadOverlayEl.hidden) return;
         scratchpadOverlayEl.hidden = true;
@@ -15696,6 +15905,26 @@
       if (typeof document.addEventListener === "function") {
         document.addEventListener("selectionchange", () => {
           updateActivePreviewCommentSelectionFromDom();
+        });
+      }
+
+      if (shortcutsBtn) {
+        shortcutsBtn.addEventListener("click", () => {
+          toggleShortcuts();
+        });
+      }
+
+      if (shortcutsCloseBtn) {
+        shortcutsCloseBtn.addEventListener("click", () => {
+          closeShortcuts();
+        });
+      }
+
+      if (shortcutsOverlayEl) {
+        shortcutsOverlayEl.addEventListener("click", (event) => {
+          if (event.target === shortcutsOverlayEl) {
+            closeShortcuts();
+          }
         });
       }
 

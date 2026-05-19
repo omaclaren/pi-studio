@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.10] — 2026-05-19
+
+### Added
+- Added keyboard shortcuts for Studio pane navigation: F6 switches panes, F7/Shift+F7 cycles the active pane view, F8 focuses editor text, Shift+F8 focuses right-pane content, F9 toggles Zen mode, and F10 keeps pane focus/unfocus.
+- Added a compact **Shortcuts (?)** footer button with a keyboard-shortcuts overlay; `?` opens it when focus is not in a text-entry field.
+
 ## [0.9.9] — 2026-05-19
 
 ### Fixed
