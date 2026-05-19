@@ -192,6 +192,11 @@
       let studioPdfFocusCloseBtn = null;
       let studioPdfFocusLastFocusedEl = null;
       let studioPdfFocusMovedFrameState = null;
+      let studioHtmlFocusOverlayEl = null;
+      let studioHtmlFocusShellEl = null;
+      let studioHtmlFocusFullscreenBtn = null;
+      let studioHtmlFocusLastFocusedEl = null;
+      let studioHtmlFocusRestoreState = null;
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
@@ -3156,6 +3161,12 @@
           && typeof studioPdfFocusDialogEl.contains === "function"
           && studioPdfFocusDialogEl.contains(event.target)
         );
+        const htmlFocusOwnsEvent = Boolean(
+          studioHtmlFocusShellEl
+          && event.target
+          && typeof studioHtmlFocusShellEl.contains === "function"
+          && studioHtmlFocusShellEl.contains(event.target)
+        );
         const quizOwnsEvent = Boolean(
           quizDialogEl
           && event.target
@@ -3172,6 +3183,12 @@
         if (isStudioPdfFocusOpen() && plainEscape) {
           event.preventDefault();
           closeStudioPdfFocusViewer();
+          return;
+        }
+
+        if (isStudioHtmlFocusOpen() && plainEscape) {
+          event.preventDefault();
+          closeStudioHtmlFocusViewer();
           return;
         }
 
@@ -3193,7 +3210,7 @@
           return;
         }
 
-        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || pdfFocusOwnsEvent || quizOwnsEvent) {
+        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || pdfFocusOwnsEvent || htmlFocusOwnsEvent || quizOwnsEvent) {
           return;
         }
 
@@ -3854,6 +3871,10 @@
           return;
         }
         if (event.source && record.iframe.contentWindow && event.source !== record.iframe.contentWindow) return;
+        if (record.shell && record.shell.classList && record.shell.classList.contains("is-focused")) {
+          if (record.detail) record.detail.textContent = "HTML preview";
+          return;
+        }
         const rawHeight = Number(data.height);
         if (!Number.isFinite(rawHeight) || rawHeight <= 0) return;
         const measuredHeight = Math.ceil(rawHeight + 2);
@@ -3875,30 +3896,232 @@
 
       window.addEventListener("message", handleHtmlArtifactFrameSizeMessage);
 
+      function isStudioHtmlFocusOpen() {
+        return Boolean(studioHtmlFocusOverlayEl && studioHtmlFocusOverlayEl.hidden === false && studioHtmlFocusShellEl);
+      }
+
+      function ensureStudioHtmlFocusViewer() {
+        if (studioHtmlFocusOverlayEl) return studioHtmlFocusOverlayEl;
+
+        const overlay = document.createElement("div");
+        overlay.className = "studio-pdf-focus-overlay studio-html-focus-overlay";
+        overlay.hidden = true;
+        overlay.setAttribute("aria-hidden", "true");
+        overlay.addEventListener("click", (event) => {
+          if (event.target === overlay) closeStudioHtmlFocusViewer();
+        });
+        document.addEventListener("fullscreenchange", syncStudioHtmlFocusFullscreenButton);
+        document.body.appendChild(overlay);
+        studioHtmlFocusOverlayEl = overlay;
+        syncStudioHtmlFocusFullscreenButton();
+        return overlay;
+      }
+
+      function getStudioHtmlFocusButton(shell) {
+        return shell && typeof shell.querySelector === "function"
+          ? shell.querySelector(".studio-html-artifact-focus-btn")
+          : null;
+      }
+
+      function getStudioHtmlFullscreenButton(shell) {
+        return shell && typeof shell.querySelector === "function"
+          ? shell.querySelector(".studio-html-artifact-fullscreen-btn")
+          : null;
+      }
+
+      function setStudioHtmlFocusButtonMode(button, focused) {
+        if (!button) return;
+        button.replaceChildren(makeStudioUiRefreshIcon(focused ? "focus-exit" : "focus"));
+        button.title = focused
+          ? "Exit HTML preview focus view."
+          : "Open this HTML preview in a larger Studio overlay.";
+        button.setAttribute("aria-label", focused ? "Exit HTML preview focus view" : "Focus HTML preview");
+        button.setAttribute("aria-pressed", focused ? "true" : "false");
+      }
+
+      function syncStudioHtmlFocusFullscreenButton() {
+        const button = studioHtmlFocusFullscreenBtn;
+        if (!button) return;
+        const shell = studioHtmlFocusShellEl;
+        const isFullscreen = Boolean(shell && document.fullscreenElement && document.fullscreenElement === shell);
+        button.replaceChildren(makeStudioUiRefreshIcon(isFullscreen ? "fullscreen-exit" : "fullscreen"));
+        const label = isFullscreen ? "Exit fullscreen" : "Fullscreen";
+        button.title = isFullscreen
+          ? "Exit browser fullscreen and keep the HTML preview focus view open."
+          : "Ask the browser to make this HTML preview fullscreen.";
+        button.setAttribute("aria-label", label);
+        button.setAttribute("aria-pressed", isFullscreen ? "true" : "false");
+      }
+
+      async function toggleStudioHtmlFocusFullscreen() {
+        const shell = studioHtmlFocusShellEl;
+        if (!shell) return;
+        const isFullscreen = Boolean(document.fullscreenElement && document.fullscreenElement === shell);
+        if (isFullscreen) {
+          try {
+            if (typeof document.exitFullscreen === "function") await document.exitFullscreen();
+          } catch (error) {
+            setStatus("Could not exit HTML preview fullscreen: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+          } finally {
+            syncStudioHtmlFocusFullscreenButton();
+          }
+          return;
+        }
+        if (typeof shell.requestFullscreen !== "function") {
+          setStatus("Browser fullscreen is not available for this HTML preview.", "warning");
+          return;
+        }
+        try {
+          await shell.requestFullscreen();
+        } catch (error) {
+          setStatus("Could not enter HTML preview fullscreen: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+        } finally {
+          syncStudioHtmlFocusFullscreenButton();
+        }
+      }
+
+      function openStudioHtmlFocusViewer(title, shell) {
+        // Keep the existing sandboxed iframe in place. Reparenting srcdoc iframes can
+        // recreate their browsing context and lose form/script state.
+        const focusShell = shell instanceof HTMLElement ? shell : null;
+        if (!focusShell || !focusShell.isConnected) return false;
+        if (isStudioHtmlFocusOpen() && studioHtmlFocusShellEl === focusShell) return true;
+        if (isStudioHtmlFocusOpen()) closeStudioHtmlFocusViewer();
+        ensureStudioHtmlFocusViewer();
+
+        studioHtmlFocusLastFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        studioHtmlFocusShellEl = focusShell;
+        studioHtmlFocusRestoreState = {
+          role: focusShell.getAttribute("role"),
+          ariaModal: focusShell.getAttribute("aria-modal"),
+          ariaLabel: focusShell.getAttribute("aria-label"),
+        };
+
+        focusShell.classList.add("is-focused");
+        focusShell.setAttribute("role", "dialog");
+        focusShell.setAttribute("aria-modal", "true");
+        focusShell.setAttribute("aria-label", String(title || "HTML preview").trim() || "HTML preview");
+
+        const focusButton = getStudioHtmlFocusButton(focusShell);
+        setStudioHtmlFocusButtonMode(focusButton, true);
+        studioHtmlFocusFullscreenBtn = getStudioHtmlFullscreenButton(focusShell);
+        if (studioHtmlFocusFullscreenBtn) studioHtmlFocusFullscreenBtn.hidden = false;
+
+        if (document.body) document.body.classList.add("studio-html-focus-open", "studio-pdf-focus-open");
+        if (studioHtmlFocusOverlayEl) {
+          studioHtmlFocusOverlayEl.hidden = false;
+          studioHtmlFocusOverlayEl.setAttribute("aria-hidden", "false");
+        }
+        syncStudioHtmlFocusFullscreenButton();
+        closeStudioUiRefreshMenus();
+        closeExportPreviewMenu();
+        window.setTimeout(() => {
+          if (focusButton && typeof focusButton.focus === "function") focusButton.focus();
+        }, 0);
+        return true;
+      }
+
+      function closeStudioHtmlFocusViewer() {
+        if (!isStudioHtmlFocusOpen()) return false;
+        const shell = studioHtmlFocusShellEl;
+        if (document.fullscreenElement && shell && document.fullscreenElement === shell) {
+          try {
+            const exitResult = document.exitFullscreen && document.exitFullscreen();
+            if (exitResult && typeof exitResult.catch === "function") exitResult.catch(() => {});
+          } catch {}
+        }
+        if (studioHtmlFocusOverlayEl) {
+          studioHtmlFocusOverlayEl.hidden = true;
+          studioHtmlFocusOverlayEl.setAttribute("aria-hidden", "true");
+        }
+        if (shell) {
+          shell.classList.remove("is-focused");
+          const restore = studioHtmlFocusRestoreState || {};
+          if (restore.role === null || typeof restore.role === "undefined") shell.removeAttribute("role");
+          else shell.setAttribute("role", restore.role);
+          if (restore.ariaModal === null || typeof restore.ariaModal === "undefined") shell.removeAttribute("aria-modal");
+          else shell.setAttribute("aria-modal", restore.ariaModal);
+          if (restore.ariaLabel === null || typeof restore.ariaLabel === "undefined") shell.removeAttribute("aria-label");
+          else shell.setAttribute("aria-label", restore.ariaLabel);
+          setStudioHtmlFocusButtonMode(getStudioHtmlFocusButton(shell), false);
+        }
+        if (studioHtmlFocusFullscreenBtn) studioHtmlFocusFullscreenBtn.hidden = true;
+        studioHtmlFocusShellEl = null;
+        studioHtmlFocusFullscreenBtn = null;
+        studioHtmlFocusRestoreState = null;
+        if (document.body) document.body.classList.remove("studio-html-focus-open", "studio-pdf-focus-open");
+        const focusTarget = studioHtmlFocusLastFocusedEl;
+        studioHtmlFocusLastFocusedEl = null;
+        if (focusTarget && typeof focusTarget.focus === "function" && document.contains(focusTarget)) {
+          window.setTimeout(() => focusTarget.focus(), 0);
+        }
+        return true;
+      }
+
+      function openStudioHtmlFocusFromButton(buttonEl) {
+        if (!buttonEl) return false;
+        const shell = buttonEl.closest && buttonEl.closest(".studio-html-artifact-shell");
+        if (!shell) return false;
+        if (isStudioHtmlFocusOpen() && studioHtmlFocusShellEl === shell) {
+          return closeStudioHtmlFocusViewer();
+        }
+        const title = String(shell.dataset && shell.dataset.studioHtmlTitle ? shell.dataset.studioHtmlTitle : "").trim()
+          || String(buttonEl.dataset && buttonEl.dataset.studioHtmlTitle ? buttonEl.dataset.studioHtmlTitle : "").trim()
+          || "HTML preview";
+        return openStudioHtmlFocusViewer(title, shell);
+      }
+
+      function handleStudioHtmlFocusButtonClick(event) {
+        const target = event && event.target;
+        const buttonEl = target instanceof Element ? target.closest(".studio-html-artifact-focus-btn") : null;
+        if (!buttonEl) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") {
+          event.stopImmediatePropagation();
+        }
+        if (!openStudioHtmlFocusFromButton(buttonEl)) {
+          setStatus("Could not open HTML preview focus view.", "warning");
+        }
+      }
+
       function renderHtmlArtifactPreview(targetEl, html, pane, options) {
         if (!targetEl) return;
         const title = options && options.title ? String(options.title) : "HTML preview";
         const previewId = "html_artifact_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
         pruneDisconnectedHtmlArtifactFrames();
+        if (isStudioHtmlFocusOpen()) closeStudioHtmlFocusViewer();
         clearPreviewJumpHighlight(targetEl);
         finishPreviewRender(targetEl);
         targetEl.innerHTML = "";
 
         const shell = document.createElement("div");
         shell.className = "studio-html-artifact-shell";
+        if (shell.dataset) shell.dataset.studioHtmlTitle = title;
 
         const toolbar = document.createElement("div");
         toolbar.className = "studio-html-artifact-toolbar";
+        const titleGroup = document.createElement("div");
+        titleGroup.className = "studio-html-artifact-title-group";
+        const focusBtn = document.createElement("button");
+        focusBtn.type = "button";
+        focusBtn.className = "studio-html-artifact-focus-btn";
+        focusBtn.title = "Open this HTML preview in a larger Studio overlay.";
+        focusBtn.setAttribute("aria-label", "Focus HTML preview");
+        if (focusBtn.dataset) focusBtn.dataset.studioHtmlTitle = title;
+        focusBtn.appendChild(makeStudioUiRefreshIcon("focus"));
+        focusBtn.addEventListener("click", handleStudioHtmlFocusButtonClick);
+        titleGroup.appendChild(focusBtn);
         const label = document.createElement("span");
         label.className = "studio-html-artifact-label";
         label.textContent = title;
+        titleGroup.appendChild(label);
         const detail = document.createElement("span");
         detail.className = "studio-html-artifact-detail";
         detail.textContent = "HTML preview";
 
         const tools = document.createElement("span");
         tools.className = "studio-html-artifact-tools";
-        tools.appendChild(detail);
 
         const zoomControls = document.createElement("span");
         zoomControls.className = "studio-html-artifact-zoom-controls";
@@ -3948,10 +4171,24 @@
         zoomControls.appendChild(zoomOutBtn);
         zoomControls.appendChild(zoomResetBtn);
         zoomControls.appendChild(zoomInBtn);
+        const fullscreenBtn = document.createElement("button");
+        fullscreenBtn.type = "button";
+        fullscreenBtn.className = "studio-html-artifact-fullscreen-btn";
+        fullscreenBtn.hidden = true;
+        fullscreenBtn.addEventListener("pointerdown", (event) => { event.stopPropagation(); });
+        fullscreenBtn.addEventListener("mousedown", (event) => { event.stopPropagation(); });
+        fullscreenBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleStudioHtmlFocusFullscreen();
+        });
+        fullscreenBtn.appendChild(makeStudioUiRefreshIcon("fullscreen"));
         updateZoomUi();
+        tools.appendChild(detail);
         tools.appendChild(zoomControls);
+        tools.appendChild(fullscreenBtn);
 
-        toolbar.appendChild(label);
+        toolbar.appendChild(titleGroup);
         toolbar.appendChild(tools);
         shell.appendChild(toolbar);
 
@@ -15396,6 +15633,13 @@
         const focusBtn = target instanceof Element ? target.closest(".studio-pdf-card-focus") : null;
         if (!focusBtn) return;
         handleStudioPdfFocusButtonClick(event);
+      }, true);
+
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        const focusBtn = target instanceof Element ? target.closest(".studio-html-artifact-focus-btn") : null;
+        if (!focusBtn) return;
+        handleStudioHtmlFocusButtonClick(event);
       }, true);
 
       document.addEventListener("click", (event) => {

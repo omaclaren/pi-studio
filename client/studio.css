@@ -1635,7 +1635,8 @@
       background: #fff;
     }
 
-    body.studio-pdf-focus-open {
+    body.studio-pdf-focus-open,
+    body.studio-html-focus-open {
       overflow: hidden;
     }
 
@@ -2115,6 +2116,31 @@
       box-shadow: 0 1px 2px var(--shadow-color);
     }
 
+    .rendered-markdown .studio-html-artifact-shell.is-focused {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      z-index: 71;
+      width: min(96vw, 1440px);
+      height: min(92vh, 1080px);
+      min-height: 420px;
+      margin: 0;
+      transform: translate(-50%, -50%);
+      border-radius: 14px;
+      box-shadow: 0 24px 70px var(--shadow-color);
+    }
+
+    .rendered-markdown .studio-html-artifact-shell.is-focused:fullscreen {
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      min-height: 100vh;
+      transform: none;
+      border: 0;
+      border-radius: 0;
+    }
+
     .rendered-markdown .studio-html-artifact-toolbar {
       display: flex;
       align-items: center;
@@ -2129,6 +2155,20 @@
       line-height: 1.25;
     }
 
+    .rendered-markdown .studio-html-artifact-shell.is-focused .studio-html-artifact-toolbar {
+      gap: 12px;
+      padding: 9px 12px;
+      border-bottom-color: var(--panel-border);
+    }
+
+    .rendered-markdown .studio-html-artifact-title-group {
+      min-width: 0;
+      flex: 1 1 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .rendered-markdown .studio-html-artifact-label {
       min-width: 0;
       overflow: hidden;
@@ -2136,6 +2176,48 @@
       white-space: nowrap;
       color: var(--text);
       font-weight: 600;
+    }
+
+    .rendered-markdown .studio-html-artifact-focus-btn,
+    .rendered-markdown .studio-html-artifact-fullscreen-btn {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      min-width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--studio-info-text, var(--muted));
+    }
+
+    .rendered-markdown .studio-html-artifact-shell.is-focused .studio-html-artifact-focus-btn,
+    .rendered-markdown .studio-html-artifact-shell.is-focused .studio-html-artifact-fullscreen-btn {
+      width: 29px;
+      min-width: 29px;
+      height: 29px;
+    }
+
+    .rendered-markdown .studio-html-artifact-fullscreen-btn[hidden] {
+      display: none !important;
+    }
+
+    .rendered-markdown .studio-html-artifact-focus-btn:not(:disabled):hover,
+    .rendered-markdown .studio-html-artifact-focus-btn:focus-visible,
+    .rendered-markdown .studio-html-artifact-fullscreen-btn:not(:disabled):hover,
+    .rendered-markdown .studio-html-artifact-fullscreen-btn:focus-visible {
+      background: var(--panel);
+      border-color: var(--control-border);
+      color: var(--text);
+    }
+
+    .rendered-markdown .studio-html-artifact-focus-btn .studio-refresh-icon,
+    .rendered-markdown .studio-html-artifact-fullscreen-btn .studio-refresh-icon {
+      width: 14px;
+      height: 14px;
     }
 
     .rendered-markdown .studio-html-artifact-tools {
@@ -2202,6 +2284,11 @@
       min-height: 520px;
       border: 0;
       background: #fff;
+    }
+
+    .rendered-markdown .studio-html-artifact-shell.is-focused .studio-html-artifact-frame {
+      min-height: 0;
+      height: auto !important;
     }
 
     .rendered-markdown .studio-html-artifact-shell.is-height-capped .studio-html-artifact-toolbar {

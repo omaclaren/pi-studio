@@ -8276,9 +8276,33 @@ function isSshSession(): boolean {
 	);
 }
 
-function buildStudioSshTunnelHint(port: number, studioUrl: string): string | null {
+function parseStudioLaunchOpenFlags(rawArgs: string): { args: string; openRemoteBrowser: boolean; error?: string } {
+	const parsed = tokenizeStudioCommandArgs(rawArgs);
+	if (parsed.error) return { args: rawArgs, openRemoteBrowser: false, error: parsed.error };
+	const remaining: string[] = [];
+	let openRemoteBrowser = false;
+	for (const token of parsed.tokens) {
+		if (token === "--open-remote" || token === "--open-remote-browser") {
+			openRemoteBrowser = true;
+			continue;
+		}
+		remaining.push(token);
+	}
+	return { args: remaining.join(" "), openRemoteBrowser };
+}
+
+function shouldAutoOpenStudioBrowser(options?: { openRemoteBrowser?: boolean }): boolean {
+	return !isSshSession() || Boolean(options?.openRemoteBrowser);
+}
+
+function buildStudioSshTunnelHint(port: number): string | null {
 	if (!isSshSession()) return null;
-	return `SSH detected. Full Studio URL: ${studioUrl}. Forward the remote Studio port with: ssh -L ${port}:127.0.0.1:${port} <remote-host>. Open the full URL locally through the tunnel, preserving its ?token=... parameter. If you choose a different local port, change only the port in the URL; keep the token.`;
+	return [
+		"SSH detected. Studio was not opened in the remote browser.",
+		"To open it locally, run this on your local machine:",
+		`  ssh -L ${port}:127.0.0.1:${port} <remote-host>`,
+		"Then open the Studio URL above in your local browser.",
+	].join("\n");
 }
 
 function resolveRequestedStudioDocumentFromUrl(
@@ -12512,6 +12536,12 @@ export default function (pi: ExtensionAPI) {
 		mode: StudioUiMode,
 		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; replaceExistingFull?: boolean },
 	) => {
+		const launchOpenFlags = parseStudioLaunchOpenFlags(trimmed);
+		if (launchOpenFlags.error) {
+			ctx.ui.notify(`${launchOpenFlags.error} Use ${options?.commandLabel ?? "/studio"} --help`, "error");
+			return;
+		}
+		const launchArgs = launchOpenFlags.args;
 		if (mode === "full" && hasConnectedFullStudioView()) {
 			if (options?.replaceExistingFull) {
 				closeStudioClientsByMode("full", 4001, "Full Studio replaced");
@@ -12520,7 +12550,7 @@ export default function (pi: ExtensionAPI) {
 				if (serverState) {
 					const url = buildStudioUrl(serverState.port, serverState.token, "full");
 					ctx.ui.notify(`Studio URL: ${url}`, "info");
-					const sshTunnelHint = buildStudioSshTunnelHint(serverState.port, url);
+					const sshTunnelHint = buildStudioSshTunnelHint(serverState.port);
 					if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				}
 				return;
@@ -12542,23 +12572,30 @@ export default function (pi: ExtensionAPI) {
 			// ignore theme read errors
 		}
 
-		const selected = resolveStudioLaunchDocument(trimmed, ctx, options);
+		const selected = resolveStudioLaunchDocument(launchArgs, ctx, options);
 		if (!selected) return;
 		initialStudioDocument = selected;
 
 		const state = await ensureServer();
 		const url = buildStudioUrl(state.port, state.token, mode, selected);
-		const sshTunnelHint = buildStudioSshTunnelHint(state.port, url);
+		const sshTunnelHint = buildStudioSshTunnelHint(state.port);
 		const openedLabel = mode === "editor-only" ? "pi Studio editor-only view" : "pi Studio";
 
+		const shouldOpenBrowser = shouldAutoOpenStudioBrowser({
+			openRemoteBrowser: launchOpenFlags.openRemoteBrowser,
+		});
 		try {
-			await openUrlInDefaultBrowser(url);
-			if (selected.source === "file") {
-				ctx.ui.notify(`Opened ${openedLabel} with file loaded: ${selected.label}`, "info");
-			} else if (selected.source === "last-response") {
-				ctx.ui.notify(`Opened ${openedLabel} with last model response (${selected.text.length} chars).`, "info");
+			if (!shouldOpenBrowser) {
+				ctx.ui.notify(`${openedLabel} is ready. Browser auto-open was skipped because SSH was detected.`, "info");
 			} else {
-				ctx.ui.notify(`Opened ${openedLabel} with blank editor.`, "info");
+				await openUrlInDefaultBrowser(url);
+				if (selected.source === "file") {
+					ctx.ui.notify(`Opened ${openedLabel} with file loaded: ${selected.label}`, "info");
+				} else if (selected.source === "last-response") {
+					ctx.ui.notify(`Opened ${openedLabel} with last model response (${selected.text.length} chars).`, "info");
+				} else {
+					ctx.ui.notify(`Opened ${openedLabel} with blank editor.`, "info");
+				}
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -12595,7 +12632,7 @@ export default function (pi: ExtensionAPI) {
 					`Studio running at ${url} (busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
 					"info",
 				);
-				const sshTunnelHint = buildStudioSshTunnelHint(serverState.port, url);
+				const sshTunnelHint = buildStudioSshTunnelHint(serverState.port);
 				if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				return;
 			}
@@ -12607,6 +12644,7 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio <path>    Open studio with file preloaded\n"
 						+ "  /studio --blank   Open with blank editor\n"
 						+ "  /studio --last    Open with last model response\n"
+						+ "  /studio --open-remote  Over SSH, open the remote browser anyway\n"
 						+ "  /studio --status  Show studio status\n"
 						+ "  /studio --stop    Stop studio server\n"
 						+ "  Note: only one full /studio view is allowed per Pi session.\n"

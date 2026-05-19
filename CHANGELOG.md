@@ -4,6 +4,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-05-19
+
+### Added
+- Added Focus support for interactive HTML previews, using the existing sandboxed preview iframe in-place so form input and script state survive focus/unfocus.
+
+### Changed
+- `/studio` launched over SSH now skips opening the remote host browser by default, prints a local tunnel hint instead, and keeps local/non-SSH browser auto-open behavior unchanged. Use `/studio --open-remote` to request the previous remote-browser behavior.
+- Moved the HTML preview Focus control next to the preview title to match PDF Focus placement.
+
 ## [0.9.6] — 2026-05-19
 
 ### Changed
