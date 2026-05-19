@@ -28,6 +28,7 @@ import {
 } from "./shared/studio-markdown-latex-literals.js";
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
+import { buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
@@ -8270,12 +8271,6 @@ function buildStudioUrl(
 	return `http://127.0.0.1:${port}/?${params.toString()}`;
 }
 
-function isSshSession(): boolean {
-	return Boolean(
-		String(process.env.SSH_CONNECTION ?? process.env.SSH_CLIENT ?? process.env.SSH_TTY ?? "").trim(),
-	);
-}
-
 function parseStudioLaunchOpenFlags(rawArgs: string): { args: string; openRemoteBrowser: boolean; error?: string } {
 	const parsed = tokenizeStudioCommandArgs(rawArgs);
 	if (parsed.error) return { args: rawArgs, openRemoteBrowser: false, error: parsed.error };
@@ -8293,16 +8288,6 @@ function parseStudioLaunchOpenFlags(rawArgs: string): { args: string; openRemote
 
 function shouldAutoOpenStudioBrowser(options?: { openRemoteBrowser?: boolean }): boolean {
 	return !isSshSession() || Boolean(options?.openRemoteBrowser);
-}
-
-function buildStudioSshTunnelHint(port: number): string | null {
-	if (!isSshSession()) return null;
-	return [
-		"SSH detected. Studio was not opened in the remote browser.",
-		"To open it locally, run this on your local machine:",
-		`  ssh -L ${port}:127.0.0.1:${port} <remote-host>`,
-		"Then open the Studio URL above in your local browser.",
-	].join("\n");
 }
 
 function resolveRequestedStudioDocumentFromUrl(
@@ -12550,7 +12535,7 @@ export default function (pi: ExtensionAPI) {
 				if (serverState) {
 					const url = buildStudioUrl(serverState.port, serverState.token, "full");
 					ctx.ui.notify(`Studio URL: ${url}`, "info");
-					const sshTunnelHint = buildStudioSshTunnelHint(serverState.port);
+					const sshTunnelHint = buildStudioSshTunnelHint(serverState.port, url);
 					if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				}
 				return;
@@ -12578,7 +12563,7 @@ export default function (pi: ExtensionAPI) {
 
 		const state = await ensureServer();
 		const url = buildStudioUrl(state.port, state.token, mode, selected);
-		const sshTunnelHint = buildStudioSshTunnelHint(state.port);
+		const sshTunnelHint = buildStudioSshTunnelHint(state.port, url);
 		const openedLabel = mode === "editor-only" ? "pi Studio editor-only view" : "pi Studio";
 
 		const shouldOpenBrowser = shouldAutoOpenStudioBrowser({
@@ -12632,7 +12617,7 @@ export default function (pi: ExtensionAPI) {
 					`Studio running at ${url} (busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
 					"info",
 				);
-				const sshTunnelHint = buildStudioSshTunnelHint(serverState.port);
+				const sshTunnelHint = buildStudioSshTunnelHint(serverState.port, url);
 				if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				return;
 			}

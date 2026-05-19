@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.8] — 2026-05-19
+
+### Fixed
+- Restored the full tokenized Studio URL inside SSH tunnel hints so the local browser URL remains visible even when only the latest notification is shown.
+
 ## [0.9.7] — 2026-05-19
 
 ### Added
