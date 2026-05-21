@@ -236,9 +236,47 @@
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
+      grid-template-columns: minmax(260px, var(--studio-left-pane-fr, 1fr)) 10px minmax(320px, var(--studio-right-pane-fr, 1fr));
+      gap: 0;
       padding: 12px;
+    }
+
+    .pane-resize-handle {
+      align-self: stretch;
+      min-width: 10px;
+      border-radius: 999px;
+      background: transparent;
+      cursor: col-resize;
+      position: relative;
+      outline: none;
+      touch-action: none;
+    }
+
+    .pane-resize-handle::before {
+      content: "";
+      position: absolute;
+      top: 8px;
+      bottom: 8px;
+      left: 50%;
+      width: 2px;
+      border-radius: 999px;
+      transform: translateX(-50%);
+      background: var(--border-subtle);
+      opacity: 0;
+      transition: opacity 0.12s ease, background-color 0.12s ease, width 0.12s ease;
+    }
+
+    .pane-resize-handle:hover::before,
+    .pane-resize-handle:focus-visible::before,
+    body.pane-resizing .pane-resize-handle::before {
+      width: 3px;
+      background: var(--accent);
+      opacity: 0.95;
+    }
+
+    body.pane-resizing {
+      cursor: col-resize;
+      user-select: none;
     }
 
     section {
@@ -252,6 +290,10 @@
       box-shadow: var(--panel-shadow);
     }
 
+    main > section {
+      container-type: inline-size;
+    }
+
     section.pane-active {
       border-color: var(--pane-active-border);
     }
@@ -259,10 +301,13 @@
     body.pane-focus-left main,
     body.pane-focus-right main {
       grid-template-columns: 1fr;
+      gap: 12px;
     }
 
     body.pane-focus-left #rightPane,
-    body.pane-focus-right #leftPane {
+    body.pane-focus-right #leftPane,
+    body.pane-focus-left #paneResizeHandle,
+    body.pane-focus-right #paneResizeHandle {
       display: none;
     }
 
@@ -2893,10 +2938,11 @@
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
 
     .repl-controls select,
+    .repl-controls input,
     .repl-controls button,
     .repl-more-controls summary,
     .repl-journal-actions button {
@@ -2907,7 +2953,7 @@
     .repl-control-label {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 4px;
       color: var(--muted);
       font-size: 11px;
       font-weight: 600;
@@ -2926,7 +2972,7 @@
       list-style: none;
       border: 1px solid transparent;
       border-radius: 6px;
-      padding: 4px 10px;
+      padding: 4px 7px;
       color: var(--text);
       background: transparent;
     }
@@ -2937,9 +2983,36 @@
 
     .repl-more-controls summary::after {
       content: "⌄";
-      margin-left: 6px;
+      margin-left: 4px;
       color: var(--studio-info-text, var(--muted));
       font-size: 11px;
+    }
+
+    .repl-command-label input {
+      width: 3rem;
+      min-width: 3rem;
+      border-color: transparent;
+      background: transparent;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      transition: width 0.12s ease;
+    }
+
+    .repl-command-label input:focus {
+      width: clamp(12rem, 22vw, 18rem);
+    }
+
+    .repl-session-label select {
+      max-width: min(24rem, 34vw);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .repl-start-btn {
+      padding-left: 8px;
+      padding-right: 8px;
     }
 
     .repl-controls select {
@@ -2949,6 +3022,8 @@
 
     .repl-controls select:not(:disabled):hover,
     .repl-controls select:focus,
+    .repl-command-label input:hover,
+    .repl-command-label input:focus,
     .repl-more-controls summary:hover,
     .repl-more-controls summary:focus,
     .repl-more-controls[open] summary {
@@ -3017,10 +3092,10 @@
       border: 1px solid var(--panel-border);
       border-radius: 10px;
       background: var(--panel-2);
-      padding: 10px;
+      padding: 8px 10px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 7px;
     }
 
     .repl-mirror {
@@ -3064,25 +3139,25 @@
     }
 
     .repl-journal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px 12px;
     }
 
     .repl-journal-header h3 {
       margin: 0;
-      font-size: 13px;
+      font-size: 12.5px;
       color: var(--text);
     }
 
     .repl-journal-header p,
+    .repl-journal-description,
     .repl-journal-omitted {
-      margin: 3px 0 0;
+      margin: 1px 0 0;
       color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
+      font-size: 11.5px;
+      line-height: 1.3;
     }
 
     .repl-journal-actions {
@@ -3091,6 +3166,12 @@
       gap: 8px;
       flex-wrap: wrap;
       justify-content: flex-end;
+    }
+
+    .repl-journal-actions button {
+      min-height: 26px;
+      padding: 3px 8px;
+      font-size: 12px;
     }
 
     .repl-journal-compact-actions,
@@ -3110,9 +3191,9 @@
       flex-direction: column;
       gap: 0;
       border: 1px solid var(--panel-border);
-      border-radius: 10px;
+      border-radius: 9px;
       background: var(--panel);
-      padding: 10px 12px;
+      padding: 8px 10px;
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.015);
     }
 
@@ -3446,6 +3527,7 @@
 
     .shortcuts-dialog {
       width: min(720px, 100%);
+      max-height: min(82vh, 760px);
     }
 
     .scratchpad-dialog {
@@ -3502,14 +3584,16 @@
 
     .shortcuts-body {
       display: grid;
-      gap: 14px;
-      padding: 16px 18px 18px;
-      overflow: auto;
+      gap: 12px;
+      padding: 14px 18px 16px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      min-height: 0;
       background: var(--panel);
     }
 
     .shortcuts-group h3 {
-      margin: 0 0 8px;
+      margin: 0 0 6px;
       font-size: 12px;
       font-weight: 700;
       color: var(--studio-info-text, var(--muted));
@@ -3519,8 +3603,11 @@
 
     .shortcuts-group dl {
       display: grid;
-      gap: 6px;
+      gap: 0;
       margin: 0;
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      overflow: hidden;
     }
 
     .shortcuts-group dl > div {
@@ -3528,8 +3615,12 @@
       grid-template-columns: minmax(130px, max-content) minmax(0, 1fr);
       gap: 12px;
       align-items: baseline;
-      padding: 6px 0;
+      padding: 6px 10px;
       border-top: 1px solid var(--border-subtle);
+    }
+
+    .shortcuts-group dl > div:first-child {
+      border-top: 0;
     }
 
     .shortcuts-group dt {
@@ -3875,6 +3966,11 @@
     @media (max-width: 1080px) {
       main {
         grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .pane-resize-handle {
+        display: none;
       }
     }
 
@@ -3924,8 +4020,36 @@
     }
 
     body.studio-ui-refresh main {
-      gap: 9px;
+      gap: 0;
       padding: 9px;
+    }
+
+    @container (max-width: 840px) {
+      body.studio-ui-refresh .studio-refresh-header-top,
+      body.studio-ui-refresh .studio-refresh-header-utility,
+      body.studio-ui-refresh #rightSectionHeader,
+      body.studio-ui-refresh .studio-refresh-toolbar-main,
+      body.studio-ui-refresh .studio-refresh-pane-identity {
+        grid-template-columns: minmax(0, 1fr);
+        justify-content: stretch;
+      }
+
+      body.studio-ui-refresh .studio-refresh-pane-tools,
+      body.studio-ui-refresh .studio-refresh-toolbar-state {
+        justify-content: flex-start;
+        justify-items: start;
+        min-width: 0;
+      }
+
+      body.studio-ui-refresh .studio-refresh-pane-tools,
+      body.studio-ui-refresh .studio-refresh-title-group,
+      body.studio-ui-refresh .studio-refresh-utility-left {
+        flex-wrap: wrap;
+      }
+
+      body.studio-ui-refresh .studio-refresh-toolbar-state .studio-refresh-action-line {
+        justify-content: flex-start;
+      }
     }
 
     body.studio-ui-refresh footer {
@@ -3964,7 +4088,8 @@
     }
 
     body.studio-ui-refresh #rightSectionHeader {
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: max-content max-content;
+      justify-content: space-between;
       align-items: center;
     }
 
@@ -3984,10 +4109,18 @@
     body.studio-ui-refresh .studio-refresh-header-top,
     body.studio-ui-refresh .studio-refresh-header-utility {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
       gap: 9px;
       min-width: 0;
+    }
+
+    body.studio-ui-refresh .studio-refresh-header-top {
+      grid-template-columns: max-content max-content;
+      justify-content: space-between;
+    }
+
+    body.studio-ui-refresh .studio-refresh-header-utility {
+      grid-template-columns: minmax(0, 1fr) auto;
     }
 
     body.studio-ui-refresh .studio-refresh-pane-identity {
@@ -4011,10 +4144,14 @@
     }
 
     body.studio-ui-refresh .studio-refresh-title-group {
+      position: relative;
+      z-index: 2;
       gap: 2px;
     }
 
     body.studio-ui-refresh .studio-refresh-pane-tools {
+      position: relative;
+      z-index: 1;
       justify-content: flex-end;
       flex-wrap: nowrap;
     }
@@ -4311,7 +4448,7 @@
 
     body.studio-ui-refresh .studio-refresh-toolbar-main {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: max-content minmax(0, 1fr);
       gap: 10px;
       align-items: start;
       min-width: 0;
@@ -4321,7 +4458,9 @@
       display: grid;
       gap: 6px;
       justify-items: start;
-      min-width: 0;
+      min-width: max-content;
+      position: relative;
+      z-index: 2;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar-state {
@@ -4329,7 +4468,27 @@
       gap: 6px;
       justify-items: end;
       align-content: start;
-      min-width: max-content;
+      justify-self: stretch;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      position: relative;
+      z-index: 1;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar-state .studio-refresh-action-line {
+      max-width: 100%;
+      overflow: hidden;
+      flex-wrap: nowrap;
+      justify-content: flex-end;
+      white-space: nowrap;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar-state button,
+    body.studio-ui-refresh .studio-refresh-toolbar-state select,
+    body.studio-ui-refresh .studio-refresh-toolbar-state .studio-refresh-chip {
+      min-width: 0;
+      max-width: 100%;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar button,

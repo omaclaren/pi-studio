@@ -4,7 +4,7 @@ import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
@@ -365,6 +365,7 @@ interface ReplStartRequestMessage {
 	requestId: string;
 	runtime: StudioReplRuntime;
 	newSession?: boolean;
+	command?: string;
 }
 
 interface ReplStopRequestMessage {
@@ -2364,9 +2365,67 @@ function buildStudioCompanionLabel(_label: string | undefined): string {
 	return "copy of editor text";
 }
 
+const STUDIO_HTML_PREVIEW_RESOURCE_MAX_BYTES = 25 * 1024 * 1024;
+const STUDIO_HTML_PREVIEW_IMAGE_MIME_BY_EXT = new Map<string, string>([
+	[".png", "image/png"],
+	[".jpg", "image/jpeg"],
+	[".jpeg", "image/jpeg"],
+	[".gif", "image/gif"],
+	[".webp", "image/webp"],
+]);
+
 function resolveStudioPdfResourcePath(pdfPath: string | undefined, sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
 	const baseDir = resolveStudioBaseDir(sourcePath, resourceDir, fallbackCwd);
 	return resolveStudioPdfResourceFile(pdfPath, baseDir);
+}
+
+function stripStudioHtmlPreviewResourceUrlSuffix(resourcePath: string): string {
+	const withoutHash = resourcePath.split("#")[0] ?? resourcePath;
+	return withoutHash.split("?")[0] ?? withoutHash;
+}
+
+function decodeStudioHtmlPreviewResourcePath(resourcePath: string): string {
+	try {
+		return decodeURIComponent(resourcePath);
+	} catch {
+		return resourcePath;
+	}
+}
+
+function resolveStudioHtmlPreviewResourcePath(
+	resourcePath: string | undefined,
+	sourcePath: string | undefined,
+	resourceDir: string | undefined,
+	fallbackCwd: string,
+): { filePath: string; mimeType: string } {
+	const rawPath = typeof resourcePath === "string" ? resourcePath.trim() : "";
+	if (!rawPath) throw new Error("Missing HTML preview resource path.");
+	if (/\0/.test(rawPath)) throw new Error("Invalid HTML preview resource path.");
+	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
+		throw new Error("Only local HTML preview resources are supported.");
+	}
+
+	const baseDir = resolveStudioBaseDir(sourcePath, resourceDir, fallbackCwd);
+	const cleanedPath = decodeStudioHtmlPreviewResourcePath(stripStudioHtmlPreviewResourceUrlSuffix(rawPath));
+	const expandedPath = expandHome(cleanedPath);
+	const candidate = isAbsolute(expandedPath) ? expandedPath : resolve(baseDir, expandedPath);
+	const ext = extname(candidate).toLowerCase();
+	const mimeType = STUDIO_HTML_PREVIEW_IMAGE_MIME_BY_EXT.get(ext);
+	if (!mimeType) throw new Error("Only local PNG, JPEG, GIF, and WebP images can be embedded in HTML previews.");
+
+	const baseReal = realpathSync(baseDir);
+	const candidateReal = realpathSync(candidate);
+	const rel = relative(baseReal, candidateReal);
+	if (rel.startsWith("..") || isAbsolute(rel)) {
+		throw new Error("HTML preview resource path must stay within the current Studio resource directory.");
+	}
+
+	const stat = statSync(candidateReal);
+	if (!stat.isFile()) throw new Error("HTML preview resource path does not refer to a file.");
+	if (stat.size > STUDIO_HTML_PREVIEW_RESOURCE_MAX_BYTES) {
+		throw new Error("HTML preview resource is too large to embed.");
+	}
+	return { filePath: candidateReal, mimeType };
 }
 
 function resolveStudioPandocWorkingDir(baseDir: string | undefined): string | undefined {
@@ -6279,6 +6338,23 @@ function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: str
 	res.end(method === "HEAD" ? undefined : pdf);
 }
 
+function respondHtmlPreviewResourceJson(req: IncomingMessage, res: ServerResponse, filePath: string, mimeType: string): void {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "GET" && method !== "HEAD") {
+		res.setHeader("Allow", "GET, HEAD");
+		respondJson(res, 405, { ok: false, error: "Method not allowed. Use GET." });
+		return;
+	}
+
+	const data = method === "HEAD" ? "" : readFileSync(filePath).toString("base64");
+	respondJson(res, 200, {
+		ok: true,
+		mimeType,
+		filename: basename(filePath),
+		dataUrl: method === "HEAD" ? "" : `data:${mimeType};base64,${data}`,
+	});
+}
+
 function openUrlInDefaultBrowser(url: string): Promise<void> {
 	const openCommand =
 		process.platform === "darwin"
@@ -7183,6 +7259,7 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 				requestId: msg.requestId,
 				runtime,
 				newSession: Boolean(msg.newSession),
+				command: typeof msg.command === "string" ? msg.command : undefined,
 			};
 		}
 	}
@@ -7326,37 +7403,184 @@ function isGenericToolActivityLabel(label: string | null | undefined): boolean {
 		|| normalized === "editing file";
 }
 
+function splitStudioShellWords(segment: string): string[] {
+	const words: string[] = [];
+	let current = "";
+	let quote: "'" | "\"" | null = null;
+	let escaped = false;
+
+	for (const char of String(segment || "")) {
+		if (escaped) {
+			current += char;
+			escaped = false;
+			continue;
+		}
+		if (char === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (char === quote) quote = null;
+			else current += char;
+			continue;
+		}
+		if (char === "'" || char === "\"") {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current) {
+				words.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += char;
+	}
+	if (escaped) current += "\\";
+	if (current) words.push(current);
+	return words;
+}
+
+function normalizeStudioShellCommandToken(token: string): string {
+	let value = String(token || "").trim();
+	if (!value) return "";
+	const slashIndex = value.lastIndexOf("/");
+	if (slashIndex >= 0) value = value.slice(slashIndex + 1);
+	return value.toLowerCase();
+}
+
+function isStudioShellAssignmentToken(token: string): boolean {
+	return /^[A-Za-z_][A-Za-z0-9_]*=/.test(String(token || ""));
+}
+
+function getStudioShellSegmentCommand(segment: string): { name: string; words: string[]; commandIndex: number } | null {
+	const words = splitStudioShellWords(segment);
+	let index = 0;
+	const skipAssignments = () => {
+		while (index < words.length && isStudioShellAssignmentToken(words[index] || "")) index += 1;
+	};
+
+	skipAssignments();
+	let guard = 0;
+	while (index < words.length && guard < 12) {
+		guard += 1;
+		const name = normalizeStudioShellCommandToken(words[index] || "");
+		if (!name) {
+			index += 1;
+			continue;
+		}
+		if (name === "command" || name === "builtin" || name === "exec") {
+			index += 1;
+			skipAssignments();
+			continue;
+		}
+		if (name === "time") {
+			index += 1;
+			while (index < words.length && String(words[index] || "").startsWith("-")) index += 1;
+			skipAssignments();
+			continue;
+		}
+		if (name === "env") {
+			index += 1;
+			while (index < words.length) {
+				const token = String(words[index] || "");
+				const lowerToken = token.toLowerCase();
+				if (isStudioShellAssignmentToken(token)) {
+					index += 1;
+					continue;
+				}
+				if (lowerToken === "-u" || lowerToken === "--unset" || lowerToken === "-s" || lowerToken === "-S") {
+					index += 2;
+					continue;
+				}
+				if (lowerToken.startsWith("-")) {
+					index += 1;
+					continue;
+				}
+				break;
+			}
+			skipAssignments();
+			continue;
+		}
+		if (name === "sudo") {
+			index += 1;
+			while (index < words.length) {
+				const option = String(words[index] || "");
+				if (!option.startsWith("-")) break;
+				const lowerOption = option.toLowerCase();
+				index += 1;
+				if (["-c", "-g", "-h", "-p", "-t", "-u"].includes(lowerOption) && index < words.length) {
+					index += 1;
+				}
+			}
+			skipAssignments();
+			continue;
+		}
+		return { name, words, commandIndex: index };
+	}
+	return null;
+}
+
+function getStudioGitSubcommand(args: string[]): string {
+	for (let index = 0; index < args.length; index += 1) {
+		const token = String(args[index] || "").toLowerCase();
+		if (!token) continue;
+		if (["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"].map((value) => value.toLowerCase()).includes(token)) {
+			index += 1;
+			continue;
+		}
+		if (/^--(?:git-dir|work-tree|namespace|exec-path)=/.test(token)) continue;
+		if (token.startsWith("-")) continue;
+		return normalizeStudioShellCommandToken(token);
+	}
+	return "";
+}
+
 function deriveBashActivityLabel(command: string): string | null {
 	const normalized = String(command || "").trim();
 	if (!normalized) return null;
-	const lower = normalized.toLowerCase();
 
-	const segments = lower
+	const segments = normalized
 		.split(/(?:&&|\|\||;|\n)+/g)
 		.map((segment) => segment.trim())
 		.filter((segment) => segment.length > 0);
 
 	let hasPwd = false;
+	let hasLs = false;
 	let hasLsCurrent = false;
 	let hasLsParent = false;
 	let hasFind = false;
 	let hasFindCurrentListing = false;
 	let hasFindParentListing = false;
+	let hasTextSearch = false;
+	let hasFileRead = false;
+	let hasGit = false;
+	let hasGitStatus = false;
+	let hasGitDiff = false;
+	let hasNpm = false;
+	let hasPython = false;
+	let hasNode = false;
 
 	for (const segment of segments) {
-		if (/\bpwd\b/.test(segment)) hasPwd = true;
+		const commandInfo = getStudioShellSegmentCommand(segment);
+		if (!commandInfo) continue;
+		const commandName = commandInfo.name;
+		const args = commandInfo.words.slice(commandInfo.commandIndex + 1);
 
-		if (/\bls\b/.test(segment)) {
-			if (/\.\./.test(segment)) hasLsParent = true;
+		if (commandName === "pwd") hasPwd = true;
+
+		if (commandName === "ls") {
+			hasLs = true;
+			if (args.some((arg) => arg === ".." || arg === "../" || arg.startsWith("../"))) hasLsParent = true;
 			else hasLsCurrent = true;
 		}
 
-		if (/\bfind\b/.test(segment)) {
+		if (commandName === "find") {
 			hasFind = true;
-			const pathMatch = segment.match(/\bfind\s+([^\s]+)/);
-			const pathToken = pathMatch ? pathMatch[1] : "";
-			const hasSelector = /-(?:name|iname|regex|path|ipath|newer|mtime|mmin|size|user|group)\b/.test(segment);
-			const listingLike = /-maxdepth\s+\d+\b/.test(segment) && !hasSelector;
+			const pathToken = args.find((arg) => arg && !String(arg).startsWith("-")) || "";
+			const hasSelector = /-(?:name|iname|regex|path|ipath|newer|mtime|mmin|size|user|group)\b/i.test(segment);
+			const listingLike = /-maxdepth\s+\d+\b/i.test(segment) && !hasSelector;
 
 			if (listingLike) {
 				if (pathToken === ".." || pathToken === "../") {
@@ -7366,6 +7590,18 @@ function deriveBashActivityLabel(command: string): string | null {
 				}
 			}
 		}
+
+		if (commandName === "rg" || commandName === "grep") hasTextSearch = true;
+		if (commandName === "cat" || commandName === "sed" || commandName === "awk") hasFileRead = true;
+		if (commandName === "git") {
+			hasGit = true;
+			const subcommand = getStudioGitSubcommand(args);
+			if (subcommand === "status") hasGitStatus = true;
+			if (subcommand === "diff") hasGitDiff = true;
+		}
+		if (commandName === "npm") hasNpm = true;
+		if (/^python(?:3(?:\.\d+)?)?$/.test(commandName)) hasPython = true;
+		if (commandName === "node") hasNode = true;
 	}
 
 	const hasCurrentListing = hasLsCurrent || hasFindCurrentListing;
@@ -7380,34 +7616,34 @@ function deriveBashActivityLabel(command: string): string | null {
 	if (hasParentListing) {
 		return "Listing parent directory files";
 	}
-	if (hasCurrentListing || /\bls\b/.test(lower)) {
+	if (hasCurrentListing || hasLs) {
 		return "Listing directory files";
 	}
-	if (hasFind || /\bfind\b/.test(lower)) {
+	if (hasFind) {
 		return "Searching files";
 	}
-	if (/\brg\b/.test(lower) || /\bgrep\b/.test(lower)) {
+	if (hasTextSearch) {
 		return "Searching text in files";
 	}
-	if (/\bcat\b/.test(lower) || /\bsed\b/.test(lower) || /\bawk\b/.test(lower)) {
+	if (hasFileRead) {
 		return "Reading file content";
 	}
-	if (/\bgit\s+status\b/.test(lower)) {
+	if (hasGitStatus) {
 		return "Checking git status";
 	}
-	if (/\bgit\s+diff\b/.test(lower)) {
+	if (hasGitDiff) {
 		return "Reviewing git changes";
 	}
-	if (/\bgit\b/.test(lower)) {
+	if (hasGit) {
 		return "Running git command";
 	}
-	if (/\bnpm\b/.test(lower)) {
+	if (hasNpm) {
 		return "Running npm command";
 	}
-	if (/\bpython3?\b/.test(lower)) {
+	if (hasPython) {
 		return "Running Python command";
 	}
-	if (/\bnode\b/.test(lower)) {
+	if (hasNode) {
 		return "Running Node.js command";
 	}
 	return "Running shell command";
@@ -7749,7 +7985,7 @@ function normalizeStudioReplRuntime(value: unknown): StudioReplRuntime | null {
 	return isStudioReplRuntime(normalized) ? normalized : null;
 }
 
-function getStudioReplRuntimeCommand(runtime: StudioReplRuntime): string {
+function getDefaultStudioReplRuntimeCommand(runtime: StudioReplRuntime): string {
 	if (runtime === "shell") return String(process.env.SHELL || "bash").trim() || "bash";
 	if (runtime === "python") return "python3";
 	if (runtime === "ipython") return "ipython";
@@ -7759,13 +7995,31 @@ function getStudioReplRuntimeCommand(runtime: StudioReplRuntime): string {
 	return "clojure";
 }
 
-function getStudioReplSessionName(runtime: StudioReplRuntime): string {
-	return `pi-studio-repl-${runtime}`;
+function normalizeStudioReplCommandOverride(runtime: StudioReplRuntime, command: string | undefined): string | undefined {
+	const normalized = String(command ?? "").replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+	if (!normalized) return undefined;
+	if (normalized.length > 240) return undefined;
+	if (normalized === getDefaultStudioReplRuntimeCommand(runtime)) return undefined;
+	return normalized;
 }
 
-function getNewStudioReplSessionName(runtime: StudioReplRuntime): string {
+function getStudioReplRuntimeCommand(runtime: StudioReplRuntime, command?: string): string {
+	return normalizeStudioReplCommandOverride(runtime, command) || getDefaultStudioReplRuntimeCommand(runtime);
+}
+
+function getStudioReplCommandSessionSuffix(runtime: StudioReplRuntime, command?: string): string {
+	const normalized = normalizeStudioReplCommandOverride(runtime, command);
+	if (!normalized) return "";
+	return `-${createHash("sha1").update(`${runtime}\n${normalized}`).digest("hex").slice(0, 8)}`;
+}
+
+function getStudioReplSessionName(runtime: StudioReplRuntime, command?: string): string {
+	return `pi-studio-repl-${runtime}${getStudioReplCommandSessionSuffix(runtime, command)}`;
+}
+
+function getNewStudioReplSessionName(runtime: StudioReplRuntime, command?: string): string {
 	const suffix = `${Date.now().toString(36)}-${randomUUID().slice(0, 6)}`;
-	return `pi-studio-repl-${runtime}-${suffix}`;
+	return `pi-studio-repl-${runtime}${getStudioReplCommandSessionSuffix(runtime, command)}-${suffix}`;
 }
 
 function getStudioReplPaneTarget(sessionName: string): string {
@@ -7865,9 +8119,10 @@ function captureStudioReplSession(sessionName: string): { ok: true; transcript: 
 	return { ok: true, transcript: String(result.stdout || "").replace(/[\t ]+$/gm, "").trimEnd(), session };
 }
 
-function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, options?: { newSession?: boolean }): { ok: true; session: StudioReplSessionInfo; message: string } | { ok: false; message: string } {
+function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, options?: { newSession?: boolean; command?: string }): { ok: true; session: StudioReplSessionInfo; message: string } | { ok: false; message: string } {
 	if (!isTmuxAvailable()) return { ok: false, message: "tmux is not available. Install tmux to use Studio REPL sessions." };
-	const sessionName = options?.newSession ? getNewStudioReplSessionName(runtime) : getStudioReplSessionName(runtime);
+	const commandOverride = normalizeStudioReplCommandOverride(runtime, options?.command);
+	const sessionName = options?.newSession ? getNewStudioReplSessionName(runtime, commandOverride) : getStudioReplSessionName(runtime, commandOverride);
 	const existing = runStudioTmux(["has-session", "-t", sessionName], { timeout: 3_000 });
 	if (existing.ok) {
 		const inferred = inferStudioReplSessionRuntime(sessionName);
@@ -7883,7 +8138,7 @@ function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, options
 			message: `${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL is already running.`,
 		};
 	}
-	const command = getStudioReplRuntimeCommand(runtime);
+	const command = getStudioReplRuntimeCommand(runtime, commandOverride);
 	const result = runStudioTmux(["new-session", "-d", "-s", sessionName, "-c", cwd || process.cwd(), command], { timeout: 5_000 });
 	if (!result.ok) return { ok: false, message: result.message || `Failed to start ${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL.` };
 	return {
@@ -7895,7 +8150,7 @@ function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, options
 			label: formatStudioReplSessionLabel(sessionName, runtime, "studio"),
 			source: "studio",
 		},
-		message: `Started ${options?.newSession ? "new " : ""}${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL.`,
+		message: `Started ${options?.newSession ? "new " : ""}${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL${commandOverride ? ` with custom command: ${commandOverride}` : ""}.`,
 	};
 }
 
@@ -8937,6 +9192,8 @@ ${cssVarsBlock}
       </div>
     </section>
 
+    <div id="paneResizeHandle" class="pane-resize-handle" role="separator" aria-label="Resize editor and response panes" aria-orientation="vertical" tabindex="0" title="Drag to resize panes. Double-click or press Enter/Space to reset; drag very close to the middle to snap to 50/50."></div>
+
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
@@ -9043,6 +9300,14 @@ ${cssVarsBlock}
             <div><dt>Cmd/Ctrl+S</dt><dd>Save editor</dd></div>
             <div><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
             <div><dt>Tab / Shift+Tab</dt><dd>Indent or unindent selected editor text</dd></div>
+          </dl>
+        </section>
+        <section class="shortcuts-group">
+          <h3>Response</h3>
+          <dl>
+            <div><dt>Alt/Option+←</dt><dd>Previous response when not editing text</dd></div>
+            <div><dt>Alt/Option+→</dt><dd>Next response when not editing text</dd></div>
+            <div><dt>Alt/Option+l</dt><dd>Latest response when not editing text</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group">
@@ -9998,7 +10263,11 @@ export default function (pi: ExtensionAPI) {
 				}
 				lastSpecificToolActivityLabel = baseLabel;
 			} else {
-				nextLabel = baseLabel;
+				// Generic shell/tool labels such as "Running git command" are often
+				// stale or too broad once the model has moved on. Keep the precise
+				// Working trace entry, but do not promote generic labels into the
+				// live Studio/terminal status line.
+				nextLabel = null;
 			}
 		} else {
 			nextLabel = null;
@@ -10759,7 +11028,7 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
 			}
-			const started = startStudioReplSession(msg.runtime, studioCwd, { newSession: msg.newSession });
+			const started = startStudioReplSession(msg.runtime, studioCwd, { newSession: msg.newSession, command: msg.command });
 			if (!started.ok) {
 				sendReplStateToClient(client, { requestId: msg.requestId, replError: started.message });
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: started.message });
@@ -12108,6 +12377,27 @@ export default function (pi: ExtensionAPI) {
 				respondPdfFile(req, res, filePath);
 			} catch (error) {
 				respondText(res, 404, `PDF resource unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			return;
+		}
+
+		if (requestUrl.pathname === "/html-preview-resource") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			try {
+				const resource = resolveStudioHtmlPreviewResourcePath(
+					requestUrl.searchParams.get("path") ?? "",
+					requestUrl.searchParams.get("sourcePath") ?? undefined,
+					requestUrl.searchParams.get("resourceDir") ?? undefined,
+					studioCwd,
+				);
+				respondHtmlPreviewResourceJson(req, res, resource.filePath, resource.mimeType);
+			} catch (error) {
+				respondJson(res, 404, { ok: false, error: `HTML preview resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
 			}
 			return;
 		}

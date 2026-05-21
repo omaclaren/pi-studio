@@ -4,6 +4,19 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.12] — 2026-05-21
+
+### Added
+- Added a draggable splitter for resizing the editor and right panes without entering pane-focus mode, with double-click/keyboard reset, narrow snap-to-50/50 near the centre, restored visual separation between panes, a hover/focus-only divider line, and a minimum editor width to avoid toolbar collapse.
+- Added an optional REPL start command field so Studio-owned REPL sessions can start through a selected environment command such as `.venv/bin/python`, `uv run python`, or `conda run --no-capture-output -n env python`.
+- Added non-text-entry response-history shortcuts: Alt/Option+Left for previous, Alt/Option+Right for next, and Alt/Option+l for latest response.
+
+### Changed
+- Generic live tool labels such as “Running git command” are no longer promoted into the Studio status line, and shell command detection now looks at executable tokens rather than matching path text like `Git-Working`.
+- Refreshed pane headers and editor toolbar controls now stack based on pane width, so resizing a pane no longer lets secondary controls overlap the primary pane title or run action.
+- Sandboxed HTML previews now resolve local relative PNG/JPEG/GIF/WebP image references through Studio's resource context and embed them as data URLs, without allowing arbitrary network resources.
+- The REPL view now keeps the selected session aligned with the selected runtime, so choosing Python no longer leaves Send to REPL targeting an existing Shell session; the start-command controls were simplified so Start creates or switches to a session for the selected runtime and command, and the **Studio REPL Record** header was tightened.
+
 ## [0.9.11] — 2026-05-19
 
 ### Added
