@@ -4,6 +4,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.14] — 2026-05-22
+
+### Added
+- Added active-pane text-size shortcuts: Alt/Option+= to increase, Alt/Option+- to decrease, and Alt/Option+0 to reset editor or right-pane text size when not editing text.
+
+### Changed
+- Blank and last-response Studio launches now default the working directory/resource context to the current Pi directory.
+- Made the working-directory label use normal muted text styling instead of standing out like a primary control.
+
+### Fixed
+- Fixed the keyboard-shortcuts overlay layout so shortcut groups are no longer clipped by the global pane section styles.
+
 ## [0.9.13] — 2026-05-22
 
 ### Added

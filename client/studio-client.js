@@ -2174,6 +2174,49 @@
         scheduleResponsePaneRepaintNudge();
       }
 
+      function getActivePaneTextSizeConfig() {
+        if (activePane === "right") {
+          return {
+            label: "Right pane text size",
+            value: responseFontSize,
+            defaultValue: DEFAULT_RESPONSE_FONT_SIZE,
+            options: RESPONSE_FONT_SIZE_OPTIONS,
+            setValue: setResponseFontSize,
+          };
+        }
+        return {
+          label: "Editor text size",
+          value: editorFontSize,
+          defaultValue: DEFAULT_EDITOR_FONT_SIZE,
+          options: EDITOR_FONT_SIZE_OPTIONS,
+          setValue: setEditorFontSize,
+        };
+      }
+
+      function getNextStudioFontSizeOption(currentValue, options, defaultValue, direction) {
+        const normalized = normalizeStudioFontSize(currentValue, options, defaultValue);
+        const currentIndex = Math.max(0, options.findIndex((option) => Math.abs(option - normalized) < 0.001));
+        const nextIndex = Math.max(0, Math.min(options.length - 1, currentIndex + direction));
+        return options[nextIndex];
+      }
+
+      function adjustActivePaneTextSize(direction) {
+        const config = getActivePaneTextSizeConfig();
+        const nextSize = getNextStudioFontSizeOption(config.value, config.options, config.defaultValue, direction);
+        if (Math.abs(nextSize - config.value) < 0.001) {
+          setStatus(config.label + " already at " + formatStudioFontSizeLabel(nextSize) + ".", "warning");
+          return;
+        }
+        config.setValue(nextSize);
+        setStatus(config.label + ": " + formatStudioFontSizeLabel(nextSize) + ".");
+      }
+
+      function resetActivePaneTextSize() {
+        const config = getActivePaneTextSizeConfig();
+        config.setValue(config.defaultValue);
+        setStatus(config.label + " reset to " + formatStudioFontSizeLabel(config.defaultValue) + ".");
+      }
+
       function getStudioUiRefreshAnnotationHeaderEnabled() {
         try {
           return Boolean(stripAnnotationHeader(sourceTextEl.value).hadHeader);
@@ -3644,6 +3687,24 @@
           if (key.toLowerCase() === "l" || code === "KeyL") {
             event.preventDefault();
             triggerResponseHistoryShortcut("latest");
+            return;
+          }
+        }
+
+        if (!isTextEntryShortcutTarget(event.target) && !event.metaKey && !event.ctrlKey && event.altKey) {
+          if (code === "Equal" || code === "NumpadAdd" || key === "=" || key === "+") {
+            event.preventDefault();
+            adjustActivePaneTextSize(1);
+            return;
+          }
+          if (code === "Minus" || code === "NumpadSubtract" || key === "-" || key === "_") {
+            event.preventDefault();
+            adjustActivePaneTextSize(-1);
+            return;
+          }
+          if (code === "Digit0" || code === "Numpad0" || key === "0") {
+            event.preventDefault();
+            resetActivePaneTextSize();
             return;
           }
         }

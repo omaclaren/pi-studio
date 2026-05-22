@@ -641,6 +641,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      font-weight: 400;
     }
     .resource-dir-label:hover {
       color: var(--fg);
@@ -3583,17 +3584,29 @@
 
     .shortcuts-body {
       display: grid;
-      gap: 12px;
-      padding: 14px 18px 16px;
+      gap: 16px;
+      padding: 16px 18px 18px;
       overflow-y: auto;
       overflow-x: hidden;
       min-height: 0;
       background: var(--panel);
     }
 
+    .shortcuts-group {
+      display: block;
+      min-height: auto;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      overflow: visible;
+    }
+
     .shortcuts-group h3 {
-      margin: 0 0 6px;
+      margin: 0 0 8px;
+      padding-top: 3px;
       font-size: 12px;
+      line-height: 1.5;
       font-weight: 700;
       color: var(--studio-info-text, var(--muted));
       text-transform: uppercase;
@@ -4259,12 +4272,16 @@
     }
 
     body.studio-ui-refresh #resourceDirBtn,
-    body.studio-ui-refresh #resourceDirLabel,
     body.studio-ui-refresh #reviewNotesBtn,
     body.studio-ui-refresh #outlineBtn,
     body.studio-ui-refresh #scratchpadBtn,
     body.studio-ui-refresh .studio-refresh-tool-tab {
       color: var(--text);
+    }
+
+    body.studio-ui-refresh #resourceDirLabel {
+      color: var(--studio-info-text, var(--muted));
+      font-weight: 400;
     }
 
     body.studio-ui-refresh #resourceDirInputWrap.visible {

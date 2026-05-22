@@ -9601,6 +9601,14 @@ ${cssVarsBlock}
           </dl>
         </section>
         <section class="shortcuts-group">
+          <h3>View</h3>
+          <dl>
+            <div><dt>Alt/Option+=</dt><dd>Increase the active pane's text size when not editing text</dd></div>
+            <div><dt>Alt/Option+-</dt><dd>Decrease the active pane's text size when not editing text</dd></div>
+            <div><dt>Alt/Option+0</dt><dd>Reset the active pane's text size when not editing text</dd></div>
+          </dl>
+        </section>
+        <section class="shortcuts-group">
           <h3>Editor</h3>
           <dl>
             <div><dt>Cmd/Ctrl+S</dt><dd>Save editor</dd></div>
@@ -13298,6 +13306,7 @@ export default function (pi: ExtensionAPI) {
 					label: "last model response",
 					source: "last-response",
 					draftId: createStudioDraftId(),
+					resourceDir: ctx.cwd,
 				};
 			}
 			return {
@@ -13305,6 +13314,7 @@ export default function (pi: ExtensionAPI) {
 				label: "blank",
 				source: "blank",
 				draftId: createStudioDraftId(),
+				resourceDir: ctx.cwd,
 			};
 		}
 
@@ -13314,6 +13324,7 @@ export default function (pi: ExtensionAPI) {
 				label: "blank",
 				source: "blank",
 				draftId: createStudioDraftId(),
+				resourceDir: ctx.cwd,
 			};
 		}
 
@@ -13325,6 +13336,7 @@ export default function (pi: ExtensionAPI) {
 					label: "blank",
 					source: "blank",
 					draftId: createStudioDraftId(),
+					resourceDir: ctx.cwd,
 				};
 			}
 			return {
@@ -13332,6 +13344,7 @@ export default function (pi: ExtensionAPI) {
 				label: "last model response",
 				source: "last-response",
 				draftId: createStudioDraftId(),
+				resourceDir: ctx.cwd,
 			};
 		}
 
