@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Studio local HTML report</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.5; margin: 2rem; }
+    figure { margin: 1rem 0; }
+    img { max-width: 420px; border: 1px solid #8885; border-radius: 8px; }
+    code { background: #8882; padding: 0.1em 0.25em; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Studio local HTML report</h1>
+  <p>This file tests sandboxed HTML preview local resources and local links.</p>
+  <ul>
+    <li><a href="../docs/linked-note.md">Relative Markdown link from HTML</a></li>
+    <li><a href="../docs/linked-note.tex">Relative LaTeX link from HTML</a></li>
+    <li><a href="../pdfs/sample-report.pdf#page=1">Relative PDF link from HTML</a></li>
+    <li><a href="../images/sample-plot.png">Relative image-file link from HTML</a></li>
+    <li><a href="#html-local-section">Same-page HTML section link</a></li>
+    <li><a href="https://example.com/">External link should remain browser-normal</a></li>
+  </ul>
+  <figure>
+    <img src="../images/sample-plot.png" alt="Local generated PNG">
+    <figcaption>Local PNG loaded through Studio's HTML preview resource resolver.</figcaption>
+  </figure>
+  <h2 id="html-local-section">HTML local section target</h2>
+  <p>If this same-page link scrolls here, fragment links inside HTML preview still work.</p>
+</body>
+</html>

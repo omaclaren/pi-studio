@@ -26,6 +26,8 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with Raw/Literate send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/stop/interrupt controls, a compact refresh-persistent **Studio REPL Record** of user and Pi-sent code, a secondary raw tmux mirror, agent-facing `studio_repl_status` / `studio_repl_send` tools, and Markdown/PDF/HTML export
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
 - Includes a docked **Outline** rail for navigating document structure in the current editor text, with clickable entries that jump in the raw editor and reveal matching preview locations when available
+- Restores the current browser-tab editor workspace after refresh and provides an explicit **Clear editor** action when you want to discard the restored draft without changing responses or saved files
+- Turns local preview links, including links inside sandboxed HTML previews, into Studio actions: PDFs open in the embedded viewer, text/code/document links can open in a new editor tab, and right-click menus provide **Open here**, **Reveal in file manager**, and **Copy path** for local resources
 - Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with transient **Comment** / **Jump** actions from raw-editor selections plus editor-preview selections for Markdown, LaTeX, and code/text/diff previews, alongside optional inline `[an: ...]` toggles when you want comments reflected in the document text
 - Browses response history (`Prev/Next/Last`) and loads either:
   - response text

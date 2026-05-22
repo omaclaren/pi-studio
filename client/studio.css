@@ -396,7 +396,6 @@
     body[data-studio-mode="editor-only"] #sendRunBtn,
     body[data-studio-mode="editor-only"] #queueSteerBtn,
     body[data-studio-mode="editor-only"] #sendEditorBtn,
-    body[data-studio-mode="editor-only"] #insertHeaderBtn,
     body[data-studio-mode="editor-only"] #lensSelect,
     body[data-studio-mode="editor-only"] #critiqueBtn,
     body[data-studio-mode="editor-only"] #followSelect,
@@ -4471,17 +4470,22 @@
       justify-self: stretch;
       min-width: 0;
       max-width: 100%;
-      overflow: hidden;
+      overflow: visible;
       position: relative;
       z-index: 1;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar-state .studio-refresh-action-line {
       max-width: 100%;
-      overflow: hidden;
+      overflow: visible;
       flex-wrap: nowrap;
       justify-content: flex-end;
       white-space: nowrap;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar-state .studio-refresh-menu-anchor {
+      min-width: 0;
+      max-width: 100%;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar-state button,
@@ -4489,6 +4493,11 @@
     body.studio-ui-refresh .studio-refresh-toolbar-state .studio-refresh-chip {
       min-width: 0;
       max-width: 100%;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar-state .studio-refresh-chip {
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar button,
@@ -4672,6 +4681,41 @@
       border-color: var(--error);
       color: var(--error-contrast);
       font-weight: 600;
+    }
+
+    .studio-preview-link-menu {
+      position: fixed;
+      z-index: 12000;
+      min-width: 180px;
+      padding: 6px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+    }
+
+    .studio-preview-link-menu[hidden] {
+      display: none;
+    }
+
+    .studio-preview-link-menu button {
+      display: block;
+      width: 100%;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      padding: 7px 9px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .studio-preview-link-menu button:hover,
+    .studio-preview-link-menu button:focus-visible {
+      background: var(--panel-2);
+      outline: none;
     }
 
     @media (max-width: 1280px) {

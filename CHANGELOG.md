@@ -4,6 +4,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.13] — 2026-05-22
+
+### Added
+- Added browser-refresh restoration for the Studio editor workspace, plus an explicit **Clear editor** action for discarding the restored browser draft without touching saved files or response history.
+- Added local preview-link handling for rendered document previews and sandboxed HTML previews: local PDF links open in Studio's embedded PDF focus viewer, local image links open in a local image preview, text/code/document links can open in a new editor tab, and right-clicking local links offers **Open here**, **Reveal in file manager**, and **Copy path** where applicable.
+- Brought editor-only Studio closer to full Studio for document-local controls: pane resizing/focus shortcuts now work, and the annotation-header toggle remains available.
+
+### Fixed
+- Fixed local resource context propagation when following links into subdocuments, so nested document/image/PDF links and **Reveal in file manager** resolve relative to the active document while staying inside the original Studio resource directory.
+- Fixed malformed working-directory/resource paths that accidentally duplicated absolute path prefixes such as `/Users/.../Users/...`.
+- Fixed refreshed toolbar menu overflow so annotation/view menus remain clickable instead of being clipped or covered by toolbar chips.
+
 ## [0.9.12] — 2026-05-21
 
 ### Added

@@ -1862,6 +1862,36 @@ function expandHome(pathInput: string): string {
 	return join(home, pathInput.slice(2));
 }
 
+function normalizeStudioResourceDirectoryInput(resourceDir: string): string {
+	let value = stripMatchingPathQuotes(String(resourceDir || "").trim());
+	if (!value) return "";
+	if (/^file:\/\//i.test(value)) {
+		try {
+			value = decodeURIComponent(new URL(value).pathname || value).trim();
+		} catch {
+			// Keep the original value if URL parsing fails.
+		}
+	}
+	const windowsMatch = value.match(/.*([A-Za-z]:[\\/].*)$/);
+	if (windowsMatch?.[1]) return windowsMatch[1].trim();
+	const markers = ["/Users/", "/home/", "/Volumes/", "/private/", "/tmp/", "/var/", "/opt/", "/Applications/"];
+	let embeddedAbsoluteIndex = -1;
+	for (const marker of markers) {
+		const index = value.lastIndexOf(marker);
+		if (index > 0) embeddedAbsoluteIndex = Math.max(embeddedAbsoluteIndex, index);
+	}
+	if (embeddedAbsoluteIndex > 0) value = value.slice(embeddedAbsoluteIndex).trim();
+	return value;
+}
+
+function recoverLikelyDroppedLeadingSlashPath(pathInput: string): string {
+	const value = String(pathInput || "").trim();
+	if (!value || isAbsolute(value)) return value;
+	if (!/^(?:Users|home|Volumes|private|tmp|var|opt|Applications)\//.test(value)) return value;
+	const candidate = `/${value}`;
+	return existsSync(candidate) ? candidate : value;
+}
+
 function resolveStudioPath(pathArg: string, cwd: string): { ok: true; resolved: string; label: string } | { ok: false; message: string } {
 	const normalized = normalizePathInput(pathArg);
 	if (!normalized) {
@@ -2332,13 +2362,43 @@ function resolveStudioBaseDir(sourcePath: string | undefined, resourceDir: strin
 		return dirname(isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded));
 	}
 
-	const resource = typeof resourceDir === "string" ? resourceDir.trim() : "";
+	const resource = normalizeStudioResourceDirectoryInput(typeof resourceDir === "string" ? resourceDir : "");
 	if (resource) {
-		const expanded = expandHome(resource);
+		const expanded = recoverLikelyDroppedLeadingSlashPath(expandHome(resource));
 		return isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded);
 	}
 
 	return fallbackCwd;
+}
+
+function isPathInsideOrEqualDirectory(childPath: string, parentDir: string): boolean {
+	const rel = relative(parentDir, childPath);
+	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function resolveStudioPreviewResourceContext(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): { baseDir: string; boundaryDir: string } {
+	const source = typeof sourcePath === "string" ? sourcePath.trim() : "";
+	const sourceBaseDir = source
+		? dirname(isAbsolute(recoverLikelyDroppedLeadingSlashPath(expandHome(source)))
+			? recoverLikelyDroppedLeadingSlashPath(expandHome(source))
+			: resolve(fallbackCwd, recoverLikelyDroppedLeadingSlashPath(expandHome(source))))
+		: "";
+
+	const resource = normalizeStudioResourceDirectoryInput(typeof resourceDir === "string" ? resourceDir : "");
+	const resourceBaseDir = resource
+		? (isAbsolute(recoverLikelyDroppedLeadingSlashPath(expandHome(resource)))
+			? recoverLikelyDroppedLeadingSlashPath(expandHome(resource))
+			: resolve(fallbackCwd, recoverLikelyDroppedLeadingSlashPath(expandHome(resource))))
+		: "";
+
+	const baseDir = sourceBaseDir || resourceBaseDir || fallbackCwd;
+	let boundaryDir = baseDir;
+	if (resourceBaseDir) {
+		boundaryDir = !sourceBaseDir || isPathInsideOrEqualDirectory(resolve(sourceBaseDir), resolve(resourceBaseDir))
+			? resourceBaseDir
+			: baseDir;
+	}
+	return { baseDir, boundaryDir };
 }
 
 function resolveStudioGitDiffBaseDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
@@ -2346,9 +2406,9 @@ function resolveStudioGitDiffBaseDir(sourcePath: string | undefined, resourceDir
 }
 
 function resolveStudioCompanionResourceDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string | undefined {
-	const explicitResource = typeof resourceDir === "string" ? resourceDir.trim() : "";
+	const explicitResource = normalizeStudioResourceDirectoryInput(typeof resourceDir === "string" ? resourceDir : "");
 	if (explicitResource) {
-		const expanded = expandHome(explicitResource);
+		const expanded = recoverLikelyDroppedLeadingSlashPath(expandHome(explicitResource));
 		return isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded);
 	}
 
@@ -2373,10 +2433,51 @@ const STUDIO_HTML_PREVIEW_IMAGE_MIME_BY_EXT = new Map<string, string>([
 	[".gif", "image/gif"],
 	[".webp", "image/webp"],
 ]);
+const STUDIO_LOCAL_LINK_TEXT_EXTENSIONS = new Set([
+	".md", ".markdown", ".mdx", ".qmd", ".txt", ".tex", ".latex", ".rst", ".adoc",
+	".html", ".htm", ".css", ".xml", ".yaml", ".yml", ".toml", ".json", ".jsonc", ".json5", ".csv", ".tsv", ".log",
+	".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx",
+	".py", ".pyw", ".sh", ".bash", ".zsh", ".rs", ".c", ".h", ".cpp", ".cxx", ".cc", ".hpp", ".hxx",
+	".jl", ".f90", ".f95", ".f03", ".f", ".for", ".r", ".m", ".java", ".go", ".rb", ".swift", ".lua",
+	".diff", ".patch",
+]);
+const STUDIO_LOCAL_LINK_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+
+type StudioLocalPreviewResourceKind = "pdf" | "text" | "image" | "other";
+
+interface StudioLocalPreviewResource {
+	filePath: string;
+	label: string;
+	extension: string;
+	kind: StudioLocalPreviewResourceKind;
+	page: number | null;
+	resourceDir: string;
+}
 
 function resolveStudioPdfResourcePath(pdfPath: string | undefined, sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
-	const baseDir = resolveStudioBaseDir(sourcePath, resourceDir, fallbackCwd);
-	return resolveStudioPdfResourceFile(pdfPath, baseDir);
+	const rawPath = typeof pdfPath === "string" ? pdfPath.trim() : "";
+	if (!rawPath) throw new Error("Missing PDF path.");
+	if (/\0/.test(rawPath)) throw new Error("Invalid PDF path.");
+	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
+		throw new Error("Only local PDF paths are supported.");
+	}
+
+	const context = resolveStudioPreviewResourceContext(sourcePath, resourceDir, fallbackCwd);
+	const cleanedPath = decodeStudioHtmlPreviewResourcePath(stripStudioHtmlPreviewResourceUrlSuffix(rawPath));
+	const expandedPath = recoverLikelyDroppedLeadingSlashPath(expandHome(cleanedPath));
+	const candidate = isAbsolute(expandedPath) ? expandedPath : resolve(context.baseDir, expandedPath);
+	if (extname(candidate).toLowerCase() !== ".pdf") throw new Error("Only .pdf files can be embedded.");
+
+	const boundaryReal = realpathSync(context.boundaryDir);
+	const candidateReal = realpathSync(candidate);
+	const rel = relative(boundaryReal, candidateReal);
+	if (rel.startsWith("..") || isAbsolute(rel)) {
+		throw new Error("PDF path must stay within the current Studio resource directory.");
+	}
+
+	const stat = statSync(candidateReal);
+	if (!stat.isFile()) throw new Error("PDF path does not refer to a file.");
+	return candidateReal;
 }
 
 function stripStudioHtmlPreviewResourceUrlSuffix(resourcePath: string): string {
@@ -2392,6 +2493,82 @@ function decodeStudioHtmlPreviewResourcePath(resourcePath: string): string {
 	}
 }
 
+function parseStudioLocalPreviewResourcePage(resourcePath: string): number | null {
+	const raw = String(resourcePath || "");
+	const parts: string[] = [];
+	const queryIndex = raw.indexOf("?");
+	if (queryIndex >= 0) {
+		const queryEnd = raw.indexOf("#", queryIndex);
+		parts.push(raw.slice(queryIndex + 1, queryEnd >= 0 ? queryEnd : raw.length));
+	}
+	const hashIndex = raw.indexOf("#");
+	if (hashIndex >= 0) parts.push(raw.slice(hashIndex + 1));
+	for (const part of parts) {
+		try {
+			const params = new URLSearchParams(part);
+			const rawPage = params.get("page") || params.get("p");
+			if (rawPage) {
+				const page = Number.parseInt(rawPage, 10);
+				if (Number.isFinite(page) && page > 0) return page;
+			}
+		} catch {
+			const match = part.match(/(?:^|[&;])page=(\d+)/i) || part.match(/^page=(\d+)$/i);
+			if (match && match[1]) {
+				const page = Number.parseInt(match[1], 10);
+				if (Number.isFinite(page) && page > 0) return page;
+			}
+		}
+	}
+	return null;
+}
+
+function getStudioLocalPreviewResourceKind(extension: string): StudioLocalPreviewResourceKind {
+	const ext = extension.toLowerCase();
+	if (ext === ".pdf") return "pdf";
+	if (STUDIO_LOCAL_LINK_TEXT_EXTENSIONS.has(ext)) return "text";
+	if (STUDIO_LOCAL_LINK_IMAGE_EXTENSIONS.has(ext)) return "image";
+	return "other";
+}
+
+function resolveStudioLocalPreviewResourcePath(
+	resourcePath: string | undefined,
+	sourcePath: string | undefined,
+	resourceDir: string | undefined,
+	fallbackCwd: string,
+): StudioLocalPreviewResource {
+	const rawPath = typeof resourcePath === "string" ? resourcePath.trim() : "";
+	if (!rawPath) throw new Error("Missing local resource path.");
+	if (/\0/.test(rawPath)) throw new Error("Invalid local resource path.");
+	if (/^\/\//.test(rawPath)) throw new Error("Network resources are not local Studio resources.");
+	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
+		throw new Error("Only local relative resources are supported.");
+	}
+
+	const context = resolveStudioPreviewResourceContext(sourcePath, resourceDir, fallbackCwd);
+	const cleanedPath = decodeStudioHtmlPreviewResourcePath(stripStudioHtmlPreviewResourceUrlSuffix(rawPath));
+	if (!cleanedPath || cleanedPath.startsWith("#")) throw new Error("Missing local resource path.");
+	const expandedPath = recoverLikelyDroppedLeadingSlashPath(expandHome(cleanedPath));
+	const candidate = isAbsolute(expandedPath) ? expandedPath : resolve(context.baseDir, expandedPath);
+	const extension = extname(candidate).toLowerCase();
+	const boundaryReal = realpathSync(context.boundaryDir);
+	const candidateReal = realpathSync(candidate);
+	const rel = relative(boundaryReal, candidateReal);
+	if (rel.startsWith("..") || isAbsolute(rel)) {
+		throw new Error("Local resource path must stay within the current Studio resource directory.");
+	}
+
+	const stat = statSync(candidateReal);
+	if (!stat.isFile()) throw new Error("Local resource path does not refer to a file.");
+	return {
+		filePath: candidateReal,
+		label: rel && rel !== "" ? rel : basename(candidateReal),
+		extension,
+		kind: getStudioLocalPreviewResourceKind(extension),
+		page: parseStudioLocalPreviewResourcePage(rawPath),
+		resourceDir: boundaryReal,
+	};
+}
+
 function resolveStudioHtmlPreviewResourcePath(
 	resourcePath: string | undefined,
 	sourcePath: string | undefined,
@@ -2405,17 +2582,17 @@ function resolveStudioHtmlPreviewResourcePath(
 		throw new Error("Only local HTML preview resources are supported.");
 	}
 
-	const baseDir = resolveStudioBaseDir(sourcePath, resourceDir, fallbackCwd);
+	const context = resolveStudioPreviewResourceContext(sourcePath, resourceDir, fallbackCwd);
 	const cleanedPath = decodeStudioHtmlPreviewResourcePath(stripStudioHtmlPreviewResourceUrlSuffix(rawPath));
-	const expandedPath = expandHome(cleanedPath);
-	const candidate = isAbsolute(expandedPath) ? expandedPath : resolve(baseDir, expandedPath);
+	const expandedPath = recoverLikelyDroppedLeadingSlashPath(expandHome(cleanedPath));
+	const candidate = isAbsolute(expandedPath) ? expandedPath : resolve(context.baseDir, expandedPath);
 	const ext = extname(candidate).toLowerCase();
 	const mimeType = STUDIO_HTML_PREVIEW_IMAGE_MIME_BY_EXT.get(ext);
 	if (!mimeType) throw new Error("Only local PNG, JPEG, GIF, and WebP images can be embedded in HTML previews.");
 
-	const baseReal = realpathSync(baseDir);
+	const boundaryReal = realpathSync(context.boundaryDir);
 	const candidateReal = realpathSync(candidate);
-	const rel = relative(baseReal, candidateReal);
+	const rel = relative(boundaryReal, candidateReal);
 	if (rel.startsWith("..") || isAbsolute(rel)) {
 		throw new Error("HTML preview resource path must stay within the current Studio resource directory.");
 	}
@@ -6355,6 +6532,134 @@ function respondHtmlPreviewResourceJson(req: IncomingMessage, res: ServerRespons
 	});
 }
 
+function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResponse, requestUrl: URL, resource: StudioLocalPreviewResource, serverState: StudioServerState): void {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "GET" && method !== "HEAD") {
+		res.setHeader("Allow", "GET, HEAD");
+		respondJson(res, 405, { ok: false, error: "Method not allowed. Use GET." });
+		return;
+	}
+
+	const action = (requestUrl.searchParams.get("action") ?? "resolve").trim().toLowerCase();
+	const basePayload = {
+		ok: true,
+		kind: resource.kind,
+		path: resource.filePath,
+		label: resource.label,
+		extension: resource.extension,
+		page: resource.page,
+		resourceDir: resource.resourceDir,
+	};
+
+	if (method === "HEAD" || action === "resolve") {
+		respondJson(res, 200, basePayload);
+		return;
+	}
+
+	if (action !== "document" && action !== "editor-url") {
+		respondJson(res, 400, { ok: false, error: "Unsupported local link action." });
+		return;
+	}
+	if (resource.kind !== "text") {
+		respondJson(res, 400, { ok: false, error: "This local resource is not a text document Studio can load into the editor." });
+		return;
+	}
+
+	const file = readStudioFile(resource.filePath, dirname(resource.filePath));
+	if (file.ok === false) {
+		respondJson(res, 400, { ok: false, error: file.message });
+		return;
+	}
+
+	const document: InitialStudioDocument = {
+		text: file.text,
+		label: resource.label || file.label,
+		source: "file",
+		path: file.resolvedPath,
+		resourceDir: resource.resourceDir,
+	};
+	if (action === "document") {
+		respondJson(res, 200, {
+			...basePayload,
+			text: file.text,
+			resourceDir: resource.resourceDir,
+		});
+		return;
+	}
+
+	const docId = storeTransientStudioDocument(document);
+	const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+	const parsedUrl = new URL(url);
+	respondJson(res, 200, {
+		...basePayload,
+		url,
+		relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+	});
+}
+
+function revealStudioLocalFile(filePath: string): { ok: true; message: string } | { ok: false; message: string } {
+	if (isSshSession()) {
+		return { ok: false, message: "Cannot reveal files from an SSH/headless Studio session. Copy the path instead." };
+	}
+
+	let command = "";
+	let args: string[] = [];
+	if (process.platform === "darwin") {
+		command = "open";
+		args = ["-R", filePath];
+	} else if (process.platform === "win32") {
+		command = "explorer.exe";
+		args = [`/select,${filePath}`];
+	} else {
+		command = "xdg-open";
+		args = [dirname(filePath)];
+	}
+
+	const result = spawnSync(command, args, { stdio: "ignore" });
+	if (result.error) {
+		return { ok: false, message: `Could not open file manager: ${result.error.message}` };
+	}
+	if (result.status !== 0) {
+		return { ok: false, message: "Could not open file manager for this resource." };
+	}
+	return { ok: true, message: process.platform === "linux" ? "Opened containing folder." : "Revealed resource in file manager." };
+}
+
+async function handleRevealLocalPreviewResourceRequest(req: IncomingMessage, res: ServerResponse, studioCwd: string): Promise<void> {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "POST") {
+		res.setHeader("Allow", "POST");
+		respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+		return;
+	}
+
+	const rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+	let payload: Record<string, unknown> = {};
+	try {
+		payload = rawBody ? JSON.parse(rawBody) : {};
+	} catch {
+		respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+		return;
+	}
+
+	try {
+		const resource = resolveStudioLocalPreviewResourcePath(
+			typeof payload.path === "string" ? payload.path : "",
+			typeof payload.sourcePath === "string" ? payload.sourcePath : undefined,
+			typeof payload.resourceDir === "string" ? payload.resourceDir : undefined,
+			studioCwd,
+		);
+		const result = revealStudioLocalFile(resource.filePath);
+		if (!result.ok) {
+			respondJson(res, 409, { ok: false, error: result.message, path: resource.filePath });
+			return;
+		}
+		respondJson(res, 200, { ok: true, message: result.message, path: resource.filePath, label: resource.label });
+	} catch (error) {
+		respondJson(res, 404, { ok: false, error: `Local resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
+	}
+}
+
 function openUrlInDefaultBrowser(url: string): Promise<void> {
 	const openCommand =
 		process.platform === "darwin"
@@ -8653,7 +8958,7 @@ function resolveRequestedStudioDocumentFromUrl(
 				label: requestedLabel || file.label,
 				source: "file",
 				path: file.resolvedPath,
-				resourceDir: requestedResourceDir || undefined,
+				resourceDir: requestedResourceDir || dirname(file.resolvedPath),
 			};
 		}
 	}
@@ -9009,6 +9314,7 @@ ${cssVarsBlock}
       <button id="saveAsBtn" type="button" title="Save editor content to a new file path. Cmd/Ctrl+S falls back here when no direct save path is available.">Save editor as…</button>
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
+      <button id="clearWorkspaceBtn" type="button" title="Clear the current editor draft in this browser tab. Saved files and responses are not changed.">Clear editor</button>
       <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
@@ -11241,6 +11547,7 @@ export default function (pi: ExtensionAPI) {
 				label: result.label,
 				source: "file",
 				path: result.resolvedPath,
+				resourceDir: dirname(result.resolvedPath),
 			};
 
 			sendToClient(client, {
@@ -11248,6 +11555,7 @@ export default function (pi: ExtensionAPI) {
 				requestId: msg.requestId,
 				path: result.resolvedPath,
 				label: result.label,
+				resourceDir: dirname(result.resolvedPath),
 				message: `Saved editor text to ${result.label}`,
 			});
 			return;
@@ -11327,6 +11635,7 @@ export default function (pi: ExtensionAPI) {
 				label: refreshed.label,
 				source: "file",
 				path: refreshed.resolvedPath,
+				resourceDir: dirname(refreshed.resolvedPath),
 			};
 
 			broadcast({
@@ -12360,6 +12669,40 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/local-preview-link") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			try {
+				const resource = resolveStudioLocalPreviewResourcePath(
+					requestUrl.searchParams.get("path") ?? "",
+					requestUrl.searchParams.get("sourcePath") ?? undefined,
+					requestUrl.searchParams.get("resourceDir") ?? undefined,
+					studioCwd,
+				);
+				respondLocalPreviewLinkJson(req, res, requestUrl, resource, serverState);
+			} catch (error) {
+				respondJson(res, 404, { ok: false, error: `Local resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
+			}
+			return;
+		}
+
+		if (requestUrl.pathname === "/reveal-local-resource") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			void handleRevealLocalPreviewResourceRequest(req, res, studioCwd).catch((error) => {
+				respondJson(res, 500, { ok: false, error: `Reveal failed: ${error instanceof Error ? error.message : String(error)}` });
+			});
+			return;
+		}
+
 		if (requestUrl.pathname === "/pdf-resource") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
@@ -13021,6 +13364,7 @@ export default function (pi: ExtensionAPI) {
 			label: file.label,
 			source: "file",
 			path: file.resolvedPath,
+			resourceDir: dirname(file.resolvedPath),
 		};
 	};
 
