@@ -1955,6 +1955,19 @@
       const DEFAULT_RESPONSE_FONT_SIZE = studioUiRefreshEnabled ? 13.5 : 15;
       let editorFontSize = DEFAULT_EDITOR_FONT_SIZE;
       let responseFontSize = DEFAULT_RESPONSE_FONT_SIZE;
+      let fileBrowserState = {
+        rootDir: "",
+        currentDir: "",
+        relativeDir: "",
+        parentDir: null,
+        entries: [],
+        omitted: 0,
+        omittedIgnored: 0,
+        loading: false,
+        error: "",
+        loaded: false,
+      };
+      let fileBrowserLoadNonce = 0;
       let studioUiRefreshUi = null;
       let studioZenModeEnabled = readStudioZenModeEnabled();
       if (studioUiRefreshEnabled && document.body) {
@@ -4084,6 +4097,12 @@
           return;
         }
         if (referenceMetaEl instanceof HTMLElement) referenceMetaEl.hidden = false;
+
+        if (rightView === "files") {
+          const dir = fileBrowserState && fileBrowserState.currentDir ? fileBrowserState.currentDir : (getCurrentResourceDirValue() || "current Studio directory");
+          referenceBadgeEl.textContent = "Files: " + dir;
+          return;
+        }
 
         if (rightView === "trace") {
           const state = traceState || createEmptyTraceState();
@@ -6645,6 +6664,7 @@
         critiqueViewEl.addEventListener("scroll", handleTracePaneScroll);
         critiqueViewEl.addEventListener("click", handleTracePaneClick);
         critiqueViewEl.addEventListener("click", handleReplPaneClick);
+        critiqueViewEl.addEventListener("click", handleFilesPaneClick);
         critiqueViewEl.addEventListener("change", handleReplPaneChange);
       }
 
@@ -8107,6 +8127,241 @@
         scheduleResponsePaneRepaintNudge();
       }
 
+      function getFileBrowserContextKey() {
+        const context = getHtmlPreviewResourceContextOptions();
+        return String(context.sourcePath || "") + "\n" + String(context.resourceDir || "");
+      }
+
+      function getFileBrowserLocalLinkContext() {
+        return { sourcePath: "", resourceDir: fileBrowserState.rootDir || getCurrentResourceDirValue() || "" };
+      }
+
+      function formatFileBrowserSize(size) {
+        const value = Number(size);
+        if (!Number.isFinite(value) || value < 0) return "";
+        if (value < 1024) return Math.round(value) + " B";
+        if (value < 1024 * 1024) return (value / 1024).toFixed(value < 10 * 1024 ? 1 : 0) + " KB";
+        if (value < 1024 * 1024 * 1024) return (value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0) + " MB";
+        return (value / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+      }
+
+      function formatFileBrowserTime(ms) {
+        const value = Number(ms);
+        if (!Number.isFinite(value) || value <= 0) return "";
+        try {
+          return new Date(value).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+        } catch {
+          return "";
+        }
+      }
+
+      function getFileBrowserKindLabel(entry) {
+        if (!entry || entry.type === "directory") return "folder";
+        if (entry.kind === "text") return "document";
+        if (entry.kind === "pdf") return "PDF";
+        if (entry.kind === "image") return "image";
+        return entry.extension ? entry.extension.replace(/^\./, "") : "file";
+      }
+
+      function buildFileBrowserPanelHtml() {
+        const state = fileBrowserState || {};
+        const entries = Array.isArray(state.entries) ? state.entries : [];
+        const currentDir = state.currentDir || "";
+        const rootDir = state.rootDir || "";
+        const relativeDir = state.relativeDir || ".";
+        const parentDisabled = state.parentDir ? "" : " disabled";
+        const rows = entries.length
+          ? entries.map((entry) => {
+            const type = entry.type === "directory" ? "directory" : "file";
+            const kind = entry.kind || (type === "directory" ? "directory" : "other");
+            const icon = type === "directory" ? "📁" : (kind === "pdf" ? "📄" : (kind === "image" ? "🖼️" : (kind === "text" ? "📝" : "📦")));
+            const metaParts = [];
+            metaParts.push(getFileBrowserKindLabel(entry));
+            if (type === "file") metaParts.push(formatFileBrowserSize(entry.size));
+            const time = formatFileBrowserTime(entry.mtimeMs);
+            if (time) metaParts.push(time);
+            const textActions = kind === "text"
+              ? "<button type='button' data-files-action='open-new' data-files-path='" + escapeHtml(entry.path) + "'>New tab</button>"
+              : "";
+            const openTitle = type === "directory"
+              ? "Open folder"
+              : (kind === "text" ? "Open in editor" : (kind === "pdf" ? "Open PDF preview" : (kind === "image" ? "Open image preview" : "Copy or reveal this file")));
+            return "<div class='files-row files-row-" + escapeHtml(type) + " files-kind-" + escapeHtml(kind) + "'>"
+              + "<button type='button' class='files-open-btn' data-files-action='" + (type === "directory" ? "open-dir" : "open") + "' data-files-path='" + escapeHtml(entry.path) + "' data-files-kind='" + escapeHtml(kind) + "' title='" + escapeHtml(openTitle) + "'>"
+              + "<span class='files-icon' aria-hidden='true'>" + icon + "</span>"
+              + "<span class='files-name'>" + escapeHtml(entry.name) + "</span>"
+              + "<span class='files-meta'>" + escapeHtml(metaParts.filter(Boolean).join(" · ")) + "</span>"
+              + "</button>"
+              + "<span class='files-actions'>"
+              + textActions
+              + "<button type='button' data-files-action='copy-path' data-files-path='" + escapeHtml(entry.path) + "'>Copy path</button>"
+              + (type === "file" ? "<button type='button' data-files-action='reveal' data-files-path='" + escapeHtml(entry.path) + "'>Reveal</button>" : "")
+              + "</span>"
+              + "</div>";
+          }).join("")
+          : "<div class='files-empty'>" + (state.loading ? "Loading files…" : "This folder is empty.") + "</div>";
+        const notices = [];
+        if (state.error) notices.push("<div class='files-notice files-notice-error'>" + escapeHtml(state.error) + "</div>");
+        if (state.omitted) notices.push("<div class='files-notice'>" + escapeHtml(String(state.omitted)) + " item" + (state.omitted === 1 ? "" : "s") + " omitted.</div>");
+        if (state.omittedIgnored) notices.push("<div class='files-notice'>" + escapeHtml(String(state.omittedIgnored)) + " heavy/cache folder" + (state.omittedIgnored === 1 ? "" : "s") + " hidden.</div>");
+        return "<div class='files-panel'>"
+          + "<div class='files-toolbar'>"
+          + "<div class='files-path-group'><span class='files-label'>Files</span><span class='files-path' title='" + escapeHtml(currentDir) + "'>" + escapeHtml(relativeDir || ".") + "</span></div>"
+          + "<div class='files-toolbar-actions'>"
+          + "<button type='button' data-files-action='parent'" + parentDisabled + ">Parent</button>"
+          + "<button type='button' data-files-action='refresh'>Refresh</button>"
+          + (rootDir ? "<button type='button' data-files-action='copy-root' data-files-path='" + escapeHtml(rootDir) + "'>Copy root</button>" : "")
+          + "</div>"
+          + "</div>"
+          + "<div class='files-subtitle'>Root: <span title='" + escapeHtml(rootDir) + "'>" + escapeHtml(rootDir || "current Studio directory") + "</span></div>"
+          + notices.join("")
+          + "<div class='files-list' role='list'>" + rows + "</div>"
+          + "</div>";
+      }
+
+      function renderFilesView() {
+        if (!critiqueViewEl) return;
+        const contextKey = getFileBrowserContextKey();
+        if (fileBrowserState.contextKey !== contextKey) {
+          fileBrowserState = {
+            rootDir: "",
+            currentDir: "",
+            relativeDir: "",
+            parentDir: null,
+            entries: [],
+            omitted: 0,
+            omittedIgnored: 0,
+            loading: false,
+            error: "",
+            loaded: false,
+            contextKey,
+          };
+        }
+        finishPreviewRender(critiqueViewEl);
+        critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+        critiqueViewEl.classList.remove("response-scroll-resetting");
+        if (!fileBrowserState.loaded && !fileBrowserState.loading) {
+          loadFileBrowserDirectory("");
+        }
+        scheduleResponsePaneRepaintNudge();
+      }
+
+      async function loadFileBrowserDirectory(dir, options) {
+        const context = getHtmlPreviewResourceContextOptions();
+        const contextKey = getFileBrowserContextKey();
+        const nonce = ++fileBrowserLoadNonce;
+        fileBrowserState = {
+          ...fileBrowserState,
+          contextKey,
+          loading: true,
+          error: "",
+        };
+        if (rightView === "files") {
+          finishPreviewRender(critiqueViewEl);
+          critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+        }
+        try {
+          const query = {};
+          if (dir) query.dir = String(dir);
+          if (context.sourcePath) query.sourcePath = context.sourcePath;
+          if (context.resourceDir) query.resourceDir = context.resourceDir;
+          const payload = await fetchStudioJson("/file-browser", { query });
+          if (nonce !== fileBrowserLoadNonce) return;
+          fileBrowserState = {
+            rootDir: typeof payload.rootDir === "string" ? payload.rootDir : "",
+            currentDir: typeof payload.currentDir === "string" ? payload.currentDir : "",
+            relativeDir: typeof payload.relativeDir === "string" ? payload.relativeDir : ".",
+            parentDir: typeof payload.parentDir === "string" ? payload.parentDir : null,
+            entries: Array.isArray(payload.entries) ? payload.entries : [],
+            omitted: Number(payload.omitted) || 0,
+            omittedIgnored: Number(payload.omittedIgnored) || 0,
+            loading: false,
+            error: "",
+            loaded: true,
+            contextKey,
+          };
+          if (rightView === "files") {
+            finishPreviewRender(critiqueViewEl);
+            critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+            scheduleResponsePaneRepaintNudge();
+          }
+          if (options && options.user) setStatus("Loaded file list.", "success");
+        } catch (error) {
+          if (nonce !== fileBrowserLoadNonce) return;
+          fileBrowserState = {
+            ...fileBrowserState,
+            loading: false,
+            error: (error && error.message) ? error.message : String(error || "Could not load files."),
+            loaded: true,
+          };
+          if (rightView === "files") {
+            finishPreviewRender(critiqueViewEl);
+            critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+            scheduleResponsePaneRepaintNudge();
+          }
+        }
+      }
+
+      async function openFileBrowserEntry(path, kind) {
+        const context = getFileBrowserLocalLinkContext();
+        if (kind === "text") {
+          await openPreviewDocumentHere(path, context);
+          return;
+        }
+        if (kind === "pdf") {
+          openPreviewPdfLink(path, path, context);
+          return;
+        }
+        if (kind === "image") {
+          await openPreviewImageLink(path, path, context);
+          return;
+        }
+        setStatus("No Studio preview for this file type. Use Copy path or Reveal.", "warning");
+      }
+
+      async function handleFilesPaneClick(event) {
+        if (rightView !== "files") return;
+        const target = event.target;
+        const actionEl = target instanceof Element ? target.closest("[data-files-action]") : null;
+        if (!actionEl) return;
+        event.preventDefault();
+        const action = actionEl.getAttribute("data-files-action") || "";
+        const path = actionEl.getAttribute("data-files-path") || "";
+        const kind = actionEl.getAttribute("data-files-kind") || getPreviewLocalLinkKind(path);
+        try {
+          if (action === "parent") {
+            if (fileBrowserState.parentDir) await loadFileBrowserDirectory(fileBrowserState.parentDir, { user: true });
+            return;
+          }
+          if (action === "refresh") {
+            await loadFileBrowserDirectory(fileBrowserState.currentDir || "", { user: true });
+            return;
+          }
+          if (action === "open-dir") {
+            await loadFileBrowserDirectory(path, { user: true });
+            return;
+          }
+          if (action === "open") {
+            await openFileBrowserEntry(path, kind);
+            return;
+          }
+          if (action === "open-new") {
+            await openPreviewDocumentInNewEditor(path, null, getFileBrowserLocalLinkContext());
+            return;
+          }
+          if (action === "copy-path" || action === "copy-root") {
+            const ok = await writeTextToClipboard(path);
+            setStatus(ok ? "Copied path." : "Clipboard write failed.", ok ? "success" : "warning");
+            return;
+          }
+          if (action === "reveal") {
+            await revealPreviewLocalLink(path, getFileBrowserLocalLinkContext());
+          }
+        } catch (error) {
+          setStatus((error && error.message) ? error.message : String(error || "File action failed."), "warning");
+        }
+      }
+
       function renderActiveResult() {
         if (rightView === "trace") {
           renderTraceView();
@@ -8115,6 +8370,11 @@
 
         if (rightView === "repl") {
           renderReplView();
+          return;
+        }
+
+        if (rightView === "files") {
+          renderFilesView();
           return;
         }
 
@@ -8192,7 +8452,7 @@
           : normalizeForCompare(sourceTextEl.value);
         const responseLoaded = hasResponse && normalizedEditor === latestResponseNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
-        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl";
+        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl" || rightView === "files";
 
         if (responseWrapEl) {
           responseWrapEl.hidden = showingAuxiliaryRightPane;
@@ -8233,6 +8493,8 @@
             : (exportingReplJournal ? "Export record" : "Export right preview");
           if (rightView === "trace") {
             exportPdfBtn.title = "Working view does not support preview export.";
+          } else if (rightView === "files") {
+            exportPdfBtn.title = "Files view does not support preview export.";
           } else if (exportingReplJournal && !replJournalExportEntries.length) {
             exportPdfBtn.title = "No Studio REPL record entries to export for this session yet.";
           } else if (rightView === "markdown") {
@@ -8465,9 +8727,24 @@
         return "source:" + normalized.source + ":" + normalized.label;
       }
 
+      function getWorkspacePersistenceStorage() {
+        try {
+          return window.sessionStorage || null;
+        } catch {
+          return null;
+        }
+      }
+
+      function clearLegacyWorkspacePersistenceStorage() {
+        try {
+          if (window.localStorage) window.localStorage.removeItem(STUDIO_WORKSPACE_STORAGE_KEY);
+        } catch {}
+      }
+
       function readPersistedWorkspaceState() {
         try {
-          const raw = window.localStorage ? window.localStorage.getItem(STUDIO_WORKSPACE_STORAGE_KEY) : null;
+          const storage = getWorkspacePersistenceStorage();
+          const raw = storage ? storage.getItem(STUDIO_WORKSPACE_STORAGE_KEY) : null;
           if (!raw) return null;
           const parsed = JSON.parse(raw);
           if (!parsed || typeof parsed !== "object" || parsed.version !== 1) return null;
@@ -8495,7 +8772,7 @@
           sourceState: normalizeWorkspaceSourceState(sourceState),
           resourceDir: getCurrentResourceDirValue(),
           editorView,
-          rightView,
+          rightView: isEditorOnlyMode ? "editor-preview" : rightView,
           editorLanguage,
           followLatest,
           responseHistoryIndex,
@@ -8509,13 +8786,15 @@
       function persistWorkspaceStateNow() {
         if (!workspacePersistenceReady) return;
         try {
-          if (!window.localStorage) return;
+          const storage = getWorkspacePersistenceStorage();
+          if (!storage) return;
+          clearLegacyWorkspacePersistenceStorage();
           const payload = buildWorkspacePersistencePayload();
           if (payload.text.length > STUDIO_WORKSPACE_MAX_TEXT_CHARS) {
-            window.localStorage.removeItem(STUDIO_WORKSPACE_STORAGE_KEY);
+            storage.removeItem(STUDIO_WORKSPACE_STORAGE_KEY);
             return;
           }
-          window.localStorage.setItem(STUDIO_WORKSPACE_STORAGE_KEY, JSON.stringify(payload));
+          storage.setItem(STUDIO_WORKSPACE_STORAGE_KEY, JSON.stringify(payload));
         } catch {
           // Ignore browser storage failures and quota limits.
         }
@@ -8544,8 +8823,10 @@
           workspacePersistTimer = null;
         }
         try {
-          if (window.localStorage) window.localStorage.removeItem(STUDIO_WORKSPACE_STORAGE_KEY);
+          const storage = getWorkspacePersistenceStorage();
+          if (storage) storage.removeItem(STUDIO_WORKSPACE_STORAGE_KEY);
         } catch {}
+        clearLegacyWorkspacePersistenceStorage();
       }
 
       function applyPersistedWorkspaceState(state) {
@@ -8563,11 +8844,15 @@
           setEditorLanguage(state.editorLanguage.trim());
         }
         editorView = state.editorView === "preview" ? "preview" : "markdown";
-        rightView = state.rightView === "preview"
-          ? "preview"
-          : (state.rightView === "editor-preview"
-            ? "editor-preview"
-            : (state.rightView === "repl" ? "repl" : ((state.rightView === "trace" || state.rightView === "thinking") ? "trace" : "markdown")));
+        rightView = isEditorOnlyMode
+          ? "editor-preview"
+          : (state.rightView === "preview"
+            ? "preview"
+            : (state.rightView === "editor-preview"
+              ? "editor-preview"
+              : (state.rightView === "repl"
+                ? "repl"
+                : (state.rightView === "files" ? "files" : ((state.rightView === "trace" || state.rightView === "thinking") ? "trace" : "markdown")))));
         if (typeof state.followLatest === "boolean") {
           followLatest = state.followLatest;
         }
@@ -8592,7 +8877,7 @@
           setStatus("Studio is busy.", "warning");
           return;
         }
-        const confirmed = window.confirm("Clear the current editor draft in this browser tab? Saved files and responses are not changed.");
+        const confirmed = window.confirm("Reset the editor to a fresh blank draft in this browser tab? Saved files and responses are not changed.");
         if (!confirmed) return;
         const preservedResponseState = {
           responseHistory: Array.isArray(responseHistory) ? responseHistory.slice() : [],
@@ -8634,7 +8919,7 @@
         if (followSelect) followSelect.value = followLatest ? "on" : "off";
         refreshResponseUi();
         persistWorkspaceStateNow();
-        setStatus("Editor cleared. Saved files and responses were not changed.", "success");
+        setStatus("Editor reset to a fresh blank draft. Saved files and responses were not changed.", "success");
       }
 
       function setEditorText(nextText, options) {
@@ -8833,7 +9118,9 @@
             ? "editor-preview"
             : (nextView === "repl"
               ? "repl"
-              : ((nextView === "trace" || nextView === "thinking") ? "trace" : "markdown")));
+              : (nextView === "files"
+                ? "files"
+                : ((nextView === "trace" || nextView === "thinking") ? "trace" : "markdown"))));
         rightViewSelect.value = rightView;
         if (rightView === "trace" && previousView !== "trace") {
           traceAutoScroll = true;
@@ -9173,6 +9460,11 @@
         ".diff", ".patch",
       ]);
       const PREVIEW_LOCAL_IMAGE_LINK_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+      const PREVIEW_LOCAL_TEXT_LINK_FILENAMES = new Set([
+        ".dockerignore", ".editorconfig", ".env", ".env.example", ".eslintignore", ".gitattributes",
+        ".gitignore", ".gitmodules", ".npmignore", ".prettierignore", "dockerfile", "gemfile",
+        "justfile", "license", "makefile", "rakefile", "readme",
+      ]);
       let previewLinkMenuEl = null;
       let activePreviewLinkContext = null;
 
@@ -9220,10 +9512,17 @@
         return match ? ("." + match[1].toLowerCase()) : "";
       }
 
+      function getPreviewLocalLinkFilename(href) {
+        const path = stripPreviewLocalLinkUrlSuffix(href).replace(/\\/g, "/");
+        const parts = path.split("/");
+        return (parts.pop() || "").toLowerCase();
+      }
+
       function getPreviewLocalLinkKind(href) {
         const ext = getPreviewLocalLinkExtension(href);
+        const name = getPreviewLocalLinkFilename(href);
         if (ext === ".pdf") return "pdf";
-        if (PREVIEW_LOCAL_TEXT_LINK_EXTENSIONS.has(ext)) return "text";
+        if (PREVIEW_LOCAL_TEXT_LINK_EXTENSIONS.has(ext) || PREVIEW_LOCAL_TEXT_LINK_FILENAMES.has(name)) return "text";
         if (PREVIEW_LOCAL_IMAGE_LINK_EXTENSIONS.has(ext)) return "image";
         return "other";
       }
@@ -9240,9 +9539,11 @@
       function getEffectivePreviewLinkContext(contextOverride) {
         const fallback = getHtmlPreviewResourceContextOptions();
         const context = contextOverride && typeof contextOverride === "object" ? contextOverride : null;
+        const hasSourcePath = Boolean(context && Object.prototype.hasOwnProperty.call(context, "sourcePath"));
+        const hasResourceDir = Boolean(context && Object.prototype.hasOwnProperty.call(context, "resourceDir"));
         return {
-          sourcePath: context && context.sourcePath ? String(context.sourcePath) : (fallback.sourcePath || ""),
-          resourceDir: context && context.resourceDir ? String(context.resourceDir) : (fallback.resourceDir || ""),
+          sourcePath: hasSourcePath ? String(context.sourcePath || "") : (fallback.sourcePath || ""),
+          resourceDir: hasResourceDir ? String(context.resourceDir || "") : (fallback.resourceDir || ""),
         };
       }
 
@@ -17891,7 +18192,7 @@
       renderSourcePreview();
       workspacePersistenceReady = true;
       if (workspaceRestoredFromBrowser) {
-        setStatus("Restored editor workspace from this browser tab. Use Clear editor to discard it.", "success");
+        setStatus("Restored editor workspace from this browser tab. Use Reset editor to discard it.", "success");
       }
       connect();
       } catch (error) {

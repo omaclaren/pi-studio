@@ -4,6 +4,20 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.15] — 2026-05-23
+
+### Added
+- Added a first-cut right-pane **Files** view for browsing the current Studio resource directory, opening folders, opening text/code documents in the editor, previewing local PDFs/images, copying paths, and revealing files in the file manager.
+- Added text-file recognition for extensionless/dotfile project files such as `.gitignore`, `.gitattributes`, `.env`, `Dockerfile`, `Makefile`, `Justfile`, `LICENSE`, and `README`.
+
+### Changed
+- The Files view now treats the Pi session directory/resource directory as its navigation root, while opening initially near the active file when applicable.
+- Renamed **Clear editor** to **Reset editor** and clarified that it resets the tab to a fresh blank draft without changing saved files or responses.
+- Browser-tab workspace restoration now uses per-tab session storage instead of shared local storage.
+
+### Fixed
+- Fixed editor-only companion tabs inheriting a Files right-pane state from another Studio tab after opening a document in a new editor.
+
 ## [0.9.14] — 2026-05-22
 
 ### Added
@@ -19,7 +33,7 @@ All notable changes to `pi-studio` are documented here.
 ## [0.9.13] — 2026-05-22
 
 ### Added
-- Added browser-refresh restoration for the Studio editor workspace, plus an explicit **Clear editor** action for discarding the restored browser draft without touching saved files or response history.
+- Added browser-refresh restoration for the Studio editor workspace, plus an explicit **Reset editor** action for discarding the restored browser draft without touching saved files or response history.
 - Added local preview-link handling for rendered document previews and sandboxed HTML previews: local PDF links open in Studio's embedded PDF focus viewer, local image links open in a local image preview, text/code/document links can open in a new editor tab, and right-clicking local links offers **Open here**, **Reveal in file manager**, and **Copy path** where applicable.
 - Brought editor-only Studio closer to full Studio for document-local controls: pane resizing/focus shortcuts now work, and the annotation-header toggle remains available.
 
