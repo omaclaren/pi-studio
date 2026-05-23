@@ -114,6 +114,11 @@
       const sendReplBtn = document.getElementById("sendReplBtn");
       const replSendModeSelect = document.getElementById("replSendModeSelect");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
+      const suggestCompletionBtn = document.getElementById("suggestCompletionBtn");
+      const completionSuggestionPanelEl = document.getElementById("completionSuggestionPanel");
+      const completionSuggestionTextEl = document.getElementById("completionSuggestionText");
+      const completionSuggestionInsertBtn = document.getElementById("completionSuggestionInsertBtn");
+      const completionSuggestionDismissBtn = document.getElementById("completionSuggestionDismissBtn");
       const saveAnnotatedBtn = document.getElementById("saveAnnotatedBtn");
       const stripAnnotationsBtn = document.getElementById("stripAnnotationsBtn");
       const highlightSelect = document.getElementById("highlightSelect");
@@ -1943,6 +1948,11 @@
       let editorHighlightEnabled = false;
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
+      let completionSuggestionState = null;
+      let completionSuggestionInFlight = false;
+      let completionSuggestionRequestId = null;
+      let completionSuggestionPendingSnapshot = null;
+      let completionSuggestionRefocusEditorOnResult = false;
       let editorHighlightRenderRaf = null;
       let lineNumbersEnabled = false;
       let lineNumbersRenderRaf = null;
@@ -2398,6 +2408,7 @@
         if (!isEditorOnlyMode && replSendModeSelect) replActionLineEl.appendChild(replSendModeSelect);
         const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         actionLineTwoEl.appendChild(copyDraftBtn);
+        if (suggestCompletionBtn) actionLineTwoEl.appendChild(suggestCompletionBtn);
         if (openCompanionBtn) actionLineTwoEl.appendChild(openCompanionBtn);
         if (!isEditorOnlyMode && sendEditorBtn) actionLineTwoEl.appendChild(sendEditorBtn);
         if (actionLineOneEl.childNodes.length > 0) actionsEl.appendChild(actionLineOneEl);
@@ -3679,6 +3690,8 @@
         if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || shortcutsOwnsEvent || pdfFocusOwnsEvent || htmlFocusOwnsEvent || quizOwnsEvent) {
           return;
         }
+
+        if (handleCompletionSuggestionAcceptKey(event)) return;
 
         if ((key === "?" || (key === "/" && event.shiftKey)) && !event.metaKey && !event.ctrlKey && !event.altKey && !isTextEntryShortcutTarget(event.target)) {
           event.preventDefault();
@@ -8653,6 +8666,10 @@
         if (loadGitDiffBtn) loadGitDiffBtn.disabled = uiBusy;
         syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
+        if (suggestCompletionBtn) {
+          suggestCompletionBtn.disabled = uiBusy || completionSuggestionInFlight || wsState !== "Ready" || !String(sourceTextEl.value || "").trim();
+          suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Suggesting…" : "Suggest";
+        }
         if (openCompanionBtn) openCompanionBtn.disabled = uiBusy || wsState !== "Ready";
         if (highlightSelect) highlightSelect.disabled = uiBusy;
         if (lineNumbersSelect) lineNumbersSelect.disabled = uiBusy;
@@ -8986,6 +9003,197 @@
         }
       }
 
+      function hideCompletionSuggestion() {
+        completionSuggestionState = null;
+        if (completionSuggestionTextEl) completionSuggestionTextEl.textContent = "";
+        if (completionSuggestionPanelEl) completionSuggestionPanelEl.hidden = true;
+      }
+
+      function showCompletionSuggestion(state) {
+        completionSuggestionState = state;
+        if (completionSuggestionTextEl) completionSuggestionTextEl.textContent = state && state.suggestion ? state.suggestion : "";
+        if (completionSuggestionPanelEl) completionSuggestionPanelEl.hidden = false;
+      }
+
+      function focusSourceTextNoScroll() {
+        if (!sourceTextEl || typeof sourceTextEl.focus !== "function") return;
+        try {
+          sourceTextEl.focus({ preventScroll: true });
+        } catch {
+          try { sourceTextEl.focus(); } catch {}
+        }
+      }
+
+      function focusSourceEditorForCompletion() {
+        const snapshot = snapshotStudioScrollablePositions();
+        if (editorView !== "markdown") {
+          setEditorView("markdown");
+          scheduleStudioScrollablePositionRestore(snapshot);
+        }
+        window.setTimeout(focusSourceTextNoScroll, 0);
+      }
+
+      function isCompletionSuggestionRequestShortcut(event) {
+        if (!event) return false;
+        const key = typeof event.key === "string" ? event.key : "";
+        const code = typeof event.code === "string" ? event.code : "";
+        const commandSpace = (event.metaKey || event.ctrlKey)
+          && event.shiftKey
+          && !event.altKey
+          && (code === "Space" || key === " " || key === "Spacebar");
+        const optionTab = event.altKey
+          && !event.metaKey
+          && !event.ctrlKey
+          && !event.shiftKey
+          && key === "Tab";
+        return commandSpace || optionTab;
+      }
+
+      function handleCompletionSuggestionAcceptKey(event) {
+        if (!event || !completionSuggestionState) return false;
+        if (event.key !== "Tab" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false;
+        const target = event.target;
+        const focusIsUnclaimed = target === document.body || target === document.documentElement;
+        const targetCanAccept = focusIsUnclaimed
+          || target === sourceTextEl
+          || target === suggestCompletionBtn
+          || Boolean(completionSuggestionPanelEl && target instanceof Element && completionSuggestionPanelEl.contains(target));
+        if (!targetCanAccept) return false;
+        event.preventDefault();
+        insertCompletionSuggestion();
+        return true;
+      }
+
+      function shouldRefocusEditorForCompletionRequest() {
+        const activeEl = document.activeElement;
+        return activeEl === sourceTextEl
+          || activeEl === suggestCompletionBtn
+          || activeEl === document.body
+          || activeEl === document.documentElement
+          || Boolean(completionSuggestionPanelEl && activeEl instanceof Element && completionSuggestionPanelEl.contains(activeEl));
+      }
+
+      function requestCompletionSuggestion() {
+        if (isEditorOnlyMode && !sourceTextEl) return;
+        if (completionSuggestionInFlight) {
+          setStatus("Suggestion request already in progress.", "warning");
+          return;
+        }
+        const text = String(sourceTextEl.value || "");
+        if (!text.trim()) {
+          setStatus("Editor is empty.", "warning");
+          return;
+        }
+        const selectionStart = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : text.length;
+        const selectionEnd = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : selectionStart;
+        const requestId = makeRequestId();
+        completionSuggestionInFlight = true;
+        completionSuggestionRequestId = requestId;
+        completionSuggestionPendingSnapshot = { text, selectionStart, selectionEnd };
+        completionSuggestionRefocusEditorOnResult = shouldRefocusEditorForCompletionRequest();
+        hideCompletionSuggestion();
+        syncActionButtons();
+        setStatus("Generating completion suggestion…", "warning");
+        const sent = sendMessage({
+          type: "completion_suggestion_request",
+          requestId,
+          text,
+          selectionStart,
+          selectionEnd,
+          language: editorLanguage || "",
+          label: sourceState && sourceState.label ? sourceState.label : "Studio editor",
+          path: sourceState && sourceState.path ? sourceState.path : undefined,
+        });
+        if (!sent) {
+          completionSuggestionInFlight = false;
+          completionSuggestionRequestId = null;
+          completionSuggestionPendingSnapshot = null;
+          completionSuggestionRefocusEditorOnResult = false;
+          syncActionButtons();
+        }
+      }
+
+      function insertCompletionSuggestion() {
+        const state = completionSuggestionState;
+        if (!state || typeof state.suggestion !== "string") {
+          setStatus("No suggestion to insert.", "warning");
+          return;
+        }
+        const currentText = String(sourceTextEl.value || "");
+        const useOriginalRange = currentText === state.baseText;
+        const start = useOriginalRange
+          ? Math.max(0, Math.min(state.selectionStart, currentText.length))
+          : (typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : currentText.length);
+        const end = useOriginalRange
+          ? Math.max(start, Math.min(state.selectionEnd, currentText.length))
+          : (typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : start);
+        const nextText = currentText.slice(0, start) + state.suggestion + currentText.slice(end);
+        const caret = start + state.suggestion.length;
+        applySourceTextEdit(nextText, caret, caret);
+        hideCompletionSuggestion();
+        focusSourceTextNoScroll();
+        setStatus("Inserted completion suggestion.", "success");
+      }
+
+      function handleCompletionSuggestionServerMessage(message) {
+        if (!message || typeof message !== "object") return false;
+        if (
+          message.type !== "completion_suggestion_progress"
+          && message.type !== "completion_suggestion_result"
+          && message.type !== "completion_suggestion_error"
+        ) return false;
+        if (typeof message.requestId === "string" && completionSuggestionRequestId && message.requestId !== completionSuggestionRequestId) {
+          return true;
+        }
+        if (message.type === "completion_suggestion_progress") {
+          setStatus(typeof message.message === "string" ? message.message : "Generating suggestion…", "warning");
+          return true;
+        }
+        const pendingSnapshot = completionSuggestionPendingSnapshot;
+        const shouldRefocusEditor = completionSuggestionRefocusEditorOnResult;
+        completionSuggestionInFlight = false;
+        completionSuggestionRequestId = null;
+        completionSuggestionPendingSnapshot = null;
+        completionSuggestionRefocusEditorOnResult = false;
+        syncActionButtons();
+        if (message.type === "completion_suggestion_error") {
+          setStatus(typeof message.message === "string" ? message.message : "Suggestion failed.", "warning");
+          return true;
+        }
+        const suggestion = typeof message.suggestion === "string" ? message.suggestion : "";
+        if (!suggestion.trim()) {
+          setStatus("Model returned an empty suggestion.", "warning");
+          return true;
+        }
+        const text = String(sourceTextEl.value || "");
+        if (pendingSnapshot && text !== pendingSnapshot.text) {
+          setStatus("Editor changed while the suggestion was generating. Please request a fresh suggestion.", "warning");
+          return true;
+        }
+        const baseText = pendingSnapshot ? pendingSnapshot.text : text;
+        const start = Math.max(0, Math.min(pendingSnapshot ? pendingSnapshot.selectionStart : (Number(message.selectionStart) || 0), baseText.length));
+        const end = Math.max(start, Math.min(pendingSnapshot ? pendingSnapshot.selectionEnd : (Number(message.selectionEnd) || start), baseText.length));
+        showCompletionSuggestion({
+          suggestion,
+          baseText,
+          selectionStart: start,
+          selectionEnd: end,
+        });
+        const activeEl = document.activeElement;
+        if (
+          shouldRefocusEditor
+          || activeEl === sourceTextEl
+          || activeEl === suggestCompletionBtn
+          || activeEl === document.body
+          || activeEl === document.documentElement
+          || Boolean(completionSuggestionPanelEl && activeEl instanceof Element && completionSuggestionPanelEl.contains(activeEl))
+        ) {
+          focusSourceEditorForCompletion();
+        }
+        setStatus("Suggestion ready. Press Tab to insert it, or use the Insert suggestion button.", "success");
+        return true;
+      }
+
       function getSourceTextLineEditBounds(text, selectionStart, selectionEnd) {
         const source = String(text || "");
         const safeStart = Math.max(0, Math.min(Math.floor(Number(selectionStart) || 0), source.length));
@@ -9065,7 +9273,14 @@
       }
 
       function handleSourceTextTabKey(event) {
-        if (!event || event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) return;
+        if (!event) return;
+        if (isCompletionSuggestionRequestShortcut(event)) {
+          event.preventDefault();
+          requestCompletionSuggestion();
+          return;
+        }
+        if (handleCompletionSuggestionAcceptKey(event)) return;
+        if (event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) return;
         event.preventDefault();
         if (event.shiftKey) {
           unindentSourceTextSelection();
@@ -16007,6 +16222,8 @@
           updateFooterMeta();
         }
 
+        if (handleCompletionSuggestionServerMessage(message)) return;
+
         if (
           message.type === "quiz_progress" ||
           message.type === "quiz_generated" ||
@@ -17258,6 +17475,9 @@
       sourceTextEl.addEventListener("keydown", handleSourceTextTabKey);
 
       sourceTextEl.addEventListener("input", () => {
+        if (completionSuggestionState && sourceTextEl.value !== completionSuggestionState.baseText) {
+          hideCompletionSuggestion();
+        }
         if (activePreviewCommentSelection) {
           clearPreviewCommentSelection();
         }
@@ -17266,6 +17486,7 @@
         scheduleEditorMetaUpdate();
         updateEditorSelectionCommentUi();
         updateOutlineUi();
+        syncActionButtons();
         if (isReviewNotesOpen() && reviewNotes.length > 0) {
           renderReviewNotesList();
           updateReviewNotesUi();
@@ -17720,6 +17941,24 @@
           setStatus("Clipboard write failed.", "warning");
         }
       });
+
+      if (suggestCompletionBtn) {
+        suggestCompletionBtn.addEventListener("click", () => {
+          requestCompletionSuggestion();
+        });
+      }
+      if (completionSuggestionInsertBtn) {
+        completionSuggestionInsertBtn.addEventListener("click", () => {
+          insertCompletionSuggestion();
+        });
+      }
+      if (completionSuggestionDismissBtn) {
+        completionSuggestionDismissBtn.addEventListener("click", () => {
+          hideCompletionSuggestion();
+          focusSourceTextNoScroll();
+          setStatus("Dismissed completion suggestion.");
+        });
+      }
 
       if (reviewNotesBtn) {
         reviewNotesBtn.addEventListener("click", () => {

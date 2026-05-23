@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.16] — 2026-05-24
+
+### Added
+- Added a first-cut manual **Suggest completion** editor action beside Run/Queue that asks the active model for a short cursor/selection-aware continuation, previews it before insertion, supports Option/Alt+Tab where available plus Cmd/Ctrl+Shift+Space from the editor, and lets Tab insert a visible suggestion.
+
 ## [0.9.15] — 2026-05-23
 
 ### Added

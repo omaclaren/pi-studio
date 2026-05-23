@@ -311,6 +311,17 @@ interface SendRunRequestMessage {
 	text: string;
 }
 
+interface CompletionSuggestionRequestMessage {
+	type: "completion_suggestion_request";
+	requestId: string;
+	text: string;
+	selectionStart: number;
+	selectionEnd: number;
+	language?: string;
+	label?: string;
+	path?: string;
+}
+
 interface QuizGenerateRequestMessage {
 	type: "quiz_generate_request";
 	requestId: string;
@@ -451,6 +462,7 @@ type IncomingStudioMessage =
 	| CritiqueRequestMessage
 	| AnnotationRequestMessage
 	| SendRunRequestMessage
+	| CompletionSuggestionRequestMessage
 	| QuizGenerateRequestMessage
 	| QuizAnswerRequestMessage
 	| QuizDiscussRequestMessage
@@ -472,6 +484,9 @@ type IncomingStudioMessage =
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
+const STUDIO_COMPLETION_MAX_TEXT_CHARS = 250_000;
+const STUDIO_COMPLETION_PREFIX_CHARS = 12_000;
+const STUDIO_COMPLETION_SUFFIX_CHARS = 6_000;
 const PDF_EXPORT_MAX_CHARS = 400_000;
 const HTML_EXPORT_MAX_CHARS = 400_000;
 const HTML_PREVIEW_MATH_RENDER_MAX_ITEMS = 250;
@@ -7118,7 +7133,7 @@ async function resolveStudioModelRequestAuth(ctx: StudioModelRequestContext, mod
 	if (typeof registry.getApiKey === "function") {
 		return { apiKey: await registry.getApiKey(model) };
 	}
-	throw new Error("Current pi model registry does not expose model credentials for Studio quiz.");
+	throw new Error("Current pi model registry does not expose model credentials for Studio model requests.");
 }
 
 function getStudioQuizReasoning(model: NonNullable<ExtensionContext["model"]>, thinking: StudioQuizThinking | undefined): ThinkingLevel | undefined {
@@ -7127,31 +7142,45 @@ function getStudioQuizReasoning(model: NonNullable<ExtensionContext["model"]>, t
 	return normalized === "off" ? undefined : normalized;
 }
 
-async function runStudioQuizModelText(ctx: StudioModelRequestContext, prompt: string, options?: { maxTokens?: number; signal?: AbortSignal; thinking?: StudioQuizThinking }): Promise<string> {
+async function runStudioModelText(
+	ctx: StudioModelRequestContext,
+	prompt: string,
+	options?: { systemPrompt?: string; maxTokens?: number; signal?: AbortSignal; reasoning?: ThinkingLevel; timeoutMs?: number; trim?: boolean },
+): Promise<string> {
 	if (!ctx.model) throw new Error("No active model selected.");
 	const auth = await resolveStudioModelRequestAuth(ctx, ctx.model);
 	const response = await completeSimple(
 		ctx.model,
 		{
-			systemPrompt: "You are an active tutor inside pi Studio. Ask and mark concise, probing quiz questions. Return exactly the requested format.",
+			systemPrompt: options?.systemPrompt ?? "You are a concise assistant inside pi Studio. Return exactly the requested format.",
 			messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 		},
 		{
 			apiKey: auth.apiKey,
 			headers: auth.headers,
-			reasoning: getStudioQuizReasoning(ctx.model, options?.thinking),
+			reasoning: options?.reasoning,
 			maxTokens: options?.maxTokens ?? 2500,
 			signal: options?.signal,
-			timeoutMs: 120_000,
+			timeoutMs: options?.timeoutMs ?? 120_000,
 		},
 	);
-	const text = response.content
+	const rawText = response.content
 		.filter((part): part is { type: "text"; text: string } => part.type === "text")
 		.map((part) => part.text)
-		.join("\n")
-		.trim();
-	if (!text) throw new Error("Model returned no text response.");
+		.join("\n");
+	const text = options?.trim === false ? rawText : rawText.trim();
+	if (!text.trim()) throw new Error("Model returned no text response.");
 	return text;
+}
+
+async function runStudioQuizModelText(ctx: StudioModelRequestContext, prompt: string, options?: { maxTokens?: number; signal?: AbortSignal; thinking?: StudioQuizThinking }): Promise<string> {
+	return runStudioModelText(ctx, prompt, {
+		systemPrompt: "You are an active tutor inside pi Studio. Ask and mark concise, probing quiz questions. Return exactly the requested format.",
+		reasoning: ctx.model ? getStudioQuizReasoning(ctx.model, options?.thinking) : undefined,
+		maxTokens: options?.maxTokens ?? 2500,
+		signal: options?.signal,
+		timeoutMs: 120_000,
+	});
 }
 
 async function runStudioQuizModelJson(
@@ -7179,6 +7208,72 @@ async function runStudioQuizModelJson(
 		}
 	}
 	throw lastError ?? new Error("Model did not return valid JSON.");
+}
+
+function buildStudioCompletionSuggestionPrompt(options: {
+	text: string;
+	selectionStart: number;
+	selectionEnd: number;
+	language?: string;
+	label?: string;
+	path?: string;
+}): string {
+	const text = String(options.text || "");
+	const start = Math.max(0, Math.min(Math.floor(options.selectionStart || 0), text.length));
+	const end = Math.max(start, Math.min(Math.floor(options.selectionEnd || start), text.length));
+	const prefix = text.slice(Math.max(0, start - STUDIO_COMPLETION_PREFIX_CHARS), start);
+	const selected = text.slice(start, end);
+	const suffix = text.slice(end, Math.min(text.length, end + STUDIO_COMPLETION_SUFFIX_CHARS));
+	const language = String(options.language || "").trim() || "unknown";
+	const label = String(options.label || options.path || "Studio editor").trim();
+	return [
+		"Generate an inline completion for the current editor cursor position.",
+		"Return only the exact text to insert. Do not wrap it in Markdown fences. Do not explain.",
+		"Match the surrounding language, style, indentation, and register.",
+		"Keep the suggestion short unless the context clearly asks for a longer continuation.",
+		selected
+			? "The selected text will be replaced by the completion."
+			: "The completion will be inserted at the cursor.",
+		"",
+		`File/context label: ${label}`,
+		`Language mode: ${language}`,
+		"",
+		"<prefix>",
+		prefix,
+		"</prefix>",
+		selected ? ["", "<selected>", selected, "</selected>"].join("\n") : "",
+		"",
+		"<suffix>",
+		suffix,
+		"</suffix>",
+	].filter((part) => part !== "").join("\n");
+}
+
+function cleanStudioCompletionSuggestion(text: string): string {
+	let value = String(text || "").replace(/\r\n/g, "\n");
+	value = value.replace(/^\s*(?:Here(?:'s| is) (?:the )?(?:completion|suggestion):|Completion:|Suggestion:)\s*/i, "");
+	return value;
+}
+
+async function runStudioCompletionSuggestion(ctx: StudioModelRequestContext, options: {
+	text: string;
+	selectionStart: number;
+	selectionEnd: number;
+	language?: string;
+	label?: string;
+	path?: string;
+}): Promise<string> {
+	const prompt = buildStudioCompletionSuggestionPrompt(options);
+	// Intentionally omit `reasoning`: pi-ai treats absent reasoning as off/disabled
+	// where supported. Passing "minimal" would still enable a reasoning path and slow completions.
+	const suggestion = cleanStudioCompletionSuggestion(await runStudioModelText(ctx, prompt, {
+		systemPrompt: "You are an inline autocomplete engine inside pi Studio. Return only text to insert at the cursor. Never explain. Never include Markdown fences unless literal fences are the intended insertion.",
+		maxTokens: 650,
+		timeoutMs: 60_000,
+		trim: false,
+	}));
+	if (!suggestion.trim()) throw new Error("Model returned an empty completion suggestion.");
+	return suggestion;
 }
 
 function inferStudioResponseKind(markdown: string): StudioRequestKind {
@@ -7587,6 +7682,24 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 			type: "send_run_request",
 			requestId: msg.requestId,
 			text: msg.text,
+		};
+	}
+
+	if (msg.type === "completion_suggestion_request" && typeof msg.requestId === "string" && typeof msg.text === "string") {
+		const textLength = msg.text.length;
+		const rawStart = typeof msg.selectionStart === "number" && Number.isFinite(msg.selectionStart) ? msg.selectionStart : textLength;
+		const rawEnd = typeof msg.selectionEnd === "number" && Number.isFinite(msg.selectionEnd) ? msg.selectionEnd : rawStart;
+		const selectionStart = Math.max(0, Math.min(Math.floor(rawStart), textLength));
+		const selectionEnd = Math.max(selectionStart, Math.min(Math.floor(rawEnd), textLength));
+		return {
+			type: "completion_suggestion_request",
+			requestId: msg.requestId,
+			text: msg.text,
+			selectionStart,
+			selectionEnd,
+			language: typeof msg.language === "string" ? msg.language : undefined,
+			label: typeof msg.label === "string" ? msg.label : undefined,
+			path: typeof msg.path === "string" ? msg.path : undefined,
 		};
 	}
 
@@ -9467,8 +9580,9 @@ ${cssVarsBlock}
               </select>
             </div>
             <div class="source-actions-row">
-              <button id="copyDraftBtn" type="button" title="Copy the current editor text to the clipboard.">Copy text</button>
-              <button id="openCompanionBtn" type="button" title="Open a detached copy of the current editor text in a new editor-only Studio tab.">Open new editor</button>
+              <button id="copyDraftBtn" type="button" title="Copy the current editor text to the clipboard.">Copy</button>
+              <button id="suggestCompletionBtn" type="button" title="Ask the current model for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.">Suggest</button>
+              <button id="openCompanionBtn" type="button" title="Open a detached copy of the current editor text in a new editor-only Studio tab.">New editor</button>
               <button id="sendEditorBtn" type="button">Send to pi editor</button>
             </div>
             <div class="source-actions-row">
@@ -9548,6 +9662,16 @@ ${cssVarsBlock}
               <div id="editorSelectionActions" class="editor-selection-actions" hidden>
                 <button id="editorSelectionCommentBtn" type="button" class="editor-selection-action-btn" hidden title="Create a new local comment from the current editor selection.">Comment</button>
                 <button id="editorSelectionJumpBtn" type="button" class="editor-selection-action-btn" hidden title="Jump to the current editor selection in the preview.">Jump</button>
+              </div>
+            </div>
+            <div id="completionSuggestionPanel" class="completion-suggestion-panel" hidden>
+              <div class="completion-suggestion-header">
+                <strong>Suggested completion</strong>
+                <button id="completionSuggestionDismissBtn" type="button" title="Dismiss this suggestion">Dismiss</button>
+              </div>
+              <pre id="completionSuggestionText" class="completion-suggestion-text"></pre>
+              <div class="completion-suggestion-actions">
+                <button id="completionSuggestionInsertBtn" type="button" title="Insert this suggestion at the cursor or original selection. You can also press Tab while the editor is focused.">Insert suggestion (Tab)</button>
               </div>
             </div>
             <div id="sourcePreview" class="panel-scroll rendered-markdown" hidden><pre class="plain-markdown"></pre></div>
@@ -9718,7 +9842,9 @@ ${cssVarsBlock}
           <dl>
             <div><dt>Cmd/Ctrl+S</dt><dd>Save editor</dd></div>
             <div><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
-            <div><dt>Tab / Shift+Tab</dt><dd>Indent or unindent selected editor text</dd></div>
+            <div><dt>Option/Alt+Tab or Cmd/Ctrl+Shift+Space</dt><dd>Suggest a completion at the editor cursor</dd></div>
+            <div><dt>Tab</dt><dd>Insert a visible completion suggestion; otherwise indent selected editor text</dd></div>
+            <div><dt>Shift+Tab</dt><dd>Unindent selected editor text</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group">
@@ -11295,6 +11421,53 @@ export default function (pi: ExtensionAPI) {
 					message: `Failed to send editor text to model: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
+			return;
+		}
+
+		if (msg.type === "completion_suggestion_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			const ctx = latestModelRequestCtx ?? lastCommandCtx;
+			if (!ctx) {
+				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: "No active pi model context is available for editor suggestions." });
+				return;
+			}
+			if (!msg.text.trim()) {
+				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: "Editor is empty." });
+				return;
+			}
+			if (msg.text.length > STUDIO_COMPLETION_MAX_TEXT_CHARS) {
+				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: `Editor text is too large for suggestions (${STUDIO_COMPLETION_MAX_TEXT_CHARS} character limit).` });
+				return;
+			}
+			sendToClient(client, { type: "completion_suggestion_progress", requestId: msg.requestId, message: "Generating suggestion…" });
+			void (async () => {
+				try {
+					const suggestion = await runStudioCompletionSuggestion(ctx, {
+						text: msg.text,
+						selectionStart: msg.selectionStart,
+						selectionEnd: msg.selectionEnd,
+						language: msg.language,
+						label: msg.label,
+						path: msg.path,
+					});
+					sendToClient(client, {
+						type: "completion_suggestion_result",
+						requestId: msg.requestId,
+						suggestion,
+						selectionStart: msg.selectionStart,
+						selectionEnd: msg.selectionEnd,
+					});
+				} catch (error) {
+					sendToClient(client, {
+						type: "completion_suggestion_error",
+						requestId: msg.requestId,
+						message: `Suggestion failed: ${error instanceof Error ? error.message : String(error)}`,
+					});
+				}
+			})();
 			return;
 		}
 

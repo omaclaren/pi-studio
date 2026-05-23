@@ -849,6 +849,63 @@
       -webkit-text-fill-color: transparent;
     }
 
+    .completion-suggestion-panel {
+      border: 1px solid var(--control-border);
+      border-radius: 10px;
+      background: var(--panel-2);
+      box-shadow: var(--panel-shadow);
+      overflow: hidden;
+    }
+
+    .completion-suggestion-panel[hidden] {
+      display: none !important;
+    }
+
+    .completion-suggestion-header,
+    .completion-suggestion-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+    }
+
+    .completion-suggestion-header {
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--studio-info-text, var(--muted));
+      font-size: 12px;
+    }
+
+    .completion-suggestion-header strong {
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .completion-suggestion-text {
+      margin: 0;
+      max-height: 180px;
+      overflow: auto;
+      padding: 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--font-mono);
+      font-size: var(--studio-editor-font-size);
+      line-height: 1.45;
+      color: var(--text);
+      background: var(--editor-bg);
+    }
+
+    .completion-suggestion-actions {
+      justify-content: flex-end;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .completion-suggestion-header button,
+    .completion-suggestion-actions button {
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+
     .editor-selection-actions {
       position: absolute;
       top: 12px;
@@ -3766,8 +3823,8 @@
 
     .shortcuts-group dl > div {
       display: grid;
-      grid-template-columns: minmax(130px, max-content) minmax(0, 1fr);
-      gap: 12px;
+      grid-template-columns: minmax(260px, 260px) minmax(0, 1fr);
+      gap: 24px;
       align-items: baseline;
       padding: 6px 10px;
       border-top: 1px solid var(--border-subtle);
@@ -4188,10 +4245,15 @@
         justify-content: stretch;
       }
 
-      body.studio-ui-refresh .studio-refresh-pane-tools,
-      body.studio-ui-refresh .studio-refresh-toolbar-state {
+      body.studio-ui-refresh .studio-refresh-pane-tools {
         justify-content: flex-start;
         justify-items: start;
+        min-width: 0;
+      }
+
+      body.studio-ui-refresh .studio-refresh-toolbar-state {
+        justify-content: flex-end;
+        justify-items: end;
         min-width: 0;
       }
 
@@ -4202,7 +4264,7 @@
       }
 
       body.studio-ui-refresh .studio-refresh-toolbar-state .studio-refresh-action-line {
-        justify-content: flex-start;
+        justify-content: flex-end;
       }
     }
 
@@ -4662,6 +4724,12 @@
     body.studio-ui-refresh .studio-refresh-toolbar button,
     body.studio-ui-refresh .studio-refresh-toolbar select {
       font-size: 12px;
+    }
+
+    body.studio-ui-refresh .studio-refresh-toolbar-actions .studio-refresh-action-line button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active) {
+      min-height: 26px;
+      padding: 5px 8px;
+      line-height: 1.2;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active),
