@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.17] — 2026-05-25
+
+### Changed
+- Escape now dismisses a visible editor completion suggestion before falling through to other Studio Escape actions.
+- Added a compact **Source & context** dropdown beside the editor-mode selector, with editor-only suggestions by default and an optional editor-plus-latest-response context mode; in-flight suggestion requests can now be stopped from the **Suggest** button.
+- Kept Zen mode focused by hiding **Suggest** with the other secondary editor utilities while still showing **Send to REPL** controls when the REPL pane is active.
+
 ## [0.9.16] — 2026-05-24
 
 ### Added

@@ -115,6 +115,8 @@
       const replSendModeSelect = document.getElementById("replSendModeSelect");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
       const suggestCompletionBtn = document.getElementById("suggestCompletionBtn");
+      const suggestCompletionOptionsBtn = document.getElementById("suggestCompletionOptionsBtn");
+      const completionContextSelect = document.getElementById("completionContextSelect");
       const completionSuggestionPanelEl = document.getElementById("completionSuggestionPanel");
       const completionSuggestionTextEl = document.getElementById("completionSuggestionText");
       const completionSuggestionInsertBtn = document.getElementById("completionSuggestionInsertBtn");
@@ -256,6 +258,8 @@
       const HTML_ARTIFACT_RESOURCE_FETCH_TIMEOUT_MS = 30_000;
       const EDITOR_TAB_TEXT = "  ";
       const QUIZ_DEFAULT_COUNT = 5;
+      const COMPLETION_CONTEXT_STORAGE_KEY = "piStudio.completionContextMode";
+      const COMPLETION_CONTEXT_MAX_CHARS = 12000;
       const QUIZ_SCOPES = ["editor", "selection", "file", "folder", "repo"];
       const QUIZ_ANGLES = ["general", "scientist", "mathematician", "statistician", "developer", "reviewer"];
       const QUIZ_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
@@ -1949,6 +1953,7 @@
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
       let completionSuggestionState = null;
+      let completionSuggestionContextMode = readCompletionSuggestionContextMode();
       let completionSuggestionInFlight = false;
       let completionSuggestionRequestId = null;
       let completionSuggestionPendingSnapshot = null;
@@ -2339,6 +2344,34 @@
           appendStudioUiRefreshMenuSection(reviewMenu.menu, "Setting", [lensSelect]);
         }
 
+        let contextMenu = null;
+        if (suggestCompletionOptionsBtn) {
+          suggestCompletionOptionsBtn.hidden = false;
+          if (completionContextSelect) completionContextSelect.hidden = true;
+          contextMenu = makeStudioUiRefreshMenu(suggestCompletionOptionsBtn, "context", "studio-refresh-context-anchor");
+          if (sourceBadgeEl) appendStudioUiRefreshMenuSection(contextMenu.menu, "Document", [sourceBadgeEl]);
+          appendStudioUiRefreshMenuSection(contextMenu.menu, "Working directory", [resourceDirBtn, resourceDirLabel, resourceDirInputWrap]);
+          const cursorContextBtn = makeStudioUiRefreshElement("button", "completion-context-option", "Editor only");
+          cursorContextBtn.type = "button";
+          cursorContextBtn.setAttribute("data-completion-context-mode", "cursor");
+          const sessionContextBtn = makeStudioUiRefreshElement("button", "completion-context-option", "Editor + latest response");
+          sessionContextBtn.type = "button";
+          sessionContextBtn.setAttribute("data-completion-context-mode", "session");
+          [cursorContextBtn, sessionContextBtn].forEach((button) => {
+            button.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setCompletionSuggestionContextMode(button.getAttribute("data-completion-context-mode") === "session" ? "session" : "cursor");
+              syncActionButtons();
+            });
+          });
+          appendStudioUiRefreshMenuSection(contextMenu.menu, "Suggestions", [cursorContextBtn, sessionContextBtn]);
+          if (syncBadgeEl) {
+            syncBadgeEl.hidden = false;
+            appendStudioUiRefreshMenuSection(contextMenu.menu, "Status", [syncBadgeEl]);
+          }
+        }
+
         const headerTopEl = makeStudioUiRefreshElement("div", "studio-refresh-header-top");
         const titleGroupEl = makeStudioUiRefreshElement("div", "studio-refresh-title-group");
         if (leftFocusBtn) {
@@ -2351,6 +2384,10 @@
         } else if (editorViewSelect) {
           titleGroupEl.appendChild(editorViewSelect);
         }
+        if (contextMenu) {
+          titleGroupEl.appendChild(makeStudioUiRefreshSeparator());
+          titleGroupEl.appendChild(contextMenu.anchor);
+        }
         headerTopEl.appendChild(titleGroupEl);
         const headerToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
         if (reviewNotesBtn) headerToolsEl.appendChild(reviewNotesBtn);
@@ -2359,18 +2396,7 @@
         if (reviewMenu) headerToolsEl.appendChild(reviewMenu.anchor);
         headerTopEl.appendChild(headerToolsEl);
 
-        const headerUtilityEl = makeStudioUiRefreshElement("div", "studio-refresh-header-utility");
-        const utilityLeftEl = makeStudioUiRefreshElement("div", "studio-refresh-utility-left");
-        if (sourceBadgeEl) utilityLeftEl.appendChild(sourceBadgeEl);
-        if (sourceBadgeEl && (resourceDirBtn || resourceDirLabel || resourceDirInputWrap || syncBadgeEl)) {
-          utilityLeftEl.appendChild(makeStudioUiRefreshSeparator());
-        }
-        if (resourceDirBtn) utilityLeftEl.appendChild(resourceDirBtn);
-        if (resourceDirLabel) utilityLeftEl.appendChild(resourceDirLabel);
-        if (resourceDirInputWrap) utilityLeftEl.appendChild(resourceDirInputWrap);
-        if (syncBadgeEl) utilityLeftEl.appendChild(syncBadgeEl);
-        headerUtilityEl.appendChild(utilityLeftEl);
-        leftHeaderEl.replaceChildren(headerTopEl, headerUtilityEl);
+        leftHeaderEl.replaceChildren(headerTopEl);
 
         const rightHeaderEl = document.getElementById("rightSectionHeader");
         if (rightHeaderEl && rightViewSelect) {
@@ -2402,18 +2428,18 @@
         const actionLineOneEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         if (!isEditorOnlyMode && sendRunBtn) actionLineOneEl.appendChild(sendRunBtn);
         if (!isEditorOnlyMode && queueSteerBtn) actionLineOneEl.appendChild(queueSteerBtn);
-        const replActionLineEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line repl-action-line");
-        replActionLineEl.hidden = true;
-        if (!isEditorOnlyMode && sendReplBtn) replActionLineEl.appendChild(sendReplBtn);
-        if (!isEditorOnlyMode && replSendModeSelect) replActionLineEl.appendChild(replSendModeSelect);
-        const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
+        const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line studio-refresh-utility-action-line");
         actionLineTwoEl.appendChild(copyDraftBtn);
         if (suggestCompletionBtn) actionLineTwoEl.appendChild(suggestCompletionBtn);
         if (openCompanionBtn) actionLineTwoEl.appendChild(openCompanionBtn);
         if (!isEditorOnlyMode && sendEditorBtn) actionLineTwoEl.appendChild(sendEditorBtn);
+        const replActionLineEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line repl-action-line");
+        replActionLineEl.hidden = true;
+        if (!isEditorOnlyMode && sendReplBtn) replActionLineEl.appendChild(sendReplBtn);
+        if (!isEditorOnlyMode && replSendModeSelect) replActionLineEl.appendChild(replSendModeSelect);
         if (actionLineOneEl.childNodes.length > 0) actionsEl.appendChild(actionLineOneEl);
-        if (replActionLineEl.childNodes.length > 0) actionsEl.appendChild(replActionLineEl);
         actionsEl.appendChild(actionLineTwoEl);
+        if (replActionLineEl.childNodes.length > 0) actionsEl.appendChild(replActionLineEl);
 
         const stateEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-state");
         const annotationsButton = makeStudioUiRefreshElement("button", "", "Annotations");
@@ -2435,7 +2461,9 @@
           annotationsButton,
           viewButton,
           reviewButton: reviewMenu ? reviewMenu.button : null,
-          menus: [annotationsMenu, viewMenu].concat(reviewMenu ? [reviewMenu] : []),
+          menus: [annotationsMenu, viewMenu]
+            .concat(contextMenu ? [contextMenu] : [])
+            .concat(reviewMenu ? [reviewMenu] : []),
         };
 
         document.addEventListener("click", (event) => {
@@ -3691,6 +3719,14 @@
           return;
         }
 
+        if (plainEscape && completionSuggestionState) {
+          event.preventDefault();
+          hideCompletionSuggestion();
+          focusSourceTextNoScroll();
+          setStatus("Dismissed completion suggestion.");
+          return;
+        }
+
         if (handleCompletionSuggestionAcceptKey(event)) return;
 
         if ((key === "?" || (key === "/" && event.shiftKey)) && !event.metaKey && !event.ctrlKey && !event.altKey && !isTextEntryShortcutTarget(event.target)) {
@@ -4244,20 +4280,15 @@
 
         if (isEditorOnlyMode) {
           syncBadgeEl.hidden = true;
-          syncBadgeEl.classList.remove("sync");
-          return;
-        }
-
-        if (rightView === "trace") {
-          syncBadgeEl.hidden = true;
-          syncBadgeEl.classList.remove("sync");
+          syncBadgeEl.textContent = "Editor-only tab";
+          syncBadgeEl.classList.remove("sync", "out-of-sync");
           return;
         }
 
         if (!latestResponseHasContent) {
-          syncBadgeEl.hidden = true;
-          syncBadgeEl.textContent = "In sync with response";
-          syncBadgeEl.classList.remove("sync");
+          syncBadgeEl.hidden = false;
+          syncBadgeEl.textContent = "No latest response";
+          syncBadgeEl.classList.remove("sync", "out-of-sync");
           return;
         }
 
@@ -4265,15 +4296,10 @@
           ? normalizedEditorText
           : normalizeForCompare(sourceTextEl.value);
         const inSync = normalizedEditor === latestResponseNormalized;
-        syncBadgeEl.hidden = !inSync;
-        syncBadgeEl.textContent = "In sync with response";
-
-        if (inSync) {
-          syncBadgeEl.classList.add("sync");
-          return;
-        }
-
-        syncBadgeEl.classList.remove("sync");
+        syncBadgeEl.hidden = false;
+        syncBadgeEl.textContent = inSync ? "In sync with response" : "Editor differs from latest response";
+        syncBadgeEl.classList.toggle("sync", inSync);
+        syncBadgeEl.classList.toggle("out-of-sync", !inSync);
       }
 
       function buildPlainMarkdownHtml(markdown, options) {
@@ -8667,9 +8693,14 @@
         syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
         if (suggestCompletionBtn) {
-          suggestCompletionBtn.disabled = uiBusy || completionSuggestionInFlight || wsState !== "Ready" || !String(sourceTextEl.value || "").trim();
-          suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Suggesting…" : "Suggest";
+          suggestCompletionBtn.disabled = wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || !String(sourceTextEl.value || "").trim()));
+          suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Stop" : "Suggest";
+          suggestCompletionBtn.title = completionSuggestionInFlight
+            ? "Stop the current suggestion request."
+            : "Ask the current model for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.";
         }
+        if (suggestCompletionOptionsBtn) suggestCompletionOptionsBtn.disabled = uiBusy || completionSuggestionInFlight;
+        syncCompletionSuggestionContextUi();
         if (openCompanionBtn) openCompanionBtn.disabled = uiBusy || wsState !== "Ready";
         if (highlightSelect) highlightSelect.disabled = uiBusy;
         if (lineNumbersSelect) lineNumbersSelect.disabled = uiBusy;
@@ -9003,6 +9034,69 @@
         }
       }
 
+      function readCompletionSuggestionContextMode() {
+        try {
+          const stored = window.localStorage ? String(window.localStorage.getItem(COMPLETION_CONTEXT_STORAGE_KEY) || "") : "";
+          return stored === "session" ? "session" : "cursor";
+        } catch {
+          return "cursor";
+        }
+      }
+
+      function setCompletionSuggestionContextMode(mode) {
+        completionSuggestionContextMode = mode === "session" ? "session" : "cursor";
+        if (completionContextSelect) completionContextSelect.value = completionSuggestionContextMode;
+        try {
+          if (window.localStorage) window.localStorage.setItem(COMPLETION_CONTEXT_STORAGE_KEY, completionSuggestionContextMode);
+        } catch {}
+        setStatus(completionSuggestionContextMode === "session"
+          ? "Suggestions will include the latest response as context."
+          : "Suggestions will use cursor-local editor context only.");
+      }
+
+      function syncCompletionSuggestionContextUi() {
+        if (completionContextSelect) completionContextSelect.value = completionSuggestionContextMode;
+        if (suggestCompletionOptionsBtn) {
+          suggestCompletionOptionsBtn.textContent = "Source & context";
+          suggestCompletionOptionsBtn.title = completionSuggestionContextMode === "session"
+            ? "Document source, working directory, status, and suggestion context. Suggestions include editor plus latest response."
+            : "Document source, working directory, status, and suggestion context. Suggestions use editor-only context.";
+          suggestCompletionOptionsBtn.setAttribute("aria-label", suggestCompletionOptionsBtn.title);
+        }
+        document.querySelectorAll("[data-completion-context-mode]").forEach((button) => {
+          if (!(button instanceof HTMLElement)) return;
+          const mode = button.getAttribute("data-completion-context-mode") === "session" ? "session" : "cursor";
+          const selected = mode === completionSuggestionContextMode;
+          button.classList.toggle("is-selected", selected);
+          button.setAttribute("aria-pressed", selected ? "true" : "false");
+          button.textContent = (selected ? "✓ " : "  ") + (mode === "session" ? "Editor + latest response" : "Editor only");
+        });
+      }
+
+      function trimCompletionContextText(text) {
+        const value = String(text || "").trim();
+        if (value.length <= COMPLETION_CONTEXT_MAX_CHARS) return value;
+        return value.slice(value.length - COMPLETION_CONTEXT_MAX_CHARS);
+      }
+
+      function getCompletionSuggestionContextText() {
+        if (completionSuggestionContextMode !== "session") return "";
+        const selected = getSelectedHistoryItem ? getSelectedHistoryItem() : null;
+        const responseText = selected && typeof selected.markdown === "string" && selected.markdown.trim()
+          ? selected.markdown
+          : latestResponseMarkdown;
+        const parts = [];
+        if (selected && typeof selected.promptTriggerText === "string" && selected.promptTriggerText.trim()) {
+          parts.push("Latest request/steering:\n" + trimCompletionContextText(selected.promptTriggerText));
+        } else if (selected && typeof selected.prompt === "string" && selected.prompt.trim()) {
+          parts.push("Latest prompt:\n" + trimCompletionContextText(selected.prompt));
+        }
+        if (String(responseText || "").trim()) {
+          parts.push("Latest response:\n" + trimCompletionContextText(responseText));
+        }
+        return trimCompletionContextText(parts.join("\n\n---\n\n"));
+      }
+
       function hideCompletionSuggestion() {
         completionSuggestionState = null;
         if (completionSuggestionTextEl) completionSuggestionTextEl.textContent = "";
@@ -9073,10 +9167,29 @@
           || Boolean(completionSuggestionPanelEl && activeEl instanceof Element && completionSuggestionPanelEl.contains(activeEl));
       }
 
+      function cancelCompletionSuggestion() {
+        if (!completionSuggestionInFlight || !completionSuggestionRequestId) {
+          setStatus("No suggestion request is running.", "warning");
+          return;
+        }
+        setStatus("Stopping suggestion…", "warning");
+        const sent = sendMessage({
+          type: "completion_suggestion_cancel_request",
+          requestId: completionSuggestionRequestId,
+        });
+        if (!sent) {
+          completionSuggestionInFlight = false;
+          completionSuggestionRequestId = null;
+          completionSuggestionPendingSnapshot = null;
+          completionSuggestionRefocusEditorOnResult = false;
+          syncActionButtons();
+        }
+      }
+
       function requestCompletionSuggestion() {
         if (isEditorOnlyMode && !sourceTextEl) return;
         if (completionSuggestionInFlight) {
-          setStatus("Suggestion request already in progress.", "warning");
+          cancelCompletionSuggestion();
           return;
         }
         const text = String(sourceTextEl.value || "");
@@ -9086,6 +9199,7 @@
         }
         const selectionStart = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : text.length;
         const selectionEnd = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : selectionStart;
+        const contextText = getCompletionSuggestionContextText();
         const requestId = makeRequestId();
         completionSuggestionInFlight = true;
         completionSuggestionRequestId = requestId;
@@ -9103,6 +9217,8 @@
           language: editorLanguage || "",
           label: sourceState && sourceState.label ? sourceState.label : "Studio editor",
           path: sourceState && sourceState.path ? sourceState.path : undefined,
+          contextMode: completionSuggestionContextMode,
+          contextText: contextText || undefined,
         });
         if (!sent) {
           completionSuggestionInFlight = false;
@@ -17945,6 +18061,13 @@
       if (suggestCompletionBtn) {
         suggestCompletionBtn.addEventListener("click", () => {
           requestCompletionSuggestion();
+        });
+      }
+      if (completionContextSelect) {
+        completionContextSelect.value = completionSuggestionContextMode;
+        completionContextSelect.addEventListener("change", () => {
+          setCompletionSuggestionContextMode(completionContextSelect.value);
+          syncActionButtons();
         });
       }
       if (completionSuggestionInsertBtn) {

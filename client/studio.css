@@ -4336,7 +4336,8 @@
     }
 
     body.studio-ui-refresh .studio-refresh-header-utility {
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: start;
     }
 
     body.studio-ui-refresh .studio-refresh-pane-identity {
@@ -4353,10 +4354,16 @@
       flex-wrap: nowrap;
     }
 
-    body.studio-ui-refresh .studio-refresh-context-group,
-    body.studio-ui-refresh .studio-refresh-utility-left {
+    body.studio-ui-refresh .studio-refresh-context-group {
       overflow: hidden;
       white-space: nowrap;
+    }
+
+    body.studio-ui-refresh .studio-refresh-utility-left {
+      overflow: visible;
+      white-space: nowrap;
+      justify-content: flex-start;
+      justify-self: start;
     }
 
     body.studio-ui-refresh .studio-refresh-title-group {
@@ -4462,12 +4469,14 @@
       border-color: transparent;
       background: transparent;
       padding: 3px 5px;
-      font-size: 13px;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.25;
       border-radius: 8px;
     }
 
     body.studio-ui-refresh #sourceBadge {
-      color: var(--text);
+      color: var(--studio-info-text, var(--muted));
       max-width: min(34rem, 54vw);
       min-width: 0;
       overflow: hidden;
@@ -4475,7 +4484,6 @@
       white-space: nowrap;
     }
 
-    body.studio-ui-refresh #resourceDirBtn,
     body.studio-ui-refresh #reviewNotesBtn,
     body.studio-ui-refresh #outlineBtn,
     body.studio-ui-refresh #scratchpadBtn,
@@ -4483,9 +4491,17 @@
       color: var(--text);
     }
 
+    body.studio-ui-refresh #resourceDirBtn,
     body.studio-ui-refresh #resourceDirLabel {
       color: var(--studio-info-text, var(--muted));
       font-weight: 400;
+    }
+
+    body.studio-ui-refresh #resourceDirBtn:hover,
+    body.studio-ui-refresh #resourceDirLabel:hover {
+      color: var(--text);
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
+      border-color: transparent;
     }
 
     body.studio-ui-refresh #resourceDirInputWrap.visible {
@@ -4501,9 +4517,11 @@
       border-radius: 999px;
       padding: 2px 7px;
       background: transparent;
-      color: var(--muted);
-      opacity: 0.82;
-      font-weight: 450;
+      color: var(--studio-info-text, var(--muted));
+      opacity: 1;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.25;
     }
 
     body.studio-ui-refresh #syncBadge[hidden] {
@@ -4517,6 +4535,11 @@
       border-radius: 999px;
       background: currentColor;
       opacity: 0.72;
+    }
+
+    body.studio-ui-refresh #syncBadge.out-of-sync::before {
+      background: var(--warning, var(--accent));
+      opacity: 0.95;
     }
 
     body.studio-ui-refresh #reviewNotesBtn,
@@ -4536,9 +4559,10 @@
     body.studio-zen-mode #exportPdfBtn,
     body.studio-zen-mode .studio-refresh-tool-tab,
     body.studio-zen-mode .studio-refresh-toolbar-state,
-    body.studio-zen-mode .studio-refresh-toolbar-actions .studio-refresh-action-line:nth-child(n+3),
+    body.studio-zen-mode .studio-refresh-toolbar-actions .studio-refresh-utility-action-line,
     body.studio-zen-mode .source-actions-row:nth-child(n+3),
     body.studio-zen-mode #copyDraftBtn,
+    body.studio-zen-mode #suggestCompletionBtn,
     body.studio-zen-mode #openCompanionBtn,
     body.studio-zen-mode #sendEditorBtn {
       display: none !important;
@@ -4805,6 +4829,19 @@
       width: min(320px, calc(100vw - 48px));
     }
 
+    body.studio-ui-refresh .studio-refresh-title-group .studio-refresh-context-anchor .studio-refresh-chip {
+      color: var(--studio-info-text, var(--muted));
+      font-size: 13px;
+      font-weight: 500;
+      padding: 3px 5px;
+    }
+
+    body.studio-ui-refresh .studio-refresh-context-anchor .studio-refresh-menu {
+      left: 0;
+      right: auto;
+      width: min(360px, calc(100vw - 48px));
+    }
+
     body.studio-ui-refresh .studio-refresh-menu[hidden] {
       display: none !important;
     }
@@ -4850,6 +4887,11 @@
     body.studio-ui-refresh .studio-refresh-menu #critiqueBtn {
       justify-content: flex-start;
       text-align: left;
+    }
+
+    body.studio-ui-refresh .completion-context-option.is-selected {
+      color: var(--text);
+      font-weight: 650;
     }
 
     body.studio-ui-refresh .studio-refresh-menu-item > button:not(:disabled):hover,

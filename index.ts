@@ -320,6 +320,13 @@ interface CompletionSuggestionRequestMessage {
 	language?: string;
 	label?: string;
 	path?: string;
+	contextMode?: "cursor" | "session";
+	contextText?: string;
+}
+
+interface CompletionSuggestionCancelRequestMessage {
+	type: "completion_suggestion_cancel_request";
+	requestId: string;
 }
 
 interface QuizGenerateRequestMessage {
@@ -463,6 +470,7 @@ type IncomingStudioMessage =
 	| AnnotationRequestMessage
 	| SendRunRequestMessage
 	| CompletionSuggestionRequestMessage
+	| CompletionSuggestionCancelRequestMessage
 	| QuizGenerateRequestMessage
 	| QuizAnswerRequestMessage
 	| QuizDiscussRequestMessage
@@ -485,6 +493,7 @@ type IncomingStudioMessage =
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
 const STUDIO_COMPLETION_MAX_TEXT_CHARS = 250_000;
+const STUDIO_COMPLETION_MAX_CONTEXT_CHARS = 12_000;
 const STUDIO_COMPLETION_PREFIX_CHARS = 12_000;
 const STUDIO_COMPLETION_SUFFIX_CHARS = 6_000;
 const PDF_EXPORT_MAX_CHARS = 400_000;
@@ -7217,6 +7226,8 @@ function buildStudioCompletionSuggestionPrompt(options: {
 	language?: string;
 	label?: string;
 	path?: string;
+	contextMode?: "cursor" | "session";
+	contextText?: string;
 }): string {
 	const text = String(options.text || "");
 	const start = Math.max(0, Math.min(Math.floor(options.selectionStart || 0), text.length));
@@ -7226,17 +7237,23 @@ function buildStudioCompletionSuggestionPrompt(options: {
 	const suffix = text.slice(end, Math.min(text.length, end + STUDIO_COMPLETION_SUFFIX_CHARS));
 	const language = String(options.language || "").trim() || "unknown";
 	const label = String(options.label || options.path || "Studio editor").trim();
+	const contextText = String(options.contextText || "").trim().slice(-STUDIO_COMPLETION_MAX_CONTEXT_CHARS);
 	return [
 		"Generate an inline completion for the current editor cursor position.",
 		"Return only the exact text to insert. Do not wrap it in Markdown fences. Do not explain.",
 		"Match the surrounding language, style, indentation, and register.",
 		"Keep the suggestion short unless the context clearly asks for a longer continuation.",
+		contextText
+			? "Use the extra session context only as background. Do not continue the extra context directly unless the editor cursor calls for it."
+			: "Use only the cursor-local editor context below.",
 		selected
 			? "The selected text will be replaced by the completion."
 			: "The completion will be inserted at the cursor.",
 		"",
 		`File/context label: ${label}`,
 		`Language mode: ${language}`,
+		`Suggestion context mode: ${contextText ? "editor plus latest response" : "editor only"}`,
+		contextText ? ["", "<extra_context>", contextText, "</extra_context>"].join("\n") : "",
 		"",
 		"<prefix>",
 		prefix,
@@ -7262,6 +7279,9 @@ async function runStudioCompletionSuggestion(ctx: StudioModelRequestContext, opt
 	language?: string;
 	label?: string;
 	path?: string;
+	contextMode?: "cursor" | "session";
+	contextText?: string;
+	signal?: AbortSignal;
 }): Promise<string> {
 	const prompt = buildStudioCompletionSuggestionPrompt(options);
 	// Intentionally omit `reasoning`: pi-ai treats absent reasoning as off/disabled
@@ -7271,6 +7291,7 @@ async function runStudioCompletionSuggestion(ctx: StudioModelRequestContext, opt
 		maxTokens: 650,
 		timeoutMs: 60_000,
 		trim: false,
+		signal: options.signal,
 	}));
 	if (!suggestion.trim()) throw new Error("Model returned an empty completion suggestion.");
 	return suggestion;
@@ -7685,12 +7706,20 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
+	if (msg.type === "completion_suggestion_cancel_request" && typeof msg.requestId === "string") {
+		return {
+			type: "completion_suggestion_cancel_request",
+			requestId: msg.requestId,
+		};
+	}
+
 	if (msg.type === "completion_suggestion_request" && typeof msg.requestId === "string" && typeof msg.text === "string") {
 		const textLength = msg.text.length;
 		const rawStart = typeof msg.selectionStart === "number" && Number.isFinite(msg.selectionStart) ? msg.selectionStart : textLength;
 		const rawEnd = typeof msg.selectionEnd === "number" && Number.isFinite(msg.selectionEnd) ? msg.selectionEnd : rawStart;
 		const selectionStart = Math.max(0, Math.min(Math.floor(rawStart), textLength));
 		const selectionEnd = Math.max(selectionStart, Math.min(Math.floor(rawEnd), textLength));
+		const contextMode = msg.contextMode === "session" ? "session" : "cursor";
 		return {
 			type: "completion_suggestion_request",
 			requestId: msg.requestId,
@@ -7700,6 +7729,8 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 			language: typeof msg.language === "string" ? msg.language : undefined,
 			label: typeof msg.label === "string" ? msg.label : undefined,
 			path: typeof msg.path === "string" ? msg.path : undefined,
+			contextMode,
+			contextText: contextMode === "session" && typeof msg.contextText === "string" ? msg.contextText.slice(-STUDIO_COMPLETION_MAX_CONTEXT_CHARS) : undefined,
 		};
 	}
 
@@ -9582,6 +9613,11 @@ ${cssVarsBlock}
             <div class="source-actions-row">
               <button id="copyDraftBtn" type="button" title="Copy the current editor text to the clipboard.">Copy</button>
               <button id="suggestCompletionBtn" type="button" title="Ask the current model for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.">Suggest</button>
+              <button id="suggestCompletionOptionsBtn" type="button" hidden title="Suggestion context options">▾</button>
+              <select id="completionContextSelect" hidden aria-label="Suggestion context mode" title="Choose how much context Suggest includes.">
+                <option value="cursor" selected>Context: editor only</option>
+                <option value="session">Context: editor + latest response</option>
+              </select>
               <button id="openCompanionBtn" type="button" title="Open a detached copy of the current editor text in a new editor-only Studio tab.">New editor</button>
               <button id="sendEditorBtn" type="button">Send to pi editor</button>
             </div>
@@ -9844,6 +9880,7 @@ ${cssVarsBlock}
             <div><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
             <div><dt>Option/Alt+Tab or Cmd/Ctrl+Shift+Space</dt><dd>Suggest a completion at the editor cursor</dd></div>
             <div><dt>Tab</dt><dd>Insert a visible completion suggestion; otherwise indent selected editor text</dd></div>
+            <div><dt>Esc</dt><dd>Dismiss a visible completion suggestion, close overlays, exit pane focus, or stop an active request</dd></div>
             <div><dt>Shift+Tab</dt><dd>Unindent selected editor text</dd></div>
           </dl>
         </section>
@@ -9938,6 +9975,7 @@ export default function (pi: ExtensionAPI) {
 	let studioReplActiveSessionName: string | null = null;
 	let compactInProgress = false;
 	let compactRequestId: string | null = null;
+	const activeCompletionSuggestions = new Map<string, AbortController>();
 
 	const selectStudioReplSessionForTool = (params: { sessionName?: string; target?: string }): { session: StudioReplSessionInfo | null; error?: string; sessions: StudioReplSessionInfo[] } => {
 		const state = listStudioReplSessions();
@@ -11424,6 +11462,21 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (msg.type === "completion_suggestion_cancel_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			const controller = activeCompletionSuggestions.get(msg.requestId);
+			if (!controller) {
+				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: "No matching suggestion request is running." });
+				return;
+			}
+			controller.abort();
+			sendToClient(client, { type: "completion_suggestion_progress", requestId: msg.requestId, message: "Stopping suggestion…" });
+			return;
+		}
+
 		if (msg.type === "completion_suggestion_request") {
 			if (!isValidRequestId(msg.requestId)) {
 				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: "Invalid request ID." });
@@ -11443,6 +11496,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			sendToClient(client, { type: "completion_suggestion_progress", requestId: msg.requestId, message: "Generating suggestion…" });
+			const completionController = new AbortController();
+			activeCompletionSuggestions.set(msg.requestId, completionController);
 			void (async () => {
 				try {
 					const suggestion = await runStudioCompletionSuggestion(ctx, {
@@ -11452,6 +11507,9 @@ export default function (pi: ExtensionAPI) {
 						language: msg.language,
 						label: msg.label,
 						path: msg.path,
+						contextMode: msg.contextMode,
+						contextText: msg.contextText,
+						signal: completionController.signal,
 					});
 					sendToClient(client, {
 						type: "completion_suggestion_result",
@@ -11464,8 +11522,12 @@ export default function (pi: ExtensionAPI) {
 					sendToClient(client, {
 						type: "completion_suggestion_error",
 						requestId: msg.requestId,
-						message: `Suggestion failed: ${error instanceof Error ? error.message : String(error)}`,
+						message: completionController.signal.aborted
+							? "Suggestion stopped."
+							: `Suggestion failed: ${error instanceof Error ? error.message : String(error)}`,
 					});
+				} finally {
+					activeCompletionSuggestions.delete(msg.requestId);
 				}
 			})();
 			return;
