@@ -1,0 +1,4 @@
+name	kind	value	notes
+alpha	measurement	1.23	simple tab-separated row
+beta	measurement	4.56	plain text TSV should open in the editor
+gamma	category	7.89	use New tab from Files to test editor-only opening

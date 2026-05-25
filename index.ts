@@ -162,6 +162,7 @@ interface PreparedStudioPdfExport {
 	createdAt: number;
 	filePath?: string;
 	tempDirPath?: string;
+	persistent?: boolean;
 }
 
 interface PreparedStudioHtmlExport {
@@ -171,6 +172,7 @@ interface PreparedStudioHtmlExport {
 	createdAt: number;
 	filePath?: string;
 	tempDirPath?: string;
+	persistent?: boolean;
 }
 
 interface StudioHtmlAnnotationPlaceholder {
@@ -2257,6 +2259,8 @@ function inferStudioPdfLanguageFromPath(pathInput: string): string | undefined {
 		".yml": "yaml",
 		".toml": "toml",
 		".lua": "lua",
+		".csv": "csv",
+		".tsv": "tsv",
 		".txt": "text",
 		".rst": "text",
 		".adoc": "text",
@@ -2297,6 +2301,33 @@ function formatStudioExportTimestamp(date = new Date()): string {
 
 function buildStudioResponseExportOutputPath(cwd: string, extension: "pdf" | "html"): string {
 	return join(cwd || process.cwd(), `studio-response-${formatStudioExportTimestamp()}.studio.${extension}`);
+}
+
+function buildStudioPreviewExportPath(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string, filename: string): string | null {
+	const cleanFilename = String(filename || "").trim();
+	if (!cleanFilename) return null;
+	const source = typeof sourcePath === "string" ? sourcePath.trim() : "";
+	if (source) {
+		const expanded = recoverLikelyDroppedLeadingSlashPath(expandHome(source));
+		return join(dirname(isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded)), cleanFilename);
+	}
+	const resource = normalizeStudioResourceDirectoryInput(typeof resourceDir === "string" ? resourceDir : "");
+	if (resource) {
+		const expanded = recoverLikelyDroppedLeadingSlashPath(expandHome(resource));
+		return join(isAbsolute(expanded) ? expanded : resolve(fallbackCwd, expanded), cleanFilename);
+	}
+	return join(fallbackCwd || process.cwd(), cleanFilename);
+}
+
+function writeStudioPreviewExportFile(path: string | null, data: Buffer): { filePath: string | null; error: string | null } {
+	if (!path) return { filePath: null, error: "No export path was resolved." };
+	try {
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, data);
+		return { filePath: path, error: null };
+	} catch (error) {
+		return { filePath: null, error: error instanceof Error ? error.message : String(error) };
+	}
 }
 
 function writeStudioFile(pathArg: string, cwd: string, content: string):
@@ -2466,6 +2497,7 @@ const STUDIO_LOCAL_LINK_TEXT_EXTENSIONS = new Set([
 	".diff", ".patch",
 ]);
 const STUDIO_LOCAL_LINK_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const STUDIO_LOCAL_LINK_OFFICE_EXTENSIONS = new Set([".docx", ".odt"]);
 const STUDIO_LOCAL_LINK_TEXT_FILENAMES = new Set([
 	".dockerignore", ".editorconfig", ".env", ".env.example", ".eslintignore", ".gitattributes",
 	".gitignore", ".gitmodules", ".npmignore", ".prettierignore", "dockerfile", "gemfile",
@@ -2477,7 +2509,7 @@ const STUDIO_FILE_BROWSER_IGNORED_DIRS = new Set([
 	"__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache",
 ]);
 
-type StudioLocalPreviewResourceKind = "pdf" | "text" | "image" | "other";
+type StudioLocalPreviewResourceKind = "pdf" | "text" | "image" | "office" | "other";
 
 interface StudioLocalPreviewResource {
 	filePath: string;
@@ -2573,6 +2605,7 @@ function getStudioLocalPreviewResourceKind(extension: string, filePathOrName?: s
 	if (ext === ".pdf") return "pdf";
 	if (STUDIO_LOCAL_LINK_TEXT_EXTENSIONS.has(ext) || STUDIO_LOCAL_LINK_TEXT_FILENAMES.has(name)) return "text";
 	if (STUDIO_LOCAL_LINK_IMAGE_EXTENSIONS.has(ext)) return "image";
+	if (STUDIO_LOCAL_LINK_OFFICE_EXTENSIONS.has(ext)) return "office";
 	return "other";
 }
 
@@ -4304,6 +4337,125 @@ function wrapStudioCodeAsMarkdown(code: string, language?: string): string {
 	return `${marker}${lang}\n${source}\n${marker}`;
 }
 
+const STUDIO_DELIMITED_PREVIEW_MAX_DATA_ROWS = 200;
+const STUDIO_DELIMITED_PREVIEW_MAX_COLUMNS = 50;
+const STUDIO_DELIMITED_PREVIEW_MAX_CELL_CHARS = 500;
+
+function getStudioDelimitedTextConfig(language?: string): { label: string; delimiter: string } | null {
+	const normalized = normalizeStudioEditorLanguage(language);
+	if (normalized === "csv") return { label: "CSV", delimiter: "," };
+	if (normalized === "tsv") return { label: "TSV", delimiter: "\t" };
+	return null;
+}
+
+function parseStudioDelimitedTextRows(text: string, delimiter: string, maxRows: number): { rows: string[][]; truncatedRows: boolean } {
+	const source = String(text ?? "").replace(/^\uFEFF/, "");
+	const limit = Math.max(1, Math.floor(maxRows));
+	const rows: string[][] = [];
+	let row: string[] = [];
+	let cell = "";
+	let inQuotes = false;
+	let truncatedRows = false;
+
+	const pushCell = () => {
+		row.push(cell);
+		cell = "";
+	};
+	const pushRow = (index: number): boolean => {
+		pushCell();
+		rows.push(row);
+		row = [];
+		if (rows.length >= limit) {
+			truncatedRows = index < source.length - 1;
+			return true;
+		}
+		return false;
+	};
+
+	for (let i = 0; i < source.length; i += 1) {
+		if (rows.length >= limit) {
+			truncatedRows = true;
+			break;
+		}
+		const ch = source[i];
+		if (inQuotes) {
+			if (ch === '"') {
+				if (source[i + 1] === '"') {
+					cell += '"';
+					i += 1;
+				} else {
+					inQuotes = false;
+				}
+			} else {
+				cell += ch;
+			}
+			continue;
+		}
+		if (ch === '"' && cell === "") {
+			inQuotes = true;
+			continue;
+		}
+		if (ch === delimiter) {
+			pushCell();
+			continue;
+		}
+		if (ch === "\n") {
+			if (pushRow(i)) break;
+			continue;
+		}
+		if (ch === "\r") {
+			if (source[i + 1] === "\n") i += 1;
+			if (pushRow(i)) break;
+			continue;
+		}
+		cell += ch;
+	}
+
+	if (!truncatedRows && rows.length < limit && (cell.length > 0 || row.length > 0)) {
+		pushCell();
+		rows.push(row);
+	}
+
+	return { rows, truncatedRows };
+}
+
+function formatStudioDelimitedMarkdownCell(value: string | undefined): string {
+	const raw = String(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	const shortened = raw.length > STUDIO_DELIMITED_PREVIEW_MAX_CELL_CHARS
+		? `${raw.slice(0, STUDIO_DELIMITED_PREVIEW_MAX_CELL_CHARS)}…`
+		: raw;
+	return shortened.replace(/\n/g, "<br>").replace(/\|/g, "\\|").trim() || " ";
+}
+
+function formatStudioDelimitedTextAsMarkdown(text: string, language?: string): string | null {
+	const config = getStudioDelimitedTextConfig(language);
+	if (!config) return null;
+	const parsed = parseStudioDelimitedTextRows(text, config.delimiter, STUDIO_DELIMITED_PREVIEW_MAX_DATA_ROWS + 1);
+	const rows = parsed.rows;
+	if (!rows.length) return `_${config.label} file has no tabular data to preview._`;
+	const rawColumnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+	const columnCount = Math.min(rawColumnCount, STUDIO_DELIMITED_PREVIEW_MAX_COLUMNS);
+	if (columnCount <= 0) return `_${config.label} file has no tabular data to preview._`;
+	const header = rows[0] ?? [];
+	const dataRows = rows.slice(1);
+	const columnIndexes = Array.from({ length: columnCount }, (_value, index) => index);
+	const lines: string[] = [`**${config.label} preview**`, ""];
+	const notices: string[] = [];
+	if (parsed.truncatedRows) notices.push(`showing first ${Math.max(0, dataRows.length)} data rows`);
+	if (rawColumnCount > columnCount) notices.push(`showing first ${columnCount} of ${rawColumnCount} columns`);
+	if (notices.length) lines.push(`_${notices.join("; ")}._`, "");
+	lines.push(`| ${columnIndexes.map((index) => formatStudioDelimitedMarkdownCell(header[index] || `Column ${index + 1}`)).join(" | ")} |`);
+	lines.push(`| ${columnIndexes.map(() => "---").join(" | ")} |`);
+	if (dataRows.length) {
+		dataRows.forEach((row) => {
+			lines.push(`| ${columnIndexes.map((index) => formatStudioDelimitedMarkdownCell(row[index])).join(" | ")} |`);
+		});
+	} else {
+		lines.push(`| ${columnIndexes.map(() => " ").join(" | ")} |`);
+	}
+	return lines.join("\n");
+}
+
 function extractStudioFenceInfoLanguage(info: string): string | undefined {
 	const firstToken = String(info ?? "").trim().split(/\s+/)[0]?.replace(/^\./, "") ?? "";
 	return normalizeStudioEditorLanguage(firstToken || undefined);
@@ -5254,11 +5406,13 @@ function buildStudioLiteralTextPdfTexConfig(options?: StudioPdfRenderOptions): {
 
 function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLanguage?: string): string {
 	if (isLatex) return markdown;
-	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorLanguage);
+	const delimitedMarkdown = formatStudioDelimitedTextAsMarkdown(markdown, editorLanguage);
+	const input = delimitedMarkdown ?? markdown;
+	const effectiveEditorLanguage = delimitedMarkdown ? "markdown" : inferStudioPdfLanguage(input, editorLanguage);
 	const source = effectiveEditorLanguage && effectiveEditorLanguage !== "markdown" && effectiveEditorLanguage !== "latex"
-		&& !isStudioSingleFencedCodeBlock(markdown)
-		? wrapStudioCodeAsMarkdown(markdown, effectiveEditorLanguage)
-		: markdown;
+		&& !isStudioSingleFencedCodeBlock(input)
+		? wrapStudioCodeAsMarkdown(input, effectiveEditorLanguage)
+		: input;
 	const annotationReadySource = !effectiveEditorLanguage || effectiveEditorLanguage === "markdown" || effectiveEditorLanguage === "latex"
 		? replaceStudioAnnotationMarkersForPdf(source)
 		: source;
@@ -5979,17 +6133,19 @@ async function renderStudioStandaloneHtmlWithPandoc(
 	sourcePath?: string,
 	options?: StudioHtmlRenderOptions,
 ): Promise<{ html: Buffer; warning?: string }> {
-	const effectiveEditorLanguage = inferStudioPdfLanguage(markdown, editorLanguage);
-	if (!isLatex && isLikelyStandaloneStudioHtml(markdown, effectiveEditorLanguage)) {
-		return { html: Buffer.from(String(markdown ?? ""), "utf-8") };
+	const delimitedMarkdown = isLatex ? null : formatStudioDelimitedTextAsMarkdown(markdown, editorLanguage);
+	const input = delimitedMarkdown ?? markdown;
+	const effectiveEditorLanguage = delimitedMarkdown ? "markdown" : inferStudioPdfLanguage(input, editorLanguage);
+	if (!isLatex && isLikelyStandaloneStudioHtml(input, effectiveEditorLanguage)) {
+		return { html: Buffer.from(String(input ?? ""), "utf-8") };
 	}
 	const source = !isLatex
 		&& effectiveEditorLanguage
 		&& effectiveEditorLanguage !== "markdown"
 		&& effectiveEditorLanguage !== "latex"
-		&& !isStudioSingleFencedCodeBlock(markdown)
-		? wrapStudioCodeAsMarkdown(markdown, effectiveEditorLanguage)
-		: markdown;
+		&& !isStudioSingleFencedCodeBlock(input)
+		? wrapStudioCodeAsMarkdown(input, effectiveEditorLanguage)
+		: input;
 	const annotationPrepared = prepareStudioAnnotationMarkersForHtml(source);
 	const pdfPrepared = prepareStudioPdfBlocksForHtml(annotationPrepared.markdown);
 	let renderedHtml = await renderStudioMarkdownWithPandoc(pdfPrepared.markdown, isLatex, resourcePath, sourcePath);
@@ -6660,7 +6816,74 @@ function respondHtmlPreviewResourceJson(req: IncomingMessage, res: ServerRespons
 	});
 }
 
-function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResponse, requestUrl: URL, resource: StudioLocalPreviewResource, serverState: StudioServerState): void {
+function formatStudioMarkdownAngleTarget(pathText: string): string {
+	return `<${String(pathText || "").replace(/>/g, "%3E")}>`;
+}
+
+function sanitizeStudioPreviewBlockLine(value: string): string {
+	return String(value || "").replace(/[\r\n]+/g, " ").trim();
+}
+
+function buildStudioLocalResourcePreviewDocument(resource: StudioLocalPreviewResource): InitialStudioDocument {
+	const label = basename(resource.filePath) || resource.label || "local preview";
+	const resourcePath = resource.label || basename(resource.filePath) || resource.filePath;
+	const title = sanitizeStudioPreviewBlockLine(label);
+	let text = "";
+	if (resource.kind === "pdf") {
+		text = "```studio-pdf\n"
+			+ `path: ${sanitizeStudioPreviewBlockLine(resourcePath)}\n`
+			+ `title: ${title || "PDF preview"}\n`
+			+ "height: 820\n"
+			+ "```\n";
+	} else if (resource.kind === "image") {
+		text = `![${title || "Image preview"}](${formatStudioMarkdownAngleTarget(resourcePath)})\n`;
+	} else {
+		throw new Error("This local resource cannot be opened as a preview document.");
+	}
+	return {
+		text,
+		label: `${label} preview`,
+		source: "blank",
+		resourceDir: resource.resourceDir,
+	};
+}
+
+function getStudioOfficePandocInputFormat(extension: string): string {
+	const ext = String(extension || "").toLowerCase();
+	if (ext === ".docx") return "docx";
+	if (ext === ".odt") return "odt";
+	return ext.replace(/^\./, "") || "docx";
+}
+
+async function convertStudioOfficeDocumentToMarkdown(resource: StudioLocalPreviewResource): Promise<{ text: string; label: string }> {
+	if (resource.kind !== "office") throw new Error("This local resource is not a supported convertible document.");
+	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
+	const inputFormat = getStudioOfficePandocInputFormat(resource.extension);
+	const result = await runStudioSubprocess(pandocCommand, [
+		"-f", inputFormat,
+		"-t", "markdown",
+		"--wrap=none",
+		resource.filePath,
+	], {
+		cwd: dirname(resource.filePath),
+		timeoutMs: STUDIO_PANDOC_TIMEOUT_MS,
+		stdoutMaxBytes: STUDIO_SUBPROCESS_OUTPUT_MAX_BYTES,
+		label: "pandoc document conversion",
+		notFoundMessage: "pandoc was not found. Install pandoc or set PANDOC_PATH to convert DOCX/ODT documents in Studio.",
+	});
+	if (result.code !== 0) {
+		throw new Error(`pandoc failed with exit code ${result.code}${result.stderr ? `: ${result.stderr}` : ""}`);
+	}
+	if (result.stdoutTruncated) {
+		throw new Error("Converted document exceeded Studio's import size limit.");
+	}
+	const label = `converted: ${resource.label || basename(resource.filePath) || "document"}`;
+	const note = `<!-- ${label} from ${resource.filePath}. This is a Markdown conversion; saving will not update the original ${resource.extension || "document"} file. -->`;
+	const body = result.stdout.trim();
+	return { text: `${note}\n\n${body}\n`, label };
+}
+
+async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResponse, requestUrl: URL, resource: StudioLocalPreviewResource, serverState: StudioServerState): Promise<void> {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "GET" && method !== "HEAD") {
 		res.setHeader("Allow", "GET, HEAD");
@@ -6684,32 +6907,72 @@ function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResponse, 
 		return;
 	}
 
+	if (action === "preview-url") {
+		if (resource.kind !== "pdf" && resource.kind !== "image") {
+			respondJson(res, 400, { ok: false, error: "This local resource cannot be opened in a Studio preview tab." });
+			return;
+		}
+		const document = buildStudioLocalResourcePreviewDocument(resource);
+		const docId = storeTransientStudioDocument(document);
+		const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+		const parsedUrl = new URL(url);
+		respondJson(res, 200, {
+			...basePayload,
+			url,
+			relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+		});
+		return;
+	}
+
 	if (action !== "document" && action !== "editor-url") {
 		respondJson(res, 400, { ok: false, error: "Unsupported local link action." });
 		return;
 	}
-	if (resource.kind !== "text") {
-		respondJson(res, 400, { ok: false, error: "This local resource is not a text document Studio can load into the editor." });
+	if (resource.kind !== "text" && resource.kind !== "office") {
+		respondJson(res, 400, { ok: false, error: "This local resource is not a document Studio can load into the editor." });
 		return;
 	}
 
-	const file = readStudioFile(resource.filePath, dirname(resource.filePath));
-	if (file.ok === false) {
-		respondJson(res, 400, { ok: false, error: file.message });
-		return;
+	let document: InitialStudioDocument;
+	let responseText = "";
+	let converted = false;
+	if (resource.kind === "office") {
+		let conversion: { text: string; label: string };
+		try {
+			conversion = await convertStudioOfficeDocumentToMarkdown(resource);
+		} catch (error) {
+			respondJson(res, 400, { ok: false, error: `Document conversion failed: ${error instanceof Error ? error.message : String(error)}` });
+			return;
+		}
+		converted = true;
+		responseText = conversion.text;
+		document = {
+			text: conversion.text,
+			label: conversion.label,
+			source: "blank",
+			resourceDir: resource.resourceDir,
+		};
+	} else {
+		const file = readStudioFile(resource.filePath, dirname(resource.filePath));
+		if (file.ok === false) {
+			respondJson(res, 400, { ok: false, error: file.message });
+			return;
+		}
+		responseText = file.text;
+		document = {
+			text: file.text,
+			label: resource.label || file.label,
+			source: "file",
+			path: file.resolvedPath,
+			resourceDir: resource.resourceDir,
+		};
 	}
-
-	const document: InitialStudioDocument = {
-		text: file.text,
-		label: resource.label || file.label,
-		source: "file",
-		path: file.resolvedPath,
-		resourceDir: resource.resourceDir,
-	};
 	if (action === "document") {
 		respondJson(res, 200, {
 			...basePayload,
-			text: file.text,
+			text: responseText,
+			label: document.label,
+			converted,
 			resourceDir: resource.resourceDir,
 		});
 		return;
@@ -6720,6 +6983,7 @@ function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResponse, 
 	const parsedUrl = new URL(url);
 	respondJson(res, 200, {
 		...basePayload,
+		converted,
 		url,
 		relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
 	});
@@ -9644,6 +9908,7 @@ ${cssVarsBlock}
                 <option value="c">Syntax highlight: C</option>
                 <option value="cpp">Syntax highlight: C++</option>
                 <option value="css">Syntax highlight: CSS</option>
+                <option value="csv">Syntax highlight: CSV</option>
                 <option value="diff">Syntax highlight: Diff</option>
                 <option value="fortran">Syntax highlight: Fortran</option>
                 <option value="go">Syntax highlight: Go</option>
@@ -9662,6 +9927,7 @@ ${cssVarsBlock}
                 <option value="rust">Syntax highlight: Rust</option>
                 <option value="swift">Syntax highlight: Swift</option>
                 <option value="toml">Syntax highlight: TOML</option>
+                <option value="tsv">Syntax highlight: TSV</option>
                 <option value="typescript">Syntax highlight: TypeScript</option>
                 <option value="xml">Syntax highlight: XML</option>
                 <option value="yaml">Syntax highlight: YAML</option>
@@ -9847,11 +10113,11 @@ ${cssVarsBlock}
       <div class="shortcuts-header">
         <div>
           <h2 id="shortcutsTitle">Keyboard shortcuts</h2>
-          <p class="shortcuts-description">Studio navigation and high-frequency actions.</p>
+          <p class="shortcuts-description">Studio navigation and high-frequency actions. Use arrow keys, Page Up/Down, Home/End, or mouse/trackpad to scroll.</p>
         </div>
         <button id="shortcutsCloseBtn" class="shortcuts-close-btn" type="button" aria-label="Close keyboard shortcuts">Close</button>
       </div>
-      <div class="shortcuts-body">
+      <div id="shortcutsBody" class="shortcuts-body" tabindex="0" aria-label="Keyboard shortcuts list">
         <section class="shortcuts-group">
           <h3>Navigation</h3>
           <dl>
@@ -12073,6 +12339,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const disposePreparedPdfExport = (entry: PreparedStudioPdfExport | null | undefined) => {
+		if (entry?.persistent) return;
 		if (!entry?.tempDirPath) return;
 		void rm(entry.tempDirPath, { recursive: true, force: true }).catch(() => undefined);
 	};
@@ -12101,7 +12368,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const storePreparedPdfExport = (pdf: Buffer, filename: string, warning?: string): string => {
+	const storePreparedPdfExport = (pdf: Buffer, filename: string, warning?: string, filePath?: string): string => {
 		prunePreparedPdfExports();
 		const exportId = randomUUID();
 		preparedPdfExports.set(exportId, {
@@ -12109,6 +12376,8 @@ export default function (pi: ExtensionAPI) {
 			filename,
 			warning,
 			createdAt: Date.now(),
+			filePath,
+			persistent: Boolean(filePath),
 		});
 		return exportId;
 	};
@@ -12117,7 +12386,7 @@ export default function (pi: ExtensionAPI) {
 		prunePreparedPdfExports();
 		const entry = preparedPdfExports.get(exportId);
 		if (!entry) return null;
-		if (entry.filePath && entry.tempDirPath) return entry;
+		if (entry.filePath && (entry.tempDirPath || entry.persistent)) return entry;
 
 		const tempDirPath = join(tmpdir(), `pi-studio-prepared-pdf-${Date.now()}-${randomUUID()}`);
 		const filePath = join(tempDirPath, sanitizePdfFilename(entry.filename));
@@ -12167,6 +12436,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const disposePreparedHtmlExport = (entry: PreparedStudioHtmlExport | null | undefined) => {
+		if (entry?.persistent) return;
 		if (!entry?.tempDirPath) return;
 		void rm(entry.tempDirPath, { recursive: true, force: true }).catch(() => undefined);
 	};
@@ -12195,7 +12465,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const storePreparedHtmlExport = (html: Buffer, filename: string, warning?: string): string => {
+	const storePreparedHtmlExport = (html: Buffer, filename: string, warning?: string, filePath?: string): string => {
 		prunePreparedHtmlExports();
 		const exportId = randomUUID();
 		preparedHtmlExports.set(exportId, {
@@ -12203,6 +12473,8 @@ export default function (pi: ExtensionAPI) {
 			filename,
 			warning,
 			createdAt: Date.now(),
+			filePath,
+			persistent: Boolean(filePath),
 		});
 		return exportId;
 	};
@@ -12211,7 +12483,7 @@ export default function (pi: ExtensionAPI) {
 		prunePreparedHtmlExports();
 		const entry = preparedHtmlExports.get(exportId);
 		if (!entry) return null;
-		if (entry.filePath && entry.tempDirPath) return entry;
+		if (entry.filePath && (entry.tempDirPath || entry.persistent)) return entry;
 
 		const tempDirPath = join(tmpdir(), `pi-studio-prepared-html-${Date.now()}-${randomUUID()}`);
 		const filePath = join(tempDirPath, sanitizeHtmlFilename(entry.filename));
@@ -12632,7 +12904,8 @@ export default function (pi: ExtensionAPI) {
 
 		try {
 			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath, editorPdfLanguage, sourcePath || undefined);
-			const exportId = storePreparedPdfExport(pdf, filename, warning);
+			const writeResult = writeStudioPreviewExportFile(buildStudioPreviewExportPath(sourcePath || undefined, userResourceDir || undefined, studioCwd, filename), pdf);
+			const exportId = storePreparedPdfExport(pdf, filename, warning, writeResult.filePath ?? undefined);
 			const token = serverState?.token ?? "";
 			let openedExternal = false;
 			let openError: string | null = null;
@@ -12649,6 +12922,8 @@ export default function (pi: ExtensionAPI) {
 			respondJson(res, 200, {
 				ok: true,
 				filename,
+				path: writeResult.filePath,
+				writeError: writeResult.error,
 				warning: warning ?? null,
 				openedExternal,
 				openError,
@@ -12743,7 +13018,8 @@ export default function (pi: ExtensionAPI) {
 					themeVars,
 				},
 			);
-			const exportId = storePreparedHtmlExport(html, filename, warning);
+			const writeResult = writeStudioPreviewExportFile(buildStudioPreviewExportPath(sourcePath || undefined, userResourceDir || undefined, studioCwd, filename), html);
+			const exportId = storePreparedHtmlExport(html, filename, warning, writeResult.filePath ?? undefined);
 			const token = serverState?.token ?? "";
 			let openedExternal = false;
 			let openError: string | null = null;
@@ -12760,6 +13036,8 @@ export default function (pi: ExtensionAPI) {
 			respondJson(res, 200, {
 				ok: true,
 				filename,
+				path: writeResult.filePath,
+				writeError: writeResult.error,
 				warning: warning ?? null,
 				openedExternal,
 				openError,
@@ -13052,17 +13330,19 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			try {
-				const resource = resolveStudioLocalPreviewResourcePath(
-					requestUrl.searchParams.get("path") ?? "",
-					requestUrl.searchParams.get("sourcePath") ?? undefined,
-					requestUrl.searchParams.get("resourceDir") ?? undefined,
-					studioCwd,
-				);
-				respondLocalPreviewLinkJson(req, res, requestUrl, resource, serverState);
-			} catch (error) {
-				respondJson(res, 404, { ok: false, error: `Local resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
-			}
+			void (async () => {
+				try {
+					const resource = resolveStudioLocalPreviewResourcePath(
+						requestUrl.searchParams.get("path") ?? "",
+						requestUrl.searchParams.get("sourcePath") ?? undefined,
+						requestUrl.searchParams.get("resourceDir") ?? undefined,
+						studioCwd,
+					);
+					await respondLocalPreviewLinkJson(req, res, requestUrl, resource, serverState);
+				} catch (error) {
+					respondJson(res, 404, { ok: false, error: `Local resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
+				}
+			})();
 			return;
 		}
 

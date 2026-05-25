@@ -131,6 +131,7 @@
       const shortcutsBtn = document.getElementById("shortcutsBtn");
       const shortcutsOverlayEl = document.getElementById("shortcutsOverlay");
       const shortcutsDialogEl = document.getElementById("shortcutsDialog");
+      const shortcutsBodyEl = document.getElementById("shortcutsBody");
       const shortcutsCloseBtn = document.getElementById("shortcutsCloseBtn");
       const leftFocusBtn = document.getElementById("leftFocusBtn");
       const rightFocusBtn = document.getElementById("rightFocusBtn");
@@ -211,6 +212,18 @@
       let studioHtmlFocusFullscreenBtn = null;
       let studioHtmlFocusLastFocusedEl = null;
       let studioHtmlFocusRestoreState = null;
+      let studioImageFocusOverlayEl = null;
+      let studioImageFocusDialogEl = null;
+      let studioImageFocusSlotEl = null;
+      let studioImageFocusImgEl = null;
+      let studioImageFocusTitleEl = null;
+      let studioImageFocusOpenLinkEl = null;
+      let studioImageFocusFullscreenBtn = null;
+      let studioImageFocusCloseBtn = null;
+      let studioImageFocusZoomLabelEl = null;
+      let studioImageFocusLastFocusedEl = null;
+      let studioImageFocusZoomMode = "fit";
+      let studioImageFocusZoom = 1;
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
@@ -1914,6 +1927,8 @@
         matlab:     { label: "MATLAB",     exts: ["m"] },
         latex:      { label: "LaTeX",      exts: ["tex", "latex"] },
         diff:       { label: "Diff",       exts: ["diff", "patch"] },
+        csv:        { label: "CSV",        exts: ["csv"] },
+        tsv:        { label: "TSV",        exts: ["tsv"] },
         // Languages accepted for upload/detect but without syntax highlighting
         java:       { label: "Java",       exts: ["java"] },
         go:         { label: "Go",         exts: ["go"] },
@@ -1941,6 +1956,9 @@
       const ANNOTATION_MODE_STORAGE_KEY = "piStudio.annotationsEnabled";
       const PREVIEW_INPUT_DEBOUNCE_MS = 0;
       const PREVIEW_PENDING_BADGE_DELAY_MS = 220;
+      const DELIMITED_PREVIEW_MAX_DATA_ROWS = 200;
+      const DELIMITED_PREVIEW_MAX_COLUMNS = 50;
+      const DELIMITED_PREVIEW_MAX_CELL_CHARS = 500;
       const previewPendingTimers = new WeakMap();
       const htmlArtifactFramesById = new Map();
       let sourcePreviewRenderTimer = null;
@@ -3666,6 +3684,12 @@
           && typeof studioHtmlFocusShellEl.contains === "function"
           && studioHtmlFocusShellEl.contains(event.target)
         );
+        const imageFocusOwnsEvent = Boolean(
+          studioImageFocusDialogEl
+          && event.target
+          && typeof studioImageFocusDialogEl.contains === "function"
+          && studioImageFocusDialogEl.contains(event.target)
+        );
         const quizOwnsEvent = Boolean(
           quizDialogEl
           && event.target
@@ -3691,6 +3715,14 @@
           return;
         }
 
+        if (isStudioImageFocusOpen() && plainEscape) {
+          event.preventDefault();
+          closeStudioImageFocusViewer();
+          return;
+        }
+
+        if (handleStudioImageFocusShortcut(event)) return;
+
         if (isScratchpadOpen() && plainEscape) {
           event.preventDefault();
           closeScratchpad();
@@ -3702,6 +3734,8 @@
           closeShortcuts();
           return;
         }
+
+        if (handleShortcutsScrollShortcut(event)) return;
 
         if (isReviewNotesOpen() && plainEscape) {
           event.preventDefault();
@@ -3715,7 +3749,7 @@
           return;
         }
 
-        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || shortcutsOwnsEvent || pdfFocusOwnsEvent || htmlFocusOwnsEvent || quizOwnsEvent) {
+        if (scratchpadOwnsEvent || reviewNotesOwnsEvent || outlineOwnsEvent || shortcutsOwnsEvent || pdfFocusOwnsEvent || htmlFocusOwnsEvent || imageFocusOwnsEvent || quizOwnsEvent) {
           return;
         }
 
@@ -3887,6 +3921,22 @@
           });
         } catch {
           return "";
+        }
+      }
+
+      function formatStudioExportTimestamp(date) {
+        const value = date instanceof Date ? date : new Date();
+        const pad = (part) => String(part).padStart(2, "0");
+        try {
+          return String(value.getFullYear())
+            + pad(value.getMonth() + 1)
+            + pad(value.getDate())
+            + "-"
+            + pad(value.getHours())
+            + pad(value.getMinutes())
+            + pad(value.getSeconds());
+        } catch {
+          return String(Date.now());
         }
       }
 
@@ -4257,9 +4307,202 @@
         return marker + (lang ? lang : "") + newline + source + newline + marker;
       }
 
+      function getDelimitedTextPreviewConfig(language) {
+        const lang = normalizeFenceLanguage(language || "");
+        if (lang === "csv") return { kind: "csv", label: "CSV", delimiter: "," };
+        if (lang === "tsv") return { kind: "tsv", label: "TSV", delimiter: "\t" };
+        return null;
+      }
+
+      function parseDelimitedTextRows(text, delimiter, maxRows) {
+        const source = String(text || "").replace(/^\uFEFF/, "");
+        const limit = Math.max(1, Number(maxRows) || (DELIMITED_PREVIEW_MAX_DATA_ROWS + 1));
+        const rows = [];
+        let row = [];
+        let cell = "";
+        let inQuotes = false;
+        let truncatedRows = false;
+
+        const pushCell = () => {
+          row.push(cell);
+          cell = "";
+        };
+        const pushRow = (index) => {
+          pushCell();
+          rows.push(row);
+          row = [];
+          if (rows.length >= limit) {
+            truncatedRows = index < source.length - 1;
+            return true;
+          }
+          return false;
+        };
+
+        for (let i = 0; i < source.length; i += 1) {
+          if (rows.length >= limit) {
+            truncatedRows = true;
+            break;
+          }
+          const ch = source[i];
+          if (inQuotes) {
+            if (ch === '"') {
+              if (source[i + 1] === '"') {
+                cell += '"';
+                i += 1;
+              } else {
+                inQuotes = false;
+              }
+            } else {
+              cell += ch;
+            }
+            continue;
+          }
+          if (ch === '"' && cell === "") {
+            inQuotes = true;
+            continue;
+          }
+          if (ch === delimiter) {
+            pushCell();
+            continue;
+          }
+          if (ch === "\n") {
+            if (pushRow(i)) break;
+            continue;
+          }
+          if (ch === "\r") {
+            if (source[i + 1] === "\n") i += 1;
+            if (pushRow(i)) break;
+            continue;
+          }
+          cell += ch;
+        }
+
+        if (!truncatedRows && rows.length < limit && (cell.length > 0 || row.length > 0)) {
+          pushCell();
+          rows.push(row);
+        }
+
+        return { rows, truncatedRows };
+      }
+
+      function buildDelimitedTextPreviewModel(text, language) {
+        const config = getDelimitedTextPreviewConfig(language);
+        if (!config) return null;
+        const parsed = parseDelimitedTextRows(text, config.delimiter, DELIMITED_PREVIEW_MAX_DATA_ROWS + 1);
+        const rows = parsed.rows;
+        const rawColumnCount = rows.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0);
+        const columnCount = Math.min(rawColumnCount, DELIMITED_PREVIEW_MAX_COLUMNS);
+        const header = rows[0] || [];
+        const dataRows = rows.slice(1);
+        return {
+          ...config,
+          rows,
+          header,
+          dataRows,
+          rawColumnCount,
+          columnCount,
+          truncatedColumns: rawColumnCount > columnCount,
+          truncatedRows: parsed.truncatedRows,
+        };
+      }
+
+      function getDelimitedHeaderLabel(header, index) {
+        const value = String((header && header[index]) || "").trim();
+        return value || ("Column " + (index + 1));
+      }
+
+      function formatDelimitedPreviewCellHtml(value) {
+        const raw = String(value ?? "");
+        if (raw.length <= DELIMITED_PREVIEW_MAX_CELL_CHARS) return escapeHtml(raw);
+        return escapeHtml(raw.slice(0, DELIMITED_PREVIEW_MAX_CELL_CHARS)) + "<span class='delimited-preview-truncation'>…</span>";
+      }
+
+      function formatDelimitedMarkdownCell(value) {
+        const raw = String(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const shortened = raw.length > DELIMITED_PREVIEW_MAX_CELL_CHARS
+          ? raw.slice(0, DELIMITED_PREVIEW_MAX_CELL_CHARS) + "…"
+          : raw;
+        return shortened.replace(/\n/g, "<br>").replace(/\|/g, "\\|").trim() || " ";
+      }
+
+      function buildDelimitedTextPreviewHtml(text, language) {
+        const model = buildDelimitedTextPreviewModel(text, language);
+        if (!model) return "";
+        if (!model.rows.length || model.columnCount <= 0) {
+          return "<div class='delimited-preview rendered-markdown'><div class='delimited-preview-header'><strong>" + escapeHtml(model.label) + " preview</strong></div><pre class='plain-markdown'>No tabular data to preview.</pre></div>";
+        }
+        const columnIndexes = Array.from({ length: model.columnCount }, (_, index) => index);
+        const headerHtml = columnIndexes.map((index) => "<th scope='col'>" + escapeHtml(getDelimitedHeaderLabel(model.header, index)) + "</th>").join("");
+        const bodyHtml = model.dataRows.length
+          ? model.dataRows.map((row, rowIndex) => {
+            const cells = columnIndexes.map((index) => {
+              const raw = String((row && row[index]) ?? "");
+              const emptyClass = raw.length === 0 ? " delimited-preview-empty-cell" : "";
+              return "<td class='" + emptyClass.trim() + "'>" + formatDelimitedPreviewCellHtml(raw) + "</td>";
+            }).join("");
+            return "<tr><th scope='row' class='delimited-preview-row-number'>" + String(rowIndex + 1) + "</th>" + cells + "</tr>";
+          }).join("")
+          : "<tr><td colspan='" + String(model.columnCount + 1) + "' class='delimited-preview-empty'>No data rows after the header.</td></tr>";
+        const notices = [];
+        if (model.truncatedRows) notices.push("Showing first " + String(Math.max(0, model.dataRows.length)) + " data rows.");
+        if (model.truncatedColumns) notices.push("Showing first " + String(model.columnCount) + " of " + String(model.rawColumnCount) + " columns.");
+        const noticeHtml = notices.length ? "<div class='preview-warning delimited-preview-notice'>" + escapeHtml(notices.join(" ")) + "</div>" : "";
+        const summaryParts = [String(model.dataRows.length) + (model.truncatedRows ? "+" : "") + " data rows", String(model.rawColumnCount) + " columns"];
+        return "<div class='delimited-preview rendered-markdown'>"
+          + "<div class='delimited-preview-header'><div><strong>" + escapeHtml(model.label) + " preview</strong><span>" + escapeHtml(summaryParts.join(" · ")) + "</span></div></div>"
+          + noticeHtml
+          + "<div class='delimited-preview-table-wrap'><table>"
+          + "<thead><tr><th scope='col' class='delimited-preview-row-number'>#</th>" + headerHtml + "</tr></thead>"
+          + "<tbody>" + bodyHtml + "</tbody>"
+          + "</table></div>"
+          + "</div>";
+      }
+
+      function buildDelimitedTextPreviewMarkdown(text, language) {
+        const model = buildDelimitedTextPreviewModel(text, language);
+        if (!model) return "";
+        if (!model.rows.length || model.columnCount <= 0) return "_No tabular data to preview._";
+        const columnIndexes = Array.from({ length: model.columnCount }, (_, index) => index);
+        const lines = ["**" + model.label + " preview**", ""];
+        const notices = [];
+        if (model.truncatedRows) notices.push("showing first " + String(Math.max(0, model.dataRows.length)) + " data rows");
+        if (model.truncatedColumns) notices.push("showing first " + String(model.columnCount) + " of " + String(model.rawColumnCount) + " columns");
+        if (notices.length) lines.push("_" + notices.join("; ") + "._", "");
+        lines.push("| " + columnIndexes.map((index) => formatDelimitedMarkdownCell(getDelimitedHeaderLabel(model.header, index))).join(" | ") + " |");
+        lines.push("| " + columnIndexes.map(() => "---").join(" | ") + " |");
+        if (model.dataRows.length) {
+          model.dataRows.forEach((row) => {
+            lines.push("| " + columnIndexes.map((index) => formatDelimitedMarkdownCell(row && row[index])).join(" | ") + " |");
+          });
+        } else {
+          lines.push("| " + columnIndexes.map(() => " ").join(" | ") + " |");
+        }
+        return lines.join("\n");
+      }
+
+      function renderDelimitedTextPreview(targetEl, text, pane) {
+        const html = buildDelimitedTextPreviewHtml(text, editorLanguage || "");
+        if (!html || !targetEl) return false;
+        if (pane === "source") {
+          sourcePreviewRenderNonce += 1;
+        } else if (pane === "response") {
+          responsePreviewRenderNonce += 1;
+        }
+        clearPreviewJumpHighlight(targetEl);
+        finishPreviewRender(targetEl);
+        targetEl.innerHTML = html;
+        if (pane === "response") {
+          applyPendingResponseScrollReset();
+          scheduleResponsePaneRepaintNudge();
+        }
+        return true;
+      }
+
       function prepareEditorTextForPdfExport(text) {
         const prepared = prepareEditorTextForPreview(text);
         const lang = normalizeFenceLanguage(editorLanguage || "");
+        const delimitedPreview = buildDelimitedTextPreviewMarkdown(prepared, lang);
+        if (delimitedPreview) return delimitedPreview;
         if (lang && lang !== "markdown" && lang !== "latex") {
           return wrapAsFencedCodeBlock(prepared, lang);
         }
@@ -4269,6 +4512,8 @@
       function prepareEditorTextForHtmlExport(text) {
         const prepared = prepareEditorTextForPreview(text);
         const lang = normalizeFenceLanguage(editorLanguage || "");
+        const delimitedPreview = buildDelimitedTextPreviewMarkdown(prepared, lang);
+        if (delimitedPreview) return delimitedPreview;
         if (lang && lang !== "markdown" && lang !== "latex") {
           return wrapAsFencedCodeBlock(prepared, lang);
         }
@@ -5096,13 +5341,12 @@
           return;
         }
         if (kind === "image") {
-          const pendingWindow = window.open("", "_blank");
-          void openPreviewImageLink(context.href, context.title, context, pendingWindow).catch((error) => {
+          void openPreviewImageLink(context.href, context.title, context).catch((error) => {
             setStatus((error && error.message) ? error.message : String(error || "Could not open linked image."), "warning");
           });
           return;
         }
-        if (kind === "text") {
+        if (kind === "text" || kind === "office") {
           const pendingWindow = window.open("", "_blank");
           void openPreviewDocumentInNewEditor(context.href, pendingWindow, context).catch((error) => {
             setStatus((error && error.message) ? error.message : String(error || "Could not open linked file."), "warning");
@@ -5770,6 +6014,394 @@
         if (!openStudioPdfFocusFromButton(buttonEl)) {
           setStatus("Could not open PDF focus view for this card.", "warning");
         }
+      }
+
+      function isStudioImageFocusOpen() {
+        return Boolean(studioImageFocusOverlayEl && studioImageFocusOverlayEl.hidden === false);
+      }
+
+      function isStudioImageFocusSrcAllowed(src) {
+        const value = String(src || "").trim();
+        if (!value) return false;
+        if (/^javascript:/i.test(value)) return false;
+        return /^(?:data:image\/|blob:|https?:|file:|\/|\.\/|\.\.\/)/i.test(value);
+      }
+
+      function clampStudioImageFocusZoom(value) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+        return Math.max(0.1, Math.min(8, parsed));
+      }
+
+      function getStudioImageFocusFitScale() {
+        const img = studioImageFocusImgEl;
+        const slot = studioImageFocusSlotEl;
+        if (!img || !slot) return 1;
+        const naturalWidth = Number(img.naturalWidth) || 0;
+        const naturalHeight = Number(img.naturalHeight) || 0;
+        if (naturalWidth <= 0 || naturalHeight <= 0) return 1;
+        let paddingX = 0;
+        let paddingY = 0;
+        try {
+          const style = window.getComputedStyle(slot);
+          paddingX = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+          paddingY = (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+        } catch {}
+        const availableWidth = Math.max(1, (slot.clientWidth || 0) - paddingX);
+        const availableHeight = Math.max(1, (slot.clientHeight || 0) - paddingY);
+        return clampStudioImageFocusZoom(Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight));
+      }
+
+      function getStudioImageFocusDisplayScale() {
+        return studioImageFocusZoomMode === "fit"
+          ? getStudioImageFocusFitScale()
+          : clampStudioImageFocusZoom(studioImageFocusZoom);
+      }
+
+      function syncStudioImageFocusZoom() {
+        if (!studioImageFocusImgEl || !studioImageFocusSlotEl) return;
+        const fitMode = studioImageFocusZoomMode === "fit";
+        studioImageFocusSlotEl.classList.toggle("is-fit", fitMode);
+        studioImageFocusSlotEl.classList.toggle("is-zoomed", !fitMode);
+        if (fitMode) {
+          studioImageFocusImgEl.style.width = "";
+          studioImageFocusImgEl.style.height = "";
+          studioImageFocusImgEl.style.maxWidth = "100%";
+          studioImageFocusImgEl.style.maxHeight = "100%";
+        } else {
+          const zoom = clampStudioImageFocusZoom(studioImageFocusZoom);
+          const naturalWidth = Number(studioImageFocusImgEl.naturalWidth) || 0;
+          studioImageFocusImgEl.style.maxWidth = "none";
+          studioImageFocusImgEl.style.maxHeight = "none";
+          studioImageFocusImgEl.style.height = "auto";
+          studioImageFocusImgEl.style.width = naturalWidth > 0 ? Math.max(1, Math.round(naturalWidth * zoom)) + "px" : Math.round(zoom * 100) + "%";
+        }
+        if (studioImageFocusZoomLabelEl) {
+          studioImageFocusZoomLabelEl.textContent = Math.round(getStudioImageFocusDisplayScale() * 100) + "%";
+        }
+      }
+
+      function getStudioImageFocusViewportCenter() {
+        const slot = studioImageFocusSlotEl;
+        if (!slot) return { x: 0.5, y: 0.5 };
+        const scrollWidth = Math.max(slot.scrollWidth || 0, slot.clientWidth || 0, 1);
+        const scrollHeight = Math.max(slot.scrollHeight || 0, slot.clientHeight || 0, 1);
+        return {
+          x: Math.max(0, Math.min(1, (slot.scrollLeft + (slot.clientWidth || 0) / 2) / scrollWidth)),
+          y: Math.max(0, Math.min(1, (slot.scrollTop + (slot.clientHeight || 0) / 2) / scrollHeight)),
+        };
+      }
+
+      function restoreStudioImageFocusViewportCenter(center) {
+        const slot = studioImageFocusSlotEl;
+        if (!slot || !center) return;
+        const schedule = typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (callback) => window.setTimeout(callback, 0);
+        schedule(() => {
+          if (!slot.isConnected || studioImageFocusZoomMode === "fit") return;
+          const maxLeft = Math.max(0, (slot.scrollWidth || 0) - (slot.clientWidth || 0));
+          const maxTop = Math.max(0, (slot.scrollHeight || 0) - (slot.clientHeight || 0));
+          slot.scrollLeft = Math.max(0, Math.min(maxLeft, (slot.scrollWidth || 0) * center.x - (slot.clientWidth || 0) / 2));
+          slot.scrollTop = Math.max(0, Math.min(maxTop, (slot.scrollHeight || 0) * center.y - (slot.clientHeight || 0) / 2));
+        });
+      }
+
+      function getStudioImageFocusPointerCenter(event) {
+        const slot = studioImageFocusSlotEl;
+        if (!slot || !event || typeof slot.getBoundingClientRect !== "function") return getStudioImageFocusViewportCenter();
+        const rect = slot.getBoundingClientRect();
+        const scrollWidth = Math.max(slot.scrollWidth || 0, slot.clientWidth || 0, 1);
+        const scrollHeight = Math.max(slot.scrollHeight || 0, slot.clientHeight || 0, 1);
+        return {
+          x: Math.max(0, Math.min(1, (slot.scrollLeft + (Number(event.clientX) || rect.left + rect.width / 2) - rect.left) / scrollWidth)),
+          y: Math.max(0, Math.min(1, (slot.scrollTop + (Number(event.clientY) || rect.top + rect.height / 2) - rect.top) / scrollHeight)),
+        };
+      }
+
+      function setStudioImageFocusZoom(mode, zoom, options) {
+        const center = options && options.center ? options.center : getStudioImageFocusViewportCenter();
+        studioImageFocusZoomMode = mode === "fit" ? "fit" : "custom";
+        studioImageFocusZoom = clampStudioImageFocusZoom(zoom);
+        syncStudioImageFocusZoom();
+        if (studioImageFocusZoomMode !== "fit") restoreStudioImageFocusViewportCenter(center);
+      }
+
+      function zoomStudioImageFocus(factor, options) {
+        const base = studioImageFocusZoomMode === "fit" ? getStudioImageFocusFitScale() : studioImageFocusZoom;
+        setStudioImageFocusZoom("custom", clampStudioImageFocusZoom(base * factor), options);
+      }
+
+      function handleStudioImageFocusWheel(event) {
+        if (!isStudioImageFocusOpen() || !event) return;
+        if (!event.altKey && !event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const delta = Number(event.deltaY) || 0;
+        const factor = delta < 0 ? 1.12 : 1 / 1.12;
+        zoomStudioImageFocus(factor, { center: getStudioImageFocusPointerCenter(event) });
+      }
+
+      function handleStudioImageFocusShortcut(event) {
+        if (!isStudioImageFocusOpen() || !event) return false;
+        if (isTextEntryShortcutTarget(event.target)) return false;
+        const key = typeof event.key === "string" ? event.key : "";
+        const code = typeof event.code === "string" ? event.code : "";
+        if (!event.altKey || event.metaKey || event.ctrlKey) return false;
+        if (code === "Equal" || code === "NumpadAdd" || key === "=" || key === "+") {
+          event.preventDefault();
+          zoomStudioImageFocus(1.25);
+          return true;
+        }
+        if (code === "Minus" || code === "NumpadSubtract" || key === "-" || key === "_") {
+          event.preventDefault();
+          zoomStudioImageFocus(1 / 1.25);
+          return true;
+        }
+        if (code === "Digit0" || code === "Numpad0" || key === "0") {
+          event.preventDefault();
+          setStudioImageFocusZoom("fit", 1);
+          return true;
+        }
+        return false;
+      }
+
+      function syncStudioImageFocusFullscreenButton() {
+        if (!studioImageFocusFullscreenBtn) return;
+        const isFullscreen = Boolean(document.fullscreenElement && studioImageFocusDialogEl && document.fullscreenElement === studioImageFocusDialogEl);
+        studioImageFocusFullscreenBtn.replaceChildren(makeStudioUiRefreshIcon(isFullscreen ? "fullscreen-exit" : "fullscreen"));
+        const label = isFullscreen ? "Exit fullscreen" : "Fullscreen";
+        studioImageFocusFullscreenBtn.title = isFullscreen
+          ? "Exit browser fullscreen and keep the image focus viewer open."
+          : "Ask the browser to make this image viewer fullscreen.";
+        studioImageFocusFullscreenBtn.setAttribute("aria-label", label);
+        studioImageFocusFullscreenBtn.setAttribute("aria-pressed", isFullscreen ? "true" : "false");
+      }
+
+      async function toggleStudioImageFocusFullscreen() {
+        const dialog = studioImageFocusDialogEl;
+        if (!dialog) return;
+        const isFullscreen = Boolean(document.fullscreenElement && document.fullscreenElement === dialog);
+        if (isFullscreen) {
+          try {
+            if (typeof document.exitFullscreen === "function") await document.exitFullscreen();
+          } catch (error) {
+            setStatus("Could not exit image fullscreen: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+          } finally {
+            syncStudioImageFocusFullscreenButton();
+          }
+          return;
+        }
+        if (typeof dialog.requestFullscreen !== "function") {
+          setStatus("Browser fullscreen is not available for this image viewer.", "warning");
+          return;
+        }
+        try {
+          await dialog.requestFullscreen();
+        } catch (error) {
+          setStatus("Could not enter image fullscreen: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+        } finally {
+          syncStudioImageFocusFullscreenButton();
+        }
+      }
+
+      function appendStudioImageFocusTextButton(parent, label, title, onClick) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "studio-pdf-focus-btn studio-image-focus-zoom-btn";
+        button.textContent = label;
+        button.title = title;
+        button.addEventListener("click", onClick);
+        parent.appendChild(button);
+        return button;
+      }
+
+      function ensureStudioImageFocusViewer() {
+        if (studioImageFocusOverlayEl) return studioImageFocusOverlayEl;
+
+        const overlay = document.createElement("div");
+        overlay.className = "studio-pdf-focus-overlay studio-image-focus-overlay";
+        overlay.hidden = true;
+        overlay.setAttribute("role", "dialog");
+        overlay.setAttribute("aria-modal", "true");
+        overlay.setAttribute("aria-labelledby", "studioImageFocusTitle");
+
+        const dialog = document.createElement("div");
+        dialog.className = "studio-pdf-focus-dialog studio-image-focus-dialog";
+
+        const header = document.createElement("div");
+        header.className = "studio-pdf-focus-header studio-image-focus-header";
+
+        const titleGroup = document.createElement("div");
+        titleGroup.className = "studio-pdf-focus-title-group";
+
+        const closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.className = "studio-pdf-focus-btn studio-pdf-focus-close";
+        closeBtn.title = "Exit image focus view.";
+        closeBtn.setAttribute("aria-label", "Exit image focus view");
+        closeBtn.appendChild(makeStudioUiRefreshIcon("focus-exit"));
+        closeBtn.addEventListener("click", () => closeStudioImageFocusViewer());
+        titleGroup.appendChild(closeBtn);
+
+        const titleEl = document.createElement("div");
+        titleEl.id = "studioImageFocusTitle";
+        titleEl.className = "studio-pdf-focus-title";
+        titleEl.textContent = "Image preview";
+        titleGroup.appendChild(titleEl);
+        header.appendChild(titleGroup);
+
+        const actions = document.createElement("div");
+        actions.className = "studio-pdf-focus-actions studio-image-focus-actions";
+
+        const openLink = document.createElement("a");
+        openLink.className = "studio-pdf-focus-link";
+        openLink.target = "_blank";
+        openLink.rel = "noopener noreferrer";
+        openLink.textContent = "Open image";
+        actions.appendChild(openLink);
+
+        appendStudioImageFocusTextButton(actions, "Fit", "Fit the image to the viewer.", () => setStudioImageFocusZoom("fit", 1));
+        appendStudioImageFocusTextButton(actions, "100%", "Show the image at its natural pixel size.", () => setStudioImageFocusZoom("custom", 1));
+        appendStudioImageFocusTextButton(actions, "−", "Zoom out.", () => zoomStudioImageFocus(1 / 1.25));
+        const zoomLabel = document.createElement("span");
+        zoomLabel.className = "studio-image-focus-zoom-label";
+        zoomLabel.textContent = "100%";
+        actions.appendChild(zoomLabel);
+        appendStudioImageFocusTextButton(actions, "+", "Zoom in.", () => zoomStudioImageFocus(1.25));
+        appendStudioImageFocusTextButton(actions, "Reset", "Reset image zoom to fit.", () => setStudioImageFocusZoom("fit", 1));
+
+        const fullscreenBtn = document.createElement("button");
+        fullscreenBtn.type = "button";
+        fullscreenBtn.className = "studio-pdf-focus-btn studio-pdf-focus-fullscreen";
+        fullscreenBtn.addEventListener("click", () => {
+          void toggleStudioImageFocusFullscreen();
+        });
+        actions.appendChild(fullscreenBtn);
+
+        header.appendChild(actions);
+        dialog.appendChild(header);
+
+        const slot = document.createElement("div");
+        slot.className = "studio-image-focus-slot is-fit";
+        const img = document.createElement("img");
+        img.className = "studio-image-focus-img";
+        img.alt = "Image preview";
+        img.addEventListener("load", syncStudioImageFocusZoom);
+        slot.addEventListener("wheel", handleStudioImageFocusWheel, { passive: false });
+        slot.appendChild(img);
+        dialog.appendChild(slot);
+
+        overlay.appendChild(dialog);
+        overlay.addEventListener("click", (event) => {
+          if (event.target === overlay) closeStudioImageFocusViewer();
+        });
+        document.addEventListener("fullscreenchange", syncStudioImageFocusFullscreenButton);
+
+        document.body.appendChild(overlay);
+        studioImageFocusOverlayEl = overlay;
+        studioImageFocusDialogEl = dialog;
+        studioImageFocusSlotEl = slot;
+        studioImageFocusImgEl = img;
+        studioImageFocusTitleEl = titleEl;
+        studioImageFocusOpenLinkEl = openLink;
+        studioImageFocusFullscreenBtn = fullscreenBtn;
+        studioImageFocusCloseBtn = closeBtn;
+        studioImageFocusZoomLabelEl = zoomLabel;
+        syncStudioImageFocusFullscreenButton();
+        return overlay;
+      }
+
+      function openStudioImageFocusViewer(src, title) {
+        const imageSrc = String(src || "").trim();
+        if (!isStudioImageFocusSrcAllowed(imageSrc)) return false;
+        ensureStudioImageFocusViewer();
+        studioImageFocusLastFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const label = String(title || "Image preview").trim() || "Image preview";
+        if (studioImageFocusTitleEl) studioImageFocusTitleEl.textContent = label;
+        if (studioImageFocusOpenLinkEl) studioImageFocusOpenLinkEl.href = imageSrc;
+        if (studioImageFocusImgEl) {
+          studioImageFocusImgEl.alt = label;
+          studioImageFocusImgEl.src = imageSrc;
+        }
+        studioImageFocusZoomMode = "fit";
+        studioImageFocusZoom = 1;
+        syncStudioImageFocusZoom();
+        if (document.body) document.body.classList.add("studio-image-focus-open");
+        if (studioImageFocusOverlayEl) studioImageFocusOverlayEl.hidden = false;
+        syncStudioImageFocusFullscreenButton();
+        closeStudioUiRefreshMenus();
+        closeExportPreviewMenu();
+        closePreviewLinkMenu();
+        window.setTimeout(() => {
+          if (studioImageFocusCloseBtn && typeof studioImageFocusCloseBtn.focus === "function") {
+            studioImageFocusCloseBtn.focus();
+          }
+        }, 0);
+        return true;
+      }
+
+      function closeStudioImageFocusViewer() {
+        if (!isStudioImageFocusOpen()) return false;
+        if (document.fullscreenElement && studioImageFocusDialogEl && studioImageFocusDialogEl.contains(document.fullscreenElement)) {
+          try {
+            const exitResult = document.exitFullscreen && document.exitFullscreen();
+            if (exitResult && typeof exitResult.catch === "function") exitResult.catch(() => {});
+          } catch {}
+        }
+        if (studioImageFocusOverlayEl) studioImageFocusOverlayEl.hidden = true;
+        if (studioImageFocusImgEl) studioImageFocusImgEl.removeAttribute("src");
+        if (studioImageFocusOpenLinkEl) studioImageFocusOpenLinkEl.removeAttribute("href");
+        if (document.body) document.body.classList.remove("studio-image-focus-open");
+        syncStudioImageFocusFullscreenButton();
+        const focusTarget = studioImageFocusLastFocusedEl;
+        studioImageFocusLastFocusedEl = null;
+        if (focusTarget && typeof focusTarget.focus === "function" && document.contains(focusTarget)) {
+          window.setTimeout(() => focusTarget.focus(), 0);
+        }
+        return true;
+      }
+
+      function getPreviewImageElementTitle(imageEl) {
+        if (!imageEl) return "Image preview";
+        const alt = typeof imageEl.getAttribute === "function" ? String(imageEl.getAttribute("alt") || "").trim() : "";
+        const title = typeof imageEl.getAttribute === "function" ? String(imageEl.getAttribute("title") || "").trim() : "";
+        const src = typeof imageEl.getAttribute === "function" ? String(imageEl.getAttribute("src") || "").trim() : "";
+        const srcLabel = /^data:image\//i.test(src) ? "" : (src.length > 120 ? src.slice(0, 117) + "…" : src);
+        return alt || title || srcLabel || "Image preview";
+      }
+
+      function openPreviewImageElementInFocus(imageEl) {
+        if (!imageEl) return false;
+        const src = String(imageEl.currentSrc || imageEl.src || imageEl.getAttribute("src") || "").trim();
+        if (!src) return false;
+        return openStudioImageFocusViewer(src, getPreviewImageElementTitle(imageEl));
+      }
+
+      function decoratePreviewImages(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
+        const images = Array.from(targetEl.querySelectorAll("img[src]"));
+        images.forEach((imageEl) => {
+          if (!(imageEl instanceof HTMLImageElement)) return;
+          if (imageEl.dataset && imageEl.dataset.studioImageFocusDecorated === "1") return;
+          if (imageEl.closest && imageEl.closest("a[href], button, .studio-html-artifact-shell, .studio-pdf-card")) return;
+          if (!isStudioImageFocusSrcAllowed(imageEl.currentSrc || imageEl.src || imageEl.getAttribute("src") || "")) return;
+          imageEl.classList.add("studio-image-focus-target");
+          imageEl.tabIndex = imageEl.tabIndex >= 0 ? imageEl.tabIndex : 0;
+          imageEl.setAttribute("role", "button");
+          imageEl.setAttribute("aria-label", "Open image focus viewer");
+          if (imageEl.dataset) imageEl.dataset.studioImageFocusDecorated = "1";
+          imageEl.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!openPreviewImageElementInFocus(imageEl)) setStatus("Could not open image focus view.", "warning");
+          });
+          imageEl.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            if (!openPreviewImageElementInFocus(imageEl)) setStatus("Could not open image focus view.", "warning");
+          });
+        });
       }
 
       function createStudioPdfCard(block, useEditorResourceContext) {
@@ -7003,15 +7635,16 @@
         const sourcePath = exportingReplJournal ? "" : (effectivePath || sourceState.path || "");
         const resourceDir = (!sourcePath && resourceDirInput) ? getCurrentResourceDirValue() : "";
         const isEditorPreview = rightView === "editor-preview";
-        const editorPdfLanguage = isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "";
+        const editorIsDelimitedPreview = isEditorPreview && Boolean(getDelimitedTextPreviewConfig(editorLanguage || ""));
+        const editorPdfLanguage = isEditorPreview ? (editorIsDelimitedPreview ? "markdown" : normalizeFenceLanguage(editorLanguage || "")) : "";
         const isLatex = isEditorPreview
           ? editorPdfLanguage === "latex"
           : /\\documentclass\b|\\begin\{document\}/.test(markdown);
-        let filenameHint = exportingReplJournal ? "repl-studio.pdf" : (isEditorPreview ? "studio-editor-preview.pdf" : "studio-response-preview.pdf");
+        let filenameHint = exportingReplJournal ? "repl-studio.pdf" : (isEditorPreview ? "studio-editor-preview.pdf" : ("studio-response-" + formatStudioExportTimestamp() + ".studio.pdf"));
         if (sourcePath) {
           const baseName = sourcePath.split(/[\\/]/).pop() || "studio";
           const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
-          filenameHint = stem + "-preview.pdf";
+          filenameHint = stem + ".studio.pdf";
         }
 
         previewExportInProgress = true;
@@ -7059,6 +7692,8 @@
 
             const exportWarning = typeof payload.warning === "string" ? payload.warning.trim() : "";
             const openError = typeof payload.openError === "string" ? payload.openError.trim() : "";
+            const writeError = typeof payload.writeError === "string" ? payload.writeError.trim() : "";
+            const exportPath = typeof payload.path === "string" ? payload.path.trim() : "";
             const openedExternal = payload.openedExternal === true;
             let downloadName = typeof payload.filename === "string" && payload.filename.trim()
               ? payload.filename.trim()
@@ -7068,10 +7703,12 @@
             }
 
             if (openedExternal) {
-              if (exportWarning) {
+              if (writeError) {
+                setStatus("Opened PDF in default viewer, but could not write project file: " + writeError, "warning");
+              } else if (exportWarning) {
                 setStatus("Opened PDF in default viewer with warning: " + exportWarning, "warning");
               } else {
-                setStatus("Opened PDF in default viewer: " + downloadName, "success");
+                setStatus("Opened PDF in default viewer: " + (exportPath || downloadName), "success");
               }
               return;
             }
@@ -7090,10 +7727,12 @@
               } else {
                 setStatus("Opened browser fallback because external viewer failed (" + openError + ").", "warning");
               }
+            } else if (writeError) {
+              setStatus("Exported PDF to browser fallback; could not write project file: " + writeError, "warning");
             } else if (exportWarning) {
-              setStatus("Exported PDF with warning: " + exportWarning, "warning");
+              setStatus("Exported PDF with warning" + (exportPath ? " to " + exportPath : ": " + exportWarning), "warning");
             } else {
-              setStatus("Exported PDF: " + downloadName, "success");
+              setStatus("Exported PDF: " + (exportPath || downloadName), "success");
             }
             return;
           }
@@ -7169,16 +7808,17 @@
         const sourcePath = exportingReplJournal ? "" : (effectivePath || sourceState.path || "");
         const resourceDir = (!sourcePath && resourceDirInput) ? getCurrentResourceDirValue() : "";
         const isEditorPreview = rightView === "editor-preview";
-        const editorHtmlLanguage = htmlArtifactSource ? "html" : (isEditorPreview ? normalizeFenceLanguage(editorLanguage || "") : "");
+        const editorIsDelimitedPreview = isEditorPreview && Boolean(getDelimitedTextPreviewConfig(editorLanguage || ""));
+        const editorHtmlLanguage = htmlArtifactSource ? "html" : (isEditorPreview ? (editorIsDelimitedPreview ? "markdown" : normalizeFenceLanguage(editorLanguage || "")) : "");
         const isLatex = htmlArtifactSource ? false : (isEditorPreview
           ? editorHtmlLanguage === "latex"
           : /\\documentclass\b|\\begin\{document\}/.test(markdown));
-        let filenameHint = exportingReplJournal ? "repl-studio.html" : (isEditorPreview ? "studio-editor-preview.html" : "studio-response-preview.html");
+        let filenameHint = exportingReplJournal ? "repl-studio.html" : (isEditorPreview ? "studio-editor-preview.html" : ("studio-response-" + formatStudioExportTimestamp() + ".studio.html"));
         let titleHint = exportingReplJournal ? "Studio REPL Record" : (isEditorPreview ? "Studio editor preview" : "Studio response preview");
         if (sourcePath) {
           const baseName = sourcePath.split(/[\\/]/).pop() || "studio";
           const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
-          filenameHint = stem + "-preview.html";
+          filenameHint = stem + ".studio.html";
           titleHint = stem + " preview";
         }
 
@@ -7228,6 +7868,8 @@
 
             const exportWarning = typeof payload.warning === "string" ? payload.warning.trim() : "";
             const openError = typeof payload.openError === "string" ? payload.openError.trim() : "";
+            const writeError = typeof payload.writeError === "string" ? payload.writeError.trim() : "";
+            const exportPath = typeof payload.path === "string" ? payload.path.trim() : "";
             const openedExternal = payload.openedExternal === true;
             let downloadName = typeof payload.filename === "string" && payload.filename.trim()
               ? payload.filename.trim()
@@ -7237,10 +7879,12 @@
             }
 
             if (openedExternal) {
-              if (exportWarning) {
+              if (writeError) {
+                setStatus("Opened HTML in default browser, but could not write project file: " + writeError, "warning");
+              } else if (exportWarning) {
                 setStatus("Opened HTML in default browser with warning: " + exportWarning, "warning");
               } else {
-                setStatus("Opened HTML in default browser: " + downloadName, "success");
+                setStatus("Opened HTML in default browser: " + (exportPath || downloadName), "success");
               }
               return;
             }
@@ -7259,10 +7903,12 @@
               } else {
                 setStatus("Opened browser fallback because external viewer failed (" + openError + ").", "warning");
               }
+            } else if (writeError) {
+              setStatus("Exported HTML to browser fallback; could not write project file: " + writeError, "warning");
             } else if (exportWarning) {
-              setStatus("Exported HTML with warning: " + exportWarning, "warning");
+              setStatus("Exported HTML with warning" + (exportPath ? " to " + exportPath : ": " + exportWarning), "warning");
             } else {
-              setStatus("Exported HTML: " + downloadName, "success");
+              setStatus("Exported HTML: " + (exportPath || downloadName), "success");
             }
             return;
           }
@@ -7554,6 +8200,7 @@
             decorateRenderedEditorPreviewComments(targetEl, sourceTextEl.value || "");
           }
           decorateCopyablePreviewBlocks(targetEl);
+          decoratePreviewImages(targetEl);
 
           // Warn if relative images are present but unlikely to resolve (non-file-backed content)
           if (!sourceState.path && !getCurrentResourceDirValue()) {
@@ -7591,6 +8238,9 @@
         const text = prepareEditorTextForPreview(sourceTextEl.value || "");
         if (isHtmlArtifactPreviewText(text, editorLanguage)) {
           renderHtmlArtifactPreview(sourcePreviewEl, text, "source", { title: "Editor HTML preview", ...getHtmlPreviewResourceContextOptions() });
+          return;
+        }
+        if (renderDelimitedTextPreview(sourcePreviewEl, text, "source")) {
           return;
         }
         if (supportsCodePreviewCommentsForCurrentEditor()) {
@@ -8141,6 +8791,7 @@
         const previousScrollTop = critiqueViewEl.scrollTop;
         finishPreviewRender(critiqueViewEl);
         critiqueViewEl.innerHTML = buildTracePanelHtml();
+        decoratePreviewImages(critiqueViewEl);
         critiqueViewEl.classList.remove("response-scroll-resetting");
         if (shouldStick) {
           critiqueViewEl.scrollTop = critiqueViewEl.scrollHeight;
@@ -8197,6 +8848,7 @@
       function getFileBrowserKindLabel(entry) {
         if (!entry || entry.type === "directory") return "folder";
         if (entry.kind === "text") return "document";
+        if (entry.kind === "office") return "document";
         if (entry.kind === "pdf") return "PDF";
         if (entry.kind === "image") return "image";
         return entry.extension ? entry.extension.replace(/^\./, "") : "file";
@@ -8213,18 +8865,21 @@
           ? entries.map((entry) => {
             const type = entry.type === "directory" ? "directory" : "file";
             const kind = entry.kind || (type === "directory" ? "directory" : "other");
-            const icon = type === "directory" ? "📁" : (kind === "pdf" ? "📄" : (kind === "image" ? "🖼️" : (kind === "text" ? "📝" : "📦")));
+            const icon = type === "directory" ? "📁" : (kind === "pdf" ? "📄" : (kind === "image" ? "🖼️" : (kind === "text" || kind === "office" ? "📝" : "📦")));
             const metaParts = [];
             metaParts.push(getFileBrowserKindLabel(entry));
             if (type === "file") metaParts.push(formatFileBrowserSize(entry.size));
             const time = formatFileBrowserTime(entry.mtimeMs);
             if (time) metaParts.push(time);
-            const textActions = kind === "text"
-              ? "<button type='button' data-files-action='open-new' data-files-path='" + escapeHtml(entry.path) + "'>New tab</button>"
+            const newTabAction = kind === "text" || kind === "office"
+              ? "open-new"
+              : ((kind === "pdf" || kind === "image") ? "open-preview-new" : "");
+            const textActions = newTabAction
+              ? "<button type='button' data-files-action='" + escapeHtml(newTabAction) + "' data-files-path='" + escapeHtml(entry.path) + "'>New tab</button>"
               : "";
             const openTitle = type === "directory"
               ? "Open folder"
-              : (kind === "text" ? "Open in editor" : (kind === "pdf" ? "Open PDF preview" : (kind === "image" ? "Open image preview" : "Copy or reveal this file")));
+              : (kind === "text" ? "Open in editor" : (kind === "office" ? "Convert to Markdown in editor" : (kind === "pdf" ? "Open PDF preview" : (kind === "image" ? "Open image preview" : "Copy or reveal this file"))));
             return "<div class='files-row files-row-" + escapeHtml(type) + " files-kind-" + escapeHtml(kind) + "'>"
               + "<button type='button' class='files-open-btn' data-files-action='" + (type === "directory" ? "open-dir" : "open") + "' data-files-path='" + escapeHtml(entry.path) + "' data-files-kind='" + escapeHtml(kind) + "' title='" + escapeHtml(openTitle) + "'>"
               + "<span class='files-icon' aria-hidden='true'>" + icon + "</span>"
@@ -8249,6 +8904,8 @@
           + "<div class='files-toolbar-actions'>"
           + "<button type='button' data-files-action='parent'" + parentDisabled + ">Parent</button>"
           + "<button type='button' data-files-action='refresh'>Refresh</button>"
+          + (currentDir ? "<button type='button' data-files-action='copy-current' data-files-path='" + escapeHtml(currentDir) + "'>Copy path</button>" : "")
+          + (currentDir ? "<button type='button' data-files-action='use-working-dir' data-files-path='" + escapeHtml(currentDir) + "'>Use as working dir</button>" : "")
           + (rootDir ? "<button type='button' data-files-action='copy-root' data-files-path='" + escapeHtml(rootDir) + "'>Copy root</button>" : "")
           + "</div>"
           + "</div>"
@@ -8343,7 +9000,7 @@
 
       async function openFileBrowserEntry(path, kind) {
         const context = getFileBrowserLocalLinkContext();
-        if (kind === "text") {
+        if (kind === "text" || kind === "office") {
           await openPreviewDocumentHere(path, context);
           return;
         }
@@ -8356,6 +9013,19 @@
           return;
         }
         setStatus("No Studio preview for this file type. Use Copy path or Reveal.", "warning");
+      }
+
+      function setFileBrowserCurrentDirectoryAsWorkingDir(path) {
+        const nextDir = normalizeStudioResourceDirValue(path || fileBrowserState.currentDir || "");
+        if (!nextDir) {
+          setStatus("No current folder to use as working directory.", "warning");
+          return;
+        }
+        if (resourceDirInput) resourceDirInput.value = nextDir;
+        applyResourceDir();
+        fileBrowserState = { ...fileBrowserState, contextKey: "" };
+        if (rightView === "files") renderFilesView();
+        setStatus("Working dir set to current folder.", "success");
       }
 
       async function handleFilesPaneClick(event) {
@@ -8388,9 +9058,17 @@
             await openPreviewDocumentInNewEditor(path, null, getFileBrowserLocalLinkContext());
             return;
           }
-          if (action === "copy-path" || action === "copy-root") {
+          if (action === "open-preview-new") {
+            await openPreviewResourceInNewEditor(path, null, getFileBrowserLocalLinkContext());
+            return;
+          }
+          if (action === "copy-path" || action === "copy-root" || action === "copy-current") {
             const ok = await writeTextToClipboard(path);
             setStatus(ok ? "Copied path." : "Clipboard write failed.", ok ? "success" : "warning");
+            return;
+          }
+          if (action === "use-working-dir") {
+            setFileBrowserCurrentDirectoryAsWorkingDir(path);
             return;
           }
           if (action === "reveal") {
@@ -8427,6 +9105,9 @@
           }
           if (isHtmlArtifactPreviewText(editorText, editorLanguage)) {
             renderHtmlArtifactPreview(critiqueViewEl, editorText, "response", { title: "Editor HTML preview", ...getHtmlPreviewResourceContextOptions() });
+            return;
+          }
+          if (renderDelimitedTextPreview(critiqueViewEl, editorText, "response")) {
             return;
           }
           if (supportsCodePreviewCommentsForCurrentEditor()) {
@@ -8888,7 +9569,10 @@
           resourceDirInput.value = nextResourceDir;
           updateSourceBadge();
         }
-        if (typeof state.editorLanguage === "string" && state.editorLanguage.trim()) {
+        const detectedPersistedPathLanguage = detectLanguageFromName(nextSourceState.path || nextSourceState.label || "");
+        if (getDelimitedTextPreviewConfig(detectedPersistedPathLanguage)) {
+          setEditorLanguage(detectedPersistedPathLanguage);
+        } else if (typeof state.editorLanguage === "string" && state.editorLanguage.trim()) {
           setEditorLanguage(state.editorLanguage.trim());
         }
         editorView = state.editorView === "preview" ? "preview" : "markdown";
@@ -9791,6 +10475,7 @@
         ".diff", ".patch",
       ]);
       const PREVIEW_LOCAL_IMAGE_LINK_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+      const PREVIEW_LOCAL_OFFICE_LINK_EXTENSIONS = new Set([".docx", ".odt"]);
       const PREVIEW_LOCAL_TEXT_LINK_FILENAMES = new Set([
         ".dockerignore", ".editorconfig", ".env", ".env.example", ".eslintignore", ".gitattributes",
         ".gitignore", ".gitmodules", ".npmignore", ".prettierignore", "dockerfile", "gemfile",
@@ -9855,6 +10540,7 @@
         if (ext === ".pdf") return "pdf";
         if (PREVIEW_LOCAL_TEXT_LINK_EXTENSIONS.has(ext) || PREVIEW_LOCAL_TEXT_LINK_FILENAMES.has(name)) return "text";
         if (PREVIEW_LOCAL_IMAGE_LINK_EXTENSIONS.has(ext)) return "image";
+        if (PREVIEW_LOCAL_OFFICE_LINK_EXTENSIONS.has(ext)) return "office";
         return "other";
       }
 
@@ -9948,11 +10634,16 @@
         };
         if (kind === "pdf") {
           appendPreviewLinkMenuButton(menu, "Open PDF preview", "open-pdf");
+          appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
         } else if (kind === "text") {
           appendPreviewLinkMenuButton(menu, "Open in new editor", "open-new");
           appendPreviewLinkMenuButton(menu, "Open here", "open-here");
+        } else if (kind === "office") {
+          appendPreviewLinkMenuButton(menu, "Convert in new editor", "open-new");
+          appendPreviewLinkMenuButton(menu, "Convert here", "open-here");
         } else if (kind === "image") {
           appendPreviewLinkMenuButton(menu, "Open image preview", "open-image");
+          appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
         }
         appendPreviewLinkMenuButton(menu, "Reveal in file manager", "reveal");
         appendPreviewLinkMenuButton(menu, "Copy path", "copy-path");
@@ -9989,40 +10680,18 @@
       }
 
       async function openPreviewImageLink(href, title, contextOverride, pendingWindow) {
-        const popup = pendingWindow || window.open("", "_blank");
-        try {
-          if (popup && popup.document && popup.document.body) {
-            popup.document.title = "Opening image…";
-            popup.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Opening image…</p>";
-          }
-        } catch {}
-        try {
-          const payload = await fetchStudioJson("/html-preview-resource", {
-            query: getPreviewLinkResourceQuery(href, contextOverride),
-          });
-          const dataUrl = payload && typeof payload.dataUrl === "string" ? payload.dataUrl : "";
-          if (!dataUrl) throw new Error("Studio did not return image data.");
-          const safeTitle = escapeHtml(String(title || href || "Local image"));
-          const safeSrc = escapeHtml(dataUrl);
-          const html = "<!doctype html><html><head><meta charset='utf-8'><title>" + safeTitle + "</title>"
-            + "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111;color:#eee;font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}img{max-width:100vw;max-height:100vh;object-fit:contain;}header{position:fixed;left:0;right:0;top:0;padding:8px 10px;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);}</style>"
-            + "</head><body><header>" + safeTitle + "</header><img src='" + safeSrc + "' alt='" + safeTitle + "'></body></html>";
-          if (popup && !popup.closed && popup.document) {
-            popup.document.open();
-            popup.document.write(html);
-            popup.document.close();
-            setStatus("Opened local image preview.", "success");
-            return;
-          }
-          const opened = window.open(dataUrl, "_blank");
-          if (!opened) throw new Error("Popup blocked while opening image preview.");
-          setStatus("Opened local image preview.", "success");
-        } catch (error) {
-          if (popup && !popup.closed) {
-            try { popup.close(); } catch {}
-          }
-          throw error;
+        if (pendingWindow && !pendingWindow.closed) {
+          try { pendingWindow.close(); } catch {}
         }
+        const payload = await fetchStudioJson("/html-preview-resource", {
+          query: getPreviewLinkResourceQuery(href, contextOverride),
+        });
+        const dataUrl = payload && typeof payload.dataUrl === "string" ? payload.dataUrl : "";
+        if (!dataUrl) throw new Error("Studio did not return image data.");
+        if (!openStudioImageFocusViewer(dataUrl, title || href || "Local image")) {
+          throw new Error("Could not open image focus view.");
+        }
+        setStatus("Opened local image preview.", "success");
       }
 
       function editorHasPotentialUnsavedContent() {
@@ -10032,7 +10701,33 @@
         return true;
       }
 
+      function getPreviewOfficeConversionLabel(href) {
+        const cleanPath = stripPreviewLocalLinkUrlSuffix(href || "");
+        const rawName = cleanPath.split(/[\\/]/).pop() || cleanPath || "this document";
+        try {
+          return decodeURIComponent(rawName) || rawName;
+        } catch {
+          return rawName;
+        }
+      }
+
+      function confirmPreviewOfficeConversion(href, destination) {
+        if (getPreviewLocalLinkKind(href) !== "office") return true;
+        const label = getPreviewOfficeConversionLabel(href);
+        const target = destination === "here"
+          ? "replace the current editor contents with an editable Markdown copy"
+          : "open an editable Markdown copy in a new Studio tab";
+        const confirmed = window.confirm(
+          "Convert " + label + " to Markdown?\n\n"
+          + "Studio will use Pandoc to " + target + ". Some layout or formatting may change. "
+          + "The original DOCX/ODT file will not be overwritten, and edits will not round-trip back to it."
+        );
+        if (!confirmed) setStatus("Document conversion cancelled.", "warning");
+        return confirmed;
+      }
+
       async function openPreviewDocumentHere(href, contextOverride) {
+        if (!confirmPreviewOfficeConversion(href, "here")) return;
         if (editorHasPotentialUnsavedContent()) {
           const confirmed = window.confirm("Replace the current editor contents with this linked file? Unsaved editor changes may be lost.");
           if (!confirmed) return;
@@ -10042,18 +10737,29 @@
         const path = typeof payload.path === "string" ? payload.path : "";
         const label = typeof payload.label === "string" && payload.label.trim() ? payload.label.trim() : (path || "linked file");
         const nextResourceDir = typeof payload.resourceDir === "string" ? normalizeStudioResourceDirValue(payload.resourceDir) : "";
+        const converted = payload && payload.converted === true;
         if (resourceDirInput && nextResourceDir) resourceDirInput.value = nextResourceDir;
         setEditorText(payload.text, { preserveScroll: false, preserveSelection: false });
-        setSourceState({ source: "file", label, path });
-        markFileBackedBaseline(payload.text);
-        const detected = detectLanguageFromName(path || label);
+        if (converted) {
+          setSourceState({ source: "blank", label, path: null });
+        } else {
+          setSourceState({ source: "file", label, path });
+          markFileBackedBaseline(payload.text);
+        }
+        const detected = converted ? "markdown" : detectLanguageFromName(path || label);
         if (detected) setEditorLanguage(detected);
         setEditorView("markdown");
         setActivePane("left");
-        setStatus("Opened linked file in editor: " + label, "success");
+        setStatus(converted ? ("Converted document into editor: " + label) : ("Opened linked file in editor: " + label), "success");
       }
 
       async function openPreviewDocumentInNewEditor(href, pendingWindow, contextOverride) {
+        if (!confirmPreviewOfficeConversion(href, "new")) {
+          if (pendingWindow && !pendingWindow.closed) {
+            try { pendingWindow.close(); } catch {}
+          }
+          return;
+        }
         const popup = pendingWindow || window.open("", "_blank");
         try {
           if (popup && popup.document && popup.document.body) {
@@ -10071,12 +10777,44 @@
             try {
               popup.opener = null;
               popup.location.href = targetUrl;
-              setStatus("Opening linked file in a new editor.", "success");
+              setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening linked file in a new editor.", "success");
               return;
             } catch {}
           }
           window.open(targetUrl, "_blank", "noopener");
-          setStatus("Opening linked file in a new editor.", "success");
+          setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening linked file in a new editor.", "success");
+        } catch (error) {
+          if (popup && !popup.closed) {
+            try { popup.close(); } catch {}
+          }
+          throw error;
+        }
+      }
+
+      async function openPreviewResourceInNewEditor(href, pendingWindow, contextOverride) {
+        const popup = pendingWindow || window.open("", "_blank");
+        try {
+          if (popup && popup.document && popup.document.body) {
+            popup.document.title = "Opening preview…";
+            popup.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Opening preview…</p>";
+          }
+        } catch {}
+        try {
+          const payload = await fetchPreviewLocalLink("preview-url", href, contextOverride);
+          const targetUrl = payload && typeof payload.relativeUrl === "string"
+            ? new URL(payload.relativeUrl, window.location.href).href
+            : (payload && typeof payload.url === "string" ? payload.url : "");
+          if (!targetUrl) throw new Error("Studio did not return a preview URL.");
+          if (popup && !popup.closed) {
+            try {
+              popup.opener = null;
+              popup.location.href = targetUrl;
+              setStatus("Opening preview in a new Studio tab.", "success");
+              return;
+            } catch {}
+          }
+          window.open(targetUrl, "_blank", "noopener");
+          setStatus("Opening preview in a new Studio tab.", "success");
         } catch (error) {
           if (popup && !popup.closed) {
             try { popup.close(); } catch {}
@@ -10115,6 +10853,10 @@
             await openPreviewDocumentInNewEditor(href, null, context);
             return;
           }
+          if (action === "open-preview-new") {
+            await openPreviewResourceInNewEditor(href, null, context);
+            return;
+          }
           if (action === "open-here") {
             await openPreviewDocumentHere(href, context);
             return;
@@ -10149,14 +10891,13 @@
           return;
         }
         if (kind === "image") {
-          const pendingWindow = window.open("", "_blank");
-          void openPreviewImageLink(href, title, null, pendingWindow).catch((error) => {
+          void openPreviewImageLink(href, title).catch((error) => {
             setStatus((error && error.message) ? error.message : String(error || "Could not open linked image."), "warning");
           });
           return;
         }
-        if (kind === "text") {
-          const pendingWindow = window.open("", "_blank");
+        if (kind === "text" || kind === "office") {
+          const pendingWindow = kind === "office" ? null : window.open("", "_blank");
           void openPreviewDocumentInNewEditor(href, pendingWindow).catch((error) => {
             setStatus((error && error.message) ? error.message : String(error || "Could not open linked file."), "warning");
           });
@@ -11405,7 +12146,7 @@
       }
 
       function supportsCodePreviewCommentsForCurrentEditor() {
-        return Boolean(editorLanguage) && editorLanguage !== "markdown" && editorLanguage !== "latex";
+        return Boolean(editorLanguage) && editorLanguage !== "markdown" && editorLanguage !== "latex" && !getDelimitedTextPreviewConfig(editorLanguage);
       }
 
       function getCodePreviewCommentKind(language) {
@@ -11604,6 +12345,26 @@
 
       function isShortcutsOpen() {
         return Boolean(shortcutsOverlayEl && !shortcutsOverlayEl.hidden);
+      }
+
+      function handleShortcutsScrollShortcut(event) {
+        if (!isShortcutsOpen() || !shortcutsBodyEl || !event) return false;
+        if (isTextEntryShortcutTarget(event.target)) return false;
+        const key = typeof event.key === "string" ? event.key : "";
+        let delta = 0;
+        let targetTop = null;
+        if (key === "ArrowDown") delta = 42;
+        else if (key === "ArrowUp") delta = -42;
+        else if (key === "PageDown") delta = Math.max(120, Math.round((shortcutsBodyEl.clientHeight || 0) * 0.85));
+        else if (key === "PageUp") delta = -Math.max(120, Math.round((shortcutsBodyEl.clientHeight || 0) * 0.85));
+        else if (key === "Home") targetTop = 0;
+        else if (key === "End") targetTop = shortcutsBodyEl.scrollHeight;
+        else return false;
+        event.preventDefault();
+        event.stopPropagation();
+        if (targetTop !== null) shortcutsBodyEl.scrollTop = targetTop;
+        else shortcutsBodyEl.scrollTop += delta;
+        return true;
       }
 
       function isScratchpadOpen() {
@@ -15841,7 +16602,8 @@
           ? window.requestAnimationFrame.bind(window)
           : (cb) => window.setTimeout(cb, 16);
         schedule(() => {
-          if (shortcutsCloseBtn && typeof shortcutsCloseBtn.focus === "function") shortcutsCloseBtn.focus();
+          if (shortcutsBodyEl && typeof shortcutsBodyEl.focus === "function") shortcutsBodyEl.focus({ preventScroll: true });
+          else if (shortcutsCloseBtn && typeof shortcutsCloseBtn.focus === "function") shortcutsCloseBtn.focus();
         });
       }
 
@@ -16038,6 +16800,9 @@
         }
         if (editorView === "preview") {
           scheduleSourcePreviewRender(0);
+        }
+        if (rightView === "editor-preview") {
+          scheduleResponseEditorPreviewRender(0);
         }
         updateOutlineUi();
         scheduleWorkspacePersistence();

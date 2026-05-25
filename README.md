@@ -23,12 +23,12 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Includes a global **Zen** mode for hiding secondary Studio chrome without changing the current left/right pane layout
 - Runs editor text directly, asks for structured critique (auto/writing/code focus), offers a manual **Suggest completion** action for short cursor-aware continuations (`Option/Alt+Tab` where available or `Cmd/Ctrl+Shift+Space` from the editor, `Tab` to insert a visible suggestion) with an optional editor-plus-latest-response context mode, or opens **Quiz me** for a Studio-native active-recall loop over the current editor text, selection, current file, folder, or repo, with optional focus guidance for shaping question selection
 - Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available
-- Includes a right-pane **Files** view for browsing the current Pi session/resource directory, opening folders, loading text/code documents into the editor, previewing PDFs/images, copying paths, and revealing files in the file manager
+- Includes a right-pane **Files** view for browsing the current Pi session/resource directory, opening folders, loading text/code/CSV/TSV documents into the editor, previewing PDFs/images, opening PDF/image previews in a new Studio tab, converting DOCX/ODT documents to editable Markdown when Pandoc is available after confirmation, copying paths, setting the current folder as the Studio working directory, and revealing files in the file manager
 - Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with Raw/Literate send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/stop/interrupt controls, a compact refresh-persistent **Studio REPL Record** of user and Pi-sent code, a secondary raw tmux mirror, agent-facing `studio_repl_status` / `studio_repl_send` tools, and Markdown/PDF/HTML export
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them
 - Includes a docked **Outline** rail for navigating document structure in the current editor text, with clickable entries that jump in the raw editor and reveal matching preview locations when available
 - Restores the current browser-tab editor workspace after refresh and provides an explicit **Reset editor** action when you want to discard the restored draft and return the tab to a fresh blank draft without changing responses or saved files
-- Turns local preview links, including links inside sandboxed HTML previews, into Studio actions: PDFs open in the embedded viewer, text/code/document links can open in a new editor tab, and right-click menus provide **Open here**, **Reveal in file manager**, and **Copy path** for local resources
+- Turns local preview links, including links inside sandboxed HTML previews, into Studio actions: PDFs open in the embedded viewer, images open in a zoomable focus viewer, PDF/image links can open in a new Studio preview tab, text/code/CSV/TSV document links can open in a new editor tab, DOCX/ODT links can be converted to editable Markdown, and right-click menus provide **Open here**, **Reveal in file manager**, and **Copy path** for local resources
 - Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with transient **Comment** / **Jump** actions from raw-editor selections plus editor-preview selections for Markdown, LaTeX, and code/text/diff previews, alongside optional inline `[an: ...]` toggles when you want comments reflected in the document text
 - Browses response history (`Prev/Next/Last`) and loads either:
   - response text
@@ -39,11 +39,11 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
   - shows/hides annotation markers in preview
   - strips markers before send (optional)
   - saves `.annotated.md`
-- Renders Markdown/LaTeX/code previews (math + Mermaid), theme-synced with pi, with copy buttons for code blocks and blockquotes
+- Renders Markdown/LaTeX/code previews (math + Mermaid) plus lightweight CSV/TSV table previews, theme-synced with pi, with copy buttons for code blocks and blockquotes
 - Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
 - Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks, with a Focus action for temporarily enlarging the embedded viewer
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
-- Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML, preserving authored HTML previews as HTML
+- Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML into the source file directory, Studio working directory, or Pi session directory, preserving authored HTML previews as HTML and rendering CSV/TSV editor previews as tables
 - Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf` or `/studio-html <path>` to `<name>.studio.html`; without a path, those commands export the last model response to a timestamped file
 - Shows model/session/context usage in the footer, plus a compact-context action
 

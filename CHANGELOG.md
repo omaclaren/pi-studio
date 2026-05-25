@@ -4,6 +4,19 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.18] — 2026-05-26
+
+### Added
+- Added a zoomable image focus viewer for rendered Markdown images, Working-view image outputs, Files-view images, and local image preview links, with Fit, 100%, zoom in/out, reset, fullscreen, modified-wheel/pinch zoom, and active image zoom shortcuts.
+- Added lightweight CSV/TSV preview rendering as scrollable tables with sticky headers, row numbers, and truncation notices while keeping CSV/TSV files editable as plain text; editor-preview exports and `/studio-pdf`/`/studio-html` path exports now render CSV/TSV as tables too.
+
+### Changed
+- Fixed editor-only CSV/TSV tabs to refresh their right-pane table preview when the detected editor language changes.
+- Made the keyboard-shortcuts overlay keyboard-scrollable with arrow keys, Page Up/Down, Home, and End.
+- Added Files-view toolbar actions to copy the current folder path and use the current folder as the Studio working directory.
+- Added Files/local-link actions for opening PDF/image previews in new Studio tabs, plus Pandoc-based DOCX/ODT conversion into editable Markdown editor tabs or the current editor, with an explicit conversion confirmation warning. CSV/TSV files continue to open as plain text, with manual CSV/TSV fixtures for testing.
+- Right-pane preview exports now write PDF/HTML files to the source file directory, the Studio working directory, or the Pi session directory instead of only preparing a temporary file for opening/download.
+
 ## [0.9.17] — 2026-05-25
 
 ### Changed

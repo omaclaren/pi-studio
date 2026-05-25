@@ -1,0 +1,4 @@
+name,kind,value,notes
+alpha,measurement,1.23,"simple comma-separated row"
+beta,measurement,4.56,"quoted note with, comma"
+gamma,category,7.89,"plain text CSV should open in the editor"
