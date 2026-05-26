@@ -580,6 +580,7 @@
             toolName: typeof entry.toolName === "string" ? entry.toolName : "tool",
             label: parseNonEmptyString(entry.label),
             argsSummary: parseNonEmptyString(entry.argsSummary),
+            args: parseNonEmptyString(entry.args),
             output: typeof entry.output === "string" ? entry.output : "",
             images: Array.isArray(entry.images)
               ? entry.images.map((image, imageIndex) => normalizeTraceImage(image, imageIndex)).filter(Boolean)
@@ -860,8 +861,9 @@
             ? ("Tool: " + String(entry.toolName || "tool") + " — " + entry.label)
             : ("Tool: " + String(entry.toolName || "tool"));
           const parts = [header];
-          if (String(entry.argsSummary || "").trim()) {
-            parts.push("Input:\n" + String(entry.argsSummary || "").trim());
+          const inputText = String(entry.args || entry.argsSummary || "").trim();
+          if (inputText) {
+            parts.push("Input:\n" + inputText);
           }
           if (String(entry.output || "").trim()) {
             parts.push("Output:\n" + String(entry.output || "").trim());
@@ -2609,6 +2611,9 @@
       }
 
       function getIdleStatus() {
+        if (isEditorOnlyMode) {
+          return "Editor-only mode: edit, load, annotate, preview, save, suggest, or refresh file-backed text.";
+        }
         return "Edit, load, or annotate text, then run, save, send to pi editor, or critique.";
       }
 
@@ -3176,7 +3181,7 @@
 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
-        sourceBadgeEl.textContent = (studioUiRefreshEnabled ? "Origin: " : "Editor origin: ") + label;
+        sourceBadgeEl.textContent = (studioUiRefreshEnabled ? "Origin: " : "Editor origin: ") + label + (hasRefreshableFilePath() ? " · file" : "");
         const descriptor = getCurrentStudioDocumentDescriptor();
         if (sourceBadgeEl) {
           sourceBadgeEl.title = descriptor.fileBacked
@@ -3188,9 +3193,11 @@
         if (isFileBacked) {
           var fileBackedResourceDir = getCurrentResourceDirValue() || dirnameForDisplayPath(sourceState.path);
           if (resourceDirInput) resourceDirInput.value = fileBackedResourceDir;
-          if (resourceDirLabel) resourceDirLabel.textContent = "";
+          if (resourceDirLabel) {
+            resourceDirLabel.textContent = fileBackedResourceDir ? ("Resource dir: " + fileBackedResourceDir) : "Resource dir: file directory";
+            resourceDirLabel.hidden = false;
+          }
           if (resourceDirBtn) resourceDirBtn.hidden = true;
-          if (resourceDirLabel) resourceDirLabel.hidden = true;
           if (resourceDirInputWrap) resourceDirInputWrap.classList.remove("visible");
         } else {
           // Restore to label if dir is set, otherwise show button
@@ -4480,8 +4487,8 @@
         return lines.join("\n");
       }
 
-      function renderDelimitedTextPreview(targetEl, text, pane) {
-        const html = buildDelimitedTextPreviewHtml(text, editorLanguage || "");
+      function renderDelimitedTextPreview(targetEl, text, pane, language) {
+        const html = buildDelimitedTextPreviewHtml(text, language || editorLanguage || "");
         if (!html || !targetEl) return false;
         if (pane === "source") {
           sourcePreviewRenderNonce += 1;
@@ -8236,15 +8243,16 @@
       function renderSourcePreviewNow() {
         if (editorView !== "preview") return;
         const text = prepareEditorTextForPreview(sourceTextEl.value || "");
-        if (isHtmlArtifactPreviewText(text, editorLanguage)) {
+        const previewLanguage = getEditorLanguageForPreview();
+        if (isHtmlArtifactPreviewText(text, previewLanguage)) {
           renderHtmlArtifactPreview(sourcePreviewEl, text, "source", { title: "Editor HTML preview", ...getHtmlPreviewResourceContextOptions() });
           return;
         }
-        if (renderDelimitedTextPreview(sourcePreviewEl, text, "source")) {
+        if (renderDelimitedTextPreview(sourcePreviewEl, text, "source", previewLanguage)) {
           return;
         }
-        if (supportsCodePreviewCommentsForCurrentEditor()) {
-          renderCodePreviewWithCommentBlocks(sourcePreviewEl, text, "source");
+        if (supportsCodePreviewCommentsForLanguage(previewLanguage)) {
+          renderCodePreviewWithCommentBlocks(sourcePreviewEl, text, "source", previewLanguage);
           return;
         }
         const nonce = ++sourcePreviewRenderNonce;
@@ -8368,9 +8376,12 @@
         return { text: preview, truncated: true, hiddenChars, hiddenLines };
       }
 
-      function renderTraceOutput(text, outputKey) {
+      function renderTraceOutput(text, outputKey, options) {
         const value = String(text || "");
         const key = String(outputKey || "trace-output");
+        const label = options && typeof options.label === "string" && options.label.trim()
+          ? options.label.trim()
+          : "Output";
         const isExpanded = traceExpandedOutputs.has(key);
         const preview = getTraceOutputPreview(value);
         const visibleText = isExpanded || !preview.truncated ? value : preview.text;
@@ -8380,10 +8391,11 @@
         const hiddenParts = [];
         if (preview.hiddenLines > 0) hiddenParts.push(preview.hiddenLines + " more line" + (preview.hiddenLines === 1 ? "" : "s"));
         if (preview.hiddenChars > 0) hiddenParts.push(formatCompactNumber(preview.hiddenChars) + " chars hidden");
+        const labelLower = label.toLowerCase();
         const summary = isExpanded
-          ? "Showing full output (" + formatTraceOutputSize(value) + ")."
-          : "Output truncated — " + (hiddenParts.join(", ") || "more hidden") + ".";
-        const buttonLabel = isExpanded ? "Collapse" : "Show full";
+          ? "Showing full " + labelLower + " (" + formatTraceOutputSize(value) + ")."
+          : label + " truncated — " + (hiddenParts.join(", ") || "more hidden") + ".";
+        const buttonLabel = isExpanded ? "Collapse " + labelLower : "Show full " + labelLower;
         return "<div class='trace-output-wrap" + (isExpanded ? " is-expanded" : " is-truncated") + "'>"
           + body
           + "<div class='trace-output-truncation'>"
@@ -8757,15 +8769,16 @@
           }
 
           const title = entry.label || entry.toolName || "tool";
-          const argsSummary = entry.argsSummary
-            ? "<div class='trace-section'><div class='trace-section-label'>Input</div>" + renderTraceOutput(entry.argsSummary, entry.id + ":input") + "</div>"
+          const inputText = entry.args || entry.argsSummary || "";
+          const argsSummary = inputText
+            ? "<div class='trace-section trace-section-input'><div class='trace-section-label'>Input</div>" + renderTraceOutput(inputText, entry.id + ":input", { label: "Input" }) + "</div>"
             : "";
           const imageOutput = renderTraceImages(entry.images);
           const outputPieces = [];
-          if (entry.output) outputPieces.push(renderTraceOutput(entry.output, entry.id + ":output"));
+          if (entry.output) outputPieces.push(renderTraceOutput(entry.output, entry.id + ":output", { label: "Output" }));
           if (imageOutput) outputPieces.push(imageOutput);
           const output = outputPieces.length
-            ? "<div class='trace-section'><div class='trace-section-label'>Output</div>" + outputPieces.join("") + "</div>"
+            ? "<div class='trace-section trace-section-output'><div class='trace-section-label'>Output</div>" + outputPieces.join("") + "</div>"
             : "<div class='trace-empty-inline'>No output yet.</div>";
           const toolStatusLabel = entry.isError
             ? "Error"
@@ -8874,8 +8887,11 @@
             const newTabAction = kind === "text" || kind === "office"
               ? "open-new"
               : ((kind === "pdf" || kind === "image") ? "open-preview-new" : "");
+            const newTabLabel = kind === "text"
+              ? "Open file tab"
+              : (kind === "office" ? "Convert tab" : ((kind === "pdf" || kind === "image") ? "Preview tab" : "New tab"));
             const textActions = newTabAction
-              ? "<button type='button' data-files-action='" + escapeHtml(newTabAction) + "' data-files-path='" + escapeHtml(entry.path) + "'>New tab</button>"
+              ? "<button type='button' data-files-action='" + escapeHtml(newTabAction) + "' data-files-path='" + escapeHtml(entry.path) + "'>" + escapeHtml(newTabLabel) + "</button>"
               : "";
             const openTitle = type === "directory"
               ? "Open folder"
@@ -8998,10 +9014,38 @@
         }
       }
 
+      function basenameForStudioPath(path) {
+        const value = stripPreviewLocalLinkUrlSuffix(path || "").replace(/\\/g, "/");
+        const parts = value.split("/");
+        return parts.pop() || value || "file";
+      }
+
+      function ensureCurrentEditorFileBackedFromFilesPath(path) {
+        const cleanPath = stripPreviewLocalLinkUrlSuffix(path || "").trim();
+        if (!isLikelyAbsoluteStudioPath(cleanPath)) return;
+        if (sourceState && sourceState.path === cleanPath) return;
+        const resourceDir = normalizeStudioResourceDirValue(fileBrowserState.rootDir || getCurrentResourceDirValue() || dirnameForDisplayPath(cleanPath));
+        if (resourceDirInput && resourceDir) resourceDirInput.value = resourceDir;
+        setSourceState({
+          source: "file",
+          label: sourceState && sourceState.label && sourceState.label !== "blank" ? sourceState.label : basenameForStudioPath(cleanPath),
+          path: cleanPath,
+        });
+        markFileBackedBaseline(sourceTextEl.value);
+      }
+
       async function openFileBrowserEntry(path, kind) {
         const context = getFileBrowserLocalLinkContext();
-        if (kind === "text" || kind === "office") {
-          await openPreviewDocumentHere(path, context);
+        if (kind === "text") {
+          await openPreviewDocumentHere(path, context, { fallbackPath: path, fileBackedIntent: true });
+          ensureCurrentEditorFileBackedFromFilesPath(path);
+          if (sourceState && sourceState.path) {
+            setStatus("Opened file-backed document in editor: " + (sourceState.label || sourceState.path), "success");
+          }
+          return;
+        }
+        if (kind === "office") {
+          await openPreviewDocumentHere(path, context, { fallbackPath: path });
           return;
         }
         if (kind === "pdf") {
@@ -9103,15 +9147,16 @@
             scheduleResponsePaneRepaintNudge();
             return;
           }
-          if (isHtmlArtifactPreviewText(editorText, editorLanguage)) {
+          const previewLanguage = getEditorLanguageForPreview();
+          if (isHtmlArtifactPreviewText(editorText, previewLanguage)) {
             renderHtmlArtifactPreview(critiqueViewEl, editorText, "response", { title: "Editor HTML preview", ...getHtmlPreviewResourceContextOptions() });
             return;
           }
-          if (renderDelimitedTextPreview(critiqueViewEl, editorText, "response")) {
+          if (renderDelimitedTextPreview(critiqueViewEl, editorText, "response", previewLanguage)) {
             return;
           }
-          if (supportsCodePreviewCommentsForCurrentEditor()) {
-            renderCodePreviewWithCommentBlocks(critiqueViewEl, editorText, "response");
+          if (supportsCodePreviewCommentsForLanguage(previewLanguage)) {
+            renderCodePreviewWithCommentBlocks(critiqueViewEl, editorText, "response", previewLanguage);
             return;
           }
           const nonce = ++responsePreviewRenderNonce;
@@ -9296,13 +9341,17 @@
         return resourceDirInput ? normalizeStudioResourceDirValue(resourceDirInput.value) : "";
       }
 
+      function stripImportedFileLabel(label) {
+        return String(label || "").replace(/^(?:upload|imported copy):\s*/i, "");
+      }
+
       function getEffectiveSavePath() {
         // File-backed: use the original path
         if (sourceState.path) return sourceState.path;
-        // Upload with working dir + filename: derive path
+        // Browser-imported copy with working dir + filename: derive path
         const resourceDir = getCurrentResourceDirValue();
         if (sourceState.source === "upload" && sourceState.label && resourceDir) {
-          var name = sourceState.label.replace(/^upload:\s*/i, "");
+          var name = stripImportedFileLabel(sourceState.label);
           if (name) return resourceDir.replace(/\/$/, "") + "/" + name;
         }
         return null;
@@ -9327,7 +9376,7 @@
           return dir + stem + ".annotated.md";
         }
 
-        const rawLabel = sourceState.label ? sourceState.label.replace(/^upload:\s*/i, "") : "draft.md";
+        const rawLabel = sourceState.label ? stripImportedFileLabel(sourceState.label) : "draft.md";
         const stem = rawLabel.replace(/\.[^.]+$/, "") || "draft";
         const suggestedDir = getCurrentResourceDirValue()
           ? getCurrentResourceDirValue().replace(/\/$/, "") + "/"
@@ -9355,7 +9404,7 @@
           return;
         }
 
-        refreshFromDiskBtn.title = "Refresh from disk is only available for documents that currently have a file path.";
+        refreshFromDiskBtn.title = "Refresh from disk is available after opening a file from disk. Use Files → Open here, Files → Open file tab, or /studio-editor-only <path> for a refreshable editor tab.";
       }
 
       function syncActionButtons() {
@@ -10726,21 +10775,34 @@
         return confirmed;
       }
 
-      async function openPreviewDocumentHere(href, contextOverride) {
+      function isLikelyAbsoluteStudioPath(path) {
+        const value = stripPreviewLocalLinkUrlSuffix(path || "").trim();
+        return Boolean(value && (/^\//.test(value) || /^[A-Za-z]:[\\/]/.test(value)));
+      }
+
+      async function openPreviewDocumentHere(href, contextOverride, options) {
         if (!confirmPreviewOfficeConversion(href, "here")) return;
         if (editorHasPotentialUnsavedContent()) {
-          const confirmed = window.confirm("Replace the current editor contents with this linked file? Unsaved editor changes may be lost.");
+          const kind = getPreviewLocalLinkKind(href);
+          const prompt = kind === "office"
+            ? "Replace the current editor contents with this converted Markdown copy? Unsaved editor changes may be lost."
+            : "Open this file-backed document in the current editor?\n\nThis will replace the current editor contents and attach the editor to the file on disk, so Save editor and Refresh from disk use that file. Unsaved editor changes may be lost.";
+          const confirmed = window.confirm(prompt);
           if (!confirmed) return;
         }
         const payload = await fetchPreviewLocalLink("document", href, contextOverride);
         if (typeof payload.text !== "string") throw new Error("Studio did not return document text.");
-        const path = typeof payload.path === "string" ? payload.path : "";
+        const responsePath = typeof payload.path === "string" ? payload.path : "";
+        const fallbackPath = options && typeof options.fallbackPath === "string" && isLikelyAbsoluteStudioPath(options.fallbackPath)
+          ? stripPreviewLocalLinkUrlSuffix(options.fallbackPath).trim()
+          : "";
+        const path = responsePath || fallbackPath;
         const label = typeof payload.label === "string" && payload.label.trim() ? payload.label.trim() : (path || "linked file");
         const nextResourceDir = typeof payload.resourceDir === "string" ? normalizeStudioResourceDirValue(payload.resourceDir) : "";
         const converted = payload && payload.converted === true;
         if (resourceDirInput && nextResourceDir) resourceDirInput.value = nextResourceDir;
         setEditorText(payload.text, { preserveScroll: false, preserveSelection: false });
-        if (converted) {
+        if (converted || !path) {
           setSourceState({ source: "blank", label, path: null });
         } else {
           setSourceState({ source: "file", label, path });
@@ -10750,7 +10812,9 @@
         if (detected) setEditorLanguage(detected);
         setEditorView("markdown");
         setActivePane("left");
-        setStatus(converted ? ("Converted document into editor: " + label) : ("Opened linked file in editor: " + label), "success");
+        setStatus(converted
+          ? ("Converted document into editor: " + label)
+          : (path ? ("Opened file-backed document in editor: " + label) : ("Opened linked file copy in editor: " + label)), "success");
       }
 
       async function openPreviewDocumentInNewEditor(href, pendingWindow, contextOverride) {
@@ -12145,8 +12209,21 @@
         return out.join("<br>");
       }
 
+      function getEditorLanguageForPreview() {
+        const detected = detectLanguageFromName((sourceState && (sourceState.path || sourceState.label)) || "");
+        if (detected && (!editorLanguage || editorLanguage === "markdown" || editorLanguage === "text")) {
+          return detected;
+        }
+        return editorLanguage || detected || "";
+      }
+
+      function supportsCodePreviewCommentsForLanguage(language) {
+        const lang = normalizeFenceLanguage(language || "");
+        return Boolean(lang) && lang !== "markdown" && lang !== "latex" && !getDelimitedTextPreviewConfig(lang);
+      }
+
       function supportsCodePreviewCommentsForCurrentEditor() {
-        return Boolean(editorLanguage) && editorLanguage !== "markdown" && editorLanguage !== "latex" && !getDelimitedTextPreviewConfig(editorLanguage);
+        return supportsCodePreviewCommentsForLanguage(getEditorLanguageForPreview());
       }
 
       function getCodePreviewCommentKind(language) {
@@ -12191,11 +12268,11 @@
         return "<div class='response-markdown-highlight preview-code-lines'>" + html.join("") + "</div>";
       }
 
-      function renderCodePreviewWithCommentBlocks(targetEl, text, pane) {
+      function renderCodePreviewWithCommentBlocks(targetEl, text, pane, language) {
         if (!targetEl) return;
         clearPreviewJumpHighlight(targetEl);
         finishPreviewRender(targetEl);
-        targetEl.innerHTML = buildCodePreviewHtmlWithCommentBlocks(text, editorLanguage || "");
+        targetEl.innerHTML = buildCodePreviewHtmlWithCommentBlocks(text, language || editorLanguage || "");
         ensurePreviewSelectionActions(targetEl);
         updatePreviewCommentBlocksForElement(targetEl);
         decorateCopyablePreviewBlocks(targetEl);
@@ -18562,7 +18639,7 @@
           return;
         }
 
-        var suggestedName = sourceState.label ? sourceState.label.replace(/^upload:\s*/i, "") : "draft.md";
+        var suggestedName = sourceState.label ? stripImportedFileLabel(sourceState.label) : "draft.md";
         var suggestedDir = getCurrentResourceDirValue() ? getCurrentResourceDirValue().replace(/\/$/, "") + "/" : "./";
         const suggested = sourceState.path || (suggestedDir + suggestedName);
         const path = window.prompt("Save editor content as:", suggested);
@@ -18617,7 +18694,7 @@
       if (refreshFromDiskBtn) {
         refreshFromDiskBtn.addEventListener("click", () => {
           if (!hasRefreshableFilePath()) {
-            setStatus("Refresh from disk is only available for file-backed documents.", "warning");
+            setStatus("Refresh from disk needs a file path. Use Files → Open here, Files → Open file tab, or /studio-editor-only <path> for a refreshable editor tab.", "warning");
             return;
           }
 
@@ -18632,6 +18709,7 @@
           const sent = sendMessage({
             type: "refresh_from_disk_request",
             requestId,
+            path: sourceState.path,
           });
 
           if (!sent) {
@@ -19252,7 +19330,7 @@
           setEditorText(text, { preserveScroll: false, preserveSelection: false });
           setSourceState({
             source: "upload",
-            label: "upload: " + file.name,
+            label: "imported copy: " + file.name,
             path: null,
           });
           refreshResponseUi();
@@ -19260,7 +19338,7 @@
           if (detectedLang) {
             setEditorLanguage(detectedLang);
           }
-          setStatus("Loaded file " + file.name + ".", "success");
+          setStatus("Imported file copy: " + file.name + ".", "success");
         };
         reader.onerror = () => {
           setStatus("Failed to read file.", "error");

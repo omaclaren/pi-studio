@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.19] — 2026-05-27
+
+### Changed
+- Renamed the browser file picker to **Import file copy…**, clarified that browser-imported files are unsaved copies until saved, and renamed Files-view tab actions to **Open file tab**, **Convert tab**, or **Preview tab** depending on file type.
+
+### Fixed
+- Working-view tool inputs now keep a bounded full input copy so long shell commands and REPL snippets can be expanded/copied instead of only showing the short activity summary.
+- Editor-only and editor-preview panes now fall back to the file extension language while the stored editor language is still the default, avoiding Julia/code files being briefly or persistently rendered as Markdown prose.
+- Clarified refresh-from-disk behaviour for detached drafts, kept the resource directory visible for file-backed tabs, made refresh requests preserve/use the client tab's current file path so files opened from the Files view can be refreshed reliably, and made Working tool inputs appear as soon as Pi announces a tool call.
+
 ## [0.9.18] — 2026-05-26
 
 ### Added

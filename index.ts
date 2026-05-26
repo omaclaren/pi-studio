@@ -257,6 +257,7 @@ interface StudioTraceToolEntry {
 	toolName: string;
 	label: string | null;
 	argsSummary: string | null;
+	args: string | null;
 	output: string;
 	images: StudioTraceImage[];
 	startedAt: number;
@@ -429,6 +430,7 @@ interface SaveOverRequestMessage {
 interface RefreshFromDiskRequestMessage {
 	type: "refresh_from_disk_request";
 	requestId: string;
+	path?: string;
 }
 
 interface SendToEditorRequestMessage {
@@ -517,6 +519,7 @@ const MAX_PREPARED_PDF_EXPORTS = 8;
 const MAX_PREPARED_HTML_EXPORTS = 8;
 const STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES = 80;
 const STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS = 20_000;
+const STUDIO_TRACE_TOOL_ARGS_MAX_CHARS = 20_000;
 const STUDIO_TRACE_IMAGE_MAX_COUNT = 8;
 const STUDIO_TRACE_IMAGE_MAX_BASE64_CHARS = 2_500_000;
 const STUDIO_TRACE_SNAPSHOT_MAX_IMAGES = 12;
@@ -8140,10 +8143,15 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
-	if (msg.type === "refresh_from_disk_request" && typeof msg.requestId === "string") {
+	if (
+		msg.type === "refresh_from_disk_request"
+		&& typeof msg.requestId === "string"
+		&& (msg.path === undefined || typeof msg.path === "string")
+	) {
 		return {
 			type: "refresh_from_disk_request",
 			requestId: msg.requestId,
+			path: typeof msg.path === "string" ? msg.path : undefined,
 		};
 	}
 
@@ -8567,15 +8575,17 @@ function createStudioTraceSnapshot(source: StudioTraceState): { traceState: Stud
 			};
 		}
 		const argsSummary = truncateStudioTraceSnapshotText(entry.argsSummary ?? "");
+		const args = truncateStudioTraceSnapshotText(entry.args ?? entry.argsSummary ?? "");
 		const output = truncateStudioTraceSnapshotText(entry.output);
 		const snapshotImages = copyStudioTraceImagesForSnapshot(entry.images, imageBudget);
-		truncated = truncated || argsSummary.truncated || output.truncated || snapshotImages.omitted > 0;
+		truncated = truncated || argsSummary.truncated || args.truncated || output.truncated || snapshotImages.omitted > 0;
 		const omittedImageNote = snapshotImages.omitted > 0
 			? `[${snapshotImages.omitted} image preview${snapshotImages.omitted === 1 ? "" : "s"} omitted from saved Working view to keep history bounded.]`
 			: "";
 		return {
 			...entry,
 			argsSummary: argsSummary.text || null,
+			args: args.text || null,
 			output: [output.text, omittedImageNote].filter(Boolean).join("\n"),
 			images: snapshotImages.images,
 		};
@@ -8784,6 +8794,34 @@ function summarizeStudioTraceToolArgs(toolName: string, args: unknown): string |
 	} catch {
 		return trimSummary(String(args ?? ""));
 	}
+}
+
+function truncateStudioTraceToolArgs(text: string): string {
+	const value = sanitizeStudioTraceOutputText(String(text || "").trim());
+	if (!value || value.length <= STUDIO_TRACE_TOOL_ARGS_MAX_CHARS) return value;
+	const keepHead = Math.max(1_000, Math.floor(STUDIO_TRACE_TOOL_ARGS_MAX_CHARS * 0.65));
+	const keepTail = Math.max(1_000, STUDIO_TRACE_TOOL_ARGS_MAX_CHARS - keepHead - 160);
+	const omitted = value.length - keepHead - keepTail;
+	return `${value.slice(0, keepHead)}\n\n… ${omitted} chars omitted from tool input …\n\n${value.slice(value.length - keepTail)}`;
+}
+
+function formatStudioTraceToolArgs(toolName: string, args: unknown): string | null {
+	const normalizedTool = String(toolName || "").trim().toLowerCase();
+	const payload = (args && typeof args === "object") ? (args as Record<string, unknown>) : {};
+	let raw = "";
+	if (normalizedTool === "bash" && typeof payload.command === "string") {
+		raw = payload.command;
+	} else if ((normalizedTool === "repl_send" || normalizedTool === "studio_repl_send") && typeof payload.code === "string") {
+		raw = payload.code;
+	} else {
+		try {
+			raw = JSON.stringify(args, null, 2);
+		} catch {
+			raw = String(args ?? "");
+		}
+	}
+	const truncated = truncateStudioTraceToolArgs(raw);
+	return truncated ? truncated : null;
 }
 
 function isStudioReplRuntime(value: unknown): value is StudioReplRuntime {
@@ -9827,7 +9865,7 @@ ${cssVarsBlock}
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
-      <label class="file-label" title="Load a local file into editor text.">Load file content<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
+      <label class="file-label" title="Import a browser-selected text file into the editor as an unsaved copy. It will not be refreshable from disk until you save it.">Import file copy…<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>
@@ -11040,7 +11078,17 @@ export default function (pi: ExtensionAPI) {
 		const existingId = studioTraceToolEntryIds.get(toolCallId);
 		if (existingId) {
 			const existing = studioTraceState.entries.find((entry) => entry.id === existingId);
-			if (existing && existing.type === "tool") return existing;
+			if (existing && existing.type === "tool") {
+				if (args !== undefined) {
+					existing.toolName = toolName;
+					existing.label = deriveToolActivityLabel(toolName, args);
+					existing.argsSummary = summarizeStudioTraceToolArgs(toolName, args);
+					existing.args = formatStudioTraceToolArgs(toolName, args);
+					existing.updatedAt = Date.now();
+					upsertStudioTraceEntry(existing);
+				}
+				return existing;
+			}
 		}
 		if (studioTraceState.runId == null || studioTraceState.status === "idle") {
 			resetStudioTraceForRun();
@@ -11053,6 +11101,7 @@ export default function (pi: ExtensionAPI) {
 			toolName,
 			label: deriveToolActivityLabel(toolName, args),
 			argsSummary: summarizeStudioTraceToolArgs(toolName, args),
+			args: formatStudioTraceToolArgs(toolName, args),
 			output: "",
 			images: [],
 			startedAt: now,
@@ -11075,6 +11124,8 @@ export default function (pi: ExtensionAPI) {
 		images?: StudioTraceImage[],
 	) => {
 		const entry = ensureStudioTraceToolEntry(toolCallId, toolName, args);
+		if (!entry.argsSummary) entry.argsSummary = summarizeStudioTraceToolArgs(toolName, args);
+		if (!entry.args) entry.args = formatStudioTraceToolArgs(toolName, args);
 		entry.output = output;
 		if (Array.isArray(images)) entry.images = images;
 		entry.status = status;
@@ -12225,16 +12276,18 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
 				return;
 			}
-			if (!initialStudioDocument || !initialStudioDocument.path) {
+			const requestedPath = typeof msg.path === "string" && msg.path.trim() ? msg.path.trim() : "";
+			const refreshPath = requestedPath || initialStudioDocument?.path || "";
+			if (!refreshPath) {
 				sendToClient(client, {
 					type: "error",
 					requestId: msg.requestId,
-					message: "Refresh from disk is only available for file-backed documents.",
+					message: "Refresh from disk needs a file path. Use Files → Open here, Files → Open file tab, or /studio-editor-only <path> for a refreshable editor tab.",
 				});
 				return;
 			}
 
-			const refreshed = readStudioFile(initialStudioDocument.path, studioCwd);
+			const refreshed = readStudioFile(refreshPath, studioCwd);
 			if (refreshed.ok === false) {
 				sendToClient(client, {
 					type: "error",
@@ -12244,18 +12297,21 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			initialStudioDocument = {
+			const refreshedDocument: InitialStudioDocument = {
 				text: refreshed.text,
 				label: refreshed.label,
 				source: "file",
 				path: refreshed.resolvedPath,
 				resourceDir: dirname(refreshed.resolvedPath),
 			};
+			if (!requestedPath || initialStudioDocument?.path === refreshed.resolvedPath) {
+				initialStudioDocument = refreshedDocument;
+			}
 
-			broadcast({
+			sendToClient(client, {
 				type: "studio_document",
 				requestId: msg.requestId,
-				document: initialStudioDocument,
+				document: refreshedDocument,
 				message: `Reloaded ${refreshed.label} from disk.`,
 			});
 			return;
@@ -13666,7 +13722,9 @@ export default function (pi: ExtensionAPI) {
 		if (!agentBusy) return;
 		const toolName = typeof event.toolName === "string" ? event.toolName : "";
 		const input = (event as { input?: unknown }).input;
+		const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
 		const label = deriveToolActivityLabel(toolName, input);
+		if (toolCallId) ensureStudioTraceToolEntry(toolCallId, toolName, input);
 		emitDebugEvent("tool_call", { toolName, label, activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
 		setTerminalActivity("tool", toolName, label);
 	});
