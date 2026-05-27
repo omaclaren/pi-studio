@@ -392,7 +392,6 @@
     }
 
     body[data-studio-mode="editor-only"] #editorViewSelect,
-    body[data-studio-mode="editor-only"] #rightViewSelect,
     body[data-studio-mode="editor-only"] #sendRunBtn,
     body[data-studio-mode="editor-only"] #queueSteerBtn,
     body[data-studio-mode="editor-only"] #sendEditorBtn,
@@ -424,7 +423,7 @@
     }
 
     body[data-studio-mode="editor-only"] #rightSectionHeader .section-header-main::before {
-      content: "Preview";
+      content: "View";
       font-weight: 600;
       font-size: 14px;
     }
@@ -2506,6 +2505,35 @@
       white-space: nowrap;
     }
 
+    .rendered-markdown .studio-html-artifact-comment-btn {
+      flex: 0 0 auto;
+      min-height: 24px;
+      padding: 0 9px;
+      border: 1px solid var(--control-border);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-size: 11px;
+      line-height: 1;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .rendered-markdown .studio-html-artifact-comment-btn:not(:disabled):hover,
+    .rendered-markdown .studio-html-artifact-comment-btn:focus-visible {
+      background: var(--control-hover-bg, var(--inline-code-bg));
+      border-color: var(--control-border-hover, var(--accent));
+      outline: none;
+    }
+
+    .rendered-markdown .studio-html-artifact-comment-btn.is-active,
+    .rendered-markdown .studio-html-artifact-shell.is-comment-mode .studio-html-artifact-comment-btn.is-active {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
     .rendered-markdown .studio-html-artifact-zoom-controls {
       flex: 0 0 auto;
       display: inline-flex;
@@ -4034,6 +4062,10 @@
       color: var(--studio-info-text, var(--muted));
       font-size: 12px;
       line-height: 1.35;
+    }
+
+    body[data-studio-mode="editor-only"] .shortcuts-full-only {
+      display: none !important;
     }
 
     .scratchpad-textarea {

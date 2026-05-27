@@ -209,6 +209,8 @@ interface InitialStudioDocument {
 	resourceDir?: string;
 }
 
+type PersistedStudioReviewNoteAnchorKind = "source" | "html-selection" | "html-element" | "html-page";
+
 interface PersistedStudioReviewNote {
 	id: string;
 	text: string;
@@ -220,6 +222,11 @@ interface PersistedStudioReviewNote {
 	lineEnd: number;
 	selectedText: string;
 	selectedDisplayText?: string;
+	anchorKind?: PersistedStudioReviewNoteAnchorKind;
+	htmlSelector?: string;
+	htmlTag?: string;
+	htmlLabel?: string;
+	htmlPreviewTitle?: string;
 }
 
 interface StudioPersistentState {
@@ -725,6 +732,10 @@ function createEmptyStudioPersistentState(): StudioPersistentState {
 	};
 }
 
+function normalizePersistedStudioReviewNoteAnchorKind(value: unknown): PersistedStudioReviewNoteAnchorKind {
+	return value === "html-selection" || value === "html-element" || value === "html-page" ? value : "source";
+}
+
 function normalizePersistedStudioReviewNote(value: unknown): PersistedStudioReviewNote | null {
 	if (!value || typeof value !== "object") return null;
 	const candidate = value as Partial<PersistedStudioReviewNote>;
@@ -759,6 +770,11 @@ function normalizePersistedStudioReviewNote(value: unknown): PersistedStudioRevi
 		lineEnd,
 		selectedText: typeof candidate.selectedText === "string" ? candidate.selectedText : "",
 		selectedDisplayText: typeof candidate.selectedDisplayText === "string" ? candidate.selectedDisplayText : "",
+		anchorKind: normalizePersistedStudioReviewNoteAnchorKind(candidate.anchorKind),
+		htmlSelector: typeof candidate.htmlSelector === "string" ? candidate.htmlSelector : "",
+		htmlTag: typeof candidate.htmlTag === "string" ? candidate.htmlTag : "",
+		htmlLabel: typeof candidate.htmlLabel === "string" ? candidate.htmlLabel : "",
+		htmlPreviewTitle: typeof candidate.htmlPreviewTitle === "string" ? candidate.htmlPreviewTitle : "",
 	};
 }
 
@@ -10042,14 +10058,14 @@ ${cssVarsBlock}
               <div class="scratchpad-header">
                 <div>
                   <h2 id="reviewNotesTitle">Comments</h2>
-                  <p class="scratchpad-description">Local comments for editor text. Stay out of the text, anchored to selections or lines, and can be converted into inline <span class="review-notes-inline-token">[an: ...]</span> annotations.</p>
+                  <p class="scratchpad-description">Local comments for editor text and editor previews. They stay out of the text; source-anchored comments can be converted into inline <span class="review-notes-inline-token">[an: ...]</span> annotations.</p>
                 </div>
                 <button id="reviewNotesCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Hide comments" title="Hide comments">✕</button>
               </div>
               <div class="review-notes-toolbar">
                 <span id="reviewNotesMeta" class="scratchpad-meta">No comments</span>
               </div>
-              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text in <strong>Editor (Raw)</strong> or <strong>Editor (Preview)</strong> and use <em>Comment</em>, or use <em>Line comment</em> in <strong>Editor (Raw)</strong>.</div>
+              <div id="reviewNotesEmptyState" class="review-notes-empty">No comments yet for this document. Select text in <strong>Editor (Raw)</strong> or <strong>Editor (Preview)</strong> and use <em>Comment</em>, use <em>Line comment</em> in <strong>Editor (Raw)</strong>, or use <em>Comment mode</em> in an editor HTML preview.</div>
               <div id="reviewNotesList" class="review-notes-list" aria-live="polite"></div>
               <div class="review-notes-dock-footer">
                 <div class="scratchpad-actions">
@@ -10181,14 +10197,14 @@ ${cssVarsBlock}
           <h3>Editor</h3>
           <dl>
             <div><dt>Cmd/Ctrl+S</dt><dd>Save editor</dd></div>
-            <div><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
+            <div class="shortcuts-full-only"><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
             <div><dt>Option/Alt+Tab or Cmd/Ctrl+Shift+Space</dt><dd>Suggest a completion at the editor cursor</dd></div>
             <div><dt>Tab</dt><dd>Insert a visible completion suggestion; otherwise indent selected editor text</dd></div>
             <div><dt>Esc</dt><dd>Dismiss a visible completion suggestion, close overlays, exit pane focus, or stop an active request</dd></div>
             <div><dt>Shift+Tab</dt><dd>Unindent selected editor text</dd></div>
           </dl>
         </section>
-        <section class="shortcuts-group">
+        <section class="shortcuts-group shortcuts-full-only">
           <h3>Response</h3>
           <dl>
             <div><dt>Alt/Option+←</dt><dd>Previous response when not editing text</dd></div>

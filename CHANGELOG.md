@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.20] — 2026-05-27
+
+### Added
+- Added an opt-in HTML preview comment mode for editor HTML previews: use **Comment mode** to select text or click elements inside the sandboxed preview, or **Page** for a page-level comment; comments are stored in the existing local Comments rail and can be loaded into a prompt.
+- Added **Refresh** controls to Studio PDF previews and the PDF focus viewer so file-backed PDFs can be reloaded from disk without rerendering the whole Studio pane.
+- Editor-only Studio views now expose the right-pane **Files** and **REPL** views; REPL mode keeps Pi run/critique disabled but allows **Send to REPL** from the editor, including the `Cmd/Ctrl+Shift+Enter` shortcut.
+
 ## [0.9.19] — 2026-05-27
 
 ### Changed

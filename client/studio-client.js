@@ -229,6 +229,35 @@
       let stickyStudioKind = null;
       const pendingCompanionWindows = new Map();
       let initialDocumentApplied = false;
+      function normalizeRightViewValue(nextView) {
+        const raw = String(nextView || "").trim();
+        const normalized = raw === "preview"
+          ? "preview"
+          : (raw === "editor-preview"
+            ? "editor-preview"
+            : (raw === "repl"
+              ? "repl"
+              : (raw === "files"
+                ? "files"
+                : ((raw === "trace" || raw === "thinking") ? "trace" : "markdown"))));
+        if (isEditorOnlyMode && normalized !== "editor-preview" && normalized !== "files" && normalized !== "repl") {
+          return "editor-preview";
+        }
+        return normalized;
+      }
+
+      function syncRightViewModeOptions() {
+        if (!rightViewSelect || !rightViewSelect.options) return;
+        const editorOnlyAllowed = new Set(["editor-preview", "files", "repl"]);
+        Array.from(rightViewSelect.options).forEach((option) => {
+          if (!option) return;
+          option.disabled = isEditorOnlyMode && !editorOnlyAllowed.has(option.value);
+        });
+        rightViewSelect.title = isEditorOnlyMode
+          ? "Editor-only views: editor preview, Files, or REPL. Shortcut: F7 when the right pane is active; F6 switches panes."
+          : "Right pane view mode. Shortcut: F7 when the right pane is active; F6 switches panes.";
+      }
+
       function getInitialRightView(source) {
         if (isEditorOnlyMode) return "editor-preview";
         return String(source || "").trim() === "file" ? "editor-preview" : "preview";
@@ -2427,11 +2456,7 @@
             rightTitleGroupEl.appendChild(rightFocusBtn);
             rightTitleGroupEl.appendChild(makeStudioUiRefreshSeparator());
           }
-          if (isEditorOnlyMode) {
-            rightTitleGroupEl.appendChild(makeStudioUiRefreshElement("span", "studio-refresh-static-title", "Editor (Preview)"));
-          } else {
-            rightTitleGroupEl.appendChild(rightViewSelect);
-          }
+          rightTitleGroupEl.appendChild(rightViewSelect);
           rightIdentityEl.appendChild(rightTitleGroupEl);
           const rightToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
           if (exportPreviewControlsEl) {
@@ -2455,8 +2480,8 @@
         if (!isEditorOnlyMode && sendEditorBtn) actionLineTwoEl.appendChild(sendEditorBtn);
         const replActionLineEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line repl-action-line");
         replActionLineEl.hidden = true;
-        if (!isEditorOnlyMode && sendReplBtn) replActionLineEl.appendChild(sendReplBtn);
-        if (!isEditorOnlyMode && replSendModeSelect) replActionLineEl.appendChild(replSendModeSelect);
+        if (sendReplBtn) replActionLineEl.appendChild(sendReplBtn);
+        if (replSendModeSelect) replActionLineEl.appendChild(replSendModeSelect);
         if (actionLineOneEl.childNodes.length > 0) actionsEl.appendChild(actionLineOneEl);
         actionsEl.appendChild(actionLineTwoEl);
         if (replActionLineEl.childNodes.length > 0) actionsEl.appendChild(replActionLineEl);
@@ -2612,7 +2637,7 @@
 
       function getIdleStatus() {
         if (isEditorOnlyMode) {
-          return "Editor-only mode: edit, load, annotate, preview, save, suggest, or refresh file-backed text.";
+          return "Editor-only mode: edit, browse files, annotate, preview, save, suggest, refresh file-backed text, or send to a REPL.";
         }
         return "Edit, load, or annotate text, then run, save, send to pi editor, or critique.";
       }
@@ -3530,7 +3555,7 @@
 
       function cycleActivePaneView(direction) {
         if (activePane === "right") {
-          if (isEditorOnlyMode || !rightViewSelect || rightViewSelect.disabled) {
+          if (!rightViewSelect || rightViewSelect.disabled) {
             setStatus("The right-pane view selector is unavailable.", "warning");
             return;
           }
@@ -3886,7 +3911,6 @@
           && !event.altKey
           && event.shiftKey
           && activePane === "left"
-          && !isEditorOnlyMode
           && rightView === "repl"
         ) {
           event.preventDefault();
@@ -4953,6 +4977,132 @@
           + "    });\n"
           + "    scheduleHeight();\n"
           + "  }\n"
+          + "  let htmlCommentMode = false;\n"
+          + "  let htmlCommentHoverEl = null;\n"
+          + "  let htmlCommentHighlightTimer = null;\n"
+          + "  let htmlCommentLastPostAt = 0;\n"
+          + "  function htmlCommentCssEscape(value) {\n"
+          + "    const text = String(value || '');\n"
+          + "    try { if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(text); } catch {}\n"
+          + "    return text.replace(/[^A-Za-z0-9_-]/g, function(ch) { return '\\\\' + ch; });\n"
+          + "  }\n"
+          + "  function getHtmlCommentSelector(element) {\n"
+          + "    if (!element || element.nodeType !== 1) return '';\n"
+          + "    if (element.id) return '#' + htmlCommentCssEscape(element.id);\n"
+          + "    const parts = [];\n"
+          + "    let el = element;\n"
+          + "    while (el && el.nodeType === 1 && el !== document.documentElement) {\n"
+          + "      const tag = el.tagName ? el.tagName.toLowerCase() : '';\n"
+          + "      if (!tag) break;\n"
+          + "      if (el.id) { parts.unshift(tag + '#' + htmlCommentCssEscape(el.id)); break; }\n"
+          + "      let index = 1;\n"
+          + "      let sibling = el.previousElementSibling;\n"
+          + "      while (sibling) { if ((sibling.tagName || '').toLowerCase() === tag) index += 1; sibling = sibling.previousElementSibling; }\n"
+          + "      parts.unshift(tag + ':nth-of-type(' + index + ')');\n"
+          + "      if (tag === 'body') break;\n"
+          + "      el = el.parentElement;\n"
+          + "    }\n"
+          + "    return parts.join(' > ');\n"
+          + "  }\n"
+          + "  function normalizeHtmlCommentText(value, maxLength) {\n"
+          + "    const text = String(value || '').replace(/\\s+/g, ' ').trim();\n"
+          + "    const limit = Math.max(24, Number(maxLength) || 200);\n"
+          + "    return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '…' : text;\n"
+          + "  }\n"
+          + "  function getHtmlCommentElementLabel(element) {\n"
+          + "    if (!element || element.nodeType !== 1) return '';\n"
+          + "    const attrText = element.getAttribute('aria-label') || element.getAttribute('alt') || element.getAttribute('title') || '';\n"
+          + "    if (attrText) return normalizeHtmlCommentText(attrText, 220);\n"
+          + "    const tag = (element.tagName || '').toLowerCase();\n"
+          + "    if (tag === 'img') {\n"
+          + "      const src = String(element.getAttribute('src') || '').split(/[?#]/)[0].split('/').pop() || 'image';\n"
+          + "      return normalizeHtmlCommentText(src, 220);\n"
+          + "    }\n"
+          + "    return normalizeHtmlCommentText(element.innerText || element.textContent || '', 220);\n"
+          + "  }\n"
+          + "  function getHtmlCommentTarget(target) {\n"
+          + "    let node = target;\n"
+          + "    if (node && node.nodeType === 3) node = node.parentElement;\n"
+          + "    if (!node || node.nodeType !== 1) return document.body || document.documentElement;\n"
+          + "    if (typeof node.closest === 'function') {\n"
+          + "      return node.closest('img,figure,table,section,article,main,aside,nav,header,footer,pre,blockquote,ul,ol,li,canvas,svg,h1,h2,h3,h4,h5,h6,p,button,a,input,textarea,select,div') || node;\n"
+          + "    }\n"
+          + "    return node;\n"
+          + "  }\n"
+          + "  function getHtmlCommentSelectionText() {\n"
+          + "    const selection = typeof window.getSelection === 'function' ? window.getSelection() : null;\n"
+          + "    if (!selection || selection.rangeCount <= 0 || selection.isCollapsed) return '';\n"
+          + "    return normalizeHtmlCommentText(selection.toString(), 1000);\n"
+          + "  }\n"
+          + "  function getHtmlCommentSelectionElement() {\n"
+          + "    const selection = typeof window.getSelection === 'function' ? window.getSelection() : null;\n"
+          + "    if (!selection || selection.rangeCount <= 0) return null;\n"
+          + "    const range = selection.getRangeAt(0);\n"
+          + "    let node = range.commonAncestorContainer;\n"
+          + "    if (node && node.nodeType === 3) node = node.parentElement;\n"
+          + "    return node && node.nodeType === 1 ? node : null;\n"
+          + "  }\n"
+          + "  function postHtmlCommentTarget(kind, element, event, selectedText) {\n"
+          + "    const target = getHtmlCommentTarget(element || (event && event.target));\n"
+          + "    if (!target) return false;\n"
+          + "    htmlCommentLastPostAt = Date.now();\n"
+          + "    try {\n"
+          + "      parent.postMessage({\n"
+          + "        type: 'pi-studio-html-artifact-comment-target',\n"
+          + "        id: PREVIEW_ID,\n"
+          + "        kind: kind === 'selection' ? 'selection' : 'element',\n"
+          + "        selector: getHtmlCommentSelector(target),\n"
+          + "        tag: (target.tagName || '').toLowerCase(),\n"
+          + "        label: getHtmlCommentElementLabel(target),\n"
+          + "        text: normalizeHtmlCommentText(selectedText || '', 1000),\n"
+          + "        clientX: event && event.clientX || 0,\n"
+          + "        clientY: event && event.clientY || 0\n"
+          + "      }, '*');\n"
+          + "      return true;\n"
+          + "    } catch { return false; }\n"
+          + "  }\n"
+          + "  function clearHtmlCommentHover() {\n"
+          + "    if (htmlCommentHoverEl && htmlCommentHoverEl.classList) htmlCommentHoverEl.classList.remove('pi-studio-html-comment-hover');\n"
+          + "    htmlCommentHoverEl = null;\n"
+          + "  }\n"
+          + "  function setHtmlCommentMode(enabled) {\n"
+          + "    htmlCommentMode = Boolean(enabled);\n"
+          + "    if (document.documentElement && document.documentElement.classList) document.documentElement.classList.toggle('pi-studio-html-comment-mode', htmlCommentMode);\n"
+          + "    if (!htmlCommentMode) clearHtmlCommentHover();\n"
+          + "  }\n"
+          + "  function handleHtmlCommentMouseMove(event) {\n"
+          + "    if (!htmlCommentMode) return;\n"
+          + "    const target = getHtmlCommentTarget(event && event.target);\n"
+          + "    if (target === htmlCommentHoverEl) return;\n"
+          + "    clearHtmlCommentHover();\n"
+          + "    htmlCommentHoverEl = target;\n"
+          + "    if (htmlCommentHoverEl && htmlCommentHoverEl.classList) htmlCommentHoverEl.classList.add('pi-studio-html-comment-hover');\n"
+          + "  }\n"
+          + "  function handleHtmlCommentMouseUp(event) {\n"
+          + "    if (!htmlCommentMode) return;\n"
+          + "    const selectedText = getHtmlCommentSelectionText();\n"
+          + "    if (!selectedText) return;\n"
+          + "    postHtmlCommentTarget('selection', getHtmlCommentSelectionElement() || (event && event.target), event, selectedText);\n"
+          + "    if (event) { event.preventDefault(); event.stopPropagation(); }\n"
+          + "  }\n"
+          + "  function handleHtmlCommentClick(event) {\n"
+          + "    if (!htmlCommentMode) return;\n"
+          + "    if (Date.now() - htmlCommentLastPostAt < 450) { event.preventDefault(); event.stopPropagation(); return; }\n"
+          + "    postHtmlCommentTarget('element', event && event.target, event, '');\n"
+          + "    event.preventDefault();\n"
+          + "    event.stopPropagation();\n"
+          + "  }\n"
+          + "  function highlightHtmlCommentTarget(selector, anchorKind) {\n"
+          + "    if (htmlCommentHighlightTimer) { clearTimeout(htmlCommentHighlightTimer); htmlCommentHighlightTimer = null; }\n"
+          + "    Array.prototype.slice.call(document.querySelectorAll('.pi-studio-html-comment-highlight')).forEach(function(el) { el.classList.remove('pi-studio-html-comment-highlight'); });\n"
+          + "    if (anchorKind === 'html-page' || !selector) { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); } return; }\n"
+          + "    let target = null;\n"
+          + "    try { target = document.querySelector(String(selector || '')); } catch {}\n"
+          + "    if (!target) return;\n"
+          + "    try { target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' }); } catch { try { target.scrollIntoView(true); } catch {} }\n"
+          + "    if (target.classList) target.classList.add('pi-studio-html-comment-highlight');\n"
+          + "    htmlCommentHighlightTimer = setTimeout(function() { if (target && target.classList) target.classList.remove('pi-studio-html-comment-highlight'); }, 2400);\n"
+          + "  }\n"
           + "  window.addEventListener('message', (event) => {\n"
           + "    const data = event && event.data;\n"
           + "    if (!data || typeof data !== 'object' || data.id !== PREVIEW_ID) return;\n"
@@ -4966,11 +5116,23 @@
           + "    }\n"
           + "    if (data.type === 'pi-studio-html-artifact-resources-resolved') {\n"
           + "      applyResolvedHtmlPreviewResources(data.results);\n"
+          + "      return;\n"
+          + "    }\n"
+          + "    if (data.type === 'pi-studio-html-artifact-comment-mode') {\n"
+          + "      setHtmlCommentMode(data.enabled);\n"
+          + "      return;\n"
+          + "    }\n"
+          + "    if (data.type === 'pi-studio-html-artifact-highlight-comment') {\n"
+          + "      highlightHtmlCommentTarget(data.selector, data.anchorKind);\n"
           + "    }\n"
           + "  });\n"
           + "  document.addEventListener('click', handleFragmentAnchorClick);\n"
           + "  document.addEventListener('click', handleHtmlPreviewLocalLinkClick);\n"
           + "  document.addEventListener('contextmenu', handleHtmlPreviewLocalLinkContextMenu);\n"
+          + "  document.addEventListener('mousemove', handleHtmlCommentMouseMove, true);\n"
+          + "  document.addEventListener('mouseleave', clearHtmlCommentHover, true);\n"
+          + "  document.addEventListener('mouseup', handleHtmlCommentMouseUp, true);\n"
+          + "  document.addEventListener('click', handleHtmlCommentClick, true);\n"
           + "  document.addEventListener('DOMContentLoaded', () => { scheduleHtmlMathRenderScan(); scheduleHtmlPreviewResourceScan(); });\n"
           + "  window.addEventListener('hashchange', () => {\n"
           + "    const hash = String(window.location && window.location.hash || '');\n"
@@ -5002,6 +5164,9 @@
           + ".pi-studio-html-math-display{display:block;margin:0.75em 0;overflow-x:auto;text-align:center;}\n"
           + ".pi-studio-html-math-display>math{display:block;margin:0 auto;}\n"
           + ".pi-studio-html-math-inline>math{vertical-align:-0.15em;}\n"
+          + "html.pi-studio-html-comment-mode,html.pi-studio-html-comment-mode body{cursor:crosshair!important;}\n"
+          + ".pi-studio-html-comment-hover{outline:2px solid #0f8b8d!important;outline-offset:3px!important;}\n"
+          + ".pi-studio-html-comment-highlight{outline:3px solid #d97706!important;outline-offset:4px!important;box-shadow:0 0 0 6px rgba(217,119,6,.18)!important;}\n"
           + "</style>\n";
       }
 
@@ -5036,6 +5201,11 @@
         });
       }
 
+      function setHtmlArtifactDetailText(record, text) {
+        if (!record || !record.detail) return;
+        record.detail.textContent = record.commentMode ? "HTML preview · comment mode" : (text || "HTML preview");
+      }
+
       function handleHtmlArtifactFrameSizeMessage(event) {
         const data = event && event.data;
         if (!data || typeof data !== "object" || data.type !== "pi-studio-html-artifact-size") return;
@@ -5047,7 +5217,7 @@
         }
         if (event.source && record.iframe.contentWindow && event.source !== record.iframe.contentWindow) return;
         if (record.shell && record.shell.classList && record.shell.classList.contains("is-focused")) {
-          if (record.detail) record.detail.textContent = "HTML preview";
+          setHtmlArtifactDetailText(record, "HTML preview");
           return;
         }
         const rawHeight = Number(data.height);
@@ -5064,9 +5234,7 @@
           record.shell.style.minHeight = "0";
           record.shell.classList.toggle("is-height-capped", capped);
         }
-        if (record.detail) {
-          record.detail.textContent = "HTML preview";
-        }
+        setHtmlArtifactDetailText(record, "HTML preview");
       }
 
       function handleHtmlArtifactFrameFragmentMessage(event) {
@@ -5190,7 +5358,7 @@
             error: error && error.message ? error.message : String(error || "HTML preview math render failed."),
           })));
         } finally {
-          if (record.detail) record.detail.textContent = "HTML preview";
+          setHtmlArtifactDetailText(record, "HTML preview");
         }
       }
 
@@ -5280,7 +5448,7 @@
         if (record.detail) record.detail.textContent = "HTML preview · loading local images";
         const results = await Promise.all(items.map((item) => fetchHtmlArtifactResource(record, item)));
         postHtmlArtifactResourceResults(record, results);
-        if (record.detail) record.detail.textContent = "HTML preview";
+        setHtmlArtifactDetailText(record, "HTML preview");
       }
 
       function handleHtmlArtifactFrameResourceMessage(event) {
@@ -5363,11 +5531,36 @@
         setStatus("Right-click this local HTML preview link for file actions.", "warning");
       }
 
+      function handleHtmlArtifactFrameCommentTargetMessage(event) {
+        const data = event && event.data;
+        if (!data || typeof data !== "object" || data.type !== "pi-studio-html-artifact-comment-target") return;
+        const id = typeof data.id === "string" ? data.id : "";
+        const record = id ? htmlArtifactFramesById.get(id) : null;
+        if (!record || !record.iframe || !record.iframe.isConnected) {
+          if (id) htmlArtifactFramesById.delete(id);
+          return;
+        }
+        if (!record.commentable) return;
+        if (event.source && record.iframe.contentWindow && event.source !== record.iframe.contentWindow) return;
+        const note = addReviewNoteFromHtmlArtifactTarget(record, data);
+        if (note && record.iframe && record.iframe.contentWindow) {
+          try {
+            record.iframe.contentWindow.postMessage({
+              type: "pi-studio-html-artifact-highlight-comment",
+              id: record.id || "",
+              selector: note.htmlSelector || "",
+              anchorKind: note.anchorKind || "html-element",
+            }, "*");
+          } catch {}
+        }
+      }
+
       window.addEventListener("message", handleHtmlArtifactFrameSizeMessage);
       window.addEventListener("message", handleHtmlArtifactFrameFragmentMessage);
       window.addEventListener("message", handleHtmlArtifactFrameMathRenderMessage);
       window.addEventListener("message", handleHtmlArtifactFrameResourceMessage);
       window.addEventListener("message", handleHtmlArtifactFrameLocalLinkMessage);
+      window.addEventListener("message", handleHtmlArtifactFrameCommentTargetMessage);
 
       function isStudioHtmlFocusOpen() {
         return Boolean(studioHtmlFocusOverlayEl && studioHtmlFocusOverlayEl.hidden === false && studioHtmlFocusShellEl);
@@ -5595,6 +5788,36 @@
 
         const tools = document.createElement("span");
         tools.className = "studio-html-artifact-tools";
+        const commentable = Boolean(options && options.commentable);
+
+        let commentBtn = null;
+        let pageCommentBtn = null;
+        const makeCommentButton = (text, title, onClick) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "studio-html-artifact-comment-btn";
+          button.textContent = text;
+          button.title = title;
+          button.addEventListener("pointerdown", (event) => { event.stopPropagation(); });
+          button.addEventListener("mousedown", (event) => { event.stopPropagation(); });
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onClick();
+          });
+          return button;
+        };
+        if (commentable) {
+          commentBtn = makeCommentButton("Comment mode", "Turn on HTML preview comment mode. Select text or click an element in the preview to add a local comment.", () => {
+            const record = htmlArtifactFramesById.get(previewId);
+            setHtmlArtifactRecordCommentMode(record, !(record && record.commentMode));
+          });
+          commentBtn.setAttribute("aria-pressed", "false");
+          pageCommentBtn = makeCommentButton("Page", "Add a page-level local comment for this HTML preview.", () => {
+            const record = htmlArtifactFramesById.get(previewId);
+            addReviewNoteFromHtmlArtifactPage(record || null);
+          });
+        }
 
         const zoomControls = document.createElement("span");
         zoomControls.className = "studio-html-artifact-zoom-controls";
@@ -5658,6 +5881,8 @@
         fullscreenBtn.appendChild(makeStudioUiRefreshIcon("fullscreen"));
         updateZoomUi();
         tools.appendChild(detail);
+        if (commentBtn) tools.appendChild(commentBtn);
+        if (pageCommentBtn) tools.appendChild(pageCommentBtn);
         tools.appendChild(zoomControls);
         tools.appendChild(fullscreenBtn);
 
@@ -5672,7 +5897,7 @@
         iframe.referrerPolicy = "no-referrer";
         iframe.setAttribute("sandbox", "allow-scripts allow-modals");
         iframe.setAttribute("allow", "clipboard-write");
-        iframe.addEventListener("load", () => { postArtifactZoom(); });
+        iframe.addEventListener("load", () => { postArtifactZoom(); postHtmlArtifactCommentMode(htmlArtifactFramesById.get(previewId)); });
         iframe.srcdoc = buildHtmlArtifactSrcdoc(html, previewId);
         shell.appendChild(iframe);
         htmlArtifactFramesById.set(previewId, {
@@ -5681,6 +5906,11 @@
           shell,
           detail,
           zoomControls,
+          commentBtn,
+          pageCommentBtn,
+          commentMode: false,
+          commentable,
+          title,
           sourcePath: options && options.sourcePath ? String(options.sourcePath) : "",
           resourceDir: options && options.resourceDir ? String(options.resourceDir) : "",
           mathRenderBatchCount: 0,
@@ -5695,6 +5925,33 @@
           applyPendingResponseScrollReset();
           scheduleResponsePaneRepaintNudge();
         }
+      }
+
+      function postHtmlArtifactCommentMode(record) {
+        if (!record || !record.iframe || !record.iframe.contentWindow) return;
+        try {
+          record.iframe.contentWindow.postMessage({
+            type: "pi-studio-html-artifact-comment-mode",
+            id: record.id || "",
+            enabled: Boolean(record.commentMode),
+          }, "*");
+        } catch {}
+      }
+
+      function setHtmlArtifactRecordCommentMode(record, enabled) {
+        if (!record) return;
+        record.commentMode = Boolean(enabled);
+        if (record.shell && record.shell.classList) record.shell.classList.toggle("is-comment-mode", record.commentMode);
+        if (record.commentBtn) {
+          record.commentBtn.classList.toggle("is-active", record.commentMode);
+          record.commentBtn.setAttribute("aria-pressed", record.commentMode ? "true" : "false");
+          record.commentBtn.textContent = "Comment mode";
+          record.commentBtn.title = record.commentMode
+            ? "HTML comment mode is on. Select text or click an element in the preview to add a local comment."
+            : "Turn on HTML preview comment mode. Select text or click an element in the preview to add a local comment.";
+        }
+        if (record.detail) record.detail.textContent = record.commentMode ? "HTML preview · comment mode" : "HTML preview";
+        postHtmlArtifactCommentMode(record);
       }
 
       function getRightPaneHtmlArtifactSource() {
@@ -5813,6 +6070,15 @@
         openLink.rel = "noopener noreferrer";
         openLink.textContent = "Open PDF";
         actions.appendChild(openLink);
+
+        const refreshBtn = document.createElement("button");
+        refreshBtn.type = "button";
+        refreshBtn.className = "studio-pdf-focus-btn studio-pdf-focus-refresh";
+        refreshBtn.textContent = "Refresh";
+        refreshBtn.title = "Reload this PDF preview from disk.";
+        refreshBtn.setAttribute("aria-label", "Refresh PDF preview from disk");
+        refreshBtn.addEventListener("click", () => refreshStudioPdfFocusViewer());
+        actions.appendChild(refreshBtn);
 
         const fullscreenBtn = document.createElement("button");
         fullscreenBtn.type = "button";
@@ -5933,6 +6199,70 @@
           params.set("resourceDir", resourceDir);
         }
         return "/pdf-resource?" + params.toString();
+      }
+
+      function buildRefreshedStudioPdfViewerUrl(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        const hashIndex = raw.indexOf("#");
+        const base = hashIndex >= 0 ? raw.slice(0, hashIndex) : raw;
+        const hash = hashIndex >= 0 ? raw.slice(hashIndex) : "";
+        const nonce = Date.now().toString(36);
+        try {
+          const url = new URL(base || window.location.href, window.location.href);
+          url.searchParams.set("_studioPdfRefresh", nonce);
+          return url.href + hash;
+        } catch {
+          const separator = base.indexOf("?") >= 0 ? "&" : "?";
+          return base + separator + "_studioPdfRefresh=" + encodeURIComponent(nonce) + hash;
+        }
+      }
+
+      function syncStudioPdfCardViewerUrl(card, viewerUrl) {
+        if (!card) return;
+        const nextUrl = String(viewerUrl || "").trim();
+        if (!nextUrl) return;
+        if (card.dataset) card.dataset.studioPdfViewerUrl = nextUrl;
+        const frame = typeof card.querySelector === "function" ? card.querySelector("iframe.studio-pdf-frame") : null;
+        if (frame) frame.src = nextUrl;
+        const openLink = typeof card.querySelector === "function" ? card.querySelector("a.studio-pdf-card-link") : null;
+        if (openLink) openLink.href = nextUrl;
+        const focusBtn = typeof card.querySelector === "function" ? card.querySelector("button.studio-pdf-card-focus") : null;
+        if (focusBtn && focusBtn.dataset) focusBtn.dataset.studioPdfViewerUrl = nextUrl;
+      }
+
+      function refreshStudioPdfCard(card) {
+        if (!card) return false;
+        const frame = typeof card.querySelector === "function" ? card.querySelector("iframe.studio-pdf-frame") : null;
+        const currentUrl = String(card.dataset && card.dataset.studioPdfViewerUrl ? card.dataset.studioPdfViewerUrl : "").trim()
+          || String(frame && frame.src ? frame.src : "").trim();
+        const nextUrl = buildRefreshedStudioPdfViewerUrl(currentUrl);
+        if (!nextUrl) return false;
+        syncStudioPdfCardViewerUrl(card, nextUrl);
+        setStatus("Refreshed PDF preview from disk.", "success");
+        return true;
+      }
+
+      function getStudioPdfFocusActiveFrame() {
+        if (studioPdfFocusMovedFrameState && studioPdfFocusMovedFrameState.frame && studioPdfFocusMovedFrameState.frame.isConnected) {
+          return studioPdfFocusMovedFrameState.frame;
+        }
+        return studioPdfFocusFrameEl;
+      }
+
+      function refreshStudioPdfFocusViewer() {
+        const frame = getStudioPdfFocusActiveFrame();
+        const currentUrl = String(frame && frame.src ? frame.src : "").trim()
+          || String(studioPdfFocusOpenLinkEl && studioPdfFocusOpenLinkEl.href ? studioPdfFocusOpenLinkEl.href : "").trim();
+        const nextUrl = buildRefreshedStudioPdfViewerUrl(currentUrl);
+        if (!nextUrl) {
+          setStatus("Could not refresh this PDF preview.", "warning");
+          return false;
+        }
+        if (frame) frame.src = nextUrl;
+        if (studioPdfFocusOpenLinkEl) studioPdfFocusOpenLinkEl.href = nextUrl;
+        setStatus("Refreshed PDF preview from disk.", "success");
+        return true;
       }
 
       function syncStudioPdfFocusFullscreenButton() {
@@ -6464,6 +6794,18 @@
           openLink.rel = "noopener noreferrer";
           openLink.textContent = "Open PDF";
           actions.appendChild(openLink);
+
+          const refreshBtn = document.createElement("button");
+          refreshBtn.type = "button";
+          refreshBtn.className = "studio-pdf-card-action studio-pdf-card-refresh";
+          refreshBtn.textContent = "Refresh";
+          refreshBtn.title = "Reload this PDF preview from disk.";
+          refreshBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!refreshStudioPdfCard(card)) setStatus("Could not refresh this PDF preview.", "warning");
+          });
+          actions.appendChild(refreshBtn);
 
           header.appendChild(actions);
         }
@@ -8245,7 +8587,7 @@
         const text = prepareEditorTextForPreview(sourceTextEl.value || "");
         const previewLanguage = getEditorLanguageForPreview();
         if (isHtmlArtifactPreviewText(text, previewLanguage)) {
-          renderHtmlArtifactPreview(sourcePreviewEl, text, "source", { title: "Editor HTML preview", ...getHtmlPreviewResourceContextOptions() });
+          renderHtmlArtifactPreview(sourcePreviewEl, text, "source", { title: "Editor HTML preview", commentable: true, ...getHtmlPreviewResourceContextOptions() });
           return;
         }
         if (renderDelimitedTextPreview(sourcePreviewEl, text, "source", previewLanguage)) {
@@ -9149,7 +9491,7 @@
           }
           const previewLanguage = getEditorLanguageForPreview();
           if (isHtmlArtifactPreviewText(editorText, previewLanguage)) {
-            renderHtmlArtifactPreview(critiqueViewEl, editorText, "response", { title: "Editor HTML preview", ...getHtmlPreviewResourceContextOptions() });
+            renderHtmlArtifactPreview(critiqueViewEl, editorText, "response", { title: "Editor HTML preview", commentable: true, ...getHtmlPreviewResourceContextOptions() });
             return;
           }
           if (renderDelimitedTextPreview(critiqueViewEl, editorText, "response", previewLanguage)) {
@@ -9439,7 +9781,8 @@
         if (stripAnnotationsBtn) stripAnnotationsBtn.disabled = uiBusy || !hasAnnotationMarkers(sourceTextEl.value);
         if (compactBtn) compactBtn.disabled = isEditorOnlyMode || uiBusy || compactInProgress || wsState === "Disconnected";
         editorViewSelect.disabled = isEditorOnlyMode;
-        rightViewSelect.disabled = isEditorOnlyMode;
+        syncRightViewModeOptions();
+        rightViewSelect.disabled = false;
         followSelect.disabled = isEditorOnlyMode || uiBusy;
         if (responseHighlightSelect) responseHighlightSelect.disabled = isEditorOnlyMode || rightView !== "markdown";
         insertHeaderBtn.disabled = uiBusy;
@@ -9550,7 +9893,7 @@
           sourceState: normalizeWorkspaceSourceState(sourceState),
           resourceDir: getCurrentResourceDirValue(),
           editorView,
-          rightView: isEditorOnlyMode ? "editor-preview" : rightView,
+          rightView: normalizeRightViewValue(rightView),
           editorLanguage,
           followLatest,
           responseHistoryIndex,
@@ -9625,15 +9968,7 @@
           setEditorLanguage(state.editorLanguage.trim());
         }
         editorView = state.editorView === "preview" ? "preview" : "markdown";
-        rightView = isEditorOnlyMode
-          ? "editor-preview"
-          : (state.rightView === "preview"
-            ? "preview"
-            : (state.rightView === "editor-preview"
-              ? "editor-preview"
-              : (state.rightView === "repl"
-                ? "repl"
-                : (state.rightView === "files" ? "files" : ((state.rightView === "trace" || state.rightView === "thinking") ? "trace" : "markdown")))));
+        rightView = normalizeRightViewValue(state.rightView);
         if (typeof state.followLatest === "boolean") {
           followLatest = state.followLatest;
         }
@@ -10176,15 +10511,8 @@
 
       function setRightView(nextView) {
         const previousView = rightView;
-        rightView = nextView === "preview"
-          ? "preview"
-          : (nextView === "editor-preview"
-            ? "editor-preview"
-            : (nextView === "repl"
-              ? "repl"
-              : (nextView === "files"
-                ? "files"
-                : ((nextView === "trace" || nextView === "thinking") ? "trace" : "markdown"))));
+        rightView = normalizeRightViewValue(nextView);
+        syncRightViewModeOptions();
         rightViewSelect.value = rightView;
         if (rightView === "trace" && previousView !== "trace") {
           traceAutoScroll = true;
@@ -12589,10 +12917,21 @@
         scheduleScratchpadPersistence(value, descriptor.key);
       }
 
+      function normalizeReviewNoteAnchorKind(value) {
+        const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+        if (raw === "html-selection" || raw === "html-element" || raw === "html-page") return raw;
+        return "source";
+      }
+
+      function isReviewNoteDomAnchor(note) {
+        return Boolean(note && normalizeReviewNoteAnchorKind(note.anchorKind) !== "source");
+      }
+
       function normalizeReviewNote(note) {
         if (!note || typeof note !== "object") return null;
         const id = typeof note.id === "string" && note.id.trim() ? note.id : makeRequestId();
         const text = typeof note.text === "string" ? note.text : "";
+        const anchorKind = normalizeReviewNoteAnchorKind(note.anchorKind);
         const createdAt = typeof note.createdAt === "number" && Number.isFinite(note.createdAt)
           ? note.createdAt
           : Date.now();
@@ -12622,6 +12961,11 @@
           lineEnd,
           selectedText: typeof note.selectedText === "string" ? note.selectedText : "",
           selectedDisplayText: typeof note.selectedDisplayText === "string" ? note.selectedDisplayText : "",
+          anchorKind,
+          htmlSelector: typeof note.htmlSelector === "string" ? note.htmlSelector : "",
+          htmlTag: typeof note.htmlTag === "string" ? note.htmlTag : "",
+          htmlLabel: typeof note.htmlLabel === "string" ? note.htmlLabel : "",
+          htmlPreviewTitle: typeof note.htmlPreviewTitle === "string" ? note.htmlPreviewTitle : "",
         };
       }
 
@@ -13120,17 +13464,26 @@
         }
       }
 
+      function formatHtmlReviewNoteAnchorLabel(note) {
+        const kind = normalizeReviewNoteAnchorKind(note && note.anchorKind);
+        const tag = String(note && note.htmlTag ? note.htmlTag : "").trim().toLowerCase();
+        if (kind === "html-selection") return "HTML selection";
+        if (kind === "html-page") return "HTML page";
+        return tag ? ("HTML <" + tag + ">") : "HTML element";
+      }
+
       function summarizeReviewNoteAnchor(note) {
+        if (isReviewNoteDomAnchor(note)) return formatHtmlReviewNoteAnchorLabel(note);
         const start = Math.max(1, Number(note && note.lineStart) || 1);
         const end = Math.max(start, Number(note && note.lineEnd) || start);
         return start === end ? "Line " + start : ("Lines " + start + "–" + end);
       }
 
       function summarizeReviewNoteQuote(note) {
-        const normalized = String(note && (note.selectedDisplayText || note.selectedText) ? (note.selectedDisplayText || note.selectedText) : "")
+        const normalized = String(note && (note.selectedDisplayText || note.selectedText || note.htmlLabel || note.htmlSelector) ? (note.selectedDisplayText || note.selectedText || note.htmlLabel || note.htmlSelector) : "")
           .replace(/\s+/g, " ")
           .trim();
-        if (!normalized) return "Anchor: current line / empty selection";
+        if (!normalized) return isReviewNoteDomAnchor(note) ? "Anchor: HTML preview" : "Anchor: current line / empty selection";
         return normalized.length > 140 ? normalized.slice(0, 137) + "…" : normalized;
       }
 
@@ -13218,6 +13571,7 @@
       }
 
       function resolveReviewNoteRange(note, text) {
+        if (isReviewNoteDomAnchor(note)) return null;
         const source = String(text || "");
         const safeStart = Math.max(0, Math.min(Number(note && note.selectionStart) || 0, source.length));
         const safeEnd = Math.max(safeStart, Math.min(Number(note && note.selectionEnd) || safeStart, source.length));
@@ -13281,6 +13635,7 @@
       }
 
       function formatReviewNotePromptLineRange(bounds, note) {
+        if (isReviewNoteDomAnchor(note)) return summarizeReviewNoteAnchor(note);
         const start = bounds ? bounds.lineStart : Math.max(1, Number(note && note.lineStart) || 1);
         const end = bounds ? bounds.lineEnd : Math.max(start, Number(note && note.lineEnd) || start);
         return start === end ? "L" + start : ("L" + start + "-L" + end);
@@ -13294,7 +13649,7 @@
         const descriptor = getCurrentStudioDocumentDescriptor();
         const documentLabel = descriptor && descriptor.label ? descriptor.label : (sourceState && sourceState.label ? sourceState.label : "Studio document");
         const parts = [
-          "Please address the following Studio comments. Use the file names and line numbers as anchors. The full document is not included here, only the comments and their anchors.",
+          "Please address the following Studio comments. Use file names, line numbers, and preview anchors to locate each comment. The full document is not included here, only the comments and their anchors.",
           "Document: " + documentLabel,
           "",
           "## Comments",
@@ -13315,6 +13670,9 @@
           );
           if (anchor) {
             parts.push("", "> " + anchor.replace(/\n/g, "\n> "));
+          }
+          if (isReviewNoteDomAnchor(note) && note.htmlSelector) {
+            parts.push("", "Preview selector: `" + String(note.htmlSelector).replace(/`/g, "\\`") + "`");
           }
           parts.push("");
         });
@@ -13337,6 +13695,7 @@
         const source = String(text || "");
         const lineMap = new Map();
         for (const note of reviewNotes) {
+          if (isReviewNoteDomAnchor(note)) continue;
           const bounds = getResolvedReviewNoteLineBounds(note, source);
           if (!bounds) continue;
           for (let line = bounds.lineStart; line <= bounds.lineEnd; line += 1) {
@@ -15875,8 +16234,8 @@
         return reviewNotes.slice().sort((left, right) => {
           const leftBounds = getResolvedReviewNoteLineBounds(left, source);
           const rightBounds = getResolvedReviewNoteLineBounds(right, source);
-          const leftLine = leftBounds ? leftBounds.lineStart : Math.max(1, Number(left && left.lineStart) || 1);
-          const rightLine = rightBounds ? rightBounds.lineStart : Math.max(1, Number(right && right.lineStart) || 1);
+          const leftLine = leftBounds ? leftBounds.lineStart : (isReviewNoteDomAnchor(left) ? Number.MAX_SAFE_INTEGER : Math.max(1, Number(left && left.lineStart) || 1));
+          const rightLine = rightBounds ? rightBounds.lineStart : (isReviewNoteDomAnchor(right) ? Number.MAX_SAFE_INTEGER : Math.max(1, Number(right && right.lineStart) || 1));
           if (leftLine !== rightLine) return leftLine - rightLine;
 
           const leftStart = leftBounds ? leftBounds.start : Math.max(0, Number(left && left.selectionStart) || 0);
@@ -15908,6 +16267,15 @@
       function getReviewNoteInlineState(note, text) {
         const source = String(text || "");
         const annotationBody = escapeReviewNoteAnnotationText(note && note.text);
+        if (isReviewNoteDomAnchor(note)) {
+          return {
+            annotationBody,
+            range: null,
+            markerText: "",
+            exists: false,
+            canToggle: false,
+          };
+        }
         if (!annotationBody) {
           return {
             annotationBody: "",
@@ -16233,7 +16601,9 @@
           const jumpBtn = document.createElement("button");
           jumpBtn.type = "button";
           jumpBtn.textContent = "Jump";
-          jumpBtn.title = "Jump to this comment's anchored location in the editor.";
+          jumpBtn.title = isReviewNoteDomAnchor(note)
+            ? "Jump to this comment's HTML preview anchor."
+            : "Jump to this comment's anchored location in the editor.";
           jumpBtn.addEventListener("click", () => {
             jumpToReviewNote(note.id);
           });
@@ -16246,9 +16616,11 @@
           convertBtn.textContent = inlineState.exists ? "Inline: On" : "Inline: Off";
           convertBtn.setAttribute("aria-pressed", inlineState.exists ? "true" : "false");
           convertBtn.disabled = !inlineState.canToggle || uiBusy;
-          convertBtn.title = inlineState.exists
-            ? "This comment currently has an inline [an: ...] annotation in the editor. Click to remove it."
-            : "This comment is currently not inline in the editor. Click to add it as an inline [an: ...] annotation.";
+          convertBtn.title = isReviewNoteDomAnchor(note)
+            ? "Inline annotations are only available for comments anchored to source text."
+            : (inlineState.exists
+              ? "This comment currently has an inline [an: ...] annotation in the editor. Click to remove it."
+              : "This comment is currently not inline in the editor. Click to add it as an inline [an: ...] annotation.");
           convertBtn.addEventListener("click", () => {
             convertReviewNoteToAnnotation(note.id);
           });
@@ -16276,9 +16648,11 @@
             convertBtn.disabled = !nextInlineState.canToggle || uiBusy;
             convertBtn.textContent = nextInlineState.exists ? "Inline: On" : "Inline: Off";
             convertBtn.setAttribute("aria-pressed", nextInlineState.exists ? "true" : "false");
-            convertBtn.title = nextInlineState.exists
-              ? "This comment currently has an inline [an: ...] annotation in the editor. Click to remove it."
-              : "This comment is currently not inline in the editor. Click to add it as an inline [an: ...] annotation.";
+            convertBtn.title = isReviewNoteDomAnchor(note)
+              ? "Inline annotations are only available for comments anchored to source text."
+              : (nextInlineState.exists
+                ? "This comment currently has an inline [an: ...] annotation in the editor. Click to remove it."
+                : "This comment is currently not inline in the editor. Click to add it as an inline [an: ...] annotation.");
             scheduleReviewNotesPersistence();
             updateReviewNotesUi();
           });
@@ -16350,6 +16724,55 @@
         return note;
       }
 
+      function addReviewNoteFromHtmlArtifactTarget(record, data) {
+        if (!record || !record.commentable) return null;
+        const kind = data && data.kind === "selection" ? "html-selection" : "html-element";
+        const selector = typeof data.selector === "string" ? data.selector : "";
+        const tag = typeof data.tag === "string" ? data.tag : "";
+        const text = typeof data.text === "string" ? data.text : "";
+        const label = typeof data.label === "string" ? data.label : "";
+        const display = text || label || selector || (tag ? ("<" + tag + ">") : "HTML element");
+        return addReviewNoteFromAnchor({
+          selectionStart: 0,
+          selectionEnd: 0,
+          lineStart: 1,
+          lineEnd: 1,
+          selectedText: "",
+          selectedDisplayText: display,
+          anchorKind: kind,
+          htmlSelector: selector,
+          htmlTag: tag,
+          htmlLabel: label,
+          htmlPreviewTitle: record.title || "HTML preview",
+        }, {
+          statusMessage: kind === "html-selection"
+            ? "Added local comment from HTML preview selection."
+            : "Added local comment from HTML preview element.",
+        });
+      }
+
+      function addReviewNoteFromHtmlArtifactPage(record) {
+        if (!record || !record.commentable) {
+          setStatus("HTML preview comments are only available for editor previews.", "warning");
+          return null;
+        }
+        return addReviewNoteFromAnchor({
+          selectionStart: 0,
+          selectionEnd: 0,
+          lineStart: 1,
+          lineEnd: 1,
+          selectedText: "",
+          selectedDisplayText: record.title || "HTML preview",
+          anchorKind: "html-page",
+          htmlSelector: "",
+          htmlTag: "",
+          htmlLabel: record.title || "HTML preview",
+          htmlPreviewTitle: record.title || "HTML preview",
+        }, {
+          statusMessage: "Added page-level local comment for HTML preview.",
+        });
+      }
+
       function addReviewNoteFromAnchor(anchor, options) {
         if (!anchor || typeof anchor !== "object") return null;
         const note = normalizeReviewNote({
@@ -16363,6 +16786,11 @@
           lineEnd: anchor.lineEnd,
           selectedText: anchor.selectedText,
           selectedDisplayText: typeof anchor.selectedDisplayText === "string" ? anchor.selectedDisplayText : (typeof anchor.selectedText === "string" ? anchor.selectedText : ""),
+          anchorKind: anchor.anchorKind,
+          htmlSelector: anchor.htmlSelector,
+          htmlTag: anchor.htmlTag,
+          htmlLabel: anchor.htmlLabel,
+          htmlPreviewTitle: anchor.htmlPreviewTitle,
         });
         if (!note) return null;
         if (editorSelectionCommentBtn) {
@@ -16510,9 +16938,55 @@
         return jumped;
       }
 
+      function getConnectedHtmlArtifactRecords() {
+        const records = [];
+        htmlArtifactFramesById.forEach((record, id) => {
+          if (!record || !record.iframe || !record.iframe.isConnected || !record.iframe.contentWindow) {
+            if (id) htmlArtifactFramesById.delete(id);
+            return;
+          }
+          records.push(record);
+        });
+        return records;
+      }
+
+      function jumpToHtmlReviewNote(note) {
+        if (!isReviewNoteDomAnchor(note)) return false;
+        const records = getConnectedHtmlArtifactRecords().filter((record) => record && record.commentable);
+        if (records.length === 0) {
+          setStatus("Open the HTML preview before jumping to this comment.", "warning");
+          return false;
+        }
+        const record = records[0];
+        if (record.shell && typeof record.shell.scrollIntoView === "function") {
+          try {
+            record.shell.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+          } catch {
+            try { record.shell.scrollIntoView(false); } catch {}
+          }
+        }
+        try {
+          record.iframe.contentWindow.postMessage({
+            type: "pi-studio-html-artifact-highlight-comment",
+            id: record.id || "",
+            selector: note.htmlSelector || "",
+            anchorKind: normalizeReviewNoteAnchorKind(note.anchorKind),
+          }, "*");
+          setStatus("Jumped to HTML preview comment anchor.", "success");
+          return true;
+        } catch {
+          setStatus("Could not jump to this HTML preview comment.", "warning");
+          return false;
+        }
+      }
+
       function jumpToReviewNote(noteId) {
         const note = reviewNotes.find((entry) => entry && entry.id === noteId);
         if (!note) return;
+        if (isReviewNoteDomAnchor(note)) {
+          jumpToHtmlReviewNote(note);
+          return;
+        }
         jumpToReviewAnchor(note, {
           status: false,
           notFoundStatusMessage: "Could not find the anchored location for this comment.",
@@ -16927,6 +17401,8 @@
         const directIsStop = activeKind === "direct";
         const critiqueIsStop = activeKind === "critique";
         const canQueueSteering = studioRunChainActive && !critiqueIsStop;
+        const hasReplSession = Boolean(getActiveReplSessionForCurrentRuntime());
+        const showReplSend = rightView === "repl";
 
         if (isEditorOnlyMode) {
           if (sendRunBtn) {
@@ -16942,15 +17418,25 @@
             queueSteerBtn.title = "Queue steering is unavailable in editor-only mode.";
           }
           if (sendReplBtn) {
-            sendReplBtn.hidden = true;
-            sendReplBtn.disabled = true;
-            sendReplBtn.classList.remove("repl-primary-action");
+            sendReplBtn.hidden = !showReplSend;
+            sendReplBtn.disabled = !showReplSend || wsState === "Disconnected" || uiBusy || replBusy || !hasReplSession;
+            sendReplBtn.classList.toggle("repl-primary-action", showReplSend);
+            sendReplBtn.textContent = showReplSend ? withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send") : "Send to REPL";
+            sendReplBtn.title = hasReplSession
+              ? (replSendMode === "literate"
+                ? "Literate send: selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk. Shortcut: Cmd/Ctrl+Shift+Enter."
+                : "Raw send: selection, or full editor if no selection. Shortcut: Cmd/Ctrl+Shift+Enter.")
+              : "Start or select a REPL session in the right pane first.";
             const replActionLine = sendReplBtn.closest(".repl-action-line");
-            if (replActionLine instanceof HTMLElement) replActionLine.hidden = true;
+            if (replActionLine instanceof HTMLElement) replActionLine.hidden = !showReplSend;
           }
           if (replSendModeSelect) {
-            replSendModeSelect.hidden = true;
-            replSendModeSelect.disabled = true;
+            replSendModeSelect.hidden = !showReplSend;
+            replSendModeSelect.disabled = !showReplSend || wsState === "Disconnected" || uiBusy || replBusy;
+            replSendModeSelect.value = replSendMode;
+            replSendModeSelect.title = replSendMode === "literate"
+              ? "Literate send: Send to REPL uses the selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk."
+              : "Raw send: Send to REPL uses the selection, or full editor if no selection.";
           }
           if (critiqueBtn) {
             critiqueBtn.textContent = "Critique text";
@@ -16992,9 +17478,7 @@
             : "Queue steering is available while Run editor text is active.";
         }
 
-        const hasReplSession = Boolean(getActiveReplSessionForCurrentRuntime());
         if (sendReplBtn) {
-          const showReplSend = rightView === "repl";
           sendReplBtn.hidden = !showReplSend;
           sendReplBtn.disabled = !showReplSend || wsState === "Disconnected" || uiBusy || replBusy || !hasReplSession;
           sendReplBtn.classList.toggle("repl-primary-action", showReplSend);
