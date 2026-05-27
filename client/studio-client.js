@@ -92,7 +92,9 @@
       const copyResponseBtn = document.getElementById("copyResponseBtn");
       const exportPreviewControlsEl = document.getElementById("exportPreviewControls");
       const exportPreviewMenuEl = document.getElementById("exportPreviewMenu");
+      const exportPreviewPdfStudioBtn = document.getElementById("exportPreviewPdfStudioBtn");
       const exportPreviewPdfBtn = document.getElementById("exportPreviewPdfBtn");
+      const exportPreviewHtmlStudioBtn = document.getElementById("exportPreviewHtmlStudioBtn");
       const exportPreviewHtmlBtn = document.getElementById("exportPreviewHtmlBtn");
       const exportPdfBtn = document.getElementById("exportPdfBtn");
       const historyPrevBtn = document.getElementById("historyPrevBtn");
@@ -142,6 +144,8 @@
       const scratchpadDialogEl = document.getElementById("scratchpadDialog");
       const scratchpadTextEl = document.getElementById("scratchpadText");
       const scratchpadMetaEl = document.getElementById("scratchpadMeta");
+      const scratchpadRecentBtn = document.getElementById("scratchpadRecentBtn");
+      const scratchpadRecentPanelEl = document.getElementById("scratchpadRecentPanel");
       const scratchpadInsertBtn = document.getElementById("scratchpadInsertBtn");
       const scratchpadCopyBtn = document.getElementById("scratchpadCopyBtn");
       const scratchpadClearBtn = document.getElementById("scratchpadClearBtn");
@@ -2044,6 +2048,9 @@
       let scratchpadReturnFocusEl = null;
       let scratchpadPersistTimer = null;
       let scratchpadLoadNonce = 0;
+      let scratchpadRecentEntries = [];
+      let scratchpadRecentVisible = false;
+      let scratchpadRecentLoading = false;
       let reviewNotes = [];
       let reviewNotesReturnFocusEl = null;
       let reviewNotesPersistTimer = null;
@@ -7940,14 +7947,32 @@
         }
       }
 
-      async function exportRightPanePdf() {
+      function getStudioPdfViewerUrlForExportPayload(payload) {
+        if (!payload || typeof payload !== "object") return "";
+        const exportPath = typeof payload.path === "string" ? payload.path.trim() : "";
+        if (exportPath) {
+          const resourceUrl = buildStudioPdfResourceUrl({ path: exportPath, resourceDir: exportPath.split(/[\\/]/).slice(0, -1).join("/") }, false);
+          if (resourceUrl) return resourceUrl;
+        }
+        return typeof payload.downloadUrl === "string" ? payload.downloadUrl : "";
+      }
+
+      async function exportRightPanePdf(options) {
+        const exportOptions = options && typeof options === "object" ? options : {};
+        const openTarget = exportOptions.openTarget === "studio" ? "studio" : "default";
+        let studioPopup = null;
+        if (openTarget === "studio") {
+          studioPopup = openExportStudioPlaceholderWindow("PDF");
+        }
         if (uiBusy || previewExportInProgress) {
+          closeExportStudioWindow(studioPopup);
           setStatus("Studio is busy.", "warning");
           return;
         }
 
         const token = getToken();
         if (!token) {
+          closeExportStudioWindow(studioPopup);
           setStatus("Missing Studio token in URL. Re-run /studio.", "error");
           return;
         }
@@ -7955,17 +7980,20 @@
         const exportingReplJournal = rightView === "repl";
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         if (!rightPaneShowsPreview && !exportingReplJournal) {
+          closeExportStudioWindow(studioPopup);
           setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL to export PDF.", "warning");
           return;
         }
         const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
         if (exportingReplJournal && !replJournalExportEntries.length) {
+          closeExportStudioWindow(studioPopup);
           setStatus("No Studio REPL record entries to export for this session yet.", "warning");
           return;
         }
 
         const htmlArtifactSource = exportingReplJournal ? "" : getRightPaneHtmlArtifactSource();
         if (htmlArtifactSource) {
+          closeExportStudioWindow(studioPopup);
           setStatus("PDF export does not support interactive HTML previews yet. Export as HTML or use the browser print dialog inside the preview.", "warning");
           return;
         }
@@ -7976,6 +8004,7 @@
             ? prepareEditorTextForPdfExport(sourceTextEl.value)
             : prepareEditorTextForPreview(latestResponseMarkdown));
         if (!markdown || !markdown.trim()) {
+          closeExportStudioWindow(studioPopup);
           setStatus("Nothing to export yet.", "warning");
           return;
         }
@@ -7998,7 +8027,7 @@
 
         previewExportInProgress = true;
         updateResultActionButtons();
-        setStatus("Exporting PDF…", "warning");
+        setStatus(openTarget === "studio" ? "Exporting PDF for Studio…" : "Exporting PDF…", "warning");
 
         try {
           const response = await fetchWithTimeout("/export-pdf?token=" + encodeURIComponent(token), {
@@ -8013,6 +8042,7 @@
               isLatex: isLatex,
               editorPdfLanguage: editorPdfLanguage,
               filenameHint: filenameHint,
+              openTarget: openTarget,
             }),
           }, PDF_EXPORT_FETCH_TIMEOUT_MS, "PDF export");
 
@@ -8049,6 +8079,35 @@
               : (filenameHint || "studio-preview.pdf");
             if (!/\.pdf$/i.test(downloadName)) {
               downloadName += ".pdf";
+            }
+
+            if (openTarget === "studio") {
+              const targetUrl = typeof payload.relativeUrl === "string" && payload.relativeUrl
+                ? new URL(payload.relativeUrl, window.location.href).href
+                : (typeof payload.url === "string" ? payload.url : "");
+              const openedStudio = navigateExportStudioWindow(studioPopup, targetUrl);
+              if (!openedStudio) {
+                closeExportStudioWindow(studioPopup);
+                const viewerUrl = getStudioPdfViewerUrlForExportPayload(payload);
+                if (viewerUrl) openStudioPdfFocusViewer(viewerUrl, downloadName);
+              }
+              if (writeError) {
+                setStatus(openedStudio
+                  ? "Opened exported PDF in a Studio preview tab, but could not write project file: " + writeError
+                  : "Exported PDF, but could not open a Studio preview tab and could not write project file: " + writeError,
+                  "warning");
+              } else if (exportWarning) {
+                setStatus(openedStudio
+                  ? "Opened exported PDF in a Studio preview tab with warning: " + exportWarning
+                  : "Exported PDF, but could not open a Studio preview tab. Warning: " + exportWarning,
+                  "warning");
+              } else {
+                setStatus(openedStudio
+                  ? "Opened exported PDF in a Studio preview tab: " + (exportPath || downloadName)
+                  : "Exported PDF, but could not open a Studio preview tab" + (targetUrl ? ": " + targetUrl : "."),
+                  openedStudio ? "success" : "warning");
+              }
+              return;
             }
 
             if (openedExternal) {
@@ -8112,6 +8171,7 @@
             setStatus("Exported PDF: " + downloadName, "success");
           }
         } catch (error) {
+          closeExportStudioWindow(studioPopup);
           const detail = error && error.message ? error.message : String(error || "unknown error");
           setStatus("PDF export failed: " + detail, "error");
         } finally {
@@ -8120,14 +8180,58 @@
         }
       }
 
-      async function exportRightPaneHtml() {
+      function openExportStudioPlaceholderWindow(formatLabel) {
+        const label = String(formatLabel || "preview").trim() || "preview";
+        let popup = null;
+        try {
+          popup = window.open("", "_blank");
+          if (popup && popup.document && popup.document.body) {
+            popup.document.title = "Opening " + label + " in Studio…";
+            popup.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Exporting " + escapeHtml(label) + " and opening it in Studio…</p>";
+          }
+        } catch {
+          popup = null;
+        }
+        return popup;
+      }
+
+      function navigateExportStudioWindow(popup, targetUrl) {
+        if (!targetUrl) return false;
+        if (popup && !popup.closed) {
+          try {
+            popup.opener = null;
+            popup.location.href = targetUrl;
+            return true;
+          } catch {}
+        }
+        try {
+          return Boolean(window.open(targetUrl, "_blank", "noopener"));
+        } catch {
+          return false;
+        }
+      }
+
+      function closeExportStudioWindow(popup) {
+        if (!popup || popup.closed) return;
+        try { popup.close(); } catch {}
+      }
+
+      async function exportRightPaneHtml(options) {
+        const exportOptions = options && typeof options === "object" ? options : {};
+        const openTarget = exportOptions.openTarget === "studio" ? "studio" : "browser";
+        let studioPopup = null;
+        if (openTarget === "studio") {
+          studioPopup = openExportStudioPlaceholderWindow("HTML");
+        }
         if (uiBusy || previewExportInProgress) {
+          closeExportStudioWindow(studioPopup);
           setStatus("Studio is busy.", "warning");
           return;
         }
 
         const token = getToken();
         if (!token) {
+          closeExportStudioWindow(studioPopup);
           setStatus("Missing Studio token in URL. Re-run /studio.", "error");
           return;
         }
@@ -8135,11 +8239,13 @@
         const exportingReplJournal = rightView === "repl";
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         if (!rightPaneShowsPreview && !exportingReplJournal) {
+          closeExportStudioWindow(studioPopup);
           setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL to export HTML.", "warning");
           return;
         }
         const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
         if (exportingReplJournal && !replJournalExportEntries.length) {
+          closeExportStudioWindow(studioPopup);
           setStatus("No Studio REPL record entries to export for this session yet.", "warning");
           return;
         }
@@ -8149,6 +8255,7 @@
           ? prepareEditorTextForHtmlExport(sourceTextEl.value)
           : prepareEditorTextForPreview(latestResponseMarkdown)));
         if (!markdown || !markdown.trim()) {
+          closeExportStudioWindow(studioPopup);
           setStatus("Nothing to export yet.", "warning");
           return;
         }
@@ -8173,7 +8280,7 @@
 
         previewExportInProgress = true;
         updateResultActionButtons();
-        setStatus("Exporting HTML…", "warning");
+        setStatus(openTarget === "studio" ? "Exporting HTML for Studio…" : "Exporting HTML…", "warning");
 
         try {
           const response = await fetchWithTimeout("/export-html?token=" + encodeURIComponent(token), {
@@ -8189,6 +8296,7 @@
               editorHtmlLanguage: editorHtmlLanguage,
               filenameHint: filenameHint,
               title: titleHint,
+              openTarget: openTarget,
             }),
           }, HTML_EXPORT_FETCH_TIMEOUT_MS, "HTML export");
 
@@ -8227,6 +8335,31 @@
               downloadName += ".html";
             }
 
+            if (openTarget === "studio") {
+              const targetUrl = typeof payload.relativeUrl === "string" && payload.relativeUrl
+                ? new URL(payload.relativeUrl, window.location.href).href
+                : (typeof payload.url === "string" ? payload.url : "");
+              const openedStudio = navigateExportStudioWindow(studioPopup, targetUrl);
+              if (!openedStudio) closeExportStudioWindow(studioPopup);
+              if (writeError) {
+                setStatus(openedStudio
+                  ? "Opened exported HTML in Studio as an unsaved copy; could not write project file: " + writeError
+                  : "Exported HTML for Studio, but the popup was blocked and the project file could not be written: " + writeError,
+                  "warning");
+              } else if (exportWarning) {
+                setStatus(openedStudio
+                  ? "Opened exported HTML in Studio with warning: " + exportWarning
+                  : "Exported HTML for Studio, but the popup was blocked. Warning: " + exportWarning,
+                  "warning");
+              } else {
+                setStatus(openedStudio
+                  ? "Opened exported HTML in Studio: " + (exportPath || downloadName)
+                  : (targetUrl ? "Exported HTML for Studio: " + targetUrl : "Exported HTML, but Studio did not receive an editor URL."),
+                  openedStudio ? "success" : "warning");
+              }
+              return;
+            }
+
             if (openedExternal) {
               if (writeError) {
                 setStatus("Opened HTML in default browser, but could not write project file: " + writeError, "warning");
@@ -8262,6 +8395,7 @@
             return;
           }
 
+          closeExportStudioWindow(studioPopup);
           const exportWarning = String(response.headers.get("x-pi-studio-export-warning") || "").trim();
           const blob = await response.blob();
           const headerFilename = parseContentDispositionFilename(response.headers.get("content-disposition"));
@@ -8288,6 +8422,7 @@
             setStatus("Exported HTML: " + downloadName, "success");
           }
         } catch (error) {
+          closeExportStudioWindow(studioPopup);
           const detail = error && error.message ? error.message : String(error || "unknown error");
           setStatus("HTML export failed: " + detail, "error");
         } finally {
@@ -8318,10 +8453,16 @@
 
       function exportRightPaneFormat(format) {
         closeExportPreviewMenu();
-        if (format === "html") {
-          return exportRightPaneHtml();
+        if (format === "html-studio") {
+          return exportRightPaneHtml({ openTarget: "studio" });
         }
-        return exportRightPanePdf();
+        if (format === "html" || format === "html-browser") {
+          return exportRightPaneHtml({ openTarget: "browser" });
+        }
+        if (format === "pdf-studio") {
+          return exportRightPanePdf({ openTarget: "studio" });
+        }
+        return exportRightPanePdf({ openTarget: "default" });
       }
 
       function normalizeCopyableBlockText(text) {
@@ -9611,28 +9752,40 @@
           } else if (isHtmlArtifactPreview) {
             exportPdfBtn.title = "This is an interactive HTML preview. Export as HTML; PDF export is not available yet.";
           } else if (exportingReplJournal) {
-            exportPdfBtn.title = "Choose PDF or HTML and export the Studio REPL record.";
+            exportPdfBtn.title = "Choose PDF export or an HTML export destination for the Studio REPL record.";
           } else {
-            exportPdfBtn.title = "Choose PDF or HTML and export the current right-pane preview.";
+            exportPdfBtn.title = "Choose PDF export or an HTML export destination for the current right-pane preview.";
           }
+        }
+        if (exportPreviewPdfStudioBtn) {
+          exportPreviewPdfStudioBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview || isHtmlArtifactPreview;
+          exportPreviewPdfStudioBtn.title = isHtmlArtifactPreview
+            ? "Interactive HTML preview PDF export is not available yet."
+            : (exportingReplJournal ? "Export the Studio REPL record as PDF and open it in Studio." : "Export the current right-pane preview as PDF and open it in Studio.");
         }
         if (exportPreviewPdfBtn) {
           exportPreviewPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview || isHtmlArtifactPreview;
           exportPreviewPdfBtn.title = isHtmlArtifactPreview
             ? "Interactive HTML preview PDF export is not available yet."
-            : (exportingReplJournal ? "Export the Studio REPL record as PDF." : "Export the current right-pane preview as PDF.");
+            : (exportingReplJournal ? "Export the Studio REPL record as PDF and open it in the default PDF viewer." : "Export the current right-pane preview as PDF and open it in the default PDF viewer.");
+        }
+        if (exportPreviewHtmlStudioBtn) {
+          exportPreviewHtmlStudioBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
+          exportPreviewHtmlStudioBtn.title = isHtmlArtifactPreview
+            ? "Export the authored HTML preview and open it in a new Studio editor tab."
+            : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML and open it in a new Studio editor tab." : "Export the current right-pane preview as standalone HTML and open it in a new Studio editor tab.");
         }
         if (exportPreviewHtmlBtn) {
           exportPreviewHtmlBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
           exportPreviewHtmlBtn.title = isHtmlArtifactPreview
-            ? "Export the authored HTML preview."
-            : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML." : "Export the current right-pane preview as standalone HTML.");
+            ? "Export the authored HTML preview and open it in the default browser."
+            : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML and open it in the default browser." : "Export the current right-pane preview as standalone HTML and open it in the default browser.");
         }
         if (exportPreviewControlsEl) {
           exportPreviewControlsEl.title = canExportPreview
             ? (exportingReplJournal
-              ? "Choose a format and export the Studio REPL record."
-              : (isHtmlArtifactPreview ? "Export this HTML preview." : "Choose a format and export the current right-pane preview."))
+              ? "Choose a format and export destination for the Studio REPL record."
+              : (isHtmlArtifactPreview ? "Export this HTML preview to Studio or browser." : "Choose a format and export destination for the current right-pane preview."))
             : (exportingReplJournal ? "No Studio REPL record entries to export for this session yet." : "Switch right pane to a non-empty preview before exporting.");
         }
         if (!canExportPreview || previewExportInProgress) {
@@ -12823,6 +12976,110 @@
         return describeStudioDocument(sourceState);
       }
 
+      function formatScratchpadRecentTime(timestamp) {
+        const value = Number(timestamp) || 0;
+        if (!value) return "unknown time";
+        try {
+          return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        } catch {
+          return "unknown time";
+        }
+      }
+
+      function renderScratchpadRecentPanel() {
+        if (!scratchpadRecentPanelEl) return;
+        scratchpadRecentPanelEl.hidden = !scratchpadRecentVisible;
+        if (!scratchpadRecentVisible) return;
+        if (scratchpadRecentLoading) {
+          scratchpadRecentPanelEl.innerHTML = "<div class='scratchpad-recent-loading'>Loading recent scratchpads…</div>";
+          return;
+        }
+        const currentKey = getCurrentStudioDocumentDescriptor().key;
+        const entries = Array.isArray(scratchpadRecentEntries) ? scratchpadRecentEntries : [];
+        if (!entries.length) {
+          scratchpadRecentPanelEl.innerHTML = "<div class='scratchpad-recent-empty'>No other saved scratchpads yet.</div>";
+          return;
+        }
+        scratchpadRecentPanelEl.innerHTML = "<div class='scratchpad-recent-list'>" + entries.map((entry) => {
+          const key = String(entry && entry.documentKey ? entry.documentKey : "");
+          const isCurrent = key === currentKey;
+          const label = String(entry && entry.label ? entry.label : key || "scratchpad");
+          const kind = String(entry && entry.kind ? entry.kind : "Scratchpad");
+          const textLength = Math.max(0, Number(entry && entry.textLength) || 0);
+          const preview = String(entry && entry.textPreview ? entry.textPreview : "");
+          const meta = (isCurrent ? "Current · " : "") + kind + " · " + String(textLength) + " chars · " + formatScratchpadRecentTime(entry && entry.updatedAt);
+          return "<div class='scratchpad-recent-item' data-scratchpad-key='" + escapeHtml(key) + "'>"
+            + "<div class='scratchpad-recent-main'>"
+            + "<div class='scratchpad-recent-title' title='" + escapeHtml(label) + "'>" + escapeHtml(label) + "</div>"
+            + "<div class='scratchpad-recent-meta'>" + escapeHtml(meta) + "</div>"
+            + (preview ? "<div class='scratchpad-recent-preview'>" + escapeHtml(preview) + "</div>" : "")
+            + "</div>"
+            + "<div class='scratchpad-recent-actions'>"
+            + "<button type='button' data-scratchpad-recent-action='load' data-scratchpad-key='" + escapeHtml(key) + "'" + (isCurrent ? " disabled" : "") + ">Load</button>"
+            + "<button type='button' data-scratchpad-recent-action='append' data-scratchpad-key='" + escapeHtml(key) + "'" + (isCurrent ? " disabled" : "") + ">Append</button>"
+            + "<button type='button' data-scratchpad-recent-action='copy' data-scratchpad-key='" + escapeHtml(key) + "'>Copy</button>"
+            + "</div>"
+            + "</div>";
+        }).join("") + "</div>";
+      }
+
+      async function loadScratchpadRecentEntries() {
+        scratchpadRecentLoading = true;
+        renderScratchpadRecentPanel();
+        try {
+          const payload = await fetchStudioJson("/scratchpad-state", { query: { action: "recent", limit: "20" } });
+          scratchpadRecentEntries = Array.isArray(payload && payload.scratchpads) ? payload.scratchpads : [];
+        } catch (error) {
+          scratchpadRecentEntries = [];
+          setStatus("Could not load recent scratchpads: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+        } finally {
+          scratchpadRecentLoading = false;
+          renderScratchpadRecentPanel();
+        }
+      }
+
+      function toggleScratchpadRecentPanel() {
+        scratchpadRecentVisible = !scratchpadRecentVisible;
+        if (scratchpadRecentVisible) {
+          void loadScratchpadRecentEntries();
+        } else {
+          renderScratchpadRecentPanel();
+        }
+        updateScratchpadUi();
+      }
+
+      async function applyScratchpadRecentAction(action, documentKey) {
+        const key = String(documentKey || "").trim();
+        if (!key) return;
+        const mode = action === "append" ? "append" : (action === "copy" ? "copy" : "load");
+        try {
+          const text = await fetchScratchpadTextForDocumentKey(key);
+          if (!String(text || "").trim()) {
+            setStatus("That scratchpad is empty.", "warning");
+            return;
+          }
+          if (mode === "copy") {
+            const ok = await writeTextToClipboard(text);
+            setStatus(ok ? "Copied recent scratchpad." : "Could not copy recent scratchpad.", ok ? "success" : "warning");
+            return;
+          }
+          if (mode === "append") {
+            const separator = scratchpadText && !scratchpadText.endsWith("\n") ? "\n\n" : (scratchpadText ? "\n" : "");
+            setScratchpadText(String(scratchpadText || "") + separator + String(text || ""));
+            setStatus("Appended recent scratchpad.", "success");
+            return;
+          }
+          if (String(scratchpadText || "").trim() && String(scratchpadText || "") !== String(text || "")) {
+            const confirmed = window.confirm("Replace the current scratchpad with this recent scratchpad? Current scratchpad text will remain saved under its current document/draft identity, but this panel will show the loaded text for the current document.");
+            if (!confirmed) return;
+          }
+          setScratchpadText(text);
+          setStatus("Loaded recent scratchpad into current scratchpad.", "success");
+        } catch (error) {
+          setStatus("Could not use recent scratchpad: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+        }
+      }
+
       async function fetchScratchpadTextForDocumentKey(documentKey) {
         const payload = await fetchStudioJson("/scratchpad-state", {
           query: { documentKey: documentKey },
@@ -12830,9 +13087,9 @@
         return payload && typeof payload.text === "string" ? payload.text : "";
       }
 
-      function flushScratchpadPersistence(documentKeyOverride, textOverride) {
+      function flushScratchpadPersistence(documentKeyOverride, textOverride, labelOverride) {
         const descriptor = documentKeyOverride
-          ? { key: String(documentKeyOverride || "").trim() }
+          ? { key: String(documentKeyOverride || "").trim(), label: String(labelOverride || "").trim() }
           : getCurrentStudioDocumentDescriptor();
         const key = String(descriptor && descriptor.key ? descriptor.key : "").trim();
         if (!key) return;
@@ -12841,27 +13098,29 @@
           scratchpadPersistTimer = null;
         }
         const snapshot = String(arguments.length >= 2 ? textOverride : scratchpadText || "");
-        if (trySendStudioJsonBeacon("/scratchpad-state", { documentKey: key, text: snapshot })) {
+        const label = String(descriptor && descriptor.label ? descriptor.label : "").trim();
+        if (trySendStudioJsonBeacon("/scratchpad-state", { documentKey: key, text: snapshot, label })) {
           return;
         }
         void fetchStudioJson("/scratchpad-state", {
           method: "POST",
-          body: JSON.stringify({ documentKey: key, text: snapshot }),
+          body: JSON.stringify({ documentKey: key, text: snapshot, label }),
         }).catch(() => {
           // Ignore scratchpad persistence failures for now.
         });
       }
 
-      function scheduleScratchpadPersistence(text, documentKey) {
+      function scheduleScratchpadPersistence(text, documentKey, label) {
         if (scratchpadPersistTimer !== null) {
           window.clearTimeout(scratchpadPersistTimer);
         }
         const snapshot = String(text || "");
         const key = String(documentKey || "").trim();
+        const labelSnapshot = String(label || "").trim();
         if (!key) return;
         scratchpadPersistTimer = window.setTimeout(() => {
           scratchpadPersistTimer = null;
-          flushScratchpadPersistence(key, snapshot);
+          flushScratchpadPersistence(key, snapshot, labelSnapshot);
         }, 180);
       }
 
@@ -12893,7 +13152,7 @@
           if (String(existing || "").trim()) return;
           await fetchStudioJson("/scratchpad-state", {
             method: "POST",
-            body: JSON.stringify({ documentKey: nextDescriptor.key, text: snapshot }),
+            body: JSON.stringify({ documentKey: nextDescriptor.key, text: snapshot, label: nextDescriptor.label }),
           });
         } catch {
           // Ignore carry-over failures and just fall back to normal scope loading.
@@ -12914,7 +13173,7 @@
 
       function persistScratchpadText(value) {
         const descriptor = getCurrentStudioDocumentDescriptor();
-        scheduleScratchpadPersistence(value, descriptor.key);
+        scheduleScratchpadPersistence(value, descriptor.key, descriptor.label);
       }
 
       function normalizeReviewNoteAnchorKind(value) {
@@ -17111,6 +17370,10 @@
             ? ("Saved locally for this document/draft · " + normalized.length + " chars")
             : "Empty · local to this document/draft";
         }
+        if (scratchpadRecentBtn) {
+          scratchpadRecentBtn.textContent = scratchpadRecentVisible ? "Hide recent" : "Recent…";
+          scratchpadRecentBtn.setAttribute("aria-expanded", scratchpadRecentVisible ? "true" : "false");
+        }
         if (scratchpadInsertBtn) scratchpadInsertBtn.disabled = !hasContent;
         if (scratchpadCopyBtn) scratchpadCopyBtn.disabled = !hasContent;
         if (scratchpadClearBtn) scratchpadClearBtn.disabled = !normalized.length;
@@ -19100,7 +19363,7 @@
           event.stopPropagation();
           if (actionBtn.disabled) return;
           const format = String(actionBtn.getAttribute("data-export-preview-format") || "pdf").toLowerCase();
-          void exportRightPaneFormat(format === "html" ? "html" : "pdf");
+          void exportRightPaneFormat(format);
         });
       }
 
@@ -19648,6 +19911,24 @@
       if (scratchpadTextEl) {
         scratchpadTextEl.addEventListener("input", () => {
           setScratchpadText(scratchpadTextEl.value);
+        });
+      }
+
+      if (scratchpadRecentBtn) {
+        scratchpadRecentBtn.addEventListener("click", () => {
+          toggleScratchpadRecentPanel();
+        });
+      }
+
+      if (scratchpadRecentPanelEl) {
+        scratchpadRecentPanelEl.addEventListener("click", (event) => {
+          const target = event.target;
+          const actionEl = target instanceof Element ? target.closest("[data-scratchpad-recent-action]") : null;
+          if (!actionEl) return;
+          event.preventDefault();
+          const action = String(actionEl.getAttribute("data-scratchpad-recent-action") || "load");
+          const key = String(actionEl.getAttribute("data-scratchpad-key") || "");
+          void applyScratchpadRecentAction(action, key);
         });
       }
 

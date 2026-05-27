@@ -22,6 +22,7 @@ import {
 	transformStudioMarkdownOutsideFences,
 } from "./shared/studio-annotation-scanner.js";
 import { stripStudioMarkdownHtmlComments } from "./shared/studio-markdown-html-comments.js";
+import { normalizeStudioMarkdownSmartFences } from "./shared/studio-markdown-fences.js";
 import {
 	extractStandaloneLatexDefinitionsFromMarkdown,
 	preserveLiteralLatexCommandsInMarkdown,
@@ -229,9 +230,15 @@ interface PersistedStudioReviewNote {
 	htmlPreviewTitle?: string;
 }
 
+interface PersistedStudioScratchpadMetadata {
+	label?: string;
+	updatedAt?: number;
+}
+
 interface StudioPersistentState {
 	version: 2;
 	scratchpadsByDocument: Record<string, string>;
+	scratchpadMetadataByDocument: Record<string, PersistedStudioScratchpadMetadata>;
 	reviewNotesByDocument: Record<string, PersistedStudioReviewNote[]>;
 }
 
@@ -728,6 +735,7 @@ function createEmptyStudioPersistentState(): StudioPersistentState {
 	return {
 		version: 2,
 		scratchpadsByDocument: {},
+		scratchpadMetadataByDocument: {},
 		reviewNotesByDocument: {},
 	};
 }
@@ -784,6 +792,7 @@ function normalizeStudioPersistentState(value: unknown): StudioPersistentState {
 	const candidate = value as Partial<StudioPersistentState> & {
 		reviewNotesByDocument?: unknown;
 		scratchpadsByDocument?: unknown;
+		scratchpadMetadataByDocument?: unknown;
 		scratchpadText?: unknown;
 	};
 	const reviewNotesByDocument: Record<string, PersistedStudioReviewNote[]> = {};
@@ -807,9 +816,21 @@ function normalizeStudioPersistentState(value: unknown): StudioPersistentState {
 	} else if (typeof candidate.scratchpadText === "string" && candidate.scratchpadText.length > 0) {
 		scratchpadsByDocument[STUDIO_DEFAULT_SCRATCHPAD_DOCUMENT_KEY] = candidate.scratchpadText;
 	}
+	const scratchpadMetadataByDocument: Record<string, PersistedStudioScratchpadMetadata> = {};
+	if (candidate.scratchpadMetadataByDocument && typeof candidate.scratchpadMetadataByDocument === "object") {
+		for (const [documentKey, rawMeta] of Object.entries(candidate.scratchpadMetadataByDocument as Record<string, unknown>)) {
+			if (typeof documentKey !== "string" || !documentKey.trim() || !rawMeta || typeof rawMeta !== "object") continue;
+			const meta = rawMeta as { label?: unknown; updatedAt?: unknown };
+			scratchpadMetadataByDocument[documentKey] = {
+				label: typeof meta.label === "string" ? meta.label : undefined,
+				updatedAt: typeof meta.updatedAt === "number" && Number.isFinite(meta.updatedAt) ? meta.updatedAt : undefined,
+			};
+		}
+	}
 	return {
 		version: 2,
 		scratchpadsByDocument,
+		scratchpadMetadataByDocument,
 		reviewNotesByDocument,
 	};
 }
@@ -852,16 +873,50 @@ async function readPersistedStudioScratchpadText(documentKey: string): Promise<s
 	return typeof value === "string" ? value : "";
 }
 
-async function writePersistedStudioScratchpadText(documentKey: string, text: string): Promise<void> {
+function describePersistedScratchpadKey(documentKey: string): { label: string; kind: string } {
+	const key = String(documentKey || "").trim();
+	if (key.startsWith("file:")) return { label: key.slice(5) || "file", kind: "File" };
+	if (key.startsWith("draft:")) return { label: key.slice(6) || "draft", kind: "Draft" };
+	if (key.startsWith("doc:")) return { label: key.slice(4).replace(/^blank:/, "") || "document", kind: "Document" };
+	return { label: key || "scratchpad", kind: "Scratchpad" };
+}
+
+function summarizeScratchpadText(text: string): string {
+	const normalized = String(text || "").replace(/\s+/g, " ").trim();
+	return normalized.length > 160 ? `${normalized.slice(0, 157)}…` : normalized;
+}
+
+async function listRecentPersistedStudioScratchpads(limit = 20): Promise<Array<{ documentKey: string; label: string; kind: string; updatedAt: number; textPreview: string; textLength: number }>> {
+	const state = await loadStudioPersistentState();
+	return Object.entries(state.scratchpadsByDocument)
+		.filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string" && entry[1].trim().length > 0)
+		.map(([documentKey, text]) => {
+			const fallback = describePersistedScratchpadKey(documentKey);
+			const meta = state.scratchpadMetadataByDocument[documentKey] ?? {};
+			const label = typeof meta.label === "string" && meta.label.trim() ? meta.label.trim() : fallback.label;
+			const updatedAt = typeof meta.updatedAt === "number" && Number.isFinite(meta.updatedAt) ? meta.updatedAt : 0;
+			return { documentKey, label, kind: fallback.kind, updatedAt, textPreview: summarizeScratchpadText(text), textLength: text.length };
+		})
+		.sort((left, right) => (right.updatedAt - left.updatedAt) || left.label.localeCompare(right.label) || left.documentKey.localeCompare(right.documentKey))
+		.slice(0, Math.max(1, Math.min(100, Math.floor(limit) || 20)));
+}
+
+async function writePersistedStudioScratchpadText(documentKey: string, text: string, label?: string): Promise<void> {
 	const key = String(documentKey ?? "").trim();
 	if (!key) return;
 	await mutateStudioPersistentState((state) => {
 		const normalized = String(text ?? "");
 		if (normalized.length === 0) {
 			delete state.scratchpadsByDocument[key];
+			delete state.scratchpadMetadataByDocument[key];
 			return;
 		}
 		state.scratchpadsByDocument[key] = normalized;
+		state.scratchpadMetadataByDocument[key] = {
+			...(state.scratchpadMetadataByDocument[key] ?? {}),
+			label: typeof label === "string" && label.trim() ? label.trim() : state.scratchpadMetadataByDocument[key]?.label,
+			updatedAt: Date.now(),
+		};
 	});
 }
 
@@ -4582,7 +4637,8 @@ function hasStudioYamlHeaderIncludes(markdown: string): boolean {
 function prepareStudioMarkdownForPandoc(markdown: string, options?: { preserveLiteralLatexCommands?: boolean }): string {
 	const shouldPreserveLiteralLatexCommands = options?.preserveLiteralLatexCommands !== false;
 	return mapStudioMarkdownBodyPreservingYamlFrontMatter(markdown, (body) => {
-		const normalizedMath = normalizeMathDelimiters(body);
+		const normalizedFences = normalizeStudioMarkdownSmartFences(body);
+		const normalizedMath = normalizeMathDelimiters(normalizedFences);
 		const latexReady = shouldPreserveLiteralLatexCommands
 			? preserveLiteralLatexCommandsInMarkdown(normalizedMath)
 			: normalizedMath;
@@ -5432,9 +5488,10 @@ function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLan
 		&& !isStudioSingleFencedCodeBlock(input)
 		? wrapStudioCodeAsMarkdown(input, effectiveEditorLanguage)
 		: input;
+	const fenceNormalizedSource = effectiveEditorLanguage === "latex" ? source : normalizeStudioMarkdownSmartFences(source);
 	const annotationReadySource = !effectiveEditorLanguage || effectiveEditorLanguage === "markdown" || effectiveEditorLanguage === "latex"
-		? replaceStudioAnnotationMarkersForPdf(source)
-		: source;
+		? replaceStudioAnnotationMarkersForPdf(fenceNormalizedSource)
+		: fenceNormalizedSource;
 	const commentStrippedSource = stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(annotationReadySource);
 	return prepareStudioMarkdownForPandoc(commentStrippedSource, {
 		preserveLiteralLatexCommands: !hasStudioYamlHeaderIncludes(annotationReadySource),
@@ -5733,7 +5790,8 @@ function decorateStudioPandocSyntaxHtml(html: string): string {
 
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const markdownWithoutHtmlComments = isLatex ? markdown : stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(markdown);
+	const markdownWithNormalizedFences = isLatex ? markdown : normalizeStudioMarkdownSmartFences(markdown);
+	const markdownWithoutHtmlComments = isLatex ? markdownWithNormalizedFences : stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(markdownWithNormalizedFences);
 	const markdownWithPreviewPageBreaks = isLatex ? markdownWithoutHtmlComments : replaceStudioPreviewPageBreakCommands(markdownWithoutHtmlComments);
 	const latexSubfigurePreviewTransform = isLatex
 		? preprocessStudioLatexSubfiguresForPreview(markdownWithPreviewPageBreaks)
@@ -10101,8 +10159,10 @@ ${cssVarsBlock}
           <span id="exportPreviewControls" class="export-preview-controls">
             <button id="exportPdfBtn" class="export-preview-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose a format and export the current right-pane preview.">Export right preview</button>
             <div id="exportPreviewMenu" class="export-preview-menu" role="menu" hidden>
-              <button id="exportPreviewPdfBtn" type="button" role="menuitem" data-export-preview-format="pdf">Export as PDF</button>
-              <button id="exportPreviewHtmlBtn" type="button" role="menuitem" data-export-preview-format="html">Export as HTML</button>
+              <button id="exportPreviewPdfStudioBtn" type="button" role="menuitem" data-export-preview-format="pdf-studio">Export PDF and Open in Studio preview tab</button>
+              <button id="exportPreviewPdfBtn" type="button" role="menuitem" data-export-preview-format="pdf-default">Export PDF and Open in default PDF viewer</button>
+              <button id="exportPreviewHtmlStudioBtn" type="button" role="menuitem" data-export-preview-format="html-studio">Export HTML and Open in Studio editor</button>
+              <button id="exportPreviewHtmlBtn" type="button" role="menuitem" data-export-preview-format="html-browser">Export HTML and Open in browser</button>
             </div>
           </span>
         </div>
@@ -10227,14 +10287,16 @@ ${cssVarsBlock}
       <div class="scratchpad-header">
         <div>
           <h2 id="scratchpadTitle">Scratchpad</h2>
-          <p class="scratchpad-description">Local persistent notes for thoughts you want to park while working on the current Studio document or draft. Closing the scratchpad does not clear it: notes persist locally for this document identity until you edit or clear them. File-backed documents reliably come back across Pi restarts; unsaved drafts stay with their own draft instance until you save them or discard them. Scratchpad text is not run, critiqued, sent, or exported unless you explicitly insert it into the editor.</p>
+          <p class="scratchpad-description">Local persistent notes for thoughts you want to park while working on the current Studio document or draft. Closing the scratchpad does not clear it: notes persist locally for this document identity until you edit or clear them. File-backed documents reliably come back across Pi restarts; unsaved drafts stay with their own draft instance until you save them or discard them. Use Recent… to recover scratchpads from other draft identities after a Studio/Pi restart. Scratchpad text is not run, critiqued, sent, or exported unless you explicitly insert it into the editor.</p>
         </div>
         <button id="scratchpadCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Keep current scratchpad text and close scratchpad" title="Keep current scratchpad text and close scratchpad">✕</button>
       </div>
+      <div id="scratchpadRecentPanel" class="scratchpad-recent-panel" hidden></div>
       <textarea id="scratchpadText" class="scratchpad-textarea" placeholder="Jot quick thoughts, TODOs, or prompt ideas here..."></textarea>
       <div class="scratchpad-footer">
         <span id="scratchpadMeta" class="scratchpad-meta">Empty · local only</span>
         <div class="scratchpad-actions">
+          <button id="scratchpadRecentBtn" type="button" title="Show recent non-empty scratchpads saved for other files and drafts.">Recent…</button>
           <button id="scratchpadInsertBtn" type="button" title="Insert the scratchpad text into the editor at the current selection, or append it if no editor selection is available.">Insert into editor</button>
           <button id="scratchpadCopyBtn" type="button" title="Copy scratchpad text to the clipboard.">Copy</button>
           <button id="scratchpadClearBtn" type="button" title="Clear scratchpad text.">Clear</button>
@@ -12607,6 +12669,12 @@ export default function (pi: ExtensionAPI) {
 	const handleScratchpadStateRequest = async (req: IncomingMessage, res: ServerResponse, requestUrl: URL) => {
 		const method = (req.method ?? "GET").toUpperCase();
 		if (method === "GET") {
+			const action = (requestUrl.searchParams.get("action") ?? "").trim().toLowerCase();
+			if (action === "recent") {
+				const limit = Number.parseInt(requestUrl.searchParams.get("limit") ?? "20", 10);
+				respondJson(res, 200, { ok: true, scratchpads: await listRecentPersistedStudioScratchpads(limit) });
+				return;
+			}
 			const documentKey = (requestUrl.searchParams.get("documentKey") ?? "").trim();
 			if (!documentKey) {
 				respondJson(res, 400, { ok: false, error: "Missing documentKey query parameter." });
@@ -12656,8 +12724,12 @@ export default function (pi: ExtensionAPI) {
 			respondJson(res, 400, { ok: false, error: "Missing scratchpad text in request body." });
 			return;
 		}
+		const label =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { label?: unknown }).label === "string"
+				? (parsedBody as { label: string }).label
+				: undefined;
 
-		await writePersistedStudioScratchpadText(documentKey, text);
+		await writePersistedStudioScratchpadText(documentKey, text, label);
 		respondJson(res, 200, { ok: true });
 	};
 
@@ -12966,6 +13038,11 @@ export default function (pi: ExtensionAPI) {
 			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { editorPdfLanguage?: unknown }).editorPdfLanguage === "string"
 				? (parsedBody as { editorPdfLanguage: string }).editorPdfLanguage
 				: "";
+		const requestedOpenTarget =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { openTarget?: unknown }).openTarget === "string"
+				? (parsedBody as { openTarget: string }).openTarget.trim().toLowerCase()
+				: "default";
+		const openTarget = requestedOpenTarget === "studio" ? "studio" : "default";
 		const editorPdfLanguage = inferStudioPdfLanguage(markdown, requestedEditorPdfLanguage);
 		const isLatex = editorPdfLanguage === "latex"
 			|| (
@@ -12979,17 +13056,48 @@ export default function (pi: ExtensionAPI) {
 			const writeResult = writeStudioPreviewExportFile(buildStudioPreviewExportPath(sourcePath || undefined, userResourceDir || undefined, studioCwd, filename), pdf);
 			const exportId = storePreparedPdfExport(pdf, filename, warning, writeResult.filePath ?? undefined);
 			const token = serverState?.token ?? "";
+			if (openTarget === "studio" && serverState && writeResult.filePath) {
+				const exportedPath = writeResult.filePath;
+				const title = sanitizeStudioPreviewBlockLine(filename || basename(exportedPath) || "PDF preview");
+				const document: InitialStudioDocument = {
+					text: "```studio-pdf\n"
+						+ `path: ${sanitizeStudioPreviewBlockLine(basename(exportedPath))}\n`
+						+ `title: ${title || "PDF preview"}\n`
+						+ "height: 820\n"
+						+ "```\n",
+					label: `${filename || basename(exportedPath) || "PDF"} preview`,
+					source: "blank",
+					resourceDir: dirname(exportedPath),
+				};
+				const docId = storeTransientStudioDocument(document);
+				const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+				const parsedUrl = new URL(url);
+				respondJson(res, 200, {
+					ok: true,
+					filename,
+					path: writeResult.filePath,
+					writeError: writeResult.error,
+					warning: warning ?? null,
+					openedStudio: true,
+					url,
+					relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+					downloadUrl: `/export-pdf?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}`,
+				});
+				return;
+			}
 			let openedExternal = false;
 			let openError: string | null = null;
-			try {
-				const prepared = await ensurePreparedPdfExportFile(exportId);
-				if (!prepared?.filePath) {
-					throw new Error("Prepared PDF file was not available for external open.");
+			if (openTarget !== "studio") {
+				try {
+					const prepared = await ensurePreparedPdfExportFile(exportId);
+					if (!prepared?.filePath) {
+						throw new Error("Prepared PDF file was not available for external open.");
+					}
+					await openPathInDefaultViewer(prepared.filePath);
+					openedExternal = true;
+				} catch (viewerError) {
+					openError = viewerError instanceof Error ? viewerError.message : String(viewerError);
 				}
-				await openPathInDefaultViewer(prepared.filePath);
-				openedExternal = true;
-			} catch (viewerError) {
-				openError = viewerError instanceof Error ? viewerError.message : String(viewerError);
 			}
 			respondJson(res, 200, {
 				ok: true,
@@ -13068,6 +13176,11 @@ export default function (pi: ExtensionAPI) {
 			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { editorHtmlLanguage?: unknown }).editorHtmlLanguage === "string"
 				? (parsedBody as { editorHtmlLanguage: string }).editorHtmlLanguage
 				: "";
+		const requestedOpenTarget =
+			parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { openTarget?: unknown }).openTarget === "string"
+				? (parsedBody as { openTarget: string }).openTarget.trim().toLowerCase()
+				: "browser";
+		const openTarget = requestedOpenTarget === "studio" ? "studio" : "browser";
 		const editorHtmlLanguage = inferStudioPdfLanguage(markdown, requestedEditorHtmlLanguage);
 		const isLatex = editorHtmlLanguage === "latex"
 			|| (
@@ -13093,6 +13206,32 @@ export default function (pi: ExtensionAPI) {
 			const writeResult = writeStudioPreviewExportFile(buildStudioPreviewExportPath(sourcePath || undefined, userResourceDir || undefined, studioCwd, filename), html);
 			const exportId = storePreparedHtmlExport(html, filename, warning, writeResult.filePath ?? undefined);
 			const token = serverState?.token ?? "";
+			if (openTarget === "studio" && serverState) {
+				const exportedPath = writeResult.filePath ?? "";
+				const document: InitialStudioDocument = {
+					text: html.toString("utf-8"),
+					label: filename,
+					source: exportedPath ? "file" : "blank",
+					path: exportedPath || undefined,
+					resourceDir: exportedPath ? dirname(exportedPath) : (userResourceDir || resourcePath || studioCwd),
+					draftId: exportedPath ? undefined : createStudioDraftId(),
+				};
+				const docId = storeTransientStudioDocument(document);
+				const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+				const parsedUrl = new URL(url);
+				respondJson(res, 200, {
+					ok: true,
+					filename,
+					path: writeResult.filePath,
+					writeError: writeResult.error,
+					warning: warning ?? null,
+					openedStudio: true,
+					url,
+					relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+					downloadUrl: `/export-html?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}`,
+				});
+				return;
+			}
 			let openedExternal = false;
 			let openError: string | null = null;
 			try {

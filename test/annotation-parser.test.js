@@ -104,6 +104,15 @@ test("prepareMarkdownForPandocPreview replaces only real annotations and leaves 
   assert.equal(proseSection.includes("[an:"), false);
 });
 
+test("prepareMarkdownForPandocPreview normalizes smart-quoted fences before annotation replacement", () => {
+  const markdown = "‘‘‘md\n[an: literal inside smart fence]\n‘‘‘\n\n[an: real note]";
+  const prepared = helpers.prepareMarkdownForPandocPreview(markdown, "TESTANNOT");
+
+  assert.equal(prepared.placeholders.length, 1);
+  assert.equal(prepared.placeholders[0].text, "real note");
+  assert.equal(prepared.markdown, "```md\n[an: literal inside smart fence]\n```\n\nTESTANNOT0TOKEN");
+});
+
 test("prepareMarkdownForPandocPreview leaves inline-code annotation examples untouched and does not desync later parsing", () => {
   const mixed = "- `[an: prefer \\`npm test\\` here]`\n- [an: keep *focus* and _tone_!]";
   const prepared = helpers.prepareMarkdownForPandocPreview(mixed, "TESTANNOT");

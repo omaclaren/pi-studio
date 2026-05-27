@@ -2,7 +2,12 @@
 
 All notable changes to `pi-studio` are documented here.
 
-## [Unreleased]
+## [0.9.21] — 2026-05-28
+
+### Added
+- Added **Recent…** to the Scratchpad so scratchpads saved under previous file/draft identities can be loaded, appended, or copied after reopening Studio or continuing a Pi session.
+- Preview export now distinguishes **Export PDF and Open in Studio preview tab** from **Export PDF and Open in default PDF viewer**; the Studio path opens a Files-view-style editor-only preview tab with a `studio-pdf` block.
+- HTML export now distinguishes **Export HTML and Open in Studio editor** from **Export HTML and Open in browser**; the Studio path opens the exported HTML in an editor-only Studio tab for inspection, editing, previewing, and comment mode.
 
 ## [0.9.20] — 2026-05-27
 

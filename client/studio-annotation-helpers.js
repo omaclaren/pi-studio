@@ -500,6 +500,23 @@
     return out;
   }
 
+  const SMART_MARKDOWN_FENCE_CHARS = "`´‘’‚‛“”„‟′‵";
+  const SMART_MARKDOWN_FENCE_RE = new RegExp(`^([ \\t]{0,3})([${SMART_MARKDOWN_FENCE_CHARS.replace(/[\\\\\]^-]/g, "\\\\$&")}]{3,})([^${SMART_MARKDOWN_FENCE_CHARS.replace(/[\\\\\]^-]/g, "\\\\$&")}\\r\\n]*)$`);
+
+  function normalizeMarkdownSmartFences(markdown) {
+    return String(markdown || "")
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .map(function(line) {
+        const match = line.match(SMART_MARKDOWN_FENCE_RE);
+        if (!match) return line;
+        const run = match[2] || "";
+        if (!/[´‘’‚‛“”„‟′‵]/u.test(run)) return line;
+        return (match[1] || "") + "`".repeat(Math.max(3, Array.from(run).length)) + (match[3] || "");
+      })
+      .join("\n");
+  }
+
   function transformMarkdownOutsideFences(text, plainTransformer) {
     const source = String(text || "").replace(/\r\n/g, "\n");
     if (!source) return source;
@@ -642,11 +659,12 @@
   }
 
   function prepareMarkdownForPandocPreview(markdown, placeholderPrefix) {
+    const normalizedMarkdown = normalizeMarkdownSmartFences(markdown);
     const placeholders = [];
     const prefix = typeof placeholderPrefix === "string" && placeholderPrefix
       ? placeholderPrefix
       : "PISTUDIOANNOT";
-    const prepared = transformMarkdownOutsideFences(markdown, function(segment) {
+    const prepared = transformMarkdownOutsideFences(normalizedMarkdown, function(segment) {
       return replaceInlineAnnotationMarkers(segment, function(marker) {
         const label = normalizePreviewAnnotationLabel(marker.body);
         if (!label) return "";
@@ -663,6 +681,7 @@
     hasAnnotationMarkers: hasAnnotationMarkers,
     normalizePreviewAnnotationLabel: normalizePreviewAnnotationLabel,
     extractStandaloneMarkdownImageCaptionText: extractStandaloneMarkdownImageCaptionText,
+    normalizeMarkdownSmartFences: normalizeMarkdownSmartFences,
     prepareMarkdownForPandocPreview: prepareMarkdownForPandocPreview,
     readInlineAnnotationMarkerAt: readInlineAnnotationMarkerAt,
     renderPreviewAnnotationHtml: renderPreviewAnnotationHtml,
