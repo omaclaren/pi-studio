@@ -5176,6 +5176,15 @@
       font-weight: 450;
     }
 
+    body.studio-ui-refresh .studio-refresh-menu-item > .source-origin-summary {
+      width: 100%;
+      border-color: var(--border-subtle);
+      background: var(--panel-2);
+      color: var(--studio-info-text, var(--muted));
+      white-space: normal;
+      line-height: 1.35;
+    }
+
     body.studio-ui-refresh .studio-refresh-menu #critiqueBtn {
       justify-content: flex-start;
       text-align: left;

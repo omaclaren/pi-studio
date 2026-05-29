@@ -177,6 +177,7 @@
       const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
 
       const initialQueryParams = new URLSearchParams(window.location.search || "");
+      const skipInitialWorkspaceRestore = initialQueryParams.get("skipWorkspaceRestore") === "1";
       const explicitDocumentIdentityFromUrl = initialQueryParams.has("docId")
         || initialQueryParams.has("docSource")
         || initialQueryParams.has("docLabel")
@@ -232,6 +233,10 @@
       let pendingKind = null;
       let stickyStudioKind = null;
       const pendingCompanionWindows = new Map();
+      let sourceOriginSummaryEl = null;
+      let sourceResetOriginBtn = null;
+      let sourceOpenCurrentFileTabBtn = null;
+      let sourceOpenCurrentTextCopyTabBtn = null;
       let initialDocumentApplied = false;
       function normalizeRightViewValue(nextView) {
         const raw = String(nextView || "").trim();
@@ -258,8 +263,8 @@
           option.disabled = isEditorOnlyMode && !editorOnlyAllowed.has(option.value);
         });
         rightViewSelect.title = isEditorOnlyMode
-          ? "Editor-only views: editor preview, Files, or REPL. Shortcut: F7 when the right pane is active; F6 switches panes."
-          : "Right pane view mode. Shortcut: F7 when the right pane is active; F6 switches panes.";
+          ? "Editor-only views: editor preview, Files, or REPL. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview."
+          : "Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview.";
       }
 
       function getInitialRightView(source) {
@@ -2405,8 +2410,66 @@
           suggestCompletionOptionsBtn.hidden = false;
           if (completionContextSelect) completionContextSelect.hidden = true;
           contextMenu = makeStudioUiRefreshMenu(suggestCompletionOptionsBtn, "context", "studio-refresh-context-anchor");
-          if (sourceBadgeEl) appendStudioUiRefreshMenuSection(contextMenu.menu, "Document", [sourceBadgeEl]);
+          sourceOriginSummaryEl = makeStudioUiRefreshElement("div", "source-badge source-origin-summary", "Origin: blank");
+          sourceOriginSummaryEl.setAttribute("aria-label", "Current editor origin");
+          sourceResetOriginBtn = makeStudioUiRefreshElement("button", "source-reset-origin-btn", "Reset origin");
+          sourceResetOriginBtn.type = "button";
+          sourceResetOriginBtn.title = "Reset the editor origin and keep the current text in a new draft.";
+          sourceResetOriginBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeStudioUiRefreshMenus();
+            resetEditorOrigin();
+          });
+          sourceOpenCurrentFileTabBtn = makeStudioUiRefreshElement("button", "source-open-file-tab-btn", "Open current file in new editor tab");
+          sourceOpenCurrentFileTabBtn.type = "button";
+          sourceOpenCurrentFileTabBtn.title = "Open this file-backed document in a new refreshable editor-only Studio tab.";
+          sourceOpenCurrentFileTabBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const path = sourceState && sourceState.path ? String(sourceState.path) : "";
+            if (!path) {
+              setStatus("Open current file in new editor tab is only available for file-backed documents.", "warning");
+              return;
+            }
+            closeStudioUiRefreshMenus();
+            const targetUrl = buildAuthedStudioUrl("/", {
+              mode: "editor-only",
+              docSource: "file",
+              docLabel: sourceState && sourceState.label ? sourceState.label : basenameForStudioPath(path),
+              docPath: path,
+              resourceDir: getCurrentResourceDirValue() || dirnameForDisplayPath(path),
+              skipWorkspaceRestore: "1",
+            });
+            try {
+              window.open(targetUrl, "_blank", "noopener");
+              setStatus("Opening current file in a new editor tab.", "success");
+            } catch (error) {
+              setStatus((error && error.message) ? error.message : String(error || "Could not open file tab."), "warning");
+            }
+          });
+          sourceOpenCurrentTextCopyTabBtn = makeStudioUiRefreshElement("button", "source-open-text-copy-tab-btn", "Open current text as copy in new editor tab");
+          sourceOpenCurrentTextCopyTabBtn.type = "button";
+          sourceOpenCurrentTextCopyTabBtn.title = "Open a detached copy of the current editor text in a new editor-only Studio tab.";
+          sourceOpenCurrentTextCopyTabBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const content = String(sourceTextEl.value || "");
+            if (!content.trim()) {
+              setStatus("Editor is empty. Use New editor tab for a blank editor.", "warning");
+              return;
+            }
+            closeStudioUiRefreshMenus();
+            requestOpenEditorOnlyDocument(content, {
+              label: sourceState && sourceState.label ? sourceState.label : "current editor",
+              path: sourceState && sourceState.path ? sourceState.path : undefined,
+              resourceDir: getCurrentResourceDirValue() || undefined,
+            });
+          });
+          if (sendEditorBtn) sendEditorBtn.textContent = "Send current text to Pi editor";
+          appendStudioUiRefreshMenuSection(contextMenu.menu, "Document", [sourceOriginSummaryEl, sourceResetOriginBtn, sourceOpenCurrentFileTabBtn, sourceOpenCurrentTextCopyTabBtn]);
           appendStudioUiRefreshMenuSection(contextMenu.menu, "Working directory", [resourceDirBtn, resourceDirLabel, resourceDirInputWrap]);
+          if (!isEditorOnlyMode && sendEditorBtn) appendStudioUiRefreshMenuSection(contextMenu.menu, "Pi editor", [sendEditorBtn]);
           const cursorContextBtn = makeStudioUiRefreshElement("button", "completion-context-option", "Editor only");
           cursorContextBtn.type = "button";
           cursorContextBtn.setAttribute("data-completion-context-mode", "cursor");
@@ -2484,7 +2547,6 @@
         actionLineTwoEl.appendChild(copyDraftBtn);
         if (suggestCompletionBtn) actionLineTwoEl.appendChild(suggestCompletionBtn);
         if (openCompanionBtn) actionLineTwoEl.appendChild(openCompanionBtn);
-        if (!isEditorOnlyMode && sendEditorBtn) actionLineTwoEl.appendChild(sendEditorBtn);
         const replActionLineEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line repl-action-line");
         replActionLineEl.hidden = true;
         if (sendReplBtn) replActionLineEl.appendChild(sendReplBtn);
@@ -3213,12 +3275,25 @@
 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
-        sourceBadgeEl.textContent = (studioUiRefreshEnabled ? "Origin: " : "Editor origin: ") + label + (hasRefreshableFilePath() ? " · file" : "");
+        const originText = (studioUiRefreshEnabled ? "Origin: " : "Editor origin: ") + label + (hasRefreshableFilePath() ? " · file" : "");
         const descriptor = getCurrentStudioDocumentDescriptor();
         if (sourceBadgeEl) {
+          sourceBadgeEl.textContent = originText;
           sourceBadgeEl.title = descriptor.fileBacked
             ? ("Editor origin: " + label + "\nClick to reset origin and detach the current editor text into a new draft. The file on disk will not be changed.")
             : ("Editor origin: " + label + "\nClick to reset origin and start a new independent draft while keeping the current text and local notes.");
+        }
+        if (sourceOriginSummaryEl) {
+          sourceOriginSummaryEl.textContent = originText;
+          sourceOriginSummaryEl.title = descriptor.fileBacked
+            ? ("File-backed editor: " + (descriptor.path || label))
+            : ("Detached editor origin: " + label);
+        }
+        if (sourceResetOriginBtn) {
+          sourceResetOriginBtn.textContent = descriptor.fileBacked ? "Detach from file" : "Reset origin";
+          sourceResetOriginBtn.title = descriptor.fileBacked
+            ? "Detach the current editor text from this file and keep it in a new draft. The file on disk will not be changed."
+            : "Reset the editor origin and keep the current text in a new draft.";
         }
         // Show "Set working dir" button when not file-backed
         var isFileBacked = hasRefreshableFilePath();
@@ -3560,6 +3635,17 @@
         setStatus("Right pane content focused.");
       }
 
+      function switchRightPaneToPrimaryPreview() {
+        const targetView = isEditorOnlyMode ? "editor-preview" : "preview";
+        const snapshot = snapshotStudioScrollablePositions();
+        setRightView(targetView);
+        scheduleStudioScrollablePositionRestore(snapshot);
+        const label = rightViewSelect && rightViewSelect.selectedOptions && rightViewSelect.selectedOptions[0]
+          ? rightViewSelect.selectedOptions[0].textContent
+          : (isEditorOnlyMode ? "Editor (Preview)" : "Response (Preview)");
+        setStatus("Right pane view: " + String(label || "Preview") + ".");
+      }
+
       function cycleActivePaneView(direction) {
         if (activePane === "right") {
           if (!rightViewSelect || rightViewSelect.disabled) {
@@ -3855,6 +3941,16 @@
         if (isViewCycleShortcut) {
           event.preventDefault();
           cycleActivePaneView(event.shiftKey ? -1 : 1);
+          return;
+        }
+
+        const isPreviewShortcut = (key.toLowerCase() === "p" || code === "KeyP")
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey;
+        if (isPreviewShortcut) {
+          event.preventDefault();
+          switchRightPaneToPrimaryPreview();
           return;
         }
 
@@ -9908,6 +10004,14 @@
 
         fileInput.disabled = uiBusy;
         if (sourceBadgeEl) sourceBadgeEl.disabled = uiBusy;
+        if (sourceResetOriginBtn) sourceResetOriginBtn.disabled = uiBusy;
+        if (sourceOpenCurrentFileTabBtn) {
+          sourceOpenCurrentFileTabBtn.disabled = uiBusy || !hasRefreshableFilePath();
+          sourceOpenCurrentFileTabBtn.title = hasRefreshableFilePath()
+            ? "Open this file-backed document in a new refreshable editor-only Studio tab."
+            : "Available after opening a file-backed document.";
+        }
+        if (sourceOpenCurrentTextCopyTabBtn) sourceOpenCurrentTextCopyTabBtn.disabled = uiBusy || wsState !== "Ready" || !String(sourceTextEl.value || "").trim();
         saveAsBtn.disabled = uiBusy;
         saveOverBtn.disabled = uiBusy || !canSaveOver;
         if (refreshFromDiskBtn) refreshFromDiskBtn.disabled = uiBusy || !canRefreshFromDisk;
@@ -10030,6 +10134,7 @@
       }
 
       function shouldRestorePersistedWorkspaceState(state) {
+        if (skipInitialWorkspaceRestore) return false;
         if (!state || typeof state.text !== "string") return false;
         const storedSourceState = normalizeWorkspaceSourceState(state.sourceState);
         const initialIdentity = getWorkspaceStateIdentity(initialSourceState);
@@ -10951,6 +11056,7 @@
           else params.delete("docPath");
           if (nextDraftId) params.set("draftId", nextDraftId);
           else params.delete("draftId");
+          params.delete("skipWorkspaceRestore");
           window.history.replaceState(null, "", currentUrl.toString());
         } catch {
           // Ignore URL-state update failures.
@@ -11166,10 +11272,10 @@
           appendPreviewLinkMenuButton(menu, "Open PDF preview", "open-pdf");
           appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
         } else if (kind === "text") {
-          appendPreviewLinkMenuButton(menu, "Open in new editor", "open-new");
+          appendPreviewLinkMenuButton(menu, "Open file tab", "open-new");
           appendPreviewLinkMenuButton(menu, "Open here", "open-here");
         } else if (kind === "office") {
-          appendPreviewLinkMenuButton(menu, "Convert in new editor", "open-new");
+          appendPreviewLinkMenuButton(menu, "Convert tab", "open-new");
           appendPreviewLinkMenuButton(menu, "Convert here", "open-here");
         } else if (kind === "image") {
           appendPreviewLinkMenuButton(menu, "Open image preview", "open-image");
@@ -11306,10 +11412,11 @@
           return;
         }
         const popup = pendingWindow || window.open("", "_blank");
+        const openingLabel = getPreviewLocalLinkKind(href) === "office" ? "Opening converted document…" : "Opening file tab…";
         try {
           if (popup && popup.document && popup.document.body) {
-            popup.document.title = "Opening linked file…";
-            popup.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Opening linked file…</p>";
+            popup.document.title = openingLabel;
+            popup.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">" + escapeHtml(openingLabel) + "</p>";
           }
         } catch {}
         try {
@@ -11322,12 +11429,12 @@
             try {
               popup.opener = null;
               popup.location.href = targetUrl;
-              setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening linked file in a new editor.", "success");
+              setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening file-backed document in a new editor.", "success");
               return;
             } catch {}
           }
           window.open(targetUrl, "_blank", "noopener");
-          setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening linked file in a new editor.", "success");
+          setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening file-backed document in a new editor.", "success");
         } catch (error) {
           if (popup && !popup.closed) {
             try { popup.close(); } catch {}
@@ -18502,11 +18609,11 @@
           const opened = navigatePendingCompanionWindow(responseRequestId, targetUrl);
           const readyMessage = typeof message.message === "string" && message.message.trim()
             ? message.message.trim()
-            : "Opened companion editor with a detached copy of the current editor text.";
+            : "Opened editor tab with a detached copy of the current editor text.";
           setStatus(
             opened
               ? readyMessage
-              : (targetUrl ? "Companion editor ready: " + targetUrl : "Companion editor is ready, but Studio did not receive a URL."),
+              : (targetUrl ? "Editor tab ready: " + targetUrl : "Editor tab is ready, but Studio did not receive a URL."),
             opened ? "success" : "warning",
           );
           return;
@@ -18826,8 +18933,8 @@
         try {
           companionWindow = window.open("", "_blank");
           if (companionWindow && companionWindow.document && companionWindow.document.body) {
-            companionWindow.document.title = "Opening companion editor…";
-            companionWindow.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Opening companion editor…</p>";
+            companionWindow.document.title = "Opening editor tab…";
+            companionWindow.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Opening editor tab…</p>";
           }
         } catch {
           companionWindow = null;
@@ -18881,6 +18988,28 @@
         } catch {
           return false;
         }
+      }
+
+      function requestOpenEditorOnlyDocument(content, options) {
+        const requestId = beginUiAction("open_editor_only");
+        if (!requestId) return false;
+        openPendingCompanionWindow(requestId);
+        const config = options && typeof options === "object" ? options : {};
+        const sent = sendMessage({
+          type: "open_editor_only_request",
+          requestId,
+          content: String(content || ""),
+          label: config.label || "current editor",
+          path: config.path || undefined,
+          resourceDir: config.resourceDir || undefined,
+        });
+        if (!sent) {
+          closePendingCompanionWindow(requestId);
+          pendingRequestId = null;
+          pendingKind = null;
+          setBusy(false);
+        }
+        return sent;
       }
 
       function describeSourceForAnnotation() {
@@ -19498,27 +19627,10 @@
 
       if (openCompanionBtn) {
         openCompanionBtn.addEventListener("click", () => {
-          const content = sourceTextEl.value;
-
-          const requestId = beginUiAction("open_editor_only");
-          if (!requestId) return;
-          openPendingCompanionWindow(requestId);
-
-          const sent = sendMessage({
-            type: "open_editor_only_request",
-            requestId,
-            content,
-            label: sourceState && sourceState.label ? sourceState.label : "current editor",
-            path: sourceState && sourceState.path ? sourceState.path : undefined,
+          requestOpenEditorOnlyDocument("", {
+            label: "blank",
             resourceDir: getCurrentResourceDirValue() || undefined,
           });
-
-          if (!sent) {
-            closePendingCompanionWindow(requestId);
-            pendingRequestId = null;
-            pendingKind = null;
-            setBusy(false);
-          }
         });
       }
 
@@ -20038,7 +20150,7 @@
       }
       if (sourceBadgeEl) {
         sourceBadgeEl.addEventListener("click", () => {
-          resetEditorOrigin();
+          if (!studioUiRefreshEnabled) resetEditorOrigin();
         });
       }
       if (resourceDirBtn) {

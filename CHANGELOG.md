@@ -2,6 +2,18 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.9.22] — 2026-05-29
+
+### Added
+- Added **Open current file in new editor tab** and **Open current text as copy in new editor tab** to Source & context for explicit file-backed vs detached-copy tab opening.
+- Added `Cmd/Ctrl+Alt+P` to switch the right pane directly back to Preview without cycling through Files, REPL, or Working.
+
+### Changed
+- Changed the editor toolbar's detached-copy action into **New editor tab** for opening a blank editor tab, moved **Send current text to Pi editor** into Source & context, separated the passive origin summary from explicit **Detach from file** / **Reset origin** actions, and aligned local link menus with Files-view wording (**Open file tab** / **Convert tab**).
+
+### Fixed
+- New Studio tabs opened from Files, local preview links, preview exports, or editor-tab actions now skip cloned browser-tab workspace restore on first load, preventing inherited Files/preview state from briefly flashing and replacing the requested document preview.
+
 ## [0.9.21] — 2026-05-28
 
 ### Added

@@ -6991,7 +6991,7 @@ async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResp
 		}
 		const document = buildStudioLocalResourcePreviewDocument(resource);
 		const docId = storeTransientStudioDocument(document);
-		const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+		const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
 		const parsedUrl = new URL(url);
 		respondJson(res, 200, {
 			...basePayload,
@@ -7056,7 +7056,7 @@ async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResp
 	}
 
 	const docId = storeTransientStudioDocument(document);
-	const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+	const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
 	const parsedUrl = new URL(url);
 	respondJson(res, 200, {
 		...basePayload,
@@ -9525,6 +9525,7 @@ function buildStudioUrl(
 	mode: StudioUiMode = "full",
 	doc?: InitialStudioDocument | null,
 	docId?: string,
+	options?: { skipWorkspaceRestore?: boolean },
 ): string {
 	const params = new URLSearchParams({ token });
 	if (mode !== "full") params.set("mode", mode);
@@ -9534,6 +9535,7 @@ function buildStudioUrl(
 	if (doc?.path) params.set("docPath", doc.path);
 	if (doc?.draftId) params.set("draftId", doc.draftId);
 	if (doc?.resourceDir) params.set("resourceDir", doc.resourceDir);
+	if (options?.skipWorkspaceRestore) params.set("skipWorkspaceRestore", "1");
 	return `http://127.0.0.1:${port}/?${params.toString()}`;
 }
 
@@ -9994,8 +9996,8 @@ ${cssVarsBlock}
                 <option value="cursor" selected>Context: editor only</option>
                 <option value="session">Context: editor + latest response</option>
               </select>
-              <button id="openCompanionBtn" type="button" title="Open a detached copy of the current editor text in a new editor-only Studio tab.">New editor</button>
-              <button id="sendEditorBtn" type="button">Send to pi editor</button>
+              <button id="openCompanionBtn" type="button" title="Open a blank editor-only Studio tab.">New editor tab</button>
+              <button id="sendEditorBtn" type="button">Send current text to Pi editor</button>
             </div>
             <div class="source-actions-row">
               <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).">Annotation header</button>
@@ -10116,7 +10118,7 @@ ${cssVarsBlock}
               <div class="scratchpad-header">
                 <div>
                   <h2 id="reviewNotesTitle">Comments</h2>
-                  <p class="scratchpad-description">Local comments for editor text and editor previews. They stay out of the text; source-anchored comments can be converted into inline <span class="review-notes-inline-token">[an: ...]</span> annotations.</p>
+                  <p class="scratchpad-description">Local comments for editor text and editor previews. They stay out of the text; can be converted into inline <span class="review-notes-inline-token">[an: ...]</span> annotations.</p>
                 </div>
                 <button id="reviewNotesCloseBtn" type="button" class="scratchpad-close-btn" aria-label="Hide comments" title="Hide comments">✕</button>
               </div>
@@ -10145,7 +10147,7 @@ ${cssVarsBlock}
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. Shortcut: F7 when the right pane is active; F6 switches panes.">
+          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview.">
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
@@ -10237,6 +10239,7 @@ ${cssVarsBlock}
           <dl>
             <div><dt>F6</dt><dd>Switch between editor and right pane</dd></div>
             <div><dt>F7 / Shift+F7</dt><dd>Cycle the active pane's view</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+P</dt><dd>Switch the right pane directly to Preview</dd></div>
             <div><dt>F8</dt><dd>Focus editor text</dd></div>
             <div><dt>Shift+F8</dt><dd>Focus right-pane content</dd></div>
             <div><dt>F9</dt><dd>Toggle Zen mode</dd></div>
@@ -11696,7 +11699,7 @@ export default function (pi: ExtensionAPI) {
 				resourceDir,
 			};
 			const docId = storeTransientStudioDocument(document);
-			const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+			const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
 			const parsedUrl = new URL(url);
 			sendToClient(client, {
 				type: "editor_only_ready",
@@ -11704,8 +11707,8 @@ export default function (pi: ExtensionAPI) {
 				url,
 				relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
 				message: hasContent
-					? "Companion editor is ready with a detached copy of the current editor text."
-					: "Blank companion editor is ready.",
+					? "Editor tab is ready with a detached copy of the current editor text."
+					: "Blank editor tab is ready.",
 			});
 			return;
 		}
@@ -13070,7 +13073,7 @@ export default function (pi: ExtensionAPI) {
 					resourceDir: dirname(exportedPath),
 				};
 				const docId = storeTransientStudioDocument(document);
-				const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+				const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
 				const parsedUrl = new URL(url);
 				respondJson(res, 200, {
 					ok: true,
@@ -13217,7 +13220,7 @@ export default function (pi: ExtensionAPI) {
 					draftId: exportedPath ? undefined : createStudioDraftId(),
 				};
 				const docId = storeTransientStudioDocument(document);
-				const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId);
+				const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
 				const parsedUrl = new URL(url);
 				respondJson(res, 200, {
 					ok: true,
