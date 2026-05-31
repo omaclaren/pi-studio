@@ -350,31 +350,34 @@
     }
 
     .pane-focus-btn.is-active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-contrast);
+      background: var(--panel);
+      border-color: var(--control-border);
+      color: var(--accent);
       font-weight: 600;
     }
 
     button.pane-focus-btn.is-active:not(:disabled):hover {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-contrast);
-      filter: brightness(0.95);
+      background: var(--panel-2);
+      border-color: var(--control-border);
+      color: var(--accent);
     }
 
     #scratchpadBtn.has-content,
     #reviewNotesBtn.has-content,
     #reviewNotesBtn.is-active,
     #outlineBtn.is-active {
-      border-color: var(--accent);
+      background: var(--panel);
+      border-color: var(--control-border);
       color: var(--accent);
       font-weight: 600;
     }
 
-    #reviewNotesBtn.is-active,
-    #outlineBtn.is-active {
-      background: var(--accent-soft);
+    #scratchpadBtn.has-content:not(:disabled):hover,
+    #reviewNotesBtn.has-content:not(:disabled):hover,
+    #reviewNotesBtn.is-active:not(:disabled):hover,
+    #outlineBtn.is-active:not(:disabled):hover {
+      background: var(--panel-2);
+      color: var(--accent);
     }
 
     .section-header select {
@@ -2529,9 +2532,10 @@
 
     .rendered-markdown .studio-html-artifact-comment-btn.is-active,
     .rendered-markdown .studio-html-artifact-shell.is-comment-mode .studio-html-artifact-comment-btn.is-active {
-      background: var(--accent-soft);
-      border-color: var(--accent);
+      background: var(--panel);
+      border-color: var(--accent-soft-strong);
       color: var(--accent);
+      font-weight: 600;
     }
 
     .rendered-markdown .studio-html-artifact-zoom-controls {
@@ -3109,7 +3113,7 @@
 
     .trace-filter-btn.is-active {
       border-color: var(--accent-soft-strong);
-      background: var(--accent-soft);
+      background: var(--panel);
       color: var(--accent);
       font-weight: 600;
     }
@@ -4783,9 +4787,9 @@
 
     body.studio-ui-refresh #leftFocusBtn.is-active,
     body.studio-ui-refresh #rightFocusBtn.is-active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-contrast);
+      background: var(--studio-header-action-bg, transparent);
+      border-color: var(--studio-header-action-border, transparent);
+      color: var(--accent);
     }
 
     body.studio-ui-refresh #sourceBadge,
@@ -4911,9 +4915,18 @@
     body.studio-ui-refresh #outlineBtn.is-active,
     body.studio-ui-refresh #scratchpadBtn.has-content,
     body.studio-ui-refresh #reviewNotesBtn.has-content {
-      background: var(--accent-soft);
+      background: var(--studio-header-action-bg, transparent);
       color: var(--accent);
-      border-color: transparent;
+      border-color: var(--studio-header-action-border, transparent);
+      font-weight: 600;
+    }
+
+    body.studio-ui-refresh #reviewNotesBtn.is-active:not(:disabled):hover,
+    body.studio-ui-refresh #outlineBtn.is-active:not(:disabled):hover,
+    body.studio-ui-refresh #scratchpadBtn.has-content:not(:disabled):hover,
+    body.studio-ui-refresh #reviewNotesBtn.has-content:not(:disabled):hover {
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
+      color: var(--accent);
     }
 
     body.studio-ui-refresh .source-wrap {

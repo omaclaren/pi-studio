@@ -16889,7 +16889,7 @@
         const hasNotes = count > 0;
         const isOpen = isReviewNotesOpen();
         if (reviewNotesBtn) {
-          reviewNotesBtn.textContent = hasNotes ? "Comments •" : "Comments";
+          reviewNotesBtn.textContent = "Comments";
           reviewNotesBtn.classList.toggle("has-content", hasNotes);
           reviewNotesBtn.classList.toggle("is-active", isOpen);
           reviewNotesBtn.setAttribute("aria-pressed", isOpen ? "true" : "false");
@@ -17491,7 +17491,7 @@
         const hasContent = Boolean(normalized.trim());
         const descriptor = getCurrentStudioDocumentDescriptor();
         if (scratchpadBtn) {
-          scratchpadBtn.textContent = hasContent ? "Scratchpad •" : "Scratchpad";
+          scratchpadBtn.textContent = "Scratchpad";
           scratchpadBtn.classList.toggle("has-content", hasContent);
           scratchpadBtn.title = hasContent
             ? ("Open the local persistent scratchpad for this document/draft. Scope: " + descriptor.label + ". File-backed docs come back across Pi restarts; unsaved drafts stay with this draft instance until saved or cleared.")

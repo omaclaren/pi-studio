@@ -10,6 +10,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Changed
 - Renamed the response-history label to **Branch history** to make its current-branch scope clearer.
+- Softened active Scratchpad, Comments, Outline, Focus pane, HTML comment-mode, and trace-filter button styling so they use accent text instead of filled highlight pills.
 
 ## [0.9.23] — 2026-05-31
 
