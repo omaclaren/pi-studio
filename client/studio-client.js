@@ -2488,9 +2488,9 @@
           appendStudioUiRefreshMenuSection(contextMenu.menu, "Suggestions", [cursorContextBtn, sessionContextBtn]);
           const statusItems = [];
           if (!isEditorOnlyMode) {
-            sourceSessionSummaryEl = makeStudioUiRefreshElement("div", "source-badge source-session-summary", "Session tree: response history follows the current Pi branch. Editor text is independent.");
+            sourceSessionSummaryEl = makeStudioUiRefreshElement("div", "source-badge source-session-summary", "Session tree: branch history follows the current Pi branch. Editor text is independent.");
             sourceSessionSummaryEl.setAttribute("aria-label", "Pi session tree and editor sync behaviour");
-            sourceSessionSummaryEl.title = "Use /tree in the Pi terminal to navigate branches. Studio updates response history to match the active branch and leaves editor text unchanged.";
+            sourceSessionSummaryEl.title = "Use /tree in the Pi terminal to navigate branches. Studio updates branch history to match the active branch and leaves editor text unchanged.";
             statusItems.push(sourceSessionSummaryEl);
           }
           if (syncBadgeEl) {
@@ -3731,12 +3731,12 @@
 
       function triggerResponseHistoryShortcut(action) {
         if (isEditorOnlyMode) {
-          setStatus("Response history is unavailable in editor-only Studio.", "warning");
+          setStatus("Branch history is unavailable in editor-only Studio.", "warning");
           return false;
         }
         const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
         if (total <= 0) {
-          setStatus("No response history available yet.", "warning");
+          setStatus("No branch history available yet.", "warning");
           return false;
         }
         if (action === "previous") {
@@ -4219,7 +4219,7 @@
           ? responseHistoryIndex + 1
           : 0;
         if (historyIndexBadgeEl) {
-          historyIndexBadgeEl.textContent = "History: " + selected + "/" + total;
+          historyIndexBadgeEl.textContent = "Branch history: " + selected + "/" + total;
         }
         if (historyPrevBtn) {
           historyPrevBtn.disabled = total <= 1 || responseHistoryIndex <= 0;
@@ -4278,7 +4278,7 @@
           const item = getSelectedHistoryItem();
           if (item) {
             const responseLabel = item.kind === "critique" ? "critique" : "response";
-            setStatus("Viewing " + responseLabel + " history " + (nextIndex + 1) + "/" + total + ".");
+            setStatus("Viewing " + responseLabel + " in current branch history " + (nextIndex + 1) + "/" + total + ".");
           }
         }
         return applied;
@@ -4400,7 +4400,7 @@
         const selected = total > 0 && responseHistoryIndex >= 0 && responseHistoryIndex < total
           ? responseHistoryIndex + 1
           : 0;
-        const historyPrefix = total > 0 ? "Response history " + selected + "/" + total + " · " : "";
+        const historyPrefix = total > 0 ? "Branch history " + selected + "/" + total + " · " : "";
         referenceBadgeEl.textContent = time
           ? historyPrefix + responseLabel + " · " + time
           : historyPrefix + responseLabel;
@@ -19259,7 +19259,7 @@
       if (historyPrevBtn) {
         historyPrevBtn.addEventListener("click", () => {
           if (!responseHistory.length) {
-            setStatus("No response history available yet.", "warning");
+            setStatus("No branch history available yet.", "warning");
             return;
           }
           selectHistoryIndex(responseHistoryIndex - 1);
@@ -19269,7 +19269,7 @@
       if (historyNextBtn) {
         historyNextBtn.addEventListener("click", () => {
           if (!responseHistory.length) {
-            setStatus("No response history available yet.", "warning");
+            setStatus("No branch history available yet.", "warning");
             return;
           }
           selectHistoryIndex(responseHistoryIndex + 1);
@@ -19279,7 +19279,7 @@
       if (historyLastBtn) {
         historyLastBtn.addEventListener("click", () => {
           if (!responseHistory.length) {
-            setStatus("No response history available yet.", "warning");
+            setStatus("No branch history available yet.", "warning");
             return;
           }
           selectHistoryIndex(responseHistory.length - 1);
@@ -19306,7 +19306,7 @@
           if (responseHistory.length > 0) {
             selectHistoryIndex(responseHistory.length - 1, { silent: true });
             queuedLatestResponse = null;
-            setStatus("Pulled latest response from history.", "success");
+            setStatus("Pulled latest response from branch history.", "success");
             updateResultActionButtons();
           } else if (applyLatestPayload(queuedLatestResponse)) {
             queuedLatestResponse = null;

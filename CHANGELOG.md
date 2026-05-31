@@ -5,7 +5,10 @@ All notable changes to `pi-studio` are documented here.
 ## [Unreleased]
 
 ### Added
-- Added a Source & context status note explaining that Studio response history follows the current Pi branch while editor text stays independent.
+- Added a Source & context status note explaining that Studio branch history follows the current Pi branch while editor text stays independent.
+
+### Changed
+- Renamed the response-history label to **Branch history** to make its current-branch scope clearer.
 
 ## [0.9.23] — 2026-05-31
 

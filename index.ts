@@ -10201,10 +10201,10 @@ ${cssVarsBlock}
           </div>
           <div class="response-actions-row history-row">
             <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Fetch latest response</button>
-            <button id="historyPrevBtn" type="button" title="Show previous response in history.">◀ Prev response</button>
-            <span id="historyIndexBadge" class="source-badge">History: 0/0</span>
-            <button id="historyNextBtn" type="button" title="Show next response in history.">Next response ▶</button>
-            <button id="historyLastBtn" type="button" title="Jump to the latest loaded response in history.">Last response ▶|</button>
+            <button id="historyPrevBtn" type="button" title="Show previous response in the current branch history.">◀ Prev response</button>
+            <span id="historyIndexBadge" class="source-badge">Branch history: 0/0</span>
+            <button id="historyNextBtn" type="button" title="Show next response in the current branch history.">Next response ▶</button>
+            <button id="historyLastBtn" type="button" title="Jump to the latest loaded response in the current branch history.">Last response ▶|</button>
           </div>
           <div class="response-actions-row response-result-row">
             <button id="loadResponseBtn" type="button">Load response into editor</button>
@@ -13865,7 +13865,7 @@ export default function (pi: ExtensionAPI) {
 			type: "info",
 			level: "info",
 			message: studioResponseHistory.length > 0
-				? "Pi session tree changed; Studio response history now follows the current branch. Editor text was left unchanged."
+				? "Pi session tree changed; Studio branch history now follows the current branch. Editor text was left unchanged."
 				: "Pi session tree changed; this branch has no assistant responses yet. Editor text was left unchanged.",
 		});
 	});
