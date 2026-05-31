@@ -237,6 +237,7 @@
       let sourceResetOriginBtn = null;
       let sourceOpenCurrentFileTabBtn = null;
       let sourceOpenCurrentTextCopyTabBtn = null;
+      let sourceSessionSummaryEl = null;
       let initialDocumentApplied = false;
       function normalizeRightViewValue(nextView) {
         const raw = String(nextView || "").trim();
@@ -2485,9 +2486,19 @@
             });
           });
           appendStudioUiRefreshMenuSection(contextMenu.menu, "Suggestions", [cursorContextBtn, sessionContextBtn]);
+          const statusItems = [];
+          if (!isEditorOnlyMode) {
+            sourceSessionSummaryEl = makeStudioUiRefreshElement("div", "source-badge source-session-summary", "Session tree: response history follows the current Pi branch. Editor text is independent.");
+            sourceSessionSummaryEl.setAttribute("aria-label", "Pi session tree and editor sync behaviour");
+            sourceSessionSummaryEl.title = "Use /tree in the Pi terminal to navigate branches. Studio updates response history to match the active branch and leaves editor text unchanged.";
+            statusItems.push(sourceSessionSummaryEl);
+          }
           if (syncBadgeEl) {
             syncBadgeEl.hidden = false;
-            appendStudioUiRefreshMenuSection(contextMenu.menu, "Status", [syncBadgeEl]);
+            statusItems.push(syncBadgeEl);
+          }
+          if (statusItems.length > 0) {
+            appendStudioUiRefreshMenuSection(contextMenu.menu, "Status", statusItems);
           }
         }
 

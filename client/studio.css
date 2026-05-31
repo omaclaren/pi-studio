@@ -5176,7 +5176,8 @@
       font-weight: 450;
     }
 
-    body.studio-ui-refresh .studio-refresh-menu-item > .source-origin-summary {
+    body.studio-ui-refresh .studio-refresh-menu-item > .source-origin-summary,
+    body.studio-ui-refresh .studio-refresh-menu-item > .source-session-summary {
       width: 100%;
       border-color: var(--border-subtle);
       background: var(--panel-2);

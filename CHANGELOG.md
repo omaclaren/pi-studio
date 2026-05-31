@@ -2,6 +2,11 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [Unreleased]
+
+### Added
+- Added a Source & context status note explaining that Studio response history follows the current Pi branch while editor text stays independent.
+
 ## [0.9.23] — 2026-05-31
 
 ### Changed
