@@ -10299,7 +10299,7 @@ ${cssVarsBlock}
       <div class="scratchpad-footer">
         <span id="scratchpadMeta" class="scratchpad-meta">Empty · local only</span>
         <div class="scratchpad-actions">
-          <button id="scratchpadRecentBtn" type="button" title="Show recent non-empty scratchpads saved for other files and drafts.">Recent…</button>
+          <button id="scratchpadRecentBtn" type="button" aria-expanded="false" title="Show recent non-empty scratchpads saved for other files and drafts.">Recent…</button>
           <button id="scratchpadInsertBtn" type="button" title="Insert the scratchpad text into the editor at the current selection, or append it if no editor selection is available.">Insert into editor</button>
           <button id="scratchpadCopyBtn" type="button" title="Copy scratchpad text to the clipboard.">Copy</button>
           <button id="scratchpadClearBtn" type="button" title="Clear scratchpad text.">Clear</button>

@@ -6,6 +6,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Added
 - Added a Source & context status note explaining that Studio branch history follows the current Pi branch while editor text stays independent.
+- Added an in-panel **Hide** control for Scratchpad Recent recovery.
 
 ### Changed
 - Renamed the response-history label to **Branch history** to make its current-branch scope clearer.

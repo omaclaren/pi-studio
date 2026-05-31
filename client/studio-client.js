@@ -13108,17 +13108,24 @@
         if (!scratchpadRecentPanelEl) return;
         scratchpadRecentPanelEl.hidden = !scratchpadRecentVisible;
         if (!scratchpadRecentVisible) return;
+        const headerHtml = "<div class='scratchpad-recent-header'>"
+          + "<div class='scratchpad-recent-heading-group'>"
+          + "<div class='scratchpad-recent-heading'>Recent scratchpads</div>"
+          + "<div class='scratchpad-recent-subtitle'>Load, append, or copy notes saved for other documents and drafts.</div>"
+          + "</div>"
+          + "<button type='button' class='scratchpad-recent-hide-btn' data-scratchpad-recent-action='hide' aria-label='Hide recent scratchpads' title='Hide recent scratchpads'>Hide</button>"
+          + "</div>";
         if (scratchpadRecentLoading) {
-          scratchpadRecentPanelEl.innerHTML = "<div class='scratchpad-recent-loading'>Loading recent scratchpads…</div>";
+          scratchpadRecentPanelEl.innerHTML = headerHtml + "<div class='scratchpad-recent-loading'>Loading recent scratchpads…</div>";
           return;
         }
         const currentKey = getCurrentStudioDocumentDescriptor().key;
         const entries = Array.isArray(scratchpadRecentEntries) ? scratchpadRecentEntries : [];
         if (!entries.length) {
-          scratchpadRecentPanelEl.innerHTML = "<div class='scratchpad-recent-empty'>No other saved scratchpads yet.</div>";
+          scratchpadRecentPanelEl.innerHTML = headerHtml + "<div class='scratchpad-recent-empty'>No other saved scratchpads yet.</div>";
           return;
         }
-        scratchpadRecentPanelEl.innerHTML = "<div class='scratchpad-recent-list'>" + entries.map((entry) => {
+        scratchpadRecentPanelEl.innerHTML = headerHtml + "<div class='scratchpad-recent-list'>" + entries.map((entry) => {
           const key = String(entry && entry.documentKey ? entry.documentKey : "");
           const isCurrent = key === currentKey;
           const label = String(entry && entry.label ? entry.label : key || "scratchpad");
@@ -13156,13 +13163,19 @@
         }
       }
 
+      function hideScratchpadRecentPanel() {
+        scratchpadRecentVisible = false;
+        renderScratchpadRecentPanel();
+        updateScratchpadUi();
+      }
+
       function toggleScratchpadRecentPanel() {
-        scratchpadRecentVisible = !scratchpadRecentVisible;
         if (scratchpadRecentVisible) {
-          void loadScratchpadRecentEntries();
-        } else {
-          renderScratchpadRecentPanel();
+          hideScratchpadRecentPanel();
+          return;
         }
+        scratchpadRecentVisible = true;
+        void loadScratchpadRecentEntries();
         updateScratchpadUi();
       }
 
@@ -13192,6 +13205,7 @@
             if (!confirmed) return;
           }
           setScratchpadText(text);
+          hideScratchpadRecentPanel();
           setStatus("Loaded recent scratchpad into current scratchpad.", "success");
         } catch (error) {
           setStatus("Could not use recent scratchpad: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
@@ -17491,6 +17505,9 @@
         if (scratchpadRecentBtn) {
           scratchpadRecentBtn.textContent = scratchpadRecentVisible ? "Hide recent" : "Recent…";
           scratchpadRecentBtn.setAttribute("aria-expanded", scratchpadRecentVisible ? "true" : "false");
+          scratchpadRecentBtn.title = scratchpadRecentVisible
+            ? "Hide recent scratchpads."
+            : "Show recent non-empty scratchpads saved for other files and drafts.";
         }
         if (scratchpadInsertBtn) scratchpadInsertBtn.disabled = !hasContent;
         if (scratchpadCopyBtn) scratchpadCopyBtn.disabled = !hasContent;
@@ -20050,7 +20067,12 @@
           const actionEl = target instanceof Element ? target.closest("[data-scratchpad-recent-action]") : null;
           if (!actionEl) return;
           event.preventDefault();
+          event.stopPropagation();
           const action = String(actionEl.getAttribute("data-scratchpad-recent-action") || "load");
+          if (action === "hide") {
+            hideScratchpadRecentPanel();
+            return;
+          }
           const key = String(actionEl.getAttribute("data-scratchpad-key") || "");
           void applyScratchpadRecentAction(action, key);
         });

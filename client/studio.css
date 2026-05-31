@@ -4081,6 +4081,39 @@
       display: none !important;
     }
 
+    .scratchpad-recent-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .scratchpad-recent-heading-group {
+      min-width: 0;
+    }
+
+    .scratchpad-recent-heading {
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .scratchpad-recent-subtitle {
+      margin-top: 2px;
+      color: var(--studio-info-text, var(--muted));
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .scratchpad-recent-hide-btn {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      font-size: 11px;
+      line-height: 1.1;
+    }
+
     .scratchpad-recent-empty,
     .scratchpad-recent-loading {
       color: var(--studio-info-text, var(--muted));
