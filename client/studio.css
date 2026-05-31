@@ -3112,9 +3112,9 @@
     }
 
     .trace-filter-btn.is-active {
-      border-color: var(--accent-soft-strong);
-      background: var(--panel);
-      color: var(--accent);
+      border-color: var(--control-border);
+      background: var(--panel-2);
+      color: var(--text);
       font-weight: 600;
     }
 
@@ -3152,16 +3152,16 @@
 
     .trace-entry-status.trace-entry-status-streaming,
     .trace-entry-status.trace-entry-status-pending {
-      color: var(--accent);
-      border-color: var(--accent-soft-strong);
-      background: var(--accent-soft);
+      color: color-mix(in srgb, var(--accent) 72%, var(--text));
+      border-color: var(--control-border);
+      background: transparent;
     }
 
     .trace-summary-status.trace-status-complete,
     .trace-entry-status.trace-entry-status-complete {
-      color: var(--ok);
-      border-color: var(--ok-border);
-      background: var(--ok-soft);
+      color: color-mix(in srgb, var(--ok) 68%, var(--text));
+      border-color: var(--control-border);
+      background: transparent;
     }
 
     .trace-entry-status.trace-entry-status-error {
