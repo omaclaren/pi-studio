@@ -569,6 +569,46 @@ const STUDIO_REPL_STATUS_TOOL_PARAMS = Type.Object({
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name to inspect." })),
 	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, or clojure. If omitted, report all Studio-visible REPL sessions." })),
 });
+const STUDIO_EXPORT_INPUT_FORMAT_DESCRIPTION = "Optional input format: auto, markdown, or latex. Defaults to auto.";
+const STUDIO_EXPORT_PDF_OPTIONS_TOOL_PARAMS = Type.Object({
+	fontsize: Type.Optional(Type.String({ description: "PDF body font size, e.g. 12pt." })),
+	margin: Type.Optional(Type.String({ description: "PDF page margin, e.g. 25mm." })),
+	marginTop: Type.Optional(Type.String({ description: "PDF top margin, e.g. 30mm." })),
+	marginRight: Type.Optional(Type.String({ description: "PDF right margin, e.g. 25mm." })),
+	marginBottom: Type.Optional(Type.String({ description: "PDF bottom margin, e.g. 30mm." })),
+	marginLeft: Type.Optional(Type.String({ description: "PDF left margin, e.g. 25mm." })),
+	footskip: Type.Optional(Type.String({ description: "PDF footer skip, e.g. 12mm." })),
+	linestretch: Type.Optional(Type.String({ description: "PDF line stretch, e.g. 1.2." })),
+	mainfont: Type.Optional(Type.String({ description: "PDF main font, e.g. TeX Gyre Pagella." })),
+	papersize: Type.Optional(Type.String({ description: "PDF paper size, e.g. a4 or letter." })),
+	geometry: Type.Optional(Type.String({ description: "Pandoc geometry spec. Use instead of margin fields." })),
+	sectionSize: Type.Optional(Type.String({ description: "PDF section heading size, e.g. 24pt." })),
+	subsectionSize: Type.Optional(Type.String({ description: "PDF subsection heading size, e.g. 18pt." })),
+	subsubsectionSize: Type.Optional(Type.String({ description: "PDF subsubsection heading size, e.g. 14pt." })),
+	sectionSpaceBefore: Type.Optional(Type.String({ description: "Space before section headings, e.g. 10mm." })),
+	sectionSpaceAfter: Type.Optional(Type.String({ description: "Space after section headings, e.g. 6mm." })),
+	subsectionSpaceBefore: Type.Optional(Type.String({ description: "Space before subsection headings, e.g. 8mm." })),
+	subsectionSpaceAfter: Type.Optional(Type.String({ description: "Space after subsection headings, e.g. 4mm." })),
+});
+const STUDIO_EXPORT_PDF_TOOL_PARAMS = Type.Object({
+	path: Type.Optional(Type.String({ description: "Local Markdown/LaTeX/code file to export. Omit to export markdown or the last model response." })),
+	markdown: Type.Optional(Type.String({ description: "Markdown or LaTeX content to export directly. Omit when exporting a file or the last model response." })),
+	outputPath: Type.Optional(Type.String({ description: "Output PDF path. Relative paths resolve against the current working directory." })),
+	resourceDir: Type.Optional(Type.String({ description: "Base directory for resolving relative images/assets when exporting direct markdown." })),
+	title: Type.Optional(Type.String({ description: "Title/source label for direct markdown exports." })),
+	inputFormat: Type.Optional(Type.String({ description: STUDIO_EXPORT_INPUT_FORMAT_DESCRIPTION })),
+	open: Type.Optional(Type.Boolean({ description: "Open the exported PDF locally after writing it. Defaults to false for tool use." })),
+	pdfOptions: Type.Optional(STUDIO_EXPORT_PDF_OPTIONS_TOOL_PARAMS),
+});
+const STUDIO_EXPORT_HTML_TOOL_PARAMS = Type.Object({
+	path: Type.Optional(Type.String({ description: "Local Markdown/LaTeX/code file to export. Omit to export markdown or the last model response." })),
+	markdown: Type.Optional(Type.String({ description: "Markdown or LaTeX content to export directly. Omit when exporting a file or the last model response." })),
+	outputPath: Type.Optional(Type.String({ description: "Output HTML path. Relative paths resolve against the current working directory." })),
+	resourceDir: Type.Optional(Type.String({ description: "Base directory for resolving relative images/assets when exporting direct markdown." })),
+	title: Type.Optional(Type.String({ description: "HTML document title/source label for direct markdown exports." })),
+	inputFormat: Type.Optional(Type.String({ description: STUDIO_EXPORT_INPUT_FORMAT_DESCRIPTION })),
+	open: Type.Optional(Type.Boolean({ description: "Open the exported HTML locally after writing it. Defaults to false for tool use." })),
+});
 const MAX_STUDIO_TRACE_SNAPSHOTS = RESPONSE_HISTORY_LIMIT;
 const TRANSIENT_STUDIO_DOCUMENT_TTL_MS = 30 * 60 * 1000;
 const MAX_TRANSIENT_STUDIO_DOCUMENTS = 16;
@@ -10532,6 +10572,48 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerTool({
+		name: "studio_export_pdf",
+		label: "Studio PDF export",
+		description: "Export Markdown/LaTeX content, a local file, or the last model response to PDF using the Studio PDF pipeline.",
+		promptSnippet: "Export Markdown/LaTeX, a local file, or the last model response to PDF with Studio's PDF pipeline.",
+		promptGuidelines: [
+			"Use studio_export_pdf when the user asks to make/export/render content as a PDF using Studio.",
+			"For remote or Telegram sessions, leave open=false and report the generated file path unless a separate upload/send-file tool is available.",
+			"Pass markdown directly when exporting content composed in the current assistant turn; omit markdown and path only when exporting the previous model response.",
+		],
+		parameters: STUDIO_EXPORT_PDF_TOOL_PARAMS,
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const result = await exportStudioPdfForTool(params, ctx);
+			return {
+				content: [{ type: "text", text: formatStudioExportToolText(result) }],
+				details: result as Record<string, unknown>,
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "studio_export_html",
+		label: "Studio HTML export",
+		description: "Export Markdown/LaTeX content, a local file, or the last model response to standalone HTML using the Studio preview pipeline.",
+		promptSnippet: "Export Markdown/LaTeX, a local file, or the last model response to standalone HTML with Studio's preview pipeline.",
+		promptGuidelines: [
+			"Use studio_export_html when the user asks to make/export/render content as HTML using Studio.",
+			"For remote or Telegram sessions, leave open=false and report the generated file path unless a separate upload/send-file tool is available.",
+			"Pass markdown directly when exporting content composed in the current assistant turn; omit markdown and path only when exporting the previous model response.",
+		],
+		parameters: STUDIO_EXPORT_HTML_TOOL_PARAMS,
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const result = await exportStudioHtmlForTool(params, ctx);
+			return {
+				content: [{ type: "text", text: formatStudioExportToolText(result) }],
+				details: result as Record<string, unknown>,
+			};
+		},
+	});
+
 	const isStudioDirectRunChainActive = () => Boolean(studioDirectRunChain);
 	const getQueuedStudioSteeringCount = () => queuedStudioDirectRequests.length;
 	const getStudioClientCounts = (): { full: number; editorOnly: number } => {
@@ -14265,7 +14347,7 @@ export default function (pi: ExtensionAPI) {
 		};
 	};
 
-	const resolveLastModelResponseForExport = (ctx: ExtensionCommandContext): { markdown: string } | null => {
+	const resolveLastModelResponseForExport = (ctx: ExtensionContext): { markdown: string } | null => {
 		const branchEntries = ctx.sessionManager.getBranch();
 		syncStudioResponseHistory(branchEntries);
 		const markdown =
@@ -14274,6 +14356,244 @@ export default function (pi: ExtensionAPI) {
 				?? lastStudioResponse?.markdown
 				?? "";
 		return markdown.trim() ? { markdown } : null;
+	};
+
+	type StudioExportInputFormat = "auto" | "markdown" | "latex";
+	type StudioExportCommonToolParams = {
+		path?: string;
+		markdown?: string;
+		outputPath?: string;
+		resourceDir?: string;
+		title?: string;
+		inputFormat?: string;
+		open?: boolean;
+	};
+	type StudioExportPdfToolParams = StudioExportCommonToolParams & { pdfOptions?: StudioPdfRenderOptions };
+	type StudioExportSource = {
+		text: string;
+		sourceLabel: string;
+		sourcePath?: string;
+		resourcePath: string;
+		outputPath: string;
+		inputFormat: StudioExportInputFormat;
+	};
+	type StudioExportResult = {
+		ok: boolean;
+		format: "pdf" | "html";
+		path?: string;
+		source?: string;
+		bytes?: number;
+		warning?: string;
+		openError?: string;
+		error?: string;
+	};
+
+	const parseStudioExportInputFormat = (value: unknown): StudioExportInputFormat | { error: string } => {
+		const normalized = String(value ?? "auto").trim().toLowerCase();
+		if (!normalized || normalized === "auto") return "auto";
+		if (normalized === "markdown" || normalized === "md") return "markdown";
+		if (normalized === "latex" || normalized === "tex") return "latex";
+		return { error: "Invalid inputFormat. Use auto, markdown, or latex." };
+	};
+
+	const resolveStudioExportOutputPath = (outputPath: string | undefined, cwd: string): string | null => {
+		const raw = typeof outputPath === "string" ? outputPath.trim() : "";
+		if (!raw) return null;
+		const resolved = resolveStudioPath(raw, cwd);
+		return resolved.ok ? resolved.resolved : null;
+	};
+
+	const validateStudioPdfOptionsForTool = (input: StudioPdfRenderOptions | undefined): StudioPdfRenderOptions | { error: string } => {
+		if (!input || typeof input !== "object") return {};
+		const options: StudioPdfRenderOptions = {};
+		const setOption = (key: keyof StudioPdfRenderOptions, value: string) => {
+			(options as Record<string, string>)[key] = value;
+		};
+		const requireLength = (key: keyof StudioPdfRenderOptions, label: string, example: string): { error: string } | null => {
+			const value = String(input[key] ?? "").trim();
+			if (!value) return null;
+			if (!isValidStudioPdfLength(value)) return { error: `Invalid ${label} value. Example: ${example}` };
+			setOption(key, value);
+			return null;
+		};
+		for (const [key, label, example] of [
+			["fontsize", "fontsize", "12pt"],
+			["sectionSize", "sectionSize", "24pt"],
+			["subsectionSize", "subsectionSize", "18pt"],
+			["subsubsectionSize", "subsubsectionSize", "14pt"],
+			["sectionSpaceBefore", "sectionSpaceBefore", "10mm"],
+			["sectionSpaceAfter", "sectionSpaceAfter", "6mm"],
+			["subsectionSpaceBefore", "subsectionSpaceBefore", "8mm"],
+			["subsectionSpaceAfter", "subsectionSpaceAfter", "4mm"],
+			["margin", "margin", "25mm"],
+			["marginTop", "marginTop", "30mm"],
+			["marginRight", "marginRight", "25mm"],
+			["marginBottom", "marginBottom", "30mm"],
+			["marginLeft", "marginLeft", "25mm"],
+			["footskip", "footskip", "12mm"],
+		] as Array<[keyof StudioPdfRenderOptions, string, string]>) {
+			const error = requireLength(key, label, example);
+			if (error) return error;
+		}
+		const linestretch = String(input.linestretch ?? "").trim();
+		if (linestretch) {
+			if (!isValidStudioPdfLineStretch(linestretch)) return { error: "Invalid linestretch value. Example: 1.2" };
+			options.linestretch = linestretch;
+		}
+		const papersize = String(input.papersize ?? "").trim();
+		if (papersize) {
+			if (!isValidStudioPdfPaperSize(papersize)) return { error: "Invalid papersize value. Example: a4" };
+			options.papersize = papersize;
+		}
+		const mainfont = sanitizeStudioPdfFreeformOption(String(input.mainfont ?? ""));
+		if (mainfont) options.mainfont = mainfont;
+		const geometry = sanitizeStudioPdfFreeformOption(String(input.geometry ?? ""));
+		if (geometry) options.geometry = geometry;
+		if (options.geometry && (options.margin || options.marginTop || options.marginRight || options.marginBottom || options.marginLeft || options.footskip)) {
+			return { error: "Use either geometry or the margin/margin*/footskip options, not both." };
+		}
+		return options;
+	};
+
+	const resolveStudioExportSource = (
+		params: StudioExportCommonToolParams,
+		ctx: ExtensionContext,
+		format: "pdf" | "html",
+	): StudioExportSource | { error: string } => {
+		const inputFormat = parseStudioExportInputFormat(params.inputFormat);
+		if (typeof inputFormat !== "string") return inputFormat;
+		const pathArg = String(params.path ?? "").trim();
+		const directMarkdown = typeof params.markdown === "string" ? params.markdown : "";
+		const hasDirectMarkdown = directMarkdown.trim().length > 0;
+		if (pathArg && hasDirectMarkdown) return { error: "Use either path or markdown, not both." };
+
+		if (hasDirectMarkdown) {
+			const outputPath = resolveStudioExportOutputPath(params.outputPath, ctx.cwd)
+				?? buildStudioResponseExportOutputPath(ctx.cwd, format);
+			const title = String(params.title ?? "").trim();
+			return {
+				text: directMarkdown,
+				sourceLabel: title || "provided markdown",
+				resourcePath: resolveStudioBaseDir(undefined, params.resourceDir, ctx.cwd),
+				outputPath,
+				inputFormat,
+			};
+		}
+
+		if (pathArg) {
+			const file = readStudioFile(pathArg, ctx.cwd);
+			if (file.ok === false) return { error: file.message };
+			const outputPath = resolveStudioExportOutputPath(params.outputPath, ctx.cwd)
+				?? (format === "pdf" ? buildStudioPdfOutputPath(file.resolvedPath) : buildStudioHtmlOutputPath(file.resolvedPath));
+			return {
+				text: file.text,
+				sourceLabel: file.label,
+				sourcePath: file.resolvedPath,
+				resourcePath: resolveStudioBaseDir(file.resolvedPath, params.resourceDir, ctx.cwd),
+				outputPath,
+				inputFormat,
+			};
+		}
+
+		const response = resolveLastModelResponseForExport(ctx);
+		if (!response) return { error: "No last model response to export. Provide path or markdown, or run a prompt first." };
+		return {
+			text: response.markdown,
+			sourceLabel: "last model response",
+			resourcePath: resolveStudioBaseDir(undefined, params.resourceDir, ctx.cwd),
+			outputPath: resolveStudioExportOutputPath(params.outputPath, ctx.cwd) ?? buildStudioResponseExportOutputPath(ctx.cwd, format),
+			inputFormat,
+		};
+	};
+
+	const resolveStudioExportLanguage = (source: StudioExportSource): string | undefined => {
+		if (source.inputFormat === "latex") return "latex";
+		if (source.inputFormat === "markdown") return "markdown";
+		return (source.sourcePath ? inferStudioPdfLanguageFromPath(source.sourcePath) : undefined)
+			?? inferStudioPdfLanguage(source.text);
+	};
+
+	const maybeOpenStudioExportPath = async (path: string, open: boolean | undefined): Promise<string | null> => {
+		if (!open) return null;
+		try {
+			await openPathInDefaultViewer(path);
+			return null;
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	};
+
+	const formatStudioExportToolText = (result: StudioExportResult): string => {
+		if (!result.ok) return result.error ?? "Studio export failed.";
+		const lines = [`Exported Studio ${result.format.toUpperCase()}: ${result.path}`];
+		if (result.source) lines.push(`Source: ${result.source}`);
+		if (result.bytes != null) lines.push(`Bytes: ${result.bytes}`);
+		if (result.warning) lines.push(`Warning: ${result.warning}`);
+		if (result.openError) lines.push(`Open warning: ${result.openError}`);
+		return lines.join("\n");
+	};
+
+	const exportStudioPdfForTool = async (params: StudioExportPdfToolParams, ctx: ExtensionContext): Promise<StudioExportResult> => {
+		const source = resolveStudioExportSource(params, ctx, "pdf");
+		if ("error" in source) return { ok: false, format: "pdf", error: source.error };
+		if (source.text.length > PDF_EXPORT_MAX_CHARS) return { ok: false, format: "pdf", error: `PDF export text exceeds ${PDF_EXPORT_MAX_CHARS} characters.` };
+		const pdfOptions = validateStudioPdfOptionsForTool(params.pdfOptions);
+		if ("error" in pdfOptions) return { ok: false, format: "pdf", error: pdfOptions.error };
+		const editorPdfLanguage = resolveStudioExportLanguage(source);
+		const isLatex = editorPdfLanguage === "latex"
+			|| (
+				source.inputFormat !== "markdown"
+				&& (editorPdfLanguage === undefined || editorPdfLanguage === "markdown")
+				&& /\\documentclass\b|\\begin\{document\}/.test(source.text)
+			);
+		try {
+			const { pdf, warning } = await renderStudioPdfWithPandoc(
+				source.text,
+				isLatex,
+				source.resourcePath,
+				editorPdfLanguage,
+				source.sourcePath,
+				pdfOptions,
+			);
+			await writeFile(source.outputPath, pdf);
+			const openError = await maybeOpenStudioExportPath(source.outputPath, params.open);
+			return { ok: true, format: "pdf", path: source.outputPath, source: source.sourceLabel, bytes: pdf.length, warning, openError: openError ?? undefined };
+		} catch (error) {
+			return { ok: false, format: "pdf", error: `Studio PDF export failed: ${error instanceof Error ? error.message : String(error)}` };
+		}
+	};
+
+	const exportStudioHtmlForTool = async (params: StudioExportCommonToolParams, ctx: ExtensionContext): Promise<StudioExportResult> => {
+		const source = resolveStudioExportSource(params, ctx, "html");
+		if ("error" in source) return { ok: false, format: "html", error: source.error };
+		if (source.text.length > HTML_EXPORT_MAX_CHARS) return { ok: false, format: "html", error: `HTML export text exceeds ${HTML_EXPORT_MAX_CHARS} characters.` };
+		const editorHtmlLanguage = resolveStudioExportLanguage(source);
+		const isLatex = editorHtmlLanguage === "latex"
+			|| (
+				source.inputFormat !== "markdown"
+				&& (editorHtmlLanguage === undefined || editorHtmlLanguage === "markdown")
+				&& isLikelyStandaloneLatexPreview(source.text)
+			);
+		try {
+			const themeVars = buildThemeCssVars(getStudioThemeStyle(ctx.ui.theme));
+			const { html, warning } = await renderStudioStandaloneHtmlWithPandoc(
+				source.text,
+				isLatex,
+				source.resourcePath,
+				editorHtmlLanguage,
+				source.sourcePath,
+				{
+					title: String(params.title ?? "").trim() || basename(source.outputPath),
+					sourceLabel: source.sourcePath ?? source.sourceLabel,
+					themeVars,
+				},
+			);
+			await writeFile(source.outputPath, html);
+			const openError = await maybeOpenStudioExportPath(source.outputPath, params.open);
+			return { ok: true, format: "html", path: source.outputPath, source: source.sourceLabel, bytes: html.length, warning, openError: openError ?? undefined };
+		} catch (error) {
+			return { ok: false, format: "html", error: `Studio HTML export failed: ${error instanceof Error ? error.message : String(error)}` };
+		}
 	};
 
 	const openStudioView = async (

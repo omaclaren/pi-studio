@@ -5,6 +5,7 @@ All notable changes to `pi-studio` are documented here.
 ## [Unreleased]
 
 ### Added
+- Added `studio_export_pdf` and `studio_export_html` agent tools so Pi can export direct Markdown/LaTeX, local files, or the last model response without the slash-command path.
 - Added a Source & context status note explaining that Studio branch history follows the current Pi branch while editor text stays independent.
 - Added an in-panel **Hide** control for Scratchpad Recent recovery.
 
