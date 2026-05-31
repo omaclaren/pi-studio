@@ -2,6 +2,11 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [Unreleased]
+
+### Changed
+- Studio now treats Pi `/tree` navigation as an explicit response-history sync: it preserves the selected response only when that response still exists on the new branch, otherwise selects the latest response on the current branch and shows a status note that editor text was left unchanged.
+
 ## [0.9.22] — 2026-05-29
 
 ### Added

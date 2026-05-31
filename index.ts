@@ -10935,10 +10935,11 @@ export default function (pi: ExtensionAPI) {
 		};
 	};
 
-	const broadcastResponseHistory = () => {
+	const broadcastResponseHistory = (extra?: Record<string, unknown>) => {
 		broadcast({
 			type: "response_history",
 			items: studioResponseHistory,
+			...(extra ?? {}),
 		});
 	};
 
@@ -13841,13 +13842,32 @@ export default function (pi: ExtensionAPI) {
 	});
 
 
-	pi.on("session_tree", async (_event, ctx) => {
+	pi.on("session_tree", async (event, ctx) => {
 		latestModelRequestCtx = ctx;
-		hydrateLatestAssistant(ctx.sessionManager.getBranch());
+		const branchEntries = ctx.sessionManager.getBranch();
+		hydrateLatestAssistant(branchEntries);
 		refreshRuntimeMetadata({ cwd: ctx.cwd, model: ctx.model });
 		refreshContextUsage(ctx);
-		broadcastResponseHistory();
+		emitDebugEvent("session_tree", {
+			oldLeafId: event.oldLeafId ?? null,
+			newLeafId: event.newLeafId ?? null,
+			branchEntryCount: branchEntries.length,
+			responseHistoryCount: studioResponseHistory.length,
+		});
+		broadcastResponseHistory({
+			reason: "tree",
+			oldLeafId: event.oldLeafId ?? null,
+			newLeafId: event.newLeafId ?? null,
+			responseHistoryCount: studioResponseHistory.length,
+		});
 		broadcastState();
+		broadcast({
+			type: "info",
+			level: "info",
+			message: studioResponseHistory.length > 0
+				? "Pi session tree changed; Studio response history now follows the current branch. Editor text was left unchanged."
+				: "Pi session tree changed; this branch has no assistant responses yet. Editor text was left unchanged.",
+		});
 	});
 
 	pi.on("model_select", async (event, ctx) => {

@@ -18451,9 +18451,10 @@
         }
 
         if (message.type === "response_history") {
+          const isTreeSync = message.reason === "tree";
           setResponseHistory(message.items, {
-            autoSelectLatest: followLatest,
-            preserveSelection: !followLatest,
+            autoSelectLatest: isTreeSync ? true : followLatest,
+            preserveSelection: isTreeSync ? true : !followLatest,
             silent: true,
           });
           return;
