@@ -2,7 +2,7 @@
 
 All notable changes to `pi-studio` are documented here.
 
-## [Unreleased]
+## [0.9.25] — 2026-06-01
 
 ### Changed
 - Render common Working-view tool inputs more readably, with summaries for edit/write/read/bash calls and raw inputs available behind collapsible details.
