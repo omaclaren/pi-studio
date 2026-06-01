@@ -3549,6 +3549,118 @@
       background: var(--panel);
     }
 
+    .trace-tool-input {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .trace-tool-fields {
+      display: grid;
+      gap: 5px;
+      padding: 8px 9px;
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .trace-tool-field {
+      display: grid;
+      grid-template-columns: minmax(58px, auto) minmax(0, 1fr);
+      gap: 8px;
+      align-items: baseline;
+      min-width: 0;
+      font-size: 12px;
+    }
+
+    .trace-tool-field-label,
+    .trace-tool-code-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .trace-tool-field-value {
+      min-width: 0;
+      color: var(--text);
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .trace-tool-path {
+      color: var(--studio-info-text, var(--muted));
+    }
+
+    .trace-tool-change-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .trace-tool-details {
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .trace-tool-details > summary {
+      cursor: pointer;
+      user-select: none;
+      padding: 7px 9px;
+      color: var(--studio-info-text, var(--muted));
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+
+    .trace-tool-details[open] > summary {
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--panel-2);
+    }
+
+    .trace-tool-details-body,
+    .trace-tool-change-body {
+      padding: 8px;
+    }
+
+    .trace-tool-change-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 8px;
+    }
+
+    .trace-tool-change-column {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .trace-tool-input-command > .trace-output,
+    .trace-tool-details-body .trace-output,
+    .trace-tool-change-column .trace-output {
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .trace-tool-raw-input > summary {
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    @container (max-width: 720px) {
+      .trace-tool-change-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .trace-image-gallery {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));

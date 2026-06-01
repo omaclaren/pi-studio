@@ -9018,6 +9018,166 @@
           + "</div>";
       }
 
+      function parseTraceToolArgsObject(inputText) {
+        const value = String(inputText || "").trim();
+        if (!value || (value[0] !== "{" && value[0] !== "[")) return null;
+        try {
+          const parsed = JSON.parse(value);
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+        } catch {
+          return null;
+        }
+      }
+
+      function countTraceTextLines(text) {
+        const value = String(text || "");
+        return value ? value.split(/\n/).length : 0;
+      }
+
+      function formatTraceTextMetrics(text) {
+        const value = String(text || "");
+        const lines = countTraceTextLines(value);
+        const chars = value.length;
+        return formatCompactNumber(lines) + " line" + (lines === 1 ? "" : "s")
+          + ", " + formatCompactNumber(chars) + " char" + (chars === 1 ? "" : "s");
+      }
+
+      function renderTraceToolField(label, value, className) {
+        const text = String(value || "").trim();
+        if (!text) return "";
+        const extraClass = className ? " " + String(className) : "";
+        return "<div class='trace-tool-field'>"
+          + "<span class='trace-tool-field-label'>" + escapeHtml(label) + "</span>"
+          + "<code class='trace-tool-field-value" + extraClass + "' title='" + escapeHtml(text) + "'>" + escapeHtml(text) + "</code>"
+          + "</div>";
+      }
+
+      function renderTraceRawInputDetails(inputText, outputKey) {
+        const value = String(inputText || "").trim();
+        if (!value) return "";
+        const rawKey = outputKey + ":raw-input";
+        const openAttr = traceExpandedOutputs.has(rawKey) ? " open" : "";
+        return "<details class='trace-tool-details trace-tool-raw-input'" + openAttr + ">"
+          + "<summary>Raw input</summary>"
+          + "<div class='trace-tool-details-body'>"
+          + renderTraceOutput(value, rawKey, { label: "Raw input" })
+          + "</div>"
+          + "</details>";
+      }
+
+      function renderTraceToolTextDetails(summary, text, outputKey, label, options) {
+        const value = String(text || "");
+        const emptyText = options && typeof options.emptyText === "string" ? options.emptyText : "[empty]";
+        const openAttr = traceExpandedOutputs.has(outputKey) ? " open" : "";
+        return "<details class='trace-tool-details" + (options && options.className ? " " + escapeHtml(options.className) : "") + "'" + openAttr + ">"
+          + "<summary>" + escapeHtml(summary) + "</summary>"
+          + "<div class='trace-tool-details-body'>"
+          + renderTraceOutput(value || emptyText, outputKey, { label })
+          + "</div>"
+          + "</details>";
+      }
+
+      function renderTraceEditInput(entry, payload, inputText) {
+        const path = payload && typeof payload.path === "string" ? payload.path : "";
+        const edits = payload && Array.isArray(payload.edits) ? payload.edits : [];
+        const replacements = edits
+          .map((edit, index) => {
+            const item = edit && typeof edit === "object" ? edit : {};
+            return {
+              index,
+              oldText: typeof item.oldText === "string" ? item.oldText : "",
+              newText: typeof item.newText === "string" ? item.newText : "",
+            };
+          })
+          .filter((edit) => edit.oldText || edit.newText);
+        const replacementCount = replacements.length || edits.length;
+        const fields = "<div class='trace-tool-fields'>"
+          + renderTraceToolField("Path", path, "trace-tool-path")
+          + renderTraceToolField("Changes", replacementCount + " replacement" + (replacementCount === 1 ? "" : "s"), "")
+          + "</div>";
+        const changes = replacements.length
+          ? "<div class='trace-tool-change-list'>" + replacements.map((edit, displayIndex) => {
+            const oldMetrics = formatTraceTextMetrics(edit.oldText);
+            const newMetrics = formatTraceTextMetrics(edit.newText);
+            const oldKey = entry.id + ":edit:" + edit.index + ":old";
+            const newKey = entry.id + ":edit:" + edit.index + ":new";
+            const openAttr = traceExpandedOutputs.has(oldKey) || traceExpandedOutputs.has(newKey) ? " open" : "";
+            return "<details class='trace-tool-details trace-tool-change'" + openAttr + ">"
+              + "<summary>Replacement " + escapeHtml(String(displayIndex + 1)) + " · " + escapeHtml(oldMetrics) + " → " + escapeHtml(newMetrics) + "</summary>"
+              + "<div class='trace-tool-change-body'>"
+              + "<div class='trace-tool-change-grid'>"
+              + "<div class='trace-tool-change-column'><div class='trace-tool-code-label'>Old text</div>"
+              + renderTraceOutput(edit.oldText || "[empty]", oldKey, { label: "Old text" })
+              + "</div>"
+              + "<div class='trace-tool-change-column'><div class='trace-tool-code-label'>New text</div>"
+              + renderTraceOutput(edit.newText || "[empty]", newKey, { label: "New text" })
+              + "</div>"
+              + "</div>"
+              + "</div>"
+              + "</details>";
+          }).join("") + "</div>"
+          : "";
+        return "<div class='trace-tool-input trace-tool-input-edit'>"
+          + fields
+          + changes
+          + renderTraceRawInputDetails(inputText, entry.id + ":input")
+          + "</div>";
+      }
+
+      function renderTraceWriteInput(entry, payload, inputText) {
+        const path = payload && typeof payload.path === "string" ? payload.path : "";
+        const content = payload && typeof payload.content === "string" ? payload.content : null;
+        const fields = "<div class='trace-tool-fields'>"
+          + renderTraceToolField("Path", path, "trace-tool-path")
+          + (content !== null ? renderTraceToolField("Content", formatTraceTextMetrics(content), "") : "")
+          + "</div>";
+        const contentDetails = content !== null
+          ? renderTraceToolTextDetails("Content · " + formatTraceTextMetrics(content), content, entry.id + ":write:content", "Content", { className: "trace-tool-content" })
+          : "";
+        return "<div class='trace-tool-input trace-tool-input-write'>"
+          + fields
+          + contentDetails
+          + renderTraceRawInputDetails(inputText, entry.id + ":input")
+          + "</div>";
+      }
+
+      function renderTraceReadInput(entry, payload, inputText) {
+        const path = payload && typeof payload.path === "string" ? payload.path : "";
+        const offset = payload && (typeof payload.offset === "number" || typeof payload.offset === "string") ? String(payload.offset) : "";
+        const limit = payload && (typeof payload.limit === "number" || typeof payload.limit === "string") ? String(payload.limit) : "";
+        const fields = "<div class='trace-tool-fields'>"
+          + renderTraceToolField("Path", path, "trace-tool-path")
+          + renderTraceToolField("Offset", offset ? "line " + offset : "", "")
+          + renderTraceToolField("Limit", limit ? limit + " lines" : "", "")
+          + "</div>";
+        return "<div class='trace-tool-input trace-tool-input-read'>"
+          + fields
+          + renderTraceRawInputDetails(inputText, entry.id + ":input")
+          + "</div>";
+      }
+
+      function renderTraceCommandInput(entry, inputText, label) {
+        const value = String(inputText || "").trim();
+        if (!value) return "";
+        return "<div class='trace-tool-input trace-tool-input-command'>"
+          + "<div class='trace-tool-code-label'>" + escapeHtml(label || "Command") + "</div>"
+          + renderTraceOutput(value, entry.id + ":input", { label: label || "Command" })
+          + "</div>";
+      }
+
+      function renderTraceToolInput(entry) {
+        const inputText = String(entry.args || entry.argsSummary || "").trim();
+        if (!inputText) return "";
+        const toolName = String(entry.toolName || "").trim().toLowerCase();
+        if (toolName === "bash") return renderTraceCommandInput(entry, inputText, "Command");
+        if (toolName === "repl_send" || toolName === "studio_repl_send") return renderTraceCommandInput(entry, inputText, "Code");
+        const payload = parseTraceToolArgsObject(inputText);
+        if (payload && toolName === "edit") return renderTraceEditInput(entry, payload, inputText);
+        if (payload && toolName === "write") return renderTraceWriteInput(entry, payload, inputText);
+        if (payload && toolName === "read") return renderTraceReadInput(entry, payload, inputText);
+        return renderTraceOutput(inputText, entry.id + ":input", { label: "Input" });
+      }
+
       function renderTraceImages(images) {
         const normalizedImages = Array.isArray(images)
           ? images.map((image, index) => normalizeTraceImage(image, index)).filter(Boolean)
@@ -9382,9 +9542,9 @@
           }
 
           const title = entry.label || entry.toolName || "tool";
-          const inputText = entry.args || entry.argsSummary || "";
-          const argsSummary = inputText
-            ? "<div class='trace-section trace-section-input'><div class='trace-section-label'>Input</div>" + renderTraceOutput(inputText, entry.id + ":input", { label: "Input" }) + "</div>"
+          const inputHtml = renderTraceToolInput(entry);
+          const argsSummary = inputHtml
+            ? "<div class='trace-section trace-section-input'><div class='trace-section-label'>Input</div>" + inputHtml + "</div>"
             : "";
           const imageOutput = renderTraceImages(entry.images);
           const outputPieces = [];
