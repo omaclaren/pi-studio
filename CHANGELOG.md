@@ -2,7 +2,7 @@
 
 All notable changes to `pi-studio` are documented here.
 
-## [Unreleased]
+## [0.9.24] — 2026-06-01
 
 ### Added
 - Added a read-only **Changes** right-pane view with changed-file list, per-file diff preview, refresh, open-file, load-diff, and copy-diff actions.
