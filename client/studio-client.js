@@ -110,7 +110,6 @@
       const openCompanionBtn = document.getElementById("openCompanionBtn");
       const getEditorBtn = document.getElementById("getEditorBtn");
       const zenModeBtn = document.getElementById("zenModeBtn");
-      const loadGitDiffBtn = document.getElementById("loadGitDiffBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
       const queueSteerBtn = document.getElementById("queueSteerBtn");
       const sendReplBtn = document.getElementById("sendReplBtn");
@@ -249,8 +248,10 @@
               ? "repl"
               : (raw === "files"
                 ? "files"
-                : ((raw === "trace" || raw === "thinking") ? "trace" : "markdown"))));
-        if (isEditorOnlyMode && normalized !== "editor-preview" && normalized !== "files" && normalized !== "repl") {
+                : (raw === "changes"
+                  ? "changes"
+                  : ((raw === "trace" || raw === "thinking") ? "trace" : "markdown")))));
+        if (isEditorOnlyMode && normalized !== "editor-preview" && normalized !== "files" && normalized !== "changes" && normalized !== "repl") {
           return "editor-preview";
         }
         return normalized;
@@ -258,13 +259,13 @@
 
       function syncRightViewModeOptions() {
         if (!rightViewSelect || !rightViewSelect.options) return;
-        const editorOnlyAllowed = new Set(["editor-preview", "files", "repl"]);
+        const editorOnlyAllowed = new Set(["editor-preview", "files", "changes", "repl"]);
         Array.from(rightViewSelect.options).forEach((option) => {
           if (!option) return;
           option.disabled = isEditorOnlyMode && !editorOnlyAllowed.has(option.value);
         });
         rightViewSelect.title = isEditorOnlyMode
-          ? "Editor-only views: editor preview, Files, or REPL. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview."
+          ? "Editor-only views: editor preview, Changes, Files, or REPL. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview."
           : "Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview.";
       }
 
@@ -297,6 +298,19 @@
       let traceAutoScroll = true;
       let traceRenderRaf = null;
       const traceExpandedOutputs = new Set();
+      let gitChangesState = {
+        status: "idle",
+        requestId: null,
+        content: "",
+        label: "",
+        repoRoot: "",
+        branch: "",
+        hasHead: true,
+        files: [],
+        selectedPath: "",
+        message: "",
+        level: "info",
+      };
       const TRACE_OUTPUT_PREVIEW_MAX_LINES = 50;
       const TRACE_OUTPUT_PREVIEW_MAX_CHARS = 8000;
       const TRACE_IMAGE_SAFE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -4348,6 +4362,14 @@
           return;
         }
 
+        if (rightView === "changes") {
+          const count = getGitChangedFiles().length;
+          referenceBadgeEl.textContent = gitChangesState.status === "loading"
+            ? "Changes: loading"
+            : (count ? ("Changes: " + count + " file" + (count === 1 ? "" : "s")) : "Changes: none");
+          return;
+        }
+
         if (rightView === "trace") {
           const state = traceState || createEmptyTraceState();
           const context = traceDisplayContext || {};
@@ -7799,6 +7821,7 @@
         critiqueViewEl.addEventListener("click", handleTracePaneClick);
         critiqueViewEl.addEventListener("click", handleReplPaneClick);
         critiqueViewEl.addEventListener("click", handleFilesPaneClick);
+        critiqueViewEl.addEventListener("click", handleGitChangesPaneClick);
         critiqueViewEl.addEventListener("change", handleReplPaneChange);
       }
 
@@ -9713,7 +9736,222 @@
         }
       }
 
+      function getGitChangesContext() {
+        return getHtmlPreviewResourceContextOptions();
+      }
+
+      function getGitChangedFiles() {
+        return Array.isArray(gitChangesState.files) ? gitChangesState.files : [];
+      }
+
+      function getSelectedGitChangedFile() {
+        const files = getGitChangedFiles();
+        if (!files.length) return null;
+        const selectedPath = String(gitChangesState.selectedPath || "");
+        return files.find((file) => String(file.path || "") === selectedPath) || files[0] || null;
+      }
+
+      function getGitChangeStatusLabel(status) {
+        if (status === "untracked") return "Untracked";
+        if (status === "added") return "Added";
+        if (status === "deleted") return "Deleted";
+        if (status === "renamed") return "Renamed";
+        if (status === "binary") return "Binary";
+        return "Modified";
+      }
+
+      function getGitChangeStatusIcon(status) {
+        if (status === "untracked") return "??";
+        if (status === "added") return "A";
+        if (status === "deleted") return "D";
+        if (status === "renamed") return "R";
+        if (status === "binary") return "BIN";
+        return "M";
+      }
+
+      function buildGitChangesDiffHtml(diffText) {
+        const lines = String(diffText || "").split("\n");
+        return "<pre class='git-changes-diff'><code>" + lines.map((line) => {
+          let cls = "git-changes-line";
+          if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git") || line.startsWith("@@")) {
+            cls += " git-changes-line-meta";
+          } else if (line.startsWith("+")) {
+            cls += " git-changes-line-add";
+          } else if (line.startsWith("-")) {
+            cls += " git-changes-line-del";
+          }
+          return "<span class='" + cls + "'>" + escapeHtml(line || " ") + "</span>";
+        }).join("\n") + "</code></pre>";
+      }
+
+      function buildGitChangesPanelHtml() {
+        const files = getGitChangedFiles();
+        const selected = getSelectedGitChangedFile();
+        const isLoading = gitChangesState.status === "loading";
+        const hasError = gitChangesState.status === "error";
+        const label = gitChangesState.label || (files.length ? (files.length + " changed") : "Git changes");
+        const branch = gitChangesState.branch || "";
+        const repoRoot = gitChangesState.repoRoot || "";
+        const subtitleParts = [];
+        subtitleParts.push(label);
+        if (branch) subtitleParts.push((gitChangesState.hasHead === false ? "No commits yet on " : "on ") + branch);
+        const rows = files.length
+          ? files.map((file) => {
+            const path = String(file.path || "");
+            const status = String(file.status || "modified");
+            const isSelected = selected && String(selected.path || "") === path;
+            const stats = (Number(file.additions) || 0) || (Number(file.deletions) || 0)
+              ? "<span class='git-changes-stats'><span class='git-changes-additions'>+" + escapeHtml(String(Number(file.additions) || 0)) + "</span><span class='git-changes-deletions'>−" + escapeHtml(String(Number(file.deletions) || 0)) + "</span></span>"
+              : "";
+            return "<button type='button' class='git-changes-file" + (isSelected ? " is-selected" : "") + "' data-git-change-action='select' data-git-change-path='" + escapeHtml(path) + "' title='" + escapeHtml(path) + "'>"
+              + "<span class='git-changes-file-icon git-changes-file-icon-" + escapeHtml(status) + "'>" + escapeHtml(getGitChangeStatusIcon(status)) + "</span>"
+              + "<span class='git-changes-file-name'>" + escapeHtml(path) + "</span>"
+              + "<span class='git-changes-file-status'>" + escapeHtml(getGitChangeStatusLabel(status)) + "</span>"
+              + stats
+              + "</button>";
+          }).join("")
+          : "<div class='git-changes-empty'>" + escapeHtml(isLoading ? "Loading git changes…" : (gitChangesState.message || "No uncommitted git changes.")) + "</div>";
+        const selectedDiff = selected && selected.diff ? String(selected.diff) : String(gitChangesState.content || "");
+        const selectedStatus = selected ? String(selected.status || "modified") : "";
+        const selectedCanOpen = selected && selectedStatus !== "deleted" && gitChangesState.repoRoot;
+        const selectedAbsPath = selectedCanOpen ? String(gitChangesState.repoRoot).replace(/\/$/, "") + "/" + String(selected.path || "") : "";
+        const notice = hasError && gitChangesState.message
+          ? "<div class='git-changes-notice git-changes-notice-" + escapeHtml(gitChangesState.level || "warning") + "'>" + escapeHtml(gitChangesState.message) + "</div>"
+          : "";
+        return "<div class='git-changes-panel'>"
+          + "<div class='git-changes-toolbar'>"
+          + "<div class='git-changes-title-group'>"
+          + "<div class='git-changes-title'>Git changes</div>"
+          + "<div class='git-changes-subtitle'>" + escapeHtml(subtitleParts.filter(Boolean).join(" · ")) + "</div>"
+          + (repoRoot ? "<div class='git-changes-root' title='" + escapeHtml(repoRoot) + "'>" + escapeHtml(repoRoot) + "</div>" : "")
+          + "</div>"
+          + "<div class='git-changes-actions'>"
+          + "<button type='button' data-git-change-action='refresh'" + (isLoading ? " disabled" : "") + ">Refresh</button>"
+          + "<button type='button' data-git-change-action='open' data-git-change-abs-path='" + escapeHtml(selectedAbsPath) + "'" + (selectedCanOpen ? "" : " disabled") + ">Open file</button>"
+          + "<button type='button' data-git-change-action='load'" + (gitChangesState.content ? "" : " disabled") + ">Load diff</button>"
+          + "<button type='button' data-git-change-action='copy'" + (gitChangesState.content ? "" : " disabled") + ">Copy diff</button>"
+          + "</div>"
+          + "</div>"
+          + notice
+          + "<div class='git-changes-body'>"
+          + "<div class='git-changes-file-list' role='list'>" + rows + "</div>"
+          + "<div class='git-changes-diff-pane'>" + (selectedDiff ? buildGitChangesDiffHtml(selectedDiff) : "<div class='git-changes-empty'>Select a changed file.</div>") + "</div>"
+          + "</div>"
+          + "</div>";
+      }
+
+      function getGitChangesScrollSnapshot() {
+        if (!critiqueViewEl) return null;
+        const fileListEl = critiqueViewEl.querySelector(".git-changes-file-list");
+        const diffPaneEl = critiqueViewEl.querySelector(".git-changes-diff-pane");
+        return {
+          paneTop: critiqueViewEl.scrollTop || 0,
+          paneLeft: critiqueViewEl.scrollLeft || 0,
+          fileListTop: fileListEl ? fileListEl.scrollTop || 0 : 0,
+          fileListLeft: fileListEl ? fileListEl.scrollLeft || 0 : 0,
+          diffTop: diffPaneEl ? diffPaneEl.scrollTop || 0 : 0,
+          diffLeft: diffPaneEl ? diffPaneEl.scrollLeft || 0 : 0,
+        };
+      }
+
+      function restoreGitChangesScrollSnapshot(snapshot, options) {
+        if (!critiqueViewEl || !snapshot) return;
+        const fileListEl = critiqueViewEl.querySelector(".git-changes-file-list");
+        const diffPaneEl = critiqueViewEl.querySelector(".git-changes-diff-pane");
+        critiqueViewEl.scrollTop = snapshot.paneTop || 0;
+        critiqueViewEl.scrollLeft = snapshot.paneLeft || 0;
+        if (fileListEl) {
+          fileListEl.scrollTop = snapshot.fileListTop || 0;
+          fileListEl.scrollLeft = snapshot.fileListLeft || 0;
+        }
+        if (diffPaneEl) {
+          if (options && options.resetDiffScroll) {
+            diffPaneEl.scrollTop = 0;
+            diffPaneEl.scrollLeft = 0;
+          } else {
+            diffPaneEl.scrollTop = snapshot.diffTop || 0;
+            diffPaneEl.scrollLeft = snapshot.diffLeft || 0;
+          }
+        }
+      }
+
+      function renderGitChangesView(options) {
+        if (!critiqueViewEl) return;
+        const scrollSnapshot = options && options.preserveScroll ? getGitChangesScrollSnapshot() : null;
+        finishPreviewRender(critiqueViewEl);
+        critiqueViewEl.classList.add("git-changes-host");
+        critiqueViewEl.innerHTML = buildGitChangesPanelHtml();
+        critiqueViewEl.classList.remove("response-scroll-resetting");
+        restoreGitChangesScrollSnapshot(scrollSnapshot, options || {});
+        if (gitChangesState.status === "idle") requestGitChangesSnapshot({ preserveScroll: true });
+        scheduleResponsePaneRepaintNudge();
+      }
+
+      function requestGitChangesSnapshot(options) {
+        const requestId = makeRequestId();
+        const context = getGitChangesContext();
+        gitChangesState = {
+          ...gitChangesState,
+          status: "loading",
+          requestId,
+          message: "",
+          level: "info",
+        };
+        if (rightView === "changes") renderGitChangesView({ preserveScroll: Boolean(options && options.preserveScroll) });
+        const message = { type: "git_changes_request", requestId };
+        if (context.sourcePath) message.sourcePath = context.sourcePath;
+        if (context.resourceDir) message.resourceDir = context.resourceDir;
+        if (!sendMessage(message)) {
+          gitChangesState = { ...gitChangesState, status: "error", message: "Studio is not connected.", level: "error" };
+          if (rightView === "changes") renderGitChangesView({ preserveScroll: true });
+        } else if (options && options.user) {
+          setStatus("Refreshing git changes…", "warning");
+        }
+      }
+
+      async function handleGitChangesPaneClick(event) {
+        if (rightView !== "changes") return;
+        const target = event.target;
+        const actionEl = target instanceof Element ? target.closest("[data-git-change-action]") : null;
+        if (!actionEl) return;
+        event.preventDefault();
+        const action = actionEl.getAttribute("data-git-change-action") || "";
+        if (action === "select") {
+          gitChangesState = { ...gitChangesState, selectedPath: actionEl.getAttribute("data-git-change-path") || "" };
+          renderGitChangesView({ preserveScroll: true, resetDiffScroll: true });
+          return;
+        }
+        if (action === "refresh") {
+          requestGitChangesSnapshot({ user: true, preserveScroll: true });
+          return;
+        }
+        if (action === "copy") {
+          const ok = await writeTextToClipboard(String(gitChangesState.content || ""));
+          setStatus(ok ? "Copied git diff." : "Clipboard write failed.", ok ? "success" : "warning");
+          return;
+        }
+        if (action === "load") {
+          if (!String(gitChangesState.content || "").trim()) {
+            setStatus("No git diff to load.", "warning");
+            return;
+          }
+          setEditorText(String(gitChangesState.content || ""), { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label: gitChangesState.label || "git diff", path: null });
+          setEditorLanguage("diff");
+          setStatus("Loaded current git diff into editor.", "success");
+          return;
+        }
+        if (action === "open") {
+          const absPath = actionEl.getAttribute("data-git-change-abs-path") || "";
+          if (!absPath) return;
+          await openPreviewDocumentHere(absPath, getFileBrowserLocalLinkContext(), { fallbackPath: absPath, fileBackedIntent: true });
+          ensureCurrentEditorFileBackedFromFilesPath(absPath);
+          setStatus("Opened changed file in editor.", "success");
+        }
+      }
+
       function renderActiveResult() {
+        if (critiqueViewEl) critiqueViewEl.classList.toggle("git-changes-host", rightView === "changes");
         if (rightView === "trace") {
           renderTraceView();
           return;
@@ -9726,6 +9964,11 @@
 
         if (rightView === "files") {
           renderFilesView();
+          return;
+        }
+
+        if (rightView === "changes") {
+          renderGitChangesView();
           return;
         }
 
@@ -9807,7 +10050,7 @@
           : normalizeForCompare(sourceTextEl.value);
         const responseLoaded = hasResponse && normalizedEditor === latestResponseNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
-        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl" || rightView === "files";
+        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl" || rightView === "files" || rightView === "changes";
 
         if (responseWrapEl) {
           responseWrapEl.hidden = showingAuxiliaryRightPane;
@@ -9850,6 +10093,8 @@
             exportPdfBtn.title = "Working view does not support preview export.";
           } else if (rightView === "files") {
             exportPdfBtn.title = "Files view does not support preview export.";
+          } else if (rightView === "changes") {
+            exportPdfBtn.title = "Changes view does not support preview export.";
           } else if (exportingReplJournal && !replJournalExportEntries.length) {
             exportPdfBtn.title = "No Studio REPL record entries to export for this session yet.";
           } else if (rightView === "markdown") {
@@ -10029,7 +10274,6 @@
         if (clearWorkspaceBtn) clearWorkspaceBtn.disabled = uiBusy;
         sendEditorBtn.disabled = uiBusy || isEditorOnlyMode;
         if (getEditorBtn) getEditorBtn.disabled = uiBusy;
-        if (loadGitDiffBtn) loadGitDiffBtn.disabled = uiBusy;
         syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
         if (suggestCompletionBtn) {
@@ -10785,6 +11029,9 @@
         rightViewSelect.value = rightView;
         if (rightView === "trace" && previousView !== "trace") {
           traceAutoScroll = true;
+        }
+        if (rightView === "changes" && previousView !== "changes" && gitChangesState.status === "idle") {
+          requestGitChangesSnapshot();
         }
         if (rightView === "repl" && previousView !== "repl") {
           replFollow = true;
@@ -18599,28 +18846,31 @@
           return;
         }
 
-        if (message.type === "git_diff_snapshot") {
-          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
-            pendingRequestId = null;
-            pendingKind = null;
-          }
-
-          const content = typeof message.content === "string" ? message.content : "";
-          const label = typeof message.label === "string" && message.label.trim()
-            ? message.label.trim()
-            : "git diff";
-          setEditorText(content, { preserveScroll: false, preserveSelection: false });
-          setSourceState({ source: "blank", label, path: null });
-          setEditorLanguage("diff");
-          setBusy(false);
-          setWsState("Ready");
-          refreshResponseUi();
-          setStatus(
-            typeof message.message === "string" && message.message.trim()
-              ? message.message
-              : "Loaded current git diff.",
-            "success",
-          );
+        if (message.type === "git_changes_snapshot") {
+          const requestId = typeof message.requestId === "string" ? message.requestId : "";
+          const preserveScroll = Boolean(gitChangesState.requestId && requestId && requestId === gitChangesState.requestId);
+          if (requestId && gitChangesState.requestId && requestId !== gitChangesState.requestId) return;
+          const ok = message.ok !== false;
+          const files = Array.isArray(message.files) ? message.files : [];
+          const selectedPath = files.some((file) => String(file && file.path || "") === String(gitChangesState.selectedPath || ""))
+            ? gitChangesState.selectedPath
+            : (files[0] && files[0].path ? String(files[0].path) : "");
+          gitChangesState = {
+            status: ok ? "ready" : "error",
+            requestId: null,
+            content: ok && typeof message.content === "string" ? message.content : "",
+            label: ok && typeof message.label === "string" ? message.label : "",
+            repoRoot: ok && typeof message.repoRoot === "string" ? message.repoRoot : "",
+            branch: ok && typeof message.branch === "string" ? message.branch : "",
+            hasHead: ok ? message.hasHead !== false : true,
+            files,
+            selectedPath,
+            message: typeof message.message === "string" ? message.message : "",
+            level: typeof message.level === "string" ? message.level : "info",
+          };
+          if (rightView === "changes") renderGitChangesView({ preserveScroll });
+          if (ok) setStatus(files.length ? "Loaded git changes." : "No uncommitted git changes.", files.length ? "success" : "warning");
+          else setStatus(gitChangesState.message || "Could not load git changes.", gitChangesState.level === "error" ? "error" : "warning");
           return;
         }
 
@@ -19671,27 +19921,6 @@
           const sent = sendMessage({
             type: "get_from_editor_request",
             requestId,
-          });
-
-          if (!sent) {
-            pendingRequestId = null;
-            pendingKind = null;
-            setBusy(false);
-          }
-        });
-      }
-
-      if (loadGitDiffBtn) {
-        loadGitDiffBtn.addEventListener("click", () => {
-          const requestId = beginUiAction("load_git_diff");
-          if (!requestId) return;
-
-          const effectivePath = getEffectiveSavePath();
-          const sent = sendMessage({
-            type: "load_git_diff_request",
-            requestId,
-            sourcePath: effectivePath || sourceState.path || undefined,
-            resourceDir: getCurrentResourceDirValue() || undefined,
           });
 
           if (!sent) {

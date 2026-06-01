@@ -458,8 +458,8 @@ interface GetFromEditorRequestMessage {
 	requestId: string;
 }
 
-interface LoadGitDiffRequestMessage {
-	type: "load_git_diff_request";
+interface GitChangesRequestMessage {
+	type: "git_changes_request";
 	requestId: string;
 	sourcePath?: string;
 	resourceDir?: string;
@@ -504,7 +504,7 @@ type IncomingStudioMessage =
 	| RefreshFromDiskRequestMessage
 	| SendToEditorRequestMessage
 	| GetFromEditorRequestMessage
-	| LoadGitDiffRequestMessage
+	| GitChangesRequestMessage
 	| OpenEditorOnlyRequestMessage
 	| CancelRequestMessage;
 
@@ -2524,6 +2524,62 @@ function buildStudioSyntheticNewFileDiff(filePath: string, content: string): str
 	return diffLines.join("\n");
 }
 
+interface StudioGitChangedFile {
+	path: string;
+	oldPath?: string;
+	status: "modified" | "added" | "deleted" | "renamed" | "untracked" | "binary";
+	additions: number;
+	deletions: number;
+	diff: string;
+}
+
+function unquoteStudioGitPath(path: string): string {
+	const value = String(path ?? "").trim();
+	if (!value.startsWith('"') || !value.endsWith('"')) return value;
+	try {
+		return JSON.parse(value) as string;
+	} catch {
+		return value.slice(1, -1);
+	}
+}
+
+function summarizeStudioGitDiffFiles(diffText: string, untrackedPaths: Set<string>): StudioGitChangedFile[] {
+	const matches = Array.from(String(diffText ?? "").matchAll(/^diff --git a\/(.*?) b\/(.*?)$/gm));
+	const files: StudioGitChangedFile[] = [];
+	for (let i = 0; i < matches.length; i += 1) {
+		const match = matches[i]!;
+		const start = match.index ?? 0;
+		const end = i + 1 < matches.length ? (matches[i + 1]!.index ?? diffText.length) : diffText.length;
+		const section = diffText.slice(start, end).trimEnd();
+		const oldPath = unquoteStudioGitPath(match[1] ?? "");
+		let path = unquoteStudioGitPath(match[2] ?? oldPath);
+		const renameTo = section.match(/^rename to\s+(.+)$/m);
+		if (renameTo) path = unquoteStudioGitPath(renameTo[1] ?? path);
+		let status: StudioGitChangedFile["status"] = "modified";
+		if (untrackedPaths.has(path)) status = "untracked";
+		else if (/^rename from\s+/m.test(section) || /^rename to\s+/m.test(section)) status = "renamed";
+		else if (/^deleted file mode\s+/m.test(section) || /^\+\+\+ \/dev\/null$/m.test(section)) status = "deleted";
+		else if (/^new file mode\s+/m.test(section) || /^--- \/dev\/null$/m.test(section)) status = "added";
+		else if (/^Binary files\s+/m.test(section)) status = "binary";
+		let additions = 0;
+		let deletions = 0;
+		for (const line of section.split("\n")) {
+			if (line.startsWith("+++") || line.startsWith("---")) continue;
+			if (line.startsWith("+")) additions += 1;
+			else if (line.startsWith("-")) deletions += 1;
+		}
+		files.push({
+			path,
+			oldPath: oldPath && oldPath !== path ? oldPath : undefined,
+			status,
+			additions,
+			deletions,
+			diff: section,
+		});
+	}
+	return files;
+}
+
 function resolveStudioBaseDir(sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
 	const source = typeof sourcePath === "string" ? sourcePath.trim() : "";
 	if (source) {
@@ -4046,7 +4102,7 @@ function injectStudioLatexEquationTags(markdown: string, sourcePath: string | un
 }
 
 function readStudioGitDiff(baseDir: string):
-	| { ok: true; text: string; label: string }
+	| { ok: true; text: string; label: string; repoRoot: string; branch: string; hasHead: boolean; files: StudioGitChangedFile[] }
 	| { ok: false; level: "info" | "warning" | "error"; message: string } {
 	const repoRootArgs = ["rev-parse", "--show-toplevel"];
 	const repoRootResult = spawnSync("git", repoRootArgs, {
@@ -4061,11 +4117,24 @@ function readStudioGitDiff(baseDir: string):
 		};
 	}
 	const repoRoot = repoRootResult.stdout.trim();
+	const branchResult = spawnSync("git", ["branch", "--show-current"], {
+		cwd: repoRoot,
+		encoding: "utf-8",
+	});
+	let branch = branchResult.status === 0 ? branchResult.stdout.trim() : "";
 
 	const hasHead = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
 		cwd: repoRoot,
 		encoding: "utf-8",
 	}).status === 0;
+	if (!branch && hasHead) {
+		const revResult = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
+			cwd: repoRoot,
+			encoding: "utf-8",
+		});
+		branch = revResult.status === 0 && revResult.stdout.trim() ? `detached ${revResult.stdout.trim()}` : "detached HEAD";
+	}
+	if (!branch) branch = "unknown branch";
 
 	const untrackedArgs = ["ls-files", "--others", "--exclude-standard"];
 	const untrackedResult = spawnSync("git", untrackedArgs, {
@@ -4168,7 +4237,8 @@ function readStudioGitDiff(baseDir: string):
 
 	const labelBase = hasHead ? "git diff HEAD" : "git diff (no commits yet)";
 	const label = summaryParts.length > 0 ? `${labelBase} (${summaryParts.join(", ")})` : labelBase;
-	return { ok: true, text: fullDiff, label };
+	const files = summarizeStudioGitDiffFiles(fullDiff, new Set(untrackedPaths));
+	return { ok: true, text: fullDiff, label, repoRoot, branch, hasHead, files };
 }
 
 function isLikelyMathExpression(expr: string): boolean {
@@ -8285,13 +8355,13 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 	}
 
 	if (
-		msg.type === "load_git_diff_request"
+		msg.type === "git_changes_request"
 		&& typeof msg.requestId === "string"
 		&& (msg.sourcePath === undefined || typeof msg.sourcePath === "string")
 		&& (msg.resourceDir === undefined || typeof msg.resourceDir === "string")
 	) {
 		return {
-			type: "load_git_diff_request",
+			type: "git_changes_request",
 			requestId: msg.requestId,
 			sourcePath: typeof msg.sourcePath === "string" ? msg.sourcePath : undefined,
 			resourceDir: typeof msg.resourceDir === "string" ? msg.resourceDir : undefined,
@@ -9982,7 +10052,6 @@ ${cssVarsBlock}
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
       <label class="file-label" title="Import a browser-selected text file into the editor as an unsaved copy. It will not be refreshable from disk until you save it.">Import file copy…<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
-      <button id="loadGitDiffBtn" type="button" title="Load the current git diff from the Studio context into the editor.">Load git diff</button>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>
     </div>
@@ -10192,6 +10261,7 @@ ${cssVarsBlock}
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
             <option value="trace">Working</option>
+            <option value="changes">Changes</option>
             <option value="files">Files</option>
             <option value="repl">REPL</option>
           </select>
@@ -11717,39 +11787,33 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		if (msg.type === "load_git_diff_request") {
+		if (msg.type === "git_changes_request") {
 			if (!isValidRequestId(msg.requestId)) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
 			}
-			if (isStudioBusy()) {
-				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
-				return;
-			}
-
 			const baseDir = resolveStudioGitDiffBaseDir(msg.sourcePath, msg.resourceDir, studioCwd);
 			const diffResult = readStudioGitDiff(baseDir);
 			if (diffResult.ok === false) {
 				sendToClient(client, {
-					type: "info",
+					type: "git_changes_snapshot",
 					requestId: msg.requestId,
+					ok: false,
 					message: diffResult.message,
 					level: diffResult.level,
 				});
 				return;
 			}
-
-			initialStudioDocument = {
-				text: diffResult.text,
-				label: diffResult.label,
-				source: "blank",
-			};
 			sendToClient(client, {
-				type: "git_diff_snapshot",
+				type: "git_changes_snapshot",
 				requestId: msg.requestId,
+				ok: true,
 				content: diffResult.text,
 				label: diffResult.label,
-				message: "Loaded current git diff into Studio.",
+				repoRoot: diffResult.repoRoot,
+				branch: diffResult.branch,
+				hasHead: diffResult.hasHead,
+				files: diffResult.files,
 			});
 			return;
 		}
