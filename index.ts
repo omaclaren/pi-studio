@@ -5898,6 +5898,28 @@ function decorateStudioPandocSyntaxHtml(html: string): string {
 	);
 }
 
+const studioPandocHtmlResourceFlagCache = new Map<string, Promise<"--embed-resources" | "--self-contained">>();
+
+async function getStudioPandocHtmlResourceFlag(pandocCommand: string): Promise<"--embed-resources" | "--self-contained"> {
+	let cached = studioPandocHtmlResourceFlagCache.get(pandocCommand);
+	if (!cached) {
+		cached = runStudioSubprocess(pandocCommand, ["--help"], {
+			timeoutMs: 5_000,
+			stdoutMaxBytes: 250_000,
+			stderrMaxBytes: 20_000,
+			label: "pandoc capability probe",
+			notFoundMessage: "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary.",
+		}).then((result) => {
+			if (result.code !== 0) {
+				throw new Error(`pandoc capability probe failed with exit code ${result.code}${result.stderr ? `: ${result.stderr}` : ""}`);
+			}
+			return result.stdout.includes("--embed-resources") ? "--embed-resources" : "--self-contained";
+		});
+		studioPandocHtmlResourceFlagCache.set(pandocCommand, cached);
+	}
+	return cached;
+}
+
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const markdownWithNormalizedFences = isLatex ? markdown : normalizeStudioMarkdownSmartFences(markdown);
@@ -5925,7 +5947,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 		await mkdir(htmlTemplateDir, { recursive: true });
 		const htmlTemplatePath = join(htmlTemplateDir, "template.html");
 		await writeFile(htmlTemplatePath, STUDIO_PANDOC_HTML_FRAGMENT_TEMPLATE, "utf-8");
-		args.push("--embed-resources", "--standalone", `--template=${htmlTemplatePath}`);
+		args.push(await getStudioPandocHtmlResourceFlag(pandocCommand), "--standalone", `--template=${htmlTemplatePath}`);
 	}
 	const normalizedMarkdown = isLatex
 		? sourceWithResolvedRefs
@@ -5955,7 +5977,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	}
 
 	let renderedHtml = pandocResult.stdout;
-	// When --standalone was used for --embed-resources, extract only the <body> content.
+	// When --standalone is used for embedded resources, extract only the <body> content.
 	if (resourcePath) {
 		const bodyMatch = renderedHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
 		if (!bodyMatch) {

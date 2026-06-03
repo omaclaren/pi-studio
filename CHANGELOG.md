@@ -2,6 +2,11 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [0.9.26] — 2026-06-04
+
+### Fixed
+- Made Studio Markdown previews compatible with older Pandoc versions by falling back to `--self-contained` when `--embed-resources` is unavailable.
+
 ## [0.9.25] — 2026-06-01
 
 ### Changed
