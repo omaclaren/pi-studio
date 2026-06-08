@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.29] — 2026-06-09
+
+### Added
+- Added `/studio --no-browser` and `/studio --port <port>` launch flags for explicit remote/forwarded Studio sessions when SSH auto-detection is not enough.
+
 ## [0.9.28] — 2026-06-08
 
 ### Added

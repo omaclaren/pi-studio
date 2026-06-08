@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildStudioSshTunnelHint, isStudioSshSession } from "../shared/studio-ssh-hint.js";
+import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession } from "../shared/studio-ssh-hint.js";
 
 test("isStudioSshSession detects standard SSH environment variables", () => {
   assert.equal(isStudioSshSession({}), false);
@@ -25,4 +25,13 @@ test("buildStudioSshTunnelHint includes the full tokenized Studio URL in the SSH
 
 test("buildStudioSshTunnelHint returns null outside SSH", () => {
   assert.equal(buildStudioSshTunnelHint(55914, "http://127.0.0.1:55914/?token=abc123", {}), null);
+});
+
+test("buildStudioForwardingHint works without SSH auto-detection", () => {
+  const url = "http://127.0.0.1:3417/?token=abc123";
+  const hint = buildStudioForwardingHint(3417, url, { prefix: "Browser auto-open was skipped." });
+
+  assert.match(hint, /Browser auto-open was skipped/);
+  assert.match(hint, /ssh -L 3417:127\.0\.0\.1:3417 <remote-host>/);
+  assert.match(hint, /http:\/\/127\.0\.0\.1:3417\/\?token=abc123/);
 });

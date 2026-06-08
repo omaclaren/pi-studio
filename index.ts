@@ -29,7 +29,7 @@ import {
 } from "./shared/studio-markdown-latex-literals.js";
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
-import { buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
+import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
@@ -9843,22 +9843,53 @@ function buildStudioUrl(
 	return `http://127.0.0.1:${port}/?${params.toString()}`;
 }
 
-function parseStudioLaunchOpenFlags(rawArgs: string): { args: string; openRemoteBrowser: boolean; error?: string } {
+interface StudioLaunchFlags {
+	args: string;
+	openRemoteBrowser: boolean;
+	noBrowser: boolean;
+	port?: number;
+	error?: string;
+}
+
+function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 	const parsed = tokenizeStudioCommandArgs(rawArgs);
-	if (parsed.error) return { args: rawArgs, openRemoteBrowser: false, error: parsed.error };
+	if (parsed.error) return { args: rawArgs, openRemoteBrowser: false, noBrowser: false, error: parsed.error };
 	const remaining: string[] = [];
 	let openRemoteBrowser = false;
-	for (const token of parsed.tokens) {
-		if (token === "--open-remote" || token === "--open-remote-browser") {
+	let noBrowser = false;
+	let port: number | undefined;
+	for (let i = 0; i < parsed.tokens.length; i += 1) {
+		const token = parsed.tokens[i]!;
+		if (token === "--open-remote" || token === "--open-remote-browser" || token === "--open-browser") {
 			openRemoteBrowser = true;
+			continue;
+		}
+		if (token === "--no-browser" || token === "--no-open" || token === "--no-open-browser") {
+			noBrowser = true;
+			continue;
+		}
+		if (token === "--port" || token.startsWith("--port=")) {
+			const rawPort = token.startsWith("--port=") ? token.slice("--port=".length) : parsed.tokens[++i];
+			if (!rawPort) {
+				return { args: rawArgs, openRemoteBrowser, noBrowser, error: "Missing value for --port." };
+			}
+			const requestedPort = Number(rawPort);
+			if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
+				return { args: rawArgs, openRemoteBrowser, noBrowser, error: `Invalid --port value: ${rawPort}. Use an integer from 1 to 65535.` };
+			}
+			port = requestedPort;
 			continue;
 		}
 		remaining.push(token);
 	}
-	return { args: remaining.join(" "), openRemoteBrowser };
+	if (openRemoteBrowser && noBrowser) {
+		return { args: rawArgs, openRemoteBrowser, noBrowser, port, error: "Use either --no-browser or --open-browser, not both." };
+	}
+	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, port };
 }
 
-function shouldAutoOpenStudioBrowser(options?: { openRemoteBrowser?: boolean }): boolean {
+function shouldAutoOpenStudioBrowser(options?: { openRemoteBrowser?: boolean; noBrowser?: boolean }): boolean {
+	if (options?.noBrowser) return false;
 	return !isSshSession() || Boolean(options?.openRemoteBrowser);
 }
 
@@ -14096,7 +14127,7 @@ export default function (pi: ExtensionAPI) {
 		res.end(buildStudioHtml(requestInitialDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, terminalSessionDetail, contextUsageSnapshot, studioMode));
 	};
 
-	const ensureServer = async (): Promise<StudioServerState> => {
+	const ensureServer = async (requestedPort?: number): Promise<StudioServerState> => {
 		if (serverState) return serverState;
 
 		const server = createServer(handleHttpRequest);
@@ -14184,6 +14215,8 @@ export default function (pi: ExtensionAPI) {
 			});
 		});
 
+		const listenPort = typeof requestedPort === "number" && Number.isInteger(requestedPort) && requestedPort > 0 ? requestedPort : 0;
+
 		await new Promise<void>((resolve, reject) => {
 			const onError = (error: Error) => {
 				server.off("listening", onListening);
@@ -14195,7 +14228,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			server.once("error", onError);
 			server.once("listening", onListening);
-			server.listen(0, "127.0.0.1");
+			server.listen(listenPort, "127.0.0.1");
 		});
 
 		const address = server.address();
@@ -14981,6 +15014,9 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		const launchArgs = launchOpenFlags.args;
+		if (serverState && launchOpenFlags.port && serverState.port !== launchOpenFlags.port) {
+			ctx.ui.notify(`Studio server is already running on port ${serverState.port}; requested port ${launchOpenFlags.port}. Use /studio --stop, then restart Studio with --port ${launchOpenFlags.port} to change it.`, "warning");
+		}
 		if (mode === "full" && hasConnectedFullStudioView()) {
 			if (options?.replaceExistingFull) {
 				closeStudioClientsByMode("full", 4001, "Full Studio replaced");
@@ -14989,8 +15025,9 @@ export default function (pi: ExtensionAPI) {
 				if (serverState) {
 					const url = buildStudioUrl(serverState.port, serverState.token, "full");
 					ctx.ui.notify(`Studio URL: ${url}`, "info");
-					const sshTunnelHint = buildStudioSshTunnelHint(serverState.port, url);
-					if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
+					const tunnelHint = buildStudioSshTunnelHint(serverState.port, url)
+						?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(serverState.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
+					if (tunnelHint) ctx.ui.notify(tunnelHint, "info");
 				}
 				return;
 			}
@@ -15015,17 +15052,28 @@ export default function (pi: ExtensionAPI) {
 		if (!selected) return;
 		initialStudioDocument = selected;
 
-		const state = await ensureServer();
+		let state: StudioServerState;
+		try {
+			state = await ensureServer(launchOpenFlags.port);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const portText = launchOpenFlags.port ? ` on port ${launchOpenFlags.port}` : "";
+			ctx.ui.notify(`Failed to start Studio server${portText}: ${message}`, "error");
+			return;
+		}
 		const url = buildStudioUrl(state.port, state.token, mode, selected);
-		const sshTunnelHint = buildStudioSshTunnelHint(state.port, url);
+		const tunnelHint = buildStudioSshTunnelHint(state.port, url)
+			?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
 		const openedLabel = mode === "editor-only" ? "pi Studio editor-only view" : "pi Studio";
 
 		const shouldOpenBrowser = shouldAutoOpenStudioBrowser({
 			openRemoteBrowser: launchOpenFlags.openRemoteBrowser,
+			noBrowser: launchOpenFlags.noBrowser,
 		});
 		try {
 			if (!shouldOpenBrowser) {
-				ctx.ui.notify(`${openedLabel} is ready. Browser auto-open was skipped because SSH was detected.`, "info");
+				const skipReason = launchOpenFlags.noBrowser ? "--no-browser was used" : "SSH was detected";
+				ctx.ui.notify(`${openedLabel} is ready. Browser auto-open was skipped because ${skipReason}.`, "info");
 			} else {
 				await openUrlInDefaultBrowser(url);
 				if (selected.source === "file") {
@@ -15045,12 +15093,12 @@ export default function (pi: ExtensionAPI) {
 			}
 		} finally {
 			ctx.ui.notify(`Studio URL: ${url}`, "info");
-			if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
+			if (tunnelHint) ctx.ui.notify(tunnelHint, "info");
 		}
 	};
 
 	pi.registerCommand("studio", {
-		description: "Open pi Studio browser UI (/studio, /studio <file>, /studio --blank, /studio --last)",
+		description: "Open pi Studio browser UI (/studio, /studio <file>, /studio --blank, /studio --last, /studio --no-browser, /studio --port <port>)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 
@@ -15083,6 +15131,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio <path>    Open studio with file preloaded\n"
 						+ "  /studio --blank   Open with blank editor\n"
 						+ "  /studio --last    Open with last model response\n"
+						+ "  /studio --no-browser  Print the Studio URL without opening a browser\n"
+						+ "  /studio --port <port> Bind Studio to a fixed localhost port when starting\n"
 						+ "  /studio --open-remote  Over SSH, open the remote browser anyway\n"
 						+ "  /studio --status  Show studio status\n"
 						+ "  /studio --stop    Stop studio server\n"
@@ -15102,7 +15152,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("studio-replace", {
-		description: "Replace the current full pi Studio view (/studio-replace, /studio-replace <file>)",
+		description: "Replace the current full pi Studio view (/studio-replace, /studio-replace <file>, /studio-replace --no-browser)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
@@ -15112,6 +15162,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio-replace <path>  Replace the current full Studio view with file preloaded\n"
 						+ "  /studio-replace --blank Replace with blank editor\n"
 						+ "  /studio-replace --last  Replace with last model response\n"
+						+ "  /studio-replace --no-browser  Print URL without opening a browser\n"
+						+ "  /studio-replace --port <port> Bind Studio to a fixed localhost port when starting\n"
 						+ "Editor-only Studio views stay open.",
 					"info",
 				);
@@ -15127,7 +15179,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("studio-editor-only", {
-		description: "Open pi Studio in editor-only mode (/studio-editor-only, /studio-editor-only <file>)",
+		description: "Open pi Studio in editor-only mode (/studio-editor-only, /studio-editor-only <file>, /studio-editor-only --no-browser)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
@@ -15137,6 +15189,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio-editor-only <path>  Open an editor-only Studio view with file preloaded\n"
 						+ "  /studio-editor-only --blank Open with blank editor\n"
 						+ "  /studio-editor-only --last  Open with last model response loaded into the editor\n"
+						+ "  /studio-editor-only --no-browser  Print URL without opening a browser\n"
+						+ "  /studio-editor-only --port <port> Bind Studio to a fixed localhost port when starting\n"
 						+ "Multiple editor-only views are allowed in the same Pi session.",
 					"info",
 				);
