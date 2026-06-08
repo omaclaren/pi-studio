@@ -2,6 +2,24 @@
 
 All notable changes to `pi-studio` are documented here.
 
+## [Unreleased]
+
+## [0.9.27] — 2026-06-08
+
+### Added
+- Added an **Open root** action to the Files view for opening the Files root folder in Finder or the system file manager.
+
+### Changed
+- Clarified browser-import and Files-view file-backed open action tooltips.
+- Added **Try another** regeneration for completion suggestions and a persistent Suggestion model picker that keeps suggestions separate from the main Pi model and uses thinking off, with clearer cursor-marker prompting and separate prose/code completion instructions.
+
+### Fixed
+- Avoided showing the missing-LaTeX-engine hint for PDF exports when XeLaTeX/PDFLaTeX ran but the document itself had a LaTeX error.
+- Restored Pandoc-rendered LaTeX title/author/abstract metadata in Studio previews that use embedded resources.
+- Preserved optional LaTeX `\footnotemark[n]` markers as linked superscript affiliation markers in Studio previews.
+- Nudged inline completion suggestions to return a non-empty continuation when explicitly requested at the end of a sentence or paragraph.
+- Fixed Markdown blockquotes containing multiline `\[ ... \]` display math so quote markers are not folded into the math content.
+
 ## [0.9.26] — 2026-06-04
 
 ### Fixed

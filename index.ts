@@ -339,6 +339,9 @@ interface CompletionSuggestionRequestMessage {
 	path?: string;
 	contextMode?: "cursor" | "session";
 	contextText?: string;
+	previousSuggestion?: string;
+	suggestionModelProvider?: string;
+	suggestionModelId?: string;
 }
 
 interface CompletionSuggestionCancelRequestMessage {
@@ -754,6 +757,17 @@ function buildStudioPandocPdfEngineOptArgs(pdfEngine: string): string[] {
 	];
 }
 
+function getStudioMissingLatexEngineHint(stderr: string, pdfEngine: string): string {
+	const text = String(stderr || "");
+	const lower = text.toLowerCase();
+	const engine = basename(String(pdfEngine || "")).toLowerCase();
+	const engineMentioned = [engine, "xelatex", "pdflatex", "lualatex", "tectonic"].filter(Boolean).some((name) => lower.includes(name));
+	const missingEnginePattern = /(?:command not found|not found|no such file|could not find|cannot find|is not installed|not installed)/i;
+	return engineMentioned && missingEnginePattern.test(text)
+		? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
+		: "";
+}
+
 const STUDIO_PANDOC_HTML_FRAGMENT_TEMPLATE = `<!doctype html>
 <html>
 <head>
@@ -761,6 +775,26 @@ const STUDIO_PANDOC_HTML_FRAGMENT_TEMPLATE = `<!doctype html>
 <title>pi Studio preview</title>
 </head>
 <body>
+$if(title)$
+<header id="title-block-header">
+<h1 class="title">$title$</h1>
+$if(subtitle)$
+<p class="subtitle">$subtitle$</p>
+$endif$
+$for(author)$
+<p class="author">$author$</p>
+$endfor$
+$if(date)$
+<p class="date">$date$</p>
+$endif$
+$if(abstract)$
+<div class="abstract">
+<div class="abstract-title">Abstract</div>
+$abstract$
+</div>
+$endif$
+</header>
+$endif$
 $body$
 </body>
 </html>
@@ -4279,12 +4313,14 @@ function normalizeMathDelimitersInSegment(markdown: string): string {
 	});
 
 	normalized = normalized.replace(/\$\s*\\\[\s*([\s\S]*?)\s*\\\]\s*\$/g, (match, expr: string) => {
+		if (/\n\s{0,3}>/.test(match)) return match;
 		if (!isLikelyMathExpression(expr)) return match;
 		const content = collapseDisplayMathContent(expr);
 		return content.length > 0 ? `\\[${content}\\]` : "\\[\\]";
 	});
 
 	normalized = normalized.replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (match, expr: string) => {
+		if (/\n\s{0,3}>/.test(match)) return match;
 		if (!isLikelyMathExpression(expr)) return `[${expr.trim()}]`;
 		const content = collapseDisplayMathContent(expr);
 		return content.length > 0 ? `\\[${content}\\]` : "\\[\\]";
@@ -5920,9 +5956,17 @@ async function getStudioPandocHtmlResourceFlag(pandocCommand: string): Promise<"
 	return cached;
 }
 
+function preprocessStudioLatexFootnotemarksForPreview(latex: string): string {
+	return String(latex ?? "").replace(/\\footnotemark\s*\[\s*([^\]\r\n]+?)\s*\]/g, (_match, marker: string) => {
+		const value = String(marker || "").trim();
+		return /^\d+$/.test(value) ? `\\href{#fn${value}}{\\textsuperscript{${value}}}` : (value ? `\\textsuperscript{${value}}` : "");
+	});
+}
+
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const markdownWithNormalizedFences = isLatex ? markdown : normalizeStudioMarkdownSmartFences(markdown);
+	const latexPreviewSource = isLatex ? preprocessStudioLatexFootnotemarksForPreview(markdown) : markdown;
+	const markdownWithNormalizedFences = isLatex ? latexPreviewSource : normalizeStudioMarkdownSmartFences(markdown);
 	const markdownWithoutHtmlComments = isLatex ? markdownWithNormalizedFences : stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(markdownWithNormalizedFences);
 	const markdownWithPreviewPageBreaks = isLatex ? markdownWithoutHtmlComments : replaceStudioPreviewPageBreakCommands(markdownWithoutHtmlComments);
 	const latexSubfigurePreviewTransform = isLatex
@@ -5938,16 +5982,20 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
 	let htmlTemplateDir: string | null = null;
+	const useStudioHtmlTemplate = Boolean(resourcePath || isLatex);
 	if (resourcePath) {
 		args.push(`--resource-path=${resourcePath}`);
-		// Embed images as data URIs so browser previews and exported HTML keep local figures.
-		// A minimal template prevents Pandoc's standalone default CSS/title block from leaking
-		// into Studio's own standalone export wrapper.
+	}
+	if (useStudioHtmlTemplate) {
+		// Use standalone mode for embedded resources and LaTeX metadata. A minimal
+		// Studio template keeps Pandoc's default standalone CSS out of the pane while
+		// still rendering LaTeX title/author/abstract metadata.
 		htmlTemplateDir = join(tmpdir(), `pi-studio-pandoc-html-${randomUUID()}`);
 		await mkdir(htmlTemplateDir, { recursive: true });
 		const htmlTemplatePath = join(htmlTemplateDir, "template.html");
 		await writeFile(htmlTemplatePath, STUDIO_PANDOC_HTML_FRAGMENT_TEMPLATE, "utf-8");
-		args.push(await getStudioPandocHtmlResourceFlag(pandocCommand), "--standalone", `--template=${htmlTemplatePath}`);
+		if (resourcePath) args.push(await getStudioPandocHtmlResourceFlag(pandocCommand));
+		args.push("--standalone", `--template=${htmlTemplatePath}`);
 	}
 	const normalizedMarkdown = isLatex
 		? sourceWithResolvedRefs
@@ -5977,8 +6025,8 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	}
 
 	let renderedHtml = pandocResult.stdout;
-	// When --standalone is used for embedded resources, extract only the <body> content.
-	if (resourcePath) {
+	// When --standalone is used for embedded resources or LaTeX metadata, extract only the <body> content.
+	if (useStudioHtmlTemplate) {
 		const bodyMatch = renderedHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
 		if (!bodyMatch) {
 			throw new Error("pandoc HTML render did not include a complete body element.");
@@ -6787,9 +6835,7 @@ async function renderStudioPdfWithPandoc(
 			});
 			if (pandocResult.code !== 0) {
 				const stderr = pandocResult.stderr;
-				const hint = stderr.includes("not found") || stderr.includes("xelatex") || stderr.includes("pdflatex")
-					? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
-					: "";
+				const hint = getStudioMissingLatexEngineHint(stderr, pdfEngine);
 				throw new Error(`pandoc PDF export failed with exit code ${pandocResult.code}${stderr ? `: ${stderr}` : ""}${hint}`);
 			}
 
@@ -6915,9 +6961,7 @@ async function renderStudioPdfWithPandoc(
 		});
 		if (pandocResult.code !== 0) {
 			const stderr = pandocResult.stderr;
-			const hint = stderr.includes("not found") || stderr.includes("xelatex") || stderr.includes("pdflatex")
-				? "\nPDF export requires a LaTeX engine. Install TeX Live (e.g. brew install --cask mactex) or set PANDOC_PDF_ENGINE."
-				: "";
+			const hint = getStudioMissingLatexEngineHint(stderr, pdfEngine);
 			throw new Error(`pandoc PDF export failed with exit code ${pandocResult.code}${stderr ? `: ${stderr}` : ""}${hint}`);
 		}
 
@@ -7303,6 +7347,41 @@ function openPathInDefaultViewer(path: string): Promise<void> {
 	});
 }
 
+async function handleOpenStudioFileBrowserDirectoryRequest(req: IncomingMessage, res: ServerResponse, studioCwd: string): Promise<void> {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "POST") {
+		res.setHeader("Allow", "POST");
+		respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+		return;
+	}
+	if (isSshSession()) {
+		respondJson(res, 409, { ok: false, error: "Cannot open local file manager from an SSH/headless Studio session. Copy the path instead." });
+		return;
+	}
+
+	const rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+	let payload: Record<string, unknown> = {};
+	try {
+		payload = rawBody ? JSON.parse(rawBody) : {};
+	} catch {
+		respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+		return;
+	}
+
+	try {
+		const directory = resolveStudioFileBrowserDirectory(
+			typeof payload.dir === "string" ? payload.dir : undefined,
+			typeof payload.sourcePath === "string" ? payload.sourcePath : undefined,
+			typeof payload.resourceDir === "string" ? payload.resourceDir : undefined,
+			studioCwd,
+		);
+		await openPathInDefaultViewer(directory.currentDir);
+		respondJson(res, 200, { ok: true, message: "Opened folder in file manager.", path: directory.currentDir, rootDir: directory.rootDir });
+	} catch (error) {
+		respondJson(res, 404, { ok: false, error: `Could not open file-browser folder: ${error instanceof Error ? error.message : String(error)}` });
+	}
+}
+
 function detectLensFromText(text: string): Lens {
 	const lines = text.split("\n");
 	const fencedCodeBlocks = (text.match(/```[\w-]*\n[\s\S]*?```/g) ?? []).length;
@@ -7627,12 +7706,13 @@ function getStudioQuizReasoning(model: NonNullable<ExtensionContext["model"]>, t
 async function runStudioModelText(
 	ctx: StudioModelRequestContext,
 	prompt: string,
-	options?: { systemPrompt?: string; maxTokens?: number; signal?: AbortSignal; reasoning?: ThinkingLevel; timeoutMs?: number; trim?: boolean },
+	options?: { systemPrompt?: string; maxTokens?: number; signal?: AbortSignal; reasoning?: ThinkingLevel; timeoutMs?: number; trim?: boolean; model?: NonNullable<ExtensionContext["model"]> },
 ): Promise<string> {
-	if (!ctx.model) throw new Error("No active model selected.");
-	const auth = await resolveStudioModelRequestAuth(ctx, ctx.model);
+	const model = options?.model ?? ctx.model;
+	if (!model) throw new Error("No active model selected.");
+	const auth = await resolveStudioModelRequestAuth(ctx, model);
 	const response = await completeSimple(
-		ctx.model,
+		model,
 		{
 			systemPrompt: options?.systemPrompt ?? "You are a concise assistant inside pi Studio. Return exactly the requested format.",
 			messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
@@ -7692,6 +7772,37 @@ async function runStudioQuizModelJson(
 	throw lastError ?? new Error("Model did not return valid JSON.");
 }
 
+function isStudioCompletionCodeLanguage(language: string | undefined): boolean {
+	const normalized = String(language || "").trim().toLowerCase();
+	return new Set([
+		"javascript",
+		"typescript",
+		"python",
+		"bash",
+		"json",
+		"rust",
+		"c",
+		"cpp",
+		"julia",
+		"fortran",
+		"r",
+		"matlab",
+		"diff",
+		"csv",
+		"tsv",
+		"java",
+		"go",
+		"ruby",
+		"swift",
+		"html",
+		"css",
+		"xml",
+		"yaml",
+		"toml",
+		"lua",
+	]).has(normalized);
+}
+
 function buildStudioCompletionSuggestionPrompt(options: {
 	text: string;
 	selectionStart: number;
@@ -7701,6 +7812,7 @@ function buildStudioCompletionSuggestionPrompt(options: {
 	path?: string;
 	contextMode?: "cursor" | "session";
 	contextText?: string;
+	previousSuggestion?: string;
 }): string {
 	const text = String(options.text || "");
 	const start = Math.max(0, Math.min(Math.floor(options.selectionStart || 0), text.length));
@@ -7711,31 +7823,51 @@ function buildStudioCompletionSuggestionPrompt(options: {
 	const language = String(options.language || "").trim() || "unknown";
 	const label = String(options.label || options.path || "Studio editor").trim();
 	const contextText = String(options.contextText || "").trim().slice(-STUDIO_COMPLETION_MAX_CONTEXT_CHARS);
+	const previousSuggestion = String(options.previousSuggestion || "").trim().slice(-4000);
+	const editorExcerpt = selected
+		? `${prefix}⟦SELECTION_START⟧${selected}⟦SELECTION_END⟧${suffix}`
+		: `${prefix}⟦CURSOR⟧${suffix}`;
+	const isCodeCompletion = isStudioCompletionCodeLanguage(language);
+	const modeInstructions = isCodeCompletion
+		? [
+			"You are acting as a tab-completion model for a code editor.",
+			"Return only the exact code/text that should be inserted if the user presses Tab. Do not wrap it in Markdown fences. Do not explain.",
+			"Preserve syntax, indentation, delimiters, local names, comments, and the surrounding coding style.",
+			"Partial identifiers, expressions, arguments, statements, or structured-data fragments are allowed when they are syntactically natural at the marker.",
+			"If the marker is inside a string, comment, docstring, or markup text node, continue that local text naturally rather than applying prose sentence rules globally.",
+			"Keep the completion local and short unless the surrounding code clearly calls for a larger block.",
+		]
+		: [
+			"You are acting as a tab-completion model for a text editor.",
+			"Return only the exact text that should be inserted if the user presses Tab. Do not wrap it in Markdown fences. Do not explain.",
+			"Do not return a sentence fragment, dependent clause, or lowercase noun phrase unless it is grammatically valid immediately at the marker.",
+			"If the marker follows a completed sentence and you continue with prose, begin with any needed whitespace and a complete new sentence using normal capitalization.",
+			"Return a non-empty completion. If the cursor is at the end of a sentence or paragraph, continue with a plausible complete sentence rather than a fragment.",
+			"Match the surrounding language, style, indentation, and register.",
+			"Keep the suggestion short unless the context clearly asks for a longer continuation.",
+		];
 	return [
-		"Generate an inline completion for the current editor cursor position.",
-		"Return only the exact text to insert. Do not wrap it in Markdown fences. Do not explain.",
-		"Match the surrounding language, style, indentation, and register.",
-		"Keep the suggestion short unless the context clearly asks for a longer continuation.",
+		...modeInstructions,
+		selected
+			? "The text between ⟦SELECTION_START⟧ and ⟦SELECTION_END⟧ is selected. Your answer will replace only that selected text."
+			: "The cursor is marked by ⟦CURSOR⟧. Your answer will replace only that marker.",
+		"The text before the marker is already written. Do not rewrite it, paraphrase it, or continue from an earlier point in the excerpt.",
+		"After replacing the marker or selected range with your answer, the excerpt must read naturally at that exact position.",
+		"Include any needed leading whitespace or punctuation; do not assume the editor will add it.",
 		contextText
 			? "Use the extra session context only as background. Do not continue the extra context directly unless the editor cursor calls for it."
 			: "Use only the cursor-local editor context below.",
-		selected
-			? "The selected text will be replaced by the completion."
-			: "The completion will be inserted at the cursor.",
+		previousSuggestion ? "The user asked for another suggestion. Avoid repeating the previous suggestion; offer a materially different continuation that still fits the same cursor context." : "",
 		"",
 		`File/context label: ${label}`,
 		`Language mode: ${language}`,
 		`Suggestion context mode: ${contextText ? "editor plus latest response" : "editor only"}`,
 		contextText ? ["", "<extra_context>", contextText, "</extra_context>"].join("\n") : "",
+		previousSuggestion ? ["", "<previous_suggestion>", previousSuggestion, "</previous_suggestion>"].join("\n") : "",
 		"",
-		"<prefix>",
-		prefix,
-		"</prefix>",
-		selected ? ["", "<selected>", selected, "</selected>"].join("\n") : "",
-		"",
-		"<suffix>",
-		suffix,
-		"</suffix>",
+		"<editor_excerpt>",
+		editorExcerpt,
+		"</editor_excerpt>",
 	].filter((part) => part !== "").join("\n");
 }
 
@@ -7754,13 +7886,19 @@ async function runStudioCompletionSuggestion(ctx: StudioModelRequestContext, opt
 	path?: string;
 	contextMode?: "cursor" | "session";
 	contextText?: string;
+	previousSuggestion?: string;
+	model?: NonNullable<ExtensionContext["model"]>;
 	signal?: AbortSignal;
 }): Promise<string> {
 	const prompt = buildStudioCompletionSuggestionPrompt(options);
+	const systemPrompt = isStudioCompletionCodeLanguage(options.language)
+		? "You are a code tab-completion engine inside pi Studio. Return only the exact code/text that replaces the cursor marker or selected range in the provided editor excerpt. The resulting excerpt must be syntactically natural at that exact position. Include needed leading whitespace. Never explain. Never include Markdown fences unless literal fences are the intended insertion."
+		: "You are a prose tab-completion engine inside pi Studio. Return only the exact text that replaces the cursor marker or selected range in the provided editor excerpt. The resulting excerpt must read naturally at that exact position. Include needed leading whitespace. Never explain. Never include Markdown fences unless literal fences are the intended insertion.";
 	// Intentionally omit `reasoning`: pi-ai treats absent reasoning as off/disabled
 	// where supported. Passing "minimal" would still enable a reasoning path and slow completions.
 	const suggestion = cleanStudioCompletionSuggestion(await runStudioModelText(ctx, prompt, {
-		systemPrompt: "You are an inline autocomplete engine inside pi Studio. Return only text to insert at the cursor. Never explain. Never include Markdown fences unless literal fences are the intended insertion.",
+		systemPrompt,
+		model: options.model,
 		maxTokens: 650,
 		timeoutMs: 60_000,
 		trim: false,
@@ -8204,6 +8342,9 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 			path: typeof msg.path === "string" ? msg.path : undefined,
 			contextMode,
 			contextText: contextMode === "session" && typeof msg.contextText === "string" ? msg.contextText.slice(-STUDIO_COMPLETION_MAX_CONTEXT_CHARS) : undefined,
+			previousSuggestion: typeof msg.previousSuggestion === "string" ? msg.previousSuggestion.slice(-4000) : undefined,
+			suggestionModelProvider: typeof msg.suggestionModelProvider === "string" ? msg.suggestionModelProvider : undefined,
+			suggestionModelId: typeof msg.suggestionModelId === "string" ? msg.suggestionModelId : undefined,
 		};
 	}
 
@@ -9760,6 +9901,12 @@ function formatModelLabelWithThinking(modelLabel: string, thinkingLevel?: string
 	return `${base} (${level})`;
 }
 
+function formatStudioModelOptionLabel(model: { provider?: string; id?: string; name?: string } | undefined): string {
+	const base = formatModelLabel(model);
+	const name = typeof model?.name === "string" ? model.name.trim() : "";
+	return name && name !== model?.id ? `${name} (${base})` : base;
+}
+
 function buildTerminalSessionLabel(cwd: string, sessionName?: string): string {
 	const cwdBase = basename(cwd || process.cwd() || "") || cwd || "~";
 	const termProgram = String(process.env.TERM_PROGRAM ?? "").trim();
@@ -10073,7 +10220,7 @@ ${cssVarsBlock}
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
-      <label class="file-label" title="Import a browser-selected text file into the editor as an unsaved copy. It will not be refreshable from disk until you save it.">Import file copy…<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
+      <label class="file-label" title="Browser import: load a selected text file as a detached unsaved copy. It will not be refreshable from disk. Use the Files view to open a file-backed document.">Import file copy…<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>
     </div>
@@ -10126,6 +10273,9 @@ ${cssVarsBlock}
               <select id="completionContextSelect" hidden aria-label="Suggestion context mode" title="Choose how much context Suggest includes.">
                 <option value="cursor" selected>Context: editor only</option>
                 <option value="session">Context: editor + latest response</option>
+              </select>
+              <select id="completionModelSelect" hidden aria-label="Suggestion model" title="Choose the model used for Suggest. Suggestions use direct completion with thinking off and do not change the main Pi model.">
+                <option value="current" selected>Suggestion model: current Pi model</option>
               </select>
               <button id="openCompanionBtn" type="button" title="Open a blank editor-only Studio tab.">New editor tab</button>
               <button id="sendEditorBtn" type="button">Send current text to Pi editor</button>
@@ -10213,11 +10363,12 @@ ${cssVarsBlock}
             </div>
             <div id="completionSuggestionPanel" class="completion-suggestion-panel" hidden>
               <div class="completion-suggestion-header">
-                <strong>Suggested completion</strong>
+                <div><strong>Suggested completion</strong><span id="completionSuggestionMeta" class="completion-suggestion-meta"></span></div>
                 <button id="completionSuggestionDismissBtn" type="button" title="Dismiss this suggestion">Dismiss</button>
               </div>
               <pre id="completionSuggestionText" class="completion-suggestion-text"></pre>
               <div class="completion-suggestion-actions">
+                <button id="completionSuggestionRegenerateBtn" type="button" title="Ask for a different suggestion at the same cursor position.">Try another</button>
                 <button id="completionSuggestionInsertBtn" type="button" title="Insert this suggestion at the cursor or original selection. You can also press Tab while the editor is focused.">Insert suggestion (Tab)</button>
               </div>
             </div>
@@ -11455,6 +11606,17 @@ export default function (pi: ExtensionAPI) {
 		broadcastState();
 	};
 
+	const getSuggestionModelOptions = () => {
+		const registry = lastCommandCtx?.modelRegistry ?? latestModelRequestCtx?.modelRegistry;
+		if (!registry || typeof registry.getAvailable !== "function") return [];
+		return registry.getAvailable().map((model) => ({
+			provider: model.provider,
+			id: model.id,
+			label: formatStudioModelOptionLabel(model),
+			reasoning: Boolean(model.reasoning),
+		}));
+	};
+
 	const broadcastState = () => {
 		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
 		terminalSessionDetail = buildTerminalSessionDetail(studioCwd, getSessionNameSafe());
@@ -11468,6 +11630,7 @@ export default function (pi: ExtensionAPI) {
 			terminalToolName: terminalActivityToolName,
 			terminalActivityLabel,
 			modelLabel: currentModelLabel,
+			suggestionModels: getSuggestionModelOptions(),
 			terminalSessionLabel,
 			terminalSessionDetail,
 			contextTokens: contextUsageSnapshot.tokens,
@@ -11763,6 +11926,7 @@ export default function (pi: ExtensionAPI) {
 				terminalToolName: terminalActivityToolName,
 				terminalActivityLabel,
 				modelLabel: currentModelLabel,
+				suggestionModels: getSuggestionModelOptions(),
 				terminalSessionLabel,
 				terminalSessionDetail,
 				contextTokens: contextUsageSnapshot.tokens,
@@ -12063,10 +12227,19 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			sendToClient(client, { type: "completion_suggestion_progress", requestId: msg.requestId, message: "Generating suggestion…" });
+			let suggestionModel: NonNullable<ExtensionContext["model"]> | undefined;
+			if (msg.suggestionModelProvider && msg.suggestionModelId) {
+				suggestionModel = ctx.modelRegistry.find(msg.suggestionModelProvider, msg.suggestionModelId);
+				if (!suggestionModel) {
+					sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: `Suggestion model not found: ${msg.suggestionModelProvider}/${msg.suggestionModelId}` });
+					return;
+				}
+			}
 			const completionController = new AbortController();
 			activeCompletionSuggestions.set(msg.requestId, completionController);
 			void (async () => {
 				try {
+					const activeSuggestionModel = suggestionModel ?? ctx.model;
 					const suggestion = await runStudioCompletionSuggestion(ctx, {
 						text: msg.text,
 						selectionStart: msg.selectionStart,
@@ -12076,12 +12249,15 @@ export default function (pi: ExtensionAPI) {
 						path: msg.path,
 						contextMode: msg.contextMode,
 						contextText: msg.contextText,
+						previousSuggestion: msg.previousSuggestion,
+						model: suggestionModel,
 						signal: completionController.signal,
 					});
 					sendToClient(client, {
 						type: "completion_suggestion_result",
 						requestId: msg.requestId,
 						suggestion,
+						modelLabel: formatStudioModelOptionLabel(activeSuggestionModel),
 						selectionStart: msg.selectionStart,
 						selectionEnd: msg.selectionEnd,
 					});
@@ -13703,6 +13879,19 @@ export default function (pi: ExtensionAPI) {
 			} catch (error) {
 				respondJson(res, 404, { ok: false, error: `File browser unavailable: ${error instanceof Error ? error.message : String(error)}` });
 			}
+			return;
+		}
+
+		if (requestUrl.pathname === "/file-browser-open") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			void handleOpenStudioFileBrowserDirectoryRequest(req, res, studioCwd).catch((error) => {
+				respondJson(res, 500, { ok: false, error: `Open folder failed: ${error instanceof Error ? error.message : String(error)}` });
+			});
 			return;
 		}
 

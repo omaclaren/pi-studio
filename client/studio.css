@@ -883,6 +883,12 @@
       font-weight: 650;
     }
 
+    .completion-suggestion-meta {
+      color: var(--studio-info-text, var(--muted));
+      font-size: 11px;
+      font-weight: 500;
+    }
+
     .completion-suggestion-text {
       margin: 0;
       max-height: 180px;
@@ -5624,12 +5630,15 @@
     }
 
     body.studio-ui-refresh .studio-refresh-menu-item > .source-origin-summary,
-    body.studio-ui-refresh .studio-refresh-menu-item > .source-session-summary {
+    body.studio-ui-refresh .studio-refresh-menu-item > .source-session-summary,
+    body.studio-ui-refresh .studio-refresh-menu-item > .completion-thinking-note {
       width: 100%;
+      min-width: 0;
       border-color: var(--border-subtle);
       background: var(--panel-2);
       color: var(--studio-info-text, var(--muted));
       white-space: normal;
+      overflow-wrap: anywhere;
       line-height: 1.35;
     }
 

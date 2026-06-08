@@ -118,8 +118,11 @@
       const suggestCompletionBtn = document.getElementById("suggestCompletionBtn");
       const suggestCompletionOptionsBtn = document.getElementById("suggestCompletionOptionsBtn");
       const completionContextSelect = document.getElementById("completionContextSelect");
+      const completionModelSelect = document.getElementById("completionModelSelect");
       const completionSuggestionPanelEl = document.getElementById("completionSuggestionPanel");
       const completionSuggestionTextEl = document.getElementById("completionSuggestionText");
+      const completionSuggestionMetaEl = document.getElementById("completionSuggestionMeta");
+      const completionSuggestionRegenerateBtn = document.getElementById("completionSuggestionRegenerateBtn");
       const completionSuggestionInsertBtn = document.getElementById("completionSuggestionInsertBtn");
       const completionSuggestionDismissBtn = document.getElementById("completionSuggestionDismissBtn");
       const saveAnnotatedBtn = document.getElementById("saveAnnotatedBtn");
@@ -325,6 +328,7 @@
       const EDITOR_TAB_TEXT = "  ";
       const QUIZ_DEFAULT_COUNT = 5;
       const COMPLETION_CONTEXT_STORAGE_KEY = "piStudio.completionContextMode";
+      const COMPLETION_MODEL_STORAGE_KEY = "piStudio.completionModel";
       const COMPLETION_CONTEXT_MAX_CHARS = 12000;
       const QUIZ_SCOPES = ["editor", "selection", "file", "folder", "repo"];
       const QUIZ_ANGLES = ["general", "scientist", "mathematician", "statistician", "developer", "reviewer"];
@@ -2027,6 +2031,8 @@
       let responseHighlightEnabled = false;
       let completionSuggestionState = null;
       let completionSuggestionContextMode = readCompletionSuggestionContextMode();
+      let completionSuggestionModelValue = readCompletionSuggestionModelValue();
+      let completionSuggestionModelOptions = [];
       let completionSuggestionInFlight = false;
       let completionSuggestionRequestId = null;
       let completionSuggestionPendingSnapshot = null;
@@ -2499,7 +2505,15 @@
               syncActionButtons();
             });
           });
-          appendStudioUiRefreshMenuSection(contextMenu.menu, "Suggestions", [cursorContextBtn, sessionContextBtn]);
+          const suggestionItems = [cursorContextBtn, sessionContextBtn];
+          if (completionModelSelect) {
+            completionModelSelect.hidden = false;
+            suggestionItems.push(completionModelSelect);
+          }
+          const completionThinkingNoteEl = makeStudioUiRefreshElement("div", "source-badge completion-thinking-note", "Suggest uses thinking off and does not change the main Pi model.");
+          completionThinkingNoteEl.setAttribute("aria-label", "Suggestion model note");
+          suggestionItems.push(completionThinkingNoteEl);
+          appendStudioUiRefreshMenuSection(contextMenu.menu, "Suggestions", suggestionItems);
           const statusItems = [];
           if (!isEditorOnlyMode) {
             sourceSessionSummaryEl = makeStudioUiRefreshElement("div", "source-badge source-session-summary", "Session tree: branch history follows the current Pi branch. Editor text is independent.");
@@ -9661,14 +9675,17 @@
               ? "open-new"
               : ((kind === "pdf" || kind === "image") ? "open-preview-new" : "");
             const newTabLabel = kind === "text"
-              ? "Open file tab"
+              ? "Open file-backed tab"
               : (kind === "office" ? "Convert tab" : ((kind === "pdf" || kind === "image") ? "Preview tab" : "New tab"));
+            const newTabTitle = kind === "text"
+              ? "Open this file-backed document in a new refreshable editor tab. Save editor and Refresh from disk will use this file."
+              : (kind === "office" ? "Convert this document to Markdown in a new editor tab." : ((kind === "pdf" || kind === "image") ? "Open this preview in a new Studio tab." : "Open in a new Studio tab."));
             const textActions = newTabAction
-              ? "<button type='button' data-files-action='" + escapeHtml(newTabAction) + "' data-files-path='" + escapeHtml(entry.path) + "'>" + escapeHtml(newTabLabel) + "</button>"
+              ? "<button type='button' data-files-action='" + escapeHtml(newTabAction) + "' data-files-path='" + escapeHtml(entry.path) + "' title='" + escapeHtml(newTabTitle) + "'>" + escapeHtml(newTabLabel) + "</button>"
               : "";
             const openTitle = type === "directory"
               ? "Open folder"
-              : (kind === "text" ? "Open in editor" : (kind === "office" ? "Convert to Markdown in editor" : (kind === "pdf" ? "Open PDF preview" : (kind === "image" ? "Open image preview" : "Copy or reveal this file"))));
+              : (kind === "text" ? "Open file-backed document in the current editor. Save editor and Refresh from disk will use this file." : (kind === "office" ? "Convert to Markdown in the current editor" : (kind === "pdf" ? "Open PDF preview" : (kind === "image" ? "Open image preview" : "Copy or reveal this file"))));
             return "<div class='files-row files-row-" + escapeHtml(type) + " files-kind-" + escapeHtml(kind) + "'>"
               + "<button type='button' class='files-open-btn' data-files-action='" + (type === "directory" ? "open-dir" : "open") + "' data-files-path='" + escapeHtml(entry.path) + "' data-files-kind='" + escapeHtml(kind) + "' title='" + escapeHtml(openTitle) + "'>"
               + "<span class='files-icon' aria-hidden='true'>" + icon + "</span>"
@@ -9695,6 +9712,7 @@
           + "<button type='button' data-files-action='refresh'>Refresh</button>"
           + (currentDir ? "<button type='button' data-files-action='copy-current' data-files-path='" + escapeHtml(currentDir) + "'>Copy path</button>" : "")
           + (currentDir ? "<button type='button' data-files-action='use-working-dir' data-files-path='" + escapeHtml(currentDir) + "'>Use as working dir</button>" : "")
+          + (rootDir ? "<button type='button' data-files-action='open-root' data-files-path='" + escapeHtml(rootDir) + "' title='Open the Files root folder in Finder or the system file manager.'>Open root</button>" : "")
           + (rootDir ? "<button type='button' data-files-action='copy-root' data-files-path='" + escapeHtml(rootDir) + "'>Copy root</button>" : "")
           + "</div>"
           + "</div>"
@@ -9845,6 +9863,23 @@
         setStatus("Working dir set to current folder.", "success");
       }
 
+      async function openFileBrowserDirectoryInFileViewer(path) {
+        const targetDir = normalizeStudioResourceDirValue(path || fileBrowserState.rootDir || fileBrowserState.currentDir || "");
+        if (!targetDir) {
+          setStatus("No folder to open.", "warning");
+          return;
+        }
+        const context = getHtmlPreviewResourceContextOptions();
+        const body = { dir: targetDir };
+        if (context.sourcePath) body.sourcePath = context.sourcePath;
+        if (context.resourceDir) body.resourceDir = context.resourceDir;
+        const payload = await fetchStudioJson("/file-browser-open", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        setStatus(payload && payload.message ? payload.message : "Opened folder in file manager.", "success");
+      }
+
       async function handleFilesPaneClick(event) {
         if (rightView !== "files") return;
         const target = event.target;
@@ -9886,6 +9921,10 @@
           }
           if (action === "use-working-dir") {
             setFileBrowserCurrentDirectoryAsWorkingDir(path);
+            return;
+          }
+          if (action === "open-root") {
+            await openFileBrowserDirectoryInFileViewer(path || fileBrowserState.rootDir || "");
             return;
           }
           if (action === "reveal") {
@@ -10437,13 +10476,18 @@
         syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
         if (suggestCompletionBtn) {
+          const hasSuggestionForCurrentText = Boolean(completionSuggestionState && sourceTextEl && sourceTextEl.value === completionSuggestionState.baseText);
           suggestCompletionBtn.disabled = wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || !String(sourceTextEl.value || "").trim()));
-          suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Stop" : "Suggest";
+          suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Stop" : (hasSuggestionForCurrentText ? "Try another" : "Suggest");
           suggestCompletionBtn.title = completionSuggestionInFlight
             ? "Stop the current suggestion request."
-            : "Ask the current model for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.";
+            : (hasSuggestionForCurrentText
+              ? "Ask for a different suggestion at the same cursor position."
+              : "Ask for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.");
         }
         if (suggestCompletionOptionsBtn) suggestCompletionOptionsBtn.disabled = uiBusy || completionSuggestionInFlight;
+        if (completionModelSelect) completionModelSelect.disabled = uiBusy || completionSuggestionInFlight;
+        if (completionSuggestionRegenerateBtn) completionSuggestionRegenerateBtn.disabled = completionSuggestionInFlight || !completionSuggestionState;
         syncCompletionSuggestionContextUi();
         if (openCompanionBtn) openCompanionBtn.disabled = uiBusy || wsState !== "Ready";
         if (highlightSelect) highlightSelect.disabled = uiBusy;
@@ -10784,9 +10828,37 @@
         }
       }
 
+      function readCompletionSuggestionModelValue() {
+        try {
+          const stored = window.localStorage ? String(window.localStorage.getItem(COMPLETION_MODEL_STORAGE_KEY) || "") : "";
+          return stored && stored !== "undefined" && stored !== "null" ? stored : "current";
+        } catch {
+          return "current";
+        }
+      }
+
+      function encodeCompletionModelValue(provider, id) {
+        return JSON.stringify([String(provider || ""), String(id || "")]);
+      }
+
+      function decodeCompletionModelValue(value) {
+        const raw = String(value || "");
+        if (!raw || raw === "current") return null;
+        try {
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed) || parsed.length < 2) return null;
+          const provider = String(parsed[0] || "").trim();
+          const id = String(parsed[1] || "").trim();
+          return provider && id ? { provider, id } : null;
+        } catch {
+          return null;
+        }
+      }
+
       function setCompletionSuggestionContextMode(mode) {
         completionSuggestionContextMode = mode === "session" ? "session" : "cursor";
         if (completionContextSelect) completionContextSelect.value = completionSuggestionContextMode;
+        hideCompletionSuggestion();
         try {
           if (window.localStorage) window.localStorage.setItem(COMPLETION_CONTEXT_STORAGE_KEY, completionSuggestionContextMode);
         } catch {}
@@ -10795,8 +10867,65 @@
           : "Suggestions will use cursor-local editor context only.");
       }
 
+      function setCompletionSuggestionModelValue(value) {
+        const normalized = String(value || "current") || "current";
+        completionSuggestionModelValue = normalized;
+        if (completionModelSelect) completionModelSelect.value = normalized;
+        hideCompletionSuggestion();
+        try {
+          if (window.localStorage) window.localStorage.setItem(COMPLETION_MODEL_STORAGE_KEY, normalized);
+        } catch {}
+        const selectedLabel = getCompletionSuggestionModelLabel();
+        setStatus(normalized === "current"
+          ? "Suggestions will use the current Pi model with thinking off."
+          : "Suggestions will use " + selectedLabel + " with thinking off.");
+      }
+
+      function getCompletionSuggestionModelSelection() {
+        return decodeCompletionModelValue(completionSuggestionModelValue);
+      }
+
+      function getCompletionSuggestionModelLabel() {
+        const selected = getCompletionSuggestionModelSelection();
+        if (!selected) return "current Pi model";
+        const match = completionSuggestionModelOptions.find((option) => option.provider === selected.provider && option.id === selected.id);
+        return match && match.label ? match.label : (selected.provider + "/" + selected.id);
+      }
+
+      function updateCompletionSuggestionModelOptions(options) {
+        completionSuggestionModelOptions = Array.isArray(options)
+          ? options.map((option) => ({
+            provider: String(option && option.provider || "").trim(),
+            id: String(option && option.id || "").trim(),
+            label: String(option && option.label || "").trim(),
+            reasoning: Boolean(option && option.reasoning),
+          })).filter((option) => option.provider && option.id)
+          : [];
+        syncCompletionSuggestionModelUi();
+      }
+
+      function syncCompletionSuggestionModelUi() {
+        if (!completionModelSelect) return;
+        const currentValue = completionSuggestionModelValue || "current";
+        const modelOptionsHtml = completionSuggestionModelOptions.map((option) => {
+          const value = encodeCompletionModelValue(option.provider, option.id);
+          const label = option.label || (option.provider + "/" + option.id);
+          return "<option value='" + escapeHtml(value) + "'>Suggestion model: " + escapeHtml(label) + "</option>";
+        });
+        const validValues = new Set(["current", ...completionSuggestionModelOptions.map((option) => encodeCompletionModelValue(option.provider, option.id))]);
+        if (!validValues.has(currentValue) && completionSuggestionModelOptions.length === 0 && currentValue !== "current") {
+          modelOptionsHtml.push("<option value='" + escapeHtml(currentValue) + "'>Suggestion model: saved selection</option>");
+          validValues.add(currentValue);
+        }
+        completionModelSelect.innerHTML = ["<option value='current'>Suggestion model: current Pi model</option>", ...modelOptionsHtml].join("");
+        completionModelSelect.value = validValues.has(currentValue) ? currentValue : "current";
+        if (completionModelSelect.value !== currentValue) completionSuggestionModelValue = "current";
+        completionModelSelect.title = "Choose the model used for Suggest. Suggestions use direct completion with thinking off and do not change the main Pi model.";
+      }
+
       function syncCompletionSuggestionContextUi() {
         if (completionContextSelect) completionContextSelect.value = completionSuggestionContextMode;
+        syncCompletionSuggestionModelUi();
         if (suggestCompletionOptionsBtn) {
           suggestCompletionOptionsBtn.textContent = "Source & context";
           suggestCompletionOptionsBtn.title = completionSuggestionContextMode === "session"
@@ -10841,13 +10970,20 @@
       function hideCompletionSuggestion() {
         completionSuggestionState = null;
         if (completionSuggestionTextEl) completionSuggestionTextEl.textContent = "";
+        if (completionSuggestionMetaEl) completionSuggestionMetaEl.textContent = "";
         if (completionSuggestionPanelEl) completionSuggestionPanelEl.hidden = true;
+        syncActionButtons();
       }
 
       function showCompletionSuggestion(state) {
         completionSuggestionState = state;
         if (completionSuggestionTextEl) completionSuggestionTextEl.textContent = state && state.suggestion ? state.suggestion : "";
+        if (completionSuggestionMetaEl) {
+          const modelLabelText = state && state.modelLabel ? String(state.modelLabel) : getCompletionSuggestionModelLabel();
+          completionSuggestionMetaEl.textContent = modelLabelText ? " · " + modelLabelText + " · thinking off" : " · thinking off";
+        }
         if (completionSuggestionPanelEl) completionSuggestionPanelEl.hidden = false;
+        syncActionButtons();
       }
 
       function focusSourceTextNoScroll() {
@@ -10927,29 +11063,38 @@
         }
       }
 
-      function requestCompletionSuggestion() {
+      function requestCompletionSuggestion(options) {
         if (isEditorOnlyMode && !sourceTextEl) return;
         if (completionSuggestionInFlight) {
           cancelCompletionSuggestion();
           return;
         }
-        const text = String(sourceTextEl.value || "");
+        const regenerateRequested = Boolean((options && options.regenerate) || (completionSuggestionState && sourceTextEl.value === completionSuggestionState.baseText));
+        const existingSuggestion = regenerateRequested ? completionSuggestionState : null;
+        const text = existingSuggestion ? String(existingSuggestion.baseText || "") : String(sourceTextEl.value || "");
         if (!text.trim()) {
           setStatus("Editor is empty.", "warning");
           return;
         }
-        const selectionStart = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : text.length;
-        const selectionEnd = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : selectionStart;
+        if (existingSuggestion && String(sourceTextEl.value || "") !== text) {
+          setStatus("Editor changed. Request a fresh suggestion from the current cursor.", "warning");
+          hideCompletionSuggestion();
+          return;
+        }
+        const selectionStart = existingSuggestion ? existingSuggestion.selectionStart : (typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : text.length);
+        const selectionEnd = existingSuggestion ? existingSuggestion.selectionEnd : (typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : selectionStart);
         const contextText = getCompletionSuggestionContextText();
+        const selectedModel = getCompletionSuggestionModelSelection();
         const requestId = makeRequestId();
+        const previousSuggestion = existingSuggestion && existingSuggestion.suggestion ? String(existingSuggestion.suggestion) : "";
         completionSuggestionInFlight = true;
         completionSuggestionRequestId = requestId;
-        completionSuggestionPendingSnapshot = { text, selectionStart, selectionEnd };
+        completionSuggestionPendingSnapshot = { text, selectionStart, selectionEnd, previousSuggestion };
         completionSuggestionRefocusEditorOnResult = shouldRefocusEditorForCompletionRequest();
         hideCompletionSuggestion();
         syncActionButtons();
-        setStatus("Generating completion suggestion…", "warning");
-        const sent = sendMessage({
+        setStatus(existingSuggestion ? "Generating another suggestion…" : "Generating completion suggestion…", "warning");
+        const message = {
           type: "completion_suggestion_request",
           requestId,
           text,
@@ -10960,7 +11105,13 @@
           path: sourceState && sourceState.path ? sourceState.path : undefined,
           contextMode: completionSuggestionContextMode,
           contextText: contextText || undefined,
-        });
+          previousSuggestion: previousSuggestion || undefined,
+        };
+        if (selectedModel) {
+          message.suggestionModelProvider = selectedModel.provider;
+          message.suggestionModelId = selectedModel.id;
+        }
+        const sent = sendMessage(message);
         if (!sent) {
           completionSuggestionInFlight = false;
           completionSuggestionRequestId = null;
@@ -11035,6 +11186,8 @@
           baseText,
           selectionStart: start,
           selectionEnd: end,
+          previousSuggestion: pendingSnapshot && pendingSnapshot.previousSuggestion ? pendingSnapshot.previousSuggestion : "",
+          modelLabel: typeof message.modelLabel === "string" ? message.modelLabel : getCompletionSuggestionModelLabel(),
         });
         const activeEl = document.activeElement;
         if (
@@ -18493,6 +18646,9 @@
           if (typeof message.modelLabel === "string") {
             modelLabel = message.modelLabel;
           }
+          if (Array.isArray(message.suggestionModels)) {
+            updateCompletionSuggestionModelOptions(message.suggestionModels);
+          }
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
@@ -19064,6 +19220,9 @@
           updateTerminalActivityState(message.terminalPhase, message.terminalToolName, message.terminalActivityLabel);
           if (typeof message.modelLabel === "string") {
             modelLabel = message.modelLabel;
+          }
+          if (Array.isArray(message.suggestionModels)) {
+            updateCompletionSuggestionModelOptions(message.suggestionModels);
           }
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
@@ -20188,6 +20347,18 @@
         completionContextSelect.addEventListener("change", () => {
           setCompletionSuggestionContextMode(completionContextSelect.value);
           syncActionButtons();
+        });
+      }
+      if (completionModelSelect) {
+        completionModelSelect.value = completionSuggestionModelValue;
+        completionModelSelect.addEventListener("change", () => {
+          setCompletionSuggestionModelValue(completionModelSelect.value || "current");
+          syncActionButtons();
+        });
+      }
+      if (completionSuggestionRegenerateBtn) {
+        completionSuggestionRegenerateBtn.addEventListener("click", () => {
+          requestCompletionSuggestion({ regenerate: true });
         });
       }
       if (completionSuggestionInsertBtn) {
