@@ -7,6 +7,7 @@
       const footerMetaModelEl = document.getElementById("footerMetaModel");
       const footerMetaTerminalEl = document.getElementById("footerMetaTerminal");
       const footerMetaContextEl = document.getElementById("footerMetaContext");
+      const footerModelMenuEl = document.getElementById("footerModelMenu");
       let faviconLinkEl = document.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
       if (!faviconLinkEl) {
         faviconLinkEl = document.createElement("link");
@@ -522,6 +523,10 @@
       let previewExportInProgress = false;
       let compactInProgress = false;
       let modelLabel = (document.body && document.body.dataset && document.body.dataset.modelLabel) || "none";
+      let piModelOptions = [];
+      let piCurrentModel = null;
+      let piThinkingLevel = "";
+      let footerModelMenuOpen = false;
       let terminalSessionLabel = (document.body && document.body.dataset && document.body.dataset.terminalLabel) || "unknown";
       let terminalSessionDetail = (document.body && document.body.dataset && document.body.dataset.terminalDetail) || terminalSessionLabel;
       let contextTokens = null;
@@ -2510,13 +2515,13 @@
             completionModelSelect.hidden = false;
             suggestionItems.push(completionModelSelect);
           }
-          const completionThinkingNoteEl = makeStudioUiRefreshElement("div", "source-badge completion-thinking-note", "Suggest uses thinking off and does not change the main Pi model.");
+          const completionThinkingNoteEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note completion-thinking-note", "Suggest: thinking off; model choice only affects suggestions.");
           completionThinkingNoteEl.setAttribute("aria-label", "Suggestion model note");
           suggestionItems.push(completionThinkingNoteEl);
           appendStudioUiRefreshMenuSection(contextMenu.menu, "Suggestions", suggestionItems);
           const statusItems = [];
           if (!isEditorOnlyMode) {
-            sourceSessionSummaryEl = makeStudioUiRefreshElement("div", "source-badge source-session-summary", "Session tree: branch history follows the current Pi branch. Editor text is independent.");
+            sourceSessionSummaryEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note source-session-summary", "Session tree: branch history follows the current Pi branch; editor text stays independent.");
             sourceSessionSummaryEl.setAttribute("aria-label", "Pi session tree and editor sync behaviour");
             sourceSessionSummaryEl.title = "Use /tree in the Pi terminal to navigate branches. Studio updates branch history to match the active branch and leaves editor text unchanged.";
             statusItems.push(sourceSessionSummaryEl);
@@ -3179,6 +3184,118 @@
         }
       }
 
+      function encodePiModelValue(provider, id) {
+        return JSON.stringify([String(provider || ""), String(id || "")]);
+      }
+
+      function decodePiModelValue(value) {
+        try {
+          const parsed = JSON.parse(String(value || ""));
+          if (!Array.isArray(parsed) || parsed.length < 2) return null;
+          const provider = String(parsed[0] || "").trim();
+          const id = String(parsed[1] || "").trim();
+          return provider && id ? { provider, id } : null;
+        } catch {
+          return null;
+        }
+      }
+
+      function normalizePiModelOptions(options) {
+        return Array.isArray(options)
+          ? options.map((option) => ({
+            provider: String(option && option.provider || "").trim(),
+            id: String(option && option.id || "").trim(),
+            label: String(option && option.label || "").trim(),
+            reasoning: Boolean(option && option.reasoning),
+          })).filter((option) => option.provider && option.id)
+          : [];
+      }
+
+      function updatePiSessionModelState(message) {
+        if (!message || typeof message !== "object") return;
+        if (Array.isArray(message.piModels)) {
+          piModelOptions = normalizePiModelOptions(message.piModels);
+        } else if (Array.isArray(message.suggestionModels) && !piModelOptions.length) {
+          piModelOptions = normalizePiModelOptions(message.suggestionModels);
+        }
+        if (message.currentModel && typeof message.currentModel === "object") {
+          const model = message.currentModel;
+          const provider = String(model.provider || "").trim();
+          const id = String(model.id || "").trim();
+          piCurrentModel = provider && id ? {
+            provider,
+            id,
+            label: String(model.label || "").trim(),
+            reasoning: Boolean(model.reasoning),
+          } : null;
+        }
+        if (typeof message.thinkingLevel === "string") {
+          piThinkingLevel = message.thinkingLevel.trim();
+        }
+        renderFooterModelMenu();
+      }
+
+      function getPiCurrentModelValue() {
+        return piCurrentModel && piCurrentModel.provider && piCurrentModel.id
+          ? encodePiModelValue(piCurrentModel.provider, piCurrentModel.id)
+          : "";
+      }
+
+      function getPiThinkingLevels() {
+        return ["off", "minimal", "low", "medium", "high", "xhigh"];
+      }
+
+      function renderFooterModelMenu() {
+        if (!footerModelMenuEl) return;
+        const currentValue = getPiCurrentModelValue();
+        const optionValues = new Set(piModelOptions.map((option) => encodePiModelValue(option.provider, option.id)));
+        const modelOptionsHtml = piModelOptions.map((option) => {
+          const value = encodePiModelValue(option.provider, option.id);
+          const label = option.label || (option.provider + "/" + option.id);
+          return "<option value='" + escapeHtml(value) + "'" + (value === currentValue ? " selected" : "") + ">" + escapeHtml(label) + "</option>";
+        });
+        if (currentValue && !optionValues.has(currentValue)) {
+          const label = piCurrentModel && piCurrentModel.label ? piCurrentModel.label : modelLabel;
+          modelOptionsHtml.unshift("<option value='" + escapeHtml(currentValue) + "' selected>" + escapeHtml(label || "current model") + "</option>");
+        }
+        const thinking = piThinkingLevel || "off";
+        const thinkingOptionsHtml = getPiThinkingLevels().map((level) => {
+          return "<option value='" + escapeHtml(level) + "'" + (level === thinking ? " selected" : "") + ">Thinking: " + escapeHtml(level) + "</option>";
+        });
+        footerModelMenuEl.innerHTML = ""
+          + "<div class='footer-model-menu-heading'>Pi model & thinking</div>"
+          + "<label class='footer-model-menu-field'><span>Pi model</span><select id='footerPiModelSelect'>" + modelOptionsHtml.join("") + "</select></label>"
+          + "<label class='footer-model-menu-field'><span>Thinking</span><select id='footerPiThinkingSelect'>" + thinkingOptionsHtml.join("") + "</select></label>"
+          + "<div class='footer-model-menu-note'>Affects future Pi turns. Studio Suggest has its own model setting.</div>";
+      }
+
+      function setFooterModelMenuOpen(open) {
+        footerModelMenuOpen = Boolean(open);
+        if (footerModelMenuEl) footerModelMenuEl.hidden = !footerModelMenuOpen;
+        if (footerMetaModelEl) {
+          footerMetaModelEl.classList.toggle("is-open", footerModelMenuOpen);
+          footerMetaModelEl.setAttribute("aria-expanded", footerModelMenuOpen ? "true" : "false");
+        }
+        if (footerModelMenuOpen) renderFooterModelMenu();
+      }
+
+      function requestPiModelSelection(value) {
+        const model = decodePiModelValue(value);
+        if (!model) {
+          setStatus("No Pi model selected.", "warning");
+          return;
+        }
+        const sent = sendMessage({ type: "pi_model_select_request", provider: model.provider, id: model.id });
+        if (sent) setStatus("Switching Pi model…", "warning");
+      }
+
+      function requestPiThinkingLevel(level) {
+        const normalized = String(level || "").trim();
+        if (!normalized) return;
+        const sent = sendMessage({ type: "pi_thinking_level_request", level: normalized });
+        if (sent) setStatus("Setting Pi thinking level…", "warning");
+      }
+
       function updateFooterMeta() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
@@ -3192,7 +3309,9 @@
           footerMetaModelEl.textContent = modelText;
           footerMetaTerminalEl.textContent = terminalText;
           footerMetaContextEl.textContent = contextDisplayText;
-          footerMetaModelEl.title = "Model: " + modelText;
+          footerMetaModelEl.title = "Pi model and thinking: " + modelText;
+          footerMetaModelEl.setAttribute("aria-haspopup", "menu");
+          footerMetaModelEl.setAttribute("aria-expanded", footerModelMenuOpen ? "true" : "false");
           footerMetaTerminalEl.title = terminalDetailText;
           footerMetaContextEl.title = contextTitleText;
           if (footerMetaTextEl) footerMetaTextEl.title = titleText;
@@ -18649,6 +18768,7 @@
           if (Array.isArray(message.suggestionModels)) {
             updateCompletionSuggestionModelOptions(message.suggestionModels);
           }
+          updatePiSessionModelState(message);
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
@@ -19224,6 +19344,7 @@
           if (Array.isArray(message.suggestionModels)) {
             updateCompletionSuggestionModelOptions(message.suggestionModels);
           }
+          updatePiSessionModelState(message);
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
@@ -20103,7 +20224,37 @@
         if (event.key === "Escape") {
           closeExportPreviewMenu();
           closePreviewLinkMenu();
+          setFooterModelMenuOpen(false);
         }
+      });
+
+      if (footerMetaModelEl) {
+        footerMetaModelEl.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setFooterModelMenuOpen(!footerModelMenuOpen);
+        });
+      }
+      if (footerModelMenuEl) {
+        footerModelMenuEl.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        footerModelMenuEl.addEventListener("change", (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLSelectElement)) return;
+          if (target.id === "footerPiModelSelect") {
+            requestPiModelSelection(target.value);
+            setFooterModelMenuOpen(false);
+          } else if (target.id === "footerPiThinkingSelect") {
+            requestPiThinkingLevel(target.value);
+            setFooterModelMenuOpen(false);
+          }
+        });
+      }
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (target instanceof Element && (target.closest("#footerModelMenu") || target.closest("#footerMetaModel"))) return;
+        setFooterModelMenuOpen(false);
       });
 
       saveAsBtn.addEventListener("click", () => {

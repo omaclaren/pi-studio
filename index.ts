@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { completeSimple, type ModelThinkingLevel, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -349,6 +349,17 @@ interface CompletionSuggestionCancelRequestMessage {
 	requestId: string;
 }
 
+interface PiModelSelectRequestMessage {
+	type: "pi_model_select_request";
+	provider: string;
+	id: string;
+}
+
+interface PiThinkingLevelRequestMessage {
+	type: "pi_thinking_level_request";
+	level: ModelThinkingLevel;
+}
+
 interface QuizGenerateRequestMessage {
 	type: "quiz_generate_request";
 	requestId: string;
@@ -492,6 +503,8 @@ type IncomingStudioMessage =
 	| SendRunRequestMessage
 	| CompletionSuggestionRequestMessage
 	| CompletionSuggestionCancelRequestMessage
+	| PiModelSelectRequestMessage
+	| PiThinkingLevelRequestMessage
 	| QuizGenerateRequestMessage
 	| QuizAnswerRequestMessage
 	| QuizDiscussRequestMessage
@@ -8324,6 +8337,24 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		};
 	}
 
+	if (msg.type === "pi_model_select_request" && typeof msg.provider === "string" && typeof msg.id === "string") {
+		return {
+			type: "pi_model_select_request",
+			provider: msg.provider,
+			id: msg.id,
+		};
+	}
+
+	if (msg.type === "pi_thinking_level_request" && typeof msg.level === "string") {
+		const level = msg.level.trim().toLowerCase();
+		if (level === "off" || level === "minimal" || level === "low" || level === "medium" || level === "high" || level === "xhigh") {
+			return {
+				type: "pi_thinking_level_request",
+				level,
+			};
+		}
+	}
+
 	if (msg.type === "completion_suggestion_request" && typeof msg.requestId === "string" && typeof msg.text === "string") {
 		const textLength = msg.text.length;
 		const rawStart = typeof msg.selectionStart === "number" && Number.isFinite(msg.selectionStart) ? msg.selectionStart : textLength;
@@ -10220,7 +10251,7 @@ ${cssVarsBlock}
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
-      <label class="file-label" title="Browser import: load a selected text file as a detached unsaved copy. It will not be refreshable from disk. Use the Files view to open a file-backed document.">Import file copy…<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
+      <label class="file-label" title="Browser import: load a selected text file as a detached copy. Use Save editor as… to attach this copy to a file path and make it file-backed, or use the Files view to open a refreshable file-backed document directly.">Import file copy…<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>
     </div>
@@ -10503,7 +10534,8 @@ ${cssVarsBlock}
 
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
-    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text"><span id="footerMetaModel" class="footer-meta-part footer-meta-model">${initialModel}</span><span class="footer-meta-sep">·</span><span id="footerMetaTerminal" class="footer-meta-part footer-meta-terminal">${initialTerminal}</span><span class="footer-meta-sep">·</span><span id="footerMetaContext" class="footer-meta-part footer-meta-context">unknown</span></span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
+    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text"><button id="footerMetaModel" class="footer-meta-part footer-meta-model footer-model-btn" type="button" aria-haspopup="menu" aria-expanded="false">${initialModel}</button><span class="footer-meta-sep">·</span><span id="footerMetaTerminal" class="footer-meta-part footer-meta-terminal">${initialTerminal}</span><span class="footer-meta-sep">·</span><span id="footerMetaContext" class="footer-meta-part footer-meta-context">unknown</span></span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
+    <div id="footerModelMenu" class="footer-model-menu" hidden></div>
     <button id="shortcutsBtn" class="shortcut-hint" type="button" title="Show Studio keyboard shortcuts. Press ? when not editing text.">Shortcuts (?)</button>
   </footer>
 
@@ -10624,7 +10656,7 @@ export default function (pi: ExtensionAPI) {
 	let terminalActivityToolName: string | null = null;
 	let terminalActivityLabel: string | null = null;
 	let lastSpecificToolActivityLabel: string | null = null;
-	let currentModel: { provider?: string; id?: string } | undefined;
+	let currentModel: { provider?: string; id?: string; name?: string; reasoning?: boolean } | undefined;
 	let currentModelLabel = "none";
 	let terminalSessionLabel = buildTerminalSessionLabel(studioCwd);
 	let terminalSessionDetail = buildTerminalSessionDetail(studioCwd);
@@ -10897,15 +10929,20 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const getThinkingLevelSafe = (): string | undefined => {
+	const getThinkingLevelSafe = (): ModelThinkingLevel | undefined => {
 		try {
-			return pi.getThinkingLevel();
+			return pi.getThinkingLevel() as ModelThinkingLevel;
 		} catch {
 			return undefined;
 		}
 	};
 
-	const refreshRuntimeMetadata = (ctx?: { cwd?: string; model?: { provider?: string; id?: string } | undefined }) => {
+	const setThinkingLevelSafe = (level: ModelThinkingLevel) => {
+		// Pi's CLI/model config support "off" as a thinking level; some extension API typings still expose the narrower reasoning-only type.
+		(pi.setThinkingLevel as (nextLevel: ModelThinkingLevel) => void)(level);
+	};
+
+	const refreshRuntimeMetadata = (ctx?: { cwd?: string; model?: { provider?: string; id?: string; name?: string; reasoning?: boolean } | undefined }) => {
 		if (ctx?.cwd) {
 			studioCwd = ctx.cwd;
 		}
@@ -10914,6 +10951,8 @@ export default function (pi: ExtensionAPI) {
 				currentModel = {
 					provider: ctx.model.provider,
 					id: ctx.model.id,
+					name: ctx.model.name,
+					reasoning: Boolean(ctx.model.reasoning),
 				};
 			} else {
 				currentModel = undefined;
@@ -10922,6 +10961,8 @@ export default function (pi: ExtensionAPI) {
 			currentModel = {
 				provider: lastCommandCtx.model.provider,
 				id: lastCommandCtx.model.id,
+				name: lastCommandCtx.model.name,
+				reasoning: Boolean(lastCommandCtx.model.reasoning),
 			};
 		}
 		const baseModelLabel = formatModelLabel(currentModel);
@@ -11606,7 +11647,7 @@ export default function (pi: ExtensionAPI) {
 		broadcastState();
 	};
 
-	const getSuggestionModelOptions = () => {
+	const getStudioModelOptions = () => {
 		const registry = lastCommandCtx?.modelRegistry ?? latestModelRequestCtx?.modelRegistry;
 		if (!registry || typeof registry.getAvailable !== "function") return [];
 		return registry.getAvailable().map((model) => ({
@@ -11617,11 +11658,21 @@ export default function (pi: ExtensionAPI) {
 		}));
 	};
 
+	const getCurrentStudioModelDescriptor = () => currentModel
+		? {
+			provider: currentModel.provider,
+			id: currentModel.id,
+			label: formatStudioModelOptionLabel(currentModel),
+			reasoning: Boolean(currentModel.reasoning),
+		}
+		: null;
+
 	const broadcastState = () => {
 		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
 		terminalSessionDetail = buildTerminalSessionDetail(studioCwd, getSessionNameSafe());
 		currentModelLabel = formatModelLabelWithThinking(formatModelLabel(currentModel), getThinkingLevelSafe());
 		refreshContextUsage();
+		const modelOptions = getStudioModelOptions();
 		broadcast({
 			type: "studio_state",
 			busy: isStudioBusy(),
@@ -11630,7 +11681,10 @@ export default function (pi: ExtensionAPI) {
 			terminalToolName: terminalActivityToolName,
 			terminalActivityLabel,
 			modelLabel: currentModelLabel,
-			suggestionModels: getSuggestionModelOptions(),
+			currentModel: getCurrentStudioModelDescriptor(),
+			thinkingLevel: getThinkingLevelSafe() ?? "off",
+			piModels: modelOptions,
+			suggestionModels: modelOptions,
 			terminalSessionLabel,
 			terminalSessionDetail,
 			contextTokens: contextUsageSnapshot.tokens,
@@ -11926,7 +11980,10 @@ export default function (pi: ExtensionAPI) {
 				terminalToolName: terminalActivityToolName,
 				terminalActivityLabel,
 				modelLabel: currentModelLabel,
-				suggestionModels: getSuggestionModelOptions(),
+				currentModel: getCurrentStudioModelDescriptor(),
+				thinkingLevel: getThinkingLevelSafe() ?? "off",
+				piModels: getStudioModelOptions(),
+				suggestionModels: getStudioModelOptions(),
 				terminalSessionLabel,
 				terminalSessionDetail,
 				contextTokens: contextUsageSnapshot.tokens,
@@ -11942,6 +11999,47 @@ export default function (pi: ExtensionAPI) {
 				traceState: studioTraceState,
 				initialDocument: initialStudioDocument,
 			});
+			return;
+		}
+
+		if (msg.type === "pi_model_select_request") {
+			void (async () => {
+				const registry = lastCommandCtx?.modelRegistry ?? latestModelRequestCtx?.modelRegistry;
+				if (!registry || typeof registry.find !== "function") {
+					sendToClient(client, { type: "info", level: "warning", message: "Pi model registry is not available yet." });
+					return;
+				}
+				const model = registry.find(msg.provider, msg.id);
+				if (!model) {
+					sendToClient(client, { type: "info", level: "warning", message: `Pi model not found: ${msg.provider}/${msg.id}` });
+					return;
+				}
+				try {
+					const ok = await pi.setModel(model);
+					if (!ok) {
+						sendToClient(client, { type: "info", level: "warning", message: `Could not switch to ${formatStudioModelOptionLabel(model)}; credentials may be unavailable.` });
+						return;
+					}
+					latestModelRequestCtx = { model, modelRegistry: registry };
+					refreshRuntimeMetadata({ model });
+					broadcastState();
+					sendToClient(client, { type: "info", level: "info", message: `Pi model switched to ${formatStudioModelOptionLabel(model)}.` });
+				} catch (error) {
+					sendToClient(client, { type: "info", level: "error", message: `Model switch failed: ${error instanceof Error ? error.message : String(error)}` });
+				}
+			})();
+			return;
+		}
+
+		if (msg.type === "pi_thinking_level_request") {
+			try {
+				setThinkingLevelSafe(msg.level);
+				refreshRuntimeMetadata({ model: lastCommandCtx?.model ?? latestModelRequestCtx?.model });
+				broadcastState();
+				sendToClient(client, { type: "info", level: "info", message: `Pi thinking level set to ${getThinkingLevelSafe() ?? msg.level}.` });
+			} catch (error) {
+				sendToClient(client, { type: "info", level: "error", message: `Thinking level change failed: ${error instanceof Error ? error.message : String(error)}` });
+			}
 			return;
 		}
 

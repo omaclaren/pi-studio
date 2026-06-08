@@ -4,6 +4,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.28] — 2026-06-08
+
+### Added
+- Added a footer **Pi model & thinking** menu for switching the active Pi model and thinking level from Studio while keeping Studio Suggest model choice separate.
+
+### Changed
+- Clarified the browser-import tooltip to explain that **Save editor as…** can make an imported copy file-backed.
+- Regularized Source & context menu notes so explanatory text uses a quieter, consistent menu-note style.
+
 ## [0.9.27] — 2026-06-08
 
 ### Added
