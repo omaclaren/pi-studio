@@ -1112,6 +1112,7 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions, extraPreamble 
 \\definecolor{StudioCalloutCautionText}{HTML}{A40E26}
 \\definecolor{StudioCalloutCautionLabelBg}{HTML}{FDEBEC}
 \\newcommand{\\studioannotation}[1]{\\begingroup\\setlength{\\fboxsep}{1.5pt}\\fcolorbox{StudioAnnotationBorder}{StudioAnnotationBg}{\\begin{varwidth}{\\dimexpr\\linewidth-2\\fboxsep-2\\fboxrule\\relax}\\raggedright\\textcolor{StudioAnnotationText}{\\sffamily\\footnotesize\\strut #1}\\end{varwidth}}\\endgroup}
+\\newcommand{\\studioblockannotation}[1]{\\par\\smallskip\\noindent\\begingroup\\setlength{\\fboxsep}{1.5pt}\\fcolorbox{StudioAnnotationBorder}{StudioAnnotationBg}{\\begin{minipage}{\\dimexpr\\linewidth-2\\fboxsep-2\\fboxrule\\relax}\\raggedright\\textcolor{StudioAnnotationText}{\\sffamily\\footnotesize\\strut #1}\\end{minipage}}\\endgroup\\par\\smallskip\\noindent\\ignorespaces}
 \\newcommand{\\StudioDiffAddTok}[1]{\\textcolor{StudioDiffAddText}{#1}}
 \\newcommand{\\StudioDiffDelTok}[1]{\\textcolor{StudioDiffDelText}{#1}}
 \\newcommand{\\StudioDiffMetaTok}[1]{\\textcolor{StudioDiffMetaText}{#1}}
@@ -5069,22 +5070,25 @@ function renderStudioAnnotationPdfLatex(text: string): string {
 	return renderStudioAnnotationPdfLatexContent(normalized).trim();
 }
 
+function renderStudioAnnotationPdfBox(markerText: string, block = false): string {
+	const cleaned = renderStudioAnnotationPdfLatex(markerText);
+	if (!cleaned) return "";
+	return block ? `\\studioblockannotation{${cleaned}}` : `\\studioannotation{${cleaned}}`;
+}
+
 function replaceStudioAnnotationMarkersForPdfInSegment(text: string): string {
+	const renderMarker = (markerText: string): string => {
+		const label = normalizeStudioAnnotationText(markerText);
+		if (!label) return "";
+		return renderStudioAnnotationPdfBox(label, shouldRenderStudioAnnotationAsPdfBlock(label));
+	};
 	const replaced = replaceStudioInlineAnnotationMarkers(
 		String(text ?? ""),
-		(marker: { body: string }) => {
-			const cleaned = renderStudioAnnotationPdfLatex(marker.body);
-			if (!cleaned) return "";
-			return `\\studioannotation{${cleaned}}`;
-		},
+		(marker: { body: string }) => renderMarker(marker.body),
 	);
 
 	return String(replaced ?? "")
-		.replace(/\{\[\}\s*an:\s*([\s\S]*?)\s*\{\]\}/gi, (_match, markerText: string) => {
-			const cleaned = renderStudioAnnotationPdfLatex(markerText);
-			if (!cleaned) return "";
-			return `\\studioannotation{${cleaned}}`;
-		});
+		.replace(/\{\[\}\s*an:\s*([\s\S]*?)\s*\{\]\}/gi, (_match, markerText: string) => renderMarker(markerText));
 }
 
 function replaceStudioAnnotationMarkersForPdf(markdown: string): string {
@@ -6096,6 +6100,15 @@ function parseStudioHtmlPdfBlockOptions(body: string): StudioHtmlPdfBlockOptions
 	return options;
 }
 
+// PDF/LaTeX cannot fully mimic the browser's inline-block wrapping for long
+// annotation chips, so long annotations switch to a display box at the marker.
+const STUDIO_PDF_ANNOTATION_DISPLAY_THRESHOLD_CHARS = 115;
+
+function shouldRenderStudioAnnotationAsPdfBlock(text: string): boolean {
+	const normalized = normalizeStudioAnnotationText(text);
+	return normalized.length > STUDIO_PDF_ANNOTATION_DISPLAY_THRESHOLD_CHARS;
+}
+
 function prepareStudioPdfBlocksForHtml(markdown: string): { markdown: string; blocks: StudioHtmlPdfBlock[] } {
 	const blocks: StudioHtmlPdfBlock[] = [];
 	const prefix = `PISTUDIOHTMLPDF${Date.now().toString(36)}${randomUUID().replace(/-/g, "")}TOKEN`;
@@ -6126,7 +6139,7 @@ function prepareStudioAnnotationMarkersForHtml(markdown: string): { markdown: st
 
 function applyStudioAnnotationPlaceholdersToHtml(html: string, placeholders: StudioHtmlAnnotationPlaceholder[]): string {
 	let transformed = String(html ?? "");
-	for (const placeholder of placeholders) {
+	for (const placeholder of [...placeholders].sort((a, b) => b.token.length - a.token.length)) {
 		const tokenPattern = new RegExp(escapeStudioRegExpLiteral(placeholder.token), "g");
 		const markerHtml = `<span class="annotation-preview-marker" title="${escapeStudioHtmlText(placeholder.title)}">${renderStudioAnnotationInlineHtml(placeholder.text)}</span>`;
 		transformed = transformed.replace(tokenPattern, markerHtml);

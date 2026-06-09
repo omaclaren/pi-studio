@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.31] — 2026-06-09
+
+### Fixed
+- Render long PDF annotations as full-width display-style boxes at their marker position so exported feedback avoids clipping while preserving the surrounding annotation order.
+- Avoided annotation placeholder collisions in HTML exports with ten or more annotations.
+
 ## [0.9.30] — 2026-06-09
 
 ### Fixed
