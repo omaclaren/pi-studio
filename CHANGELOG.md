@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.30] — 2026-06-09
+
+### Fixed
+- Rendered inline strikethrough, emphasis, and code inside `[an: ...]` annotation badges consistently across Studio preview and HTML/PDF export paths.
+
 ## [0.9.29] — 2026-06-09
 
 ### Added

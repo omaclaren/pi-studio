@@ -30,6 +30,7 @@ import {
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
+import { renderStudioAnnotationInlineHtml } from "./shared/studio-annotation-render.js";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
@@ -1086,6 +1087,7 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions, extraPreamble 
 \\titlespacing*{\\subparagraph}{0pt}{0.7ex plus 0.2ex minus 0.1ex}{0.7em}
 \\usepackage{xcolor}
 \\usepackage{varwidth}
+\\usepackage[normalem]{ulem}
 \\definecolor{StudioAnnotationBg}{HTML}{EAF3FF}
 \\definecolor{StudioAnnotationBorder}{HTML}{8CB8FF}
 \\definecolor{StudioAnnotationText}{HTML}{1F5FBF}
@@ -5031,6 +5033,13 @@ function renderStudioAnnotationPlainTextPdfLatex(text: string): string {
 	let index = 0;
 
 	while (index < source.length) {
+		const strikeMatch = readStudioAnnotationPdfEmphasisSpanAt(source, index, "~~", "sout");
+		if (strikeMatch) {
+			out += strikeMatch.latex;
+			index = strikeMatch.end;
+			continue;
+		}
+
 		const strongMatch = readStudioAnnotationPdfEmphasisSpanAt(source, index, "**", "textbf")
 			?? readStudioAnnotationPdfEmphasisSpanAt(source, index, "__", "textbf");
 		if (strongMatch) {
@@ -5648,13 +5657,14 @@ function prepareStudioPdfMarkdown(markdown: string, isLatex?: boolean, editorLan
 		? wrapStudioCodeAsMarkdown(input, effectiveEditorLanguage)
 		: input;
 	const fenceNormalizedSource = effectiveEditorLanguage === "latex" ? source : normalizeStudioMarkdownSmartFences(source);
-	const annotationReadySource = !effectiveEditorLanguage || effectiveEditorLanguage === "markdown" || effectiveEditorLanguage === "latex"
-		? replaceStudioAnnotationMarkersForPdf(fenceNormalizedSource)
-		: fenceNormalizedSource;
-	const commentStrippedSource = stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(annotationReadySource);
-	return prepareStudioMarkdownForPandoc(commentStrippedSource, {
-		preserveLiteralLatexCommands: !hasStudioYamlHeaderIncludes(annotationReadySource),
+	const annotationReadyLanguage = !effectiveEditorLanguage || effectiveEditorLanguage === "markdown" || effectiveEditorLanguage === "latex";
+	const commentStrippedSource = stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(fenceNormalizedSource);
+	const pandocReadySource = prepareStudioMarkdownForPandoc(commentStrippedSource, {
+		preserveLiteralLatexCommands: !hasStudioYamlHeaderIncludes(fenceNormalizedSource),
 	});
+	return annotationReadyLanguage
+		? replaceStudioAnnotationMarkersForPdf(pandocReadySource)
+		: pandocReadySource;
 }
 
 function stripMathMlAnnotationTags(html: string): string {
@@ -6118,7 +6128,7 @@ function applyStudioAnnotationPlaceholdersToHtml(html: string, placeholders: Stu
 	let transformed = String(html ?? "");
 	for (const placeholder of placeholders) {
 		const tokenPattern = new RegExp(escapeStudioRegExpLiteral(placeholder.token), "g");
-		const markerHtml = `<span class="annotation-preview-marker" title="${escapeStudioHtmlText(placeholder.title)}">${escapeStudioHtmlText(placeholder.text)}</span>`;
+		const markerHtml = `<span class="annotation-preview-marker" title="${escapeStudioHtmlText(placeholder.title)}">${renderStudioAnnotationInlineHtml(placeholder.text)}</span>`;
 		transformed = transformed.replace(tokenPattern, markerHtml);
 	}
 	return transformed;

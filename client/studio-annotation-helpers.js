@@ -443,6 +443,13 @@
     let index = 0;
 
     while (index < source.length) {
+      const strikeMatch = readAnnotationEmphasisSpanAt(source, index, "~~", "s");
+      if (strikeMatch) {
+        out += strikeMatch.html;
+        index = strikeMatch.end;
+        continue;
+      }
+
       const strongMatch = readAnnotationEmphasisSpanAt(source, index, "**", "strong")
         || readAnnotationEmphasisSpanAt(source, index, "__", "strong");
       if (strongMatch) {

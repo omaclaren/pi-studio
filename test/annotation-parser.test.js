@@ -65,10 +65,14 @@ test("collectInlineAnnotationMarkers keeps markdown-ish annotation bodies intact
   }
 });
 
-test("renderPreviewAnnotationHtml supports safe inline emphasis and code without activating links", () => {
+test("renderPreviewAnnotationHtml supports safe inline emphasis, strikethrough, and code without activating links", () => {
   assert.equal(
-    helpers.renderPreviewAnnotationHtml("keep *focus* and **tone** plus `npm test`"),
-    "keep <em>focus</em> and <strong>tone</strong> plus <code>npm test</code>",
+    helpers.renderPreviewAnnotationHtml("keep *focus* and **tone** plus ~~cut~~ and `npm test`"),
+    "keep <em>focus</em> and <strong>tone</strong> plus <s>cut</s> and <code>npm test</code>",
+  );
+  assert.equal(
+    helpers.renderPreviewAnnotationHtml("~~cut *this*~~"),
+    "<s>cut <em>this</em></s>",
   );
   assert.equal(
     helpers.renderPreviewAnnotationHtml("$\\mathbb{R}$ *here*"),
