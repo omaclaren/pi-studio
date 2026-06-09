@@ -4,6 +4,14 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.32] — 2026-06-10
+
+### Added
+- Added `Cmd/Ctrl+Alt+W` to switch the right pane directly to Working, matching the existing direct Preview shortcut.
+
+### Fixed
+- Preserved expanded Working-view detail sections while live working updates stream in.
+
 ## [0.9.31] — 2026-06-09
 
 ### Fixed

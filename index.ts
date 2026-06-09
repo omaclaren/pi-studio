@@ -10514,7 +10514,7 @@ ${cssVarsBlock}
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview.">
+          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview; Cmd/Ctrl+Alt+W switches directly to Working.">
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
@@ -10609,6 +10609,7 @@ ${cssVarsBlock}
             <div><dt>F6</dt><dd>Switch between editor and right pane</dd></div>
             <div><dt>F7 / Shift+F7</dt><dd>Cycle the active pane's view</dd></div>
             <div><dt>Cmd/Ctrl+Alt+P</dt><dd>Switch the right pane directly to Preview</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
             <div><dt>F8</dt><dd>Focus editor text</dd></div>
             <div><dt>Shift+F8</dt><dd>Focus right-pane content</dd></div>
             <div><dt>F9</dt><dd>Toggle Zen mode</dd></div>

@@ -270,7 +270,7 @@
         });
         rightViewSelect.title = isEditorOnlyMode
           ? "Editor-only views: editor preview, Changes, Files, or REPL. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview."
-          : "Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview.";
+          : "Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview; Cmd/Ctrl+Alt+W switches directly to Working.";
       }
 
       function getInitialRightView(source) {
@@ -302,6 +302,7 @@
       let traceAutoScroll = true;
       let traceRenderRaf = null;
       const traceExpandedOutputs = new Set();
+      const traceOpenDetails = new Set();
       let gitChangesState = {
         status: "idle",
         requestId: null,
@@ -683,6 +684,7 @@
         traceState = normalizeTraceState(nextState);
         if ((traceState.runId || null) !== previousRunId) {
           traceExpandedOutputs.clear();
+          traceOpenDetails.clear();
         }
         renderTraceViewIfActive();
       }
@@ -3804,6 +3806,17 @@
         setStatus("Right pane view: " + String(label || "Preview") + ".");
       }
 
+      function switchRightPaneToWorking() {
+        if (isEditorOnlyMode) {
+          setStatus("Working view is unavailable in editor-only Studio views.", "warning");
+          return;
+        }
+        const snapshot = snapshotStudioScrollablePositions();
+        setRightView("trace");
+        scheduleStudioScrollablePositionRestore(snapshot);
+        setStatus("Right pane view: Working.");
+      }
+
       function cycleActivePaneView(direction) {
         if (activePane === "right") {
           if (!rightViewSelect || rightViewSelect.disabled) {
@@ -4109,6 +4122,16 @@
         if (isPreviewShortcut) {
           event.preventDefault();
           switchRightPaneToPrimaryPreview();
+          return;
+        }
+
+        const isWorkingShortcut = (key.toLowerCase() === "w" || code === "KeyW")
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey;
+        if (isWorkingShortcut) {
+          event.preventDefault();
+          switchRightPaneToWorking();
           return;
         }
 
@@ -7757,6 +7780,20 @@
         }
       }
 
+      function handleTraceDetailsToggle(event) {
+        if (rightView !== "trace") return;
+        const target = event.target;
+        if (!(target instanceof Element) || !target.matches("details[data-trace-details-key]")) return;
+        const key = target.getAttribute("data-trace-details-key") || "";
+        if (!key) return;
+        if (target.open) {
+          traceOpenDetails.add(key);
+        } else {
+          traceOpenDetails.delete(key);
+        }
+        traceAutoScroll = false;
+      }
+
       async function handleTracePaneClick(event) {
         if (rightView !== "trace") return;
         const target = event.target;
@@ -7951,6 +7988,7 @@
       function attachResponsePaneInteractionHandlers() {
         if (!critiqueViewEl) return;
         critiqueViewEl.addEventListener("scroll", handleTracePaneScroll);
+        critiqueViewEl.addEventListener("toggle", handleTraceDetailsToggle, true);
         critiqueViewEl.addEventListener("click", handleTracePaneClick);
         critiqueViewEl.addEventListener("click", handleReplPaneClick);
         critiqueViewEl.addEventListener("click", handleFilesPaneClick);
@@ -9189,8 +9227,9 @@
         const value = String(inputText || "").trim();
         if (!value) return "";
         const rawKey = outputKey + ":raw-input";
-        const openAttr = traceExpandedOutputs.has(rawKey) ? " open" : "";
-        return "<details class='trace-tool-details trace-tool-raw-input'" + openAttr + ">"
+        const detailsKey = rawKey;
+        const openAttr = traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(rawKey) ? " open" : "";
+        return "<details class='trace-tool-details trace-tool-raw-input' data-trace-details-key='" + escapeHtml(detailsKey) + "'" + openAttr + ">"
           + "<summary>Raw input</summary>"
           + "<div class='trace-tool-details-body'>"
           + renderTraceOutput(value, rawKey, { label: "Raw input" })
@@ -9201,8 +9240,9 @@
       function renderTraceToolTextDetails(summary, text, outputKey, label, options) {
         const value = String(text || "");
         const emptyText = options && typeof options.emptyText === "string" ? options.emptyText : "[empty]";
-        const openAttr = traceExpandedOutputs.has(outputKey) ? " open" : "";
-        return "<details class='trace-tool-details" + (options && options.className ? " " + escapeHtml(options.className) : "") + "'" + openAttr + ">"
+        const detailsKey = outputKey;
+        const openAttr = traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(outputKey) ? " open" : "";
+        return "<details class='trace-tool-details" + (options && options.className ? " " + escapeHtml(options.className) : "") + "' data-trace-details-key='" + escapeHtml(detailsKey) + "'" + openAttr + ">"
           + "<summary>" + escapeHtml(summary) + "</summary>"
           + "<div class='trace-tool-details-body'>"
           + renderTraceOutput(value || emptyText, outputKey, { label })
@@ -9234,8 +9274,9 @@
             const newMetrics = formatTraceTextMetrics(edit.newText);
             const oldKey = entry.id + ":edit:" + edit.index + ":old";
             const newKey = entry.id + ":edit:" + edit.index + ":new";
-            const openAttr = traceExpandedOutputs.has(oldKey) || traceExpandedOutputs.has(newKey) ? " open" : "";
-            return "<details class='trace-tool-details trace-tool-change'" + openAttr + ">"
+            const detailsKey = entry.id + ":edit:" + edit.index;
+            const openAttr = traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(oldKey) || traceExpandedOutputs.has(newKey) ? " open" : "";
+            return "<details class='trace-tool-details trace-tool-change' data-trace-details-key='" + escapeHtml(detailsKey) + "'" + openAttr + ">"
               + "<summary>Replacement " + escapeHtml(String(displayIndex + 1)) + " · " + escapeHtml(oldMetrics) + " → " + escapeHtml(newMetrics) + "</summary>"
               + "<div class='trace-tool-change-body'>"
               + "<div class='trace-tool-change-grid'>"
