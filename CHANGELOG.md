@@ -4,6 +4,20 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.33] — 2026-06-16
+
+### Added
+- Added `Cmd/Ctrl+Alt+E` to switch the right pane directly to Editor Preview.
+
+### Changed
+- Calmed annotation and comment affordance styling so annotations read more like highlighted feedback and less like heavy badges.
+- Slightly muted active Stop button styling while keeping it in the theme error colour family.
+- Derived PDF annotation colours from the active theme accent hue while keeping a light, print-friendly background.
+
+### Fixed
+- Preserved the Working view scroll position when switching between `All`, `Thinking`, and `Tools` filters unless the view was already pinned to the bottom.
+- Rendered standalone long `[an: ...]` annotations correctly in LaTeX-mode PDF exports even when Pandoc wraps the escaped marker across generated LaTeX lines.
+
 ## [0.9.32] — 2026-06-10
 
 ### Added

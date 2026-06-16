@@ -210,15 +210,17 @@
 
     #sendRunBtn.request-stop-active,
     #critiqueBtn.request-stop-active {
-      background: var(--error);
-      border-color: var(--error);
+      background: color-mix(in srgb, var(--error) 82%, var(--panel));
+      border-color: color-mix(in srgb, var(--error) 88%, var(--panel));
       color: var(--error-contrast);
-      font-weight: 600;
+      font-weight: 700;
     }
 
     #sendRunBtn.request-stop-active:not(:disabled):hover,
     #critiqueBtn.request-stop-active:not(:disabled):hover {
-      filter: brightness(0.95);
+      background: var(--error);
+      border-color: var(--error);
+      filter: none;
     }
 
     .file-label {
@@ -930,17 +932,17 @@
       padding: 0 10px;
       font-size: 12px;
       line-height: 1;
-      background: var(--accent-soft);
-      border-color: var(--accent);
-      color: var(--accent);
+      background: color-mix(in srgb, var(--panel) 88%, var(--accent-soft));
+      border-color: var(--control-border);
+      color: var(--text);
       box-shadow: 0 1px 2px var(--shadow-color);
     }
 
     .editor-selection-action-btn:hover,
     .editor-selection-action-btn:focus-visible {
-      background: var(--accent-soft-strong);
+      background: var(--accent-soft);
       color: var(--accent);
-      border-color: var(--accent);
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--control-border));
     }
 
     .editor-selection-actions[hidden],
@@ -1043,12 +1045,12 @@
     }
 
     .hl-annotation {
-      color: var(--accent);
-      background: var(--accent-soft);
+      color: color-mix(in srgb, var(--accent) 72%, var(--text));
+      background: color-mix(in srgb, var(--accent-soft) 58%, transparent);
       border: 0;
-      border-radius: 4px;
+      border-radius: 3px;
       padding: 0;
-      box-shadow: inset 0 0 0 1px var(--marker-border);
+      box-shadow: inset 0 -0.08em 0 color-mix(in srgb, var(--accent) 26%, transparent);
     }
 
     .hl-annotation-muted {
@@ -1057,15 +1059,29 @@
     }
 
     .annotation-preview-marker {
-      color: var(--accent);
-      background: var(--accent-soft);
-      border: 1px solid var(--marker-border);
-      border-radius: 4px;
+      color: color-mix(in srgb, var(--accent) 72%, var(--text));
+      background: color-mix(in srgb, var(--accent-soft) 58%, transparent);
+      border: 1px solid color-mix(in srgb, var(--marker-border) 26%, transparent);
+      border-radius: 3px;
       display: inline-block;
       max-width: 100%;
       padding: 0 4px;
       white-space: normal;
       vertical-align: baseline;
+    }
+
+    .annotation-preview-marker strong {
+      color: color-mix(in srgb, var(--accent) 82%, var(--text));
+      font-weight: 750;
+    }
+
+    .annotation-preview-marker em {
+      color: color-mix(in srgb, currentColor 82%, var(--muted));
+    }
+
+    .annotation-preview-marker s {
+      color: color-mix(in srgb, currentColor 70%, var(--muted));
+      text-decoration-thickness: 0.08em;
     }
 
     .annotation-preview-marker code {
@@ -1216,9 +1232,9 @@
       padding: 0 10px;
       font-size: 12px;
       line-height: 1;
-      background: var(--accent-soft);
-      border-color: var(--accent);
-      color: var(--accent);
+      background: color-mix(in srgb, var(--panel) 88%, var(--accent-soft));
+      border-color: var(--control-border);
+      color: var(--text);
       box-shadow: 0 1px 2px var(--shadow-color);
       pointer-events: auto;
     }
@@ -1227,9 +1243,9 @@
     .preview-comment-add:focus-visible,
     .preview-comment-jump:hover,
     .preview-comment-jump:focus-visible {
-      background: var(--accent-soft-strong);
+      background: var(--accent-soft);
       color: var(--accent);
-      border-color: var(--accent);
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--control-border));
     }
 
     .preview-jump-highlight {
@@ -5779,10 +5795,10 @@
     }
 
     body.studio-ui-refresh .studio-refresh-review-btn.request-stop-active {
-      background: var(--error);
-      border-color: var(--error);
+      background: color-mix(in srgb, var(--error) 82%, var(--panel));
+      border-color: color-mix(in srgb, var(--error) 88%, var(--panel));
       color: var(--error-contrast);
-      font-weight: 600;
+      font-weight: 700;
     }
 
     body.studio-ui-refresh .studio-refresh-review-btn.request-stop-active::after {
@@ -5790,10 +5806,10 @@
     }
 
     body.studio-ui-refresh .studio-refresh-menu #critiqueBtn.request-stop-active {
-      background: var(--error);
-      border-color: var(--error);
+      background: color-mix(in srgb, var(--error) 82%, var(--panel));
+      border-color: color-mix(in srgb, var(--error) 88%, var(--panel));
       color: var(--error-contrast);
-      font-weight: 600;
+      font-weight: 700;
     }
 
     .studio-preview-link-menu {

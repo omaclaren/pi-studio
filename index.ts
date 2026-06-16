@@ -1066,7 +1066,23 @@ function buildStudioPdfCalloutTitleSizeCommand(options?: StudioPdfRenderOptions)
 	return "\\footnotesize";
 }
 
-function buildStudioPdfPreamble(options?: StudioPdfRenderOptions, extraPreamble = ""): string {
+function formatStudioPdfHtmlColor(color: string, fallback: string): string {
+	return hexToRgb(color) ? color.replace(/^#/, "").toUpperCase() : fallback;
+}
+
+function buildStudioPdfAnnotationColors(style: StudioThemeStyle): { bg: string; border: string; text: string } {
+	const accent = hexToRgb(style.palette.accent) ? style.palette.accent : "#2F6FEB";
+	const page = "#FFFFFF";
+	const darkText = "#0E1616";
+	return {
+		bg: formatStudioPdfHtmlColor(blendColors(accent, page, 0.91), "F1F7FF"),
+		border: formatStudioPdfHtmlColor(blendColors(accent, page, 0.68), "C7DDFF"),
+		text: formatStudioPdfHtmlColor(blendColors(accent, darkText, style.mode === "light" ? 0.40 : 0.34), "1F5FBF"),
+	};
+}
+
+function buildStudioPdfPreamble(options?: StudioPdfRenderOptions, extraPreamble = "", themeStyle?: StudioThemeStyle): string {
+	const annotationColors = buildStudioPdfAnnotationColors(themeStyle ?? getStudioThemeStyle());
 	const sectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.sectionSize, "\\Large");
 	const subsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsectionSize, "\\large");
 	const subsubsectionHeadingSize = buildStudioPdfHeadingSizeCommand(options?.subsubsectionSize, "\\normalsize");
@@ -1088,9 +1104,9 @@ function buildStudioPdfPreamble(options?: StudioPdfRenderOptions, extraPreamble 
 \\usepackage{xcolor}
 \\usepackage{varwidth}
 \\usepackage[normalem]{ulem}
-\\definecolor{StudioAnnotationBg}{HTML}{EAF3FF}
-\\definecolor{StudioAnnotationBorder}{HTML}{8CB8FF}
-\\definecolor{StudioAnnotationText}{HTML}{1F5FBF}
+\\definecolor{StudioAnnotationBg}{HTML}{${annotationColors.bg}}
+\\definecolor{StudioAnnotationBorder}{HTML}{${annotationColors.border}}
+\\definecolor{StudioAnnotationText}{HTML}{${annotationColors.text}}
 \\definecolor{StudioCodeBlockBg}{HTML}{F6F8FA}
 \\definecolor{StudioDiffAddText}{HTML}{1A7F37}
 \\definecolor{StudioDiffDelText}{HTML}{CF222E}
@@ -6501,8 +6517,19 @@ ${literalPdfConfig.fontSizeCommand}\\section*{${title.replace(/[{}\\]/g, "").tri
 function replaceStudioAnnotationMarkersInGeneratedLatex(latex: string): string {
 	const lines = String(latex ?? "").split("\n");
 	const out: string[] = [];
+	const pendingTextLines: string[] = [];
 	const rawEnvStack: string[] = [];
 	const rawEnvNames = new Set(["verbatim", "Verbatim", "Highlighting", "lstlisting"]);
+
+	const hasRawEnvBoundary = (line: string): boolean => {
+		const envPattern = /\\(begin|end)\{([^}]+)\}/g;
+		let match: RegExpExecArray | null;
+		while ((match = envPattern.exec(line)) !== null) {
+			const envName = match[2];
+			if (envName && rawEnvNames.has(envName)) return true;
+		}
+		return false;
+	};
 
 	const updateRawEnvStack = (line: string) => {
 		const envPattern = /\\(begin|end)\{([^}]+)\}/g;
@@ -6524,6 +6551,12 @@ function replaceStudioAnnotationMarkersInGeneratedLatex(latex: string): string {
 		}
 	};
 
+	const flushPendingText = () => {
+		if (pendingTextLines.length === 0) return;
+		out.push(replaceStudioAnnotationMarkersForPdfInSegment(pendingTextLines.join("\n")));
+		pendingTextLines.length = 0;
+	};
+
 	for (const line of lines) {
 		if (rawEnvStack.length > 0) {
 			out.push(line);
@@ -6531,10 +6564,17 @@ function replaceStudioAnnotationMarkersInGeneratedLatex(latex: string): string {
 			continue;
 		}
 
-		out.push(replaceStudioAnnotationMarkersForPdfInSegment(line));
-		updateRawEnvStack(line);
+		if (hasRawEnvBoundary(line)) {
+			flushPendingText();
+			out.push(line);
+			updateRawEnvStack(line);
+			continue;
+		}
+
+		pendingTextLines.push(line);
 	}
 
+	flushPendingText();
 	return out.join("\n");
 }
 
@@ -6727,6 +6767,7 @@ async function renderStudioPdfFromGeneratedLatex(
 	alignedImageBlocks: StudioPdfAlignedImageBlock[] = [],
 	pdfOptions?: StudioPdfRenderOptions,
 	extraPreamble = "",
+	themeStyle?: StudioThemeStyle,
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const tempDir = join(tmpdir(), `pi-studio-pdf-${Date.now()}-${randomUUID()}`);
 	const preamblePath = join(tempDir, "_pdf_preamble.tex");
@@ -6734,7 +6775,7 @@ async function renderStudioPdfFromGeneratedLatex(
 	const outputPath = join(tempDir, "studio-export.pdf");
 
 	await mkdir(tempDir, { recursive: true });
-	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions, extraPreamble), "utf-8");
+	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions, extraPreamble, themeStyle), "utf-8");
 
 	const pandocArgs = [
 		"-f", inputFormat,
@@ -6805,6 +6846,7 @@ async function renderStudioPdfWithPandoc(
 	editorPdfLanguage?: string,
 	sourcePath?: string,
 	pdfOptions?: StudioPdfRenderOptions,
+	themeStyle?: StudioThemeStyle,
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
@@ -6842,7 +6884,7 @@ async function renderStudioPdfWithPandoc(
 		const outputPath = join(tempDir, "studio-export.pdf");
 
 		await mkdir(tempDir, { recursive: true });
-		await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions), "utf-8");
+		await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions, "", themeStyle), "utf-8");
 
 		const hasYamlHeaderIncludesForPdf = inputFormat !== "latex" && hasStudioYamlHeaderIncludes(markdownForPdf);
 		const headerIncludeArgs = hasYamlHeaderIncludesForPdf ? [] : ["--include-in-header", preamblePath];
@@ -6895,6 +6937,8 @@ async function renderStudioPdfWithPandoc(
 			[],
 			[],
 			pdfOptions,
+			"",
+			themeStyle,
 		);
 	}
 
@@ -6915,6 +6959,8 @@ async function renderStudioPdfWithPandoc(
 				[],
 				[],
 				pdfOptions,
+				"",
+				themeStyle,
 			);
 		} catch {
 			const fenced = parseStudioSingleFencedCodeBlock(diffMarkdown);
@@ -6941,7 +6987,7 @@ async function renderStudioPdfWithPandoc(
 	const outputPath = join(tempDir, "studio-export.pdf");
 
 	await mkdir(tempDir, { recursive: true });
-	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions, extraPdfPreamble), "utf-8");
+	await writeFile(preamblePath, buildStudioPdfPreamble(pdfOptions, extraPdfPreamble, themeStyle), "utf-8");
 
 	const mermaidPrepared: StudioMermaidPdfPreprocessResult = isLatex
 		? { markdown: normalizedMarkdownBody, found: 0, replaced: 0, failed: 0, missingCli: false }
@@ -6964,6 +7010,7 @@ async function renderStudioPdfWithPandoc(
 			pdfAlignedImageTransform.blocks,
 			pdfOptions,
 			extraPdfPreamble,
+			themeStyle,
 		);
 		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
 		return { pdf: rendered.pdf, warning: mermaidPrepared.warning ?? rendered.warning };
@@ -10514,7 +10561,7 @@ ${cssVarsBlock}
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview; Cmd/Ctrl+Alt+W switches directly to Working.">
+          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Response Preview; Cmd/Ctrl+Alt+E switches directly to Editor Preview; Cmd/Ctrl+Alt+W switches directly to Working.">
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
@@ -10608,7 +10655,8 @@ ${cssVarsBlock}
           <dl>
             <div><dt>F6</dt><dd>Switch between editor and right pane</dd></div>
             <div><dt>F7 / Shift+F7</dt><dd>Cycle the active pane's view</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+P</dt><dd>Switch the right pane directly to Preview</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+P</dt><dd>Switch the right pane directly to Response Preview</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+E</dt><dd>Switch the right pane directly to Editor Preview</dd></div>
             <div><dt>Cmd/Ctrl+Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
             <div><dt>F8</dt><dd>Focus editor text</dd></div>
             <div><dt>Shift+F8</dt><dd>Focus right-pane content</dd></div>
@@ -13553,7 +13601,7 @@ export default function (pi: ExtensionAPI) {
 		const filename = sanitizePdfFilename(requestedFilename || (isLatex ? "studio-latex-preview.pdf" : "studio-preview.pdf"));
 
 		try {
-			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath, editorPdfLanguage, sourcePath || undefined);
+			const { pdf, warning } = await renderStudioPdfWithPandoc(markdown, isLatex, resourcePath, editorPdfLanguage, sourcePath || undefined, undefined, getStudioThemeStyle(lastCommandCtx?.ui?.theme));
 			const writeResult = writeStudioPreviewExportFile(buildStudioPreviewExportPath(sourcePath || undefined, userResourceDir || undefined, studioCwd, filename), pdf);
 			const exportId = storePreparedPdfExport(pdf, filename, warning, writeResult.filePath ?? undefined);
 			const token = serverState?.token ?? "";
@@ -14984,6 +15032,7 @@ export default function (pi: ExtensionAPI) {
 				editorPdfLanguage,
 				source.sourcePath,
 				pdfOptions,
+				getStudioThemeStyle(ctx.ui.theme),
 			);
 			await writeFile(source.outputPath, pdf);
 			const openError = await maybeOpenStudioExportPath(source.outputPath, params.open);
@@ -15296,6 +15345,7 @@ export default function (pi: ExtensionAPI) {
 						editorPdfLanguage,
 						undefined,
 						pdfOptions,
+						getStudioThemeStyle(ctx.ui.theme),
 					);
 					await writeFile(outputPath, pdf);
 
@@ -15354,6 +15404,7 @@ export default function (pi: ExtensionAPI) {
 					editorPdfLanguage,
 					file.resolvedPath,
 					pdfOptions,
+					getStudioThemeStyle(ctx.ui.theme),
 				);
 				await writeFile(outputPath, pdf);
 

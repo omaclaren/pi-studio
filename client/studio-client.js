@@ -269,8 +269,8 @@
           option.disabled = isEditorOnlyMode && !editorOnlyAllowed.has(option.value);
         });
         rightViewSelect.title = isEditorOnlyMode
-          ? "Editor-only views: editor preview, Changes, Files, or REPL. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview."
-          : "Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Preview; Cmd/Ctrl+Alt+W switches directly to Working.";
+          ? "Editor-only views: editor preview, Changes, Files, or REPL. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P or Cmd/Ctrl+Alt+E switches directly to Preview."
+          : "Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Response Preview; Cmd/Ctrl+Alt+E switches directly to Editor Preview; Cmd/Ctrl+Alt+W switches directly to Working.";
       }
 
       function getInitialRightView(source) {
@@ -859,7 +859,7 @@
         const normalized = normalizeTraceFilter(nextFilter);
         if (traceFilter === normalized) return;
         traceFilter = normalized;
-        traceAutoScroll = true;
+        traceAutoScroll = rightView === "trace" ? shouldStickTraceToBottom() : traceAutoScroll;
         renderTraceViewIfActive();
       }
 
@@ -3817,6 +3817,13 @@
         setStatus("Right pane view: Working.");
       }
 
+      function switchRightPaneToEditorPreview() {
+        const snapshot = snapshotStudioScrollablePositions();
+        setRightView("editor-preview");
+        scheduleStudioScrollablePositionRestore(snapshot);
+        setStatus("Right pane view: Editor (Preview).");
+      }
+
       function cycleActivePaneView(direction) {
         if (activePane === "right") {
           if (!rightViewSelect || rightViewSelect.disabled) {
@@ -4132,6 +4139,16 @@
         if (isWorkingShortcut) {
           event.preventDefault();
           switchRightPaneToWorking();
+          return;
+        }
+
+        const isEditorPreviewShortcut = (key.toLowerCase() === "e" || code === "KeyE")
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey;
+        if (isEditorPreviewShortcut) {
+          event.preventDefault();
+          switchRightPaneToEditorPreview();
           return;
         }
 
