@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.34] — 2026-07-02
+
 ### Added
 - Added a bottom-right Studio theme menu for switching the active Pi theme without returning to the terminal.
 - Added `Cmd/Ctrl+Alt+1–7` shortcuts for switching directly between all right-pane views, with editor-only views warning on unavailable full-session panes.
