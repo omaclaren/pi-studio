@@ -25,7 +25,8 @@
     "README.md",
     "CHANGELOG.md",
     "WORKFLOW.md",
-    "assets/screenshots"
+    "assets/screenshots",
+    "assets/demo"
   ],
   "scripts": {
     "test": "node --test",

@@ -8,6 +8,8 @@
       const footerMetaTerminalEl = document.getElementById("footerMetaTerminal");
       const footerMetaContextEl = document.getElementById("footerMetaContext");
       const footerModelMenuEl = document.getElementById("footerModelMenu");
+      const footerThemeBtn = document.getElementById("footerThemeBtn");
+      const footerThemeMenuEl = document.getElementById("footerThemeMenu");
       let faviconLinkEl = document.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
       if (!faviconLinkEl) {
         faviconLinkEl = document.createElement("link");
@@ -178,6 +180,32 @@
         : "full";
       const isEditorOnlyMode = studioMode === "editor-only";
       const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
+      const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "files", "changes", "repl"]);
+      const RIGHT_VIEW_LABELS = {
+        markdown: "Response (Raw)",
+        preview: "Response (Preview)",
+        "editor-preview": "Editor (Preview)",
+        trace: "Working",
+        changes: "Changes",
+        files: "Files",
+        repl: "REPL",
+      };
+      const RIGHT_VIEW_NUMERIC_SHORTCUTS = {
+        Digit1: "markdown",
+        Digit2: "preview",
+        Digit3: "editor-preview",
+        Digit4: "trace",
+        Digit5: "changes",
+        Digit6: "files",
+        Digit7: "repl",
+        Numpad1: "markdown",
+        Numpad2: "preview",
+        Numpad3: "editor-preview",
+        Numpad4: "trace",
+        Numpad5: "changes",
+        Numpad6: "files",
+        Numpad7: "repl",
+      };
 
       const initialQueryParams = new URLSearchParams(window.location.search || "");
       const skipInitialWorkspaceRestore = initialQueryParams.get("skipWorkspaceRestore") === "1";
@@ -242,9 +270,9 @@
       let sourceOpenCurrentTextCopyTabBtn = null;
       let sourceSessionSummaryEl = null;
       let initialDocumentApplied = false;
-      function normalizeRightViewValue(nextView) {
+      function canonicalRightViewValue(nextView) {
         const raw = String(nextView || "").trim();
-        const normalized = raw === "preview"
+        return raw === "preview"
           ? "preview"
           : (raw === "editor-preview"
             ? "editor-preview"
@@ -255,22 +283,39 @@
                 : (raw === "changes"
                   ? "changes"
                   : ((raw === "trace" || raw === "thinking") ? "trace" : "markdown")))));
-        if (isEditorOnlyMode && normalized !== "editor-preview" && normalized !== "files" && normalized !== "changes" && normalized !== "repl") {
+      }
+
+      function normalizeRightViewValue(nextView) {
+        const normalized = canonicalRightViewValue(nextView);
+        if (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized)) {
           return "editor-preview";
         }
         return normalized;
       }
 
+      function isRightViewAvailableInCurrentMode(view) {
+        const normalized = canonicalRightViewValue(view);
+        return !isEditorOnlyMode || EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized);
+      }
+
+      function getRightViewDisplayLabel(view) {
+        const normalized = canonicalRightViewValue(view);
+        if (rightViewSelect && rightViewSelect.options) {
+          const option = Array.from(rightViewSelect.options).find((candidate) => candidate && candidate.value === normalized);
+          if (option && option.textContent) return option.textContent;
+        }
+        return RIGHT_VIEW_LABELS[normalized] || normalized;
+      }
+
       function syncRightViewModeOptions() {
         if (!rightViewSelect || !rightViewSelect.options) return;
-        const editorOnlyAllowed = new Set(["editor-preview", "files", "changes", "repl"]);
         Array.from(rightViewSelect.options).forEach((option) => {
           if (!option) return;
-          option.disabled = isEditorOnlyMode && !editorOnlyAllowed.has(option.value);
+          option.disabled = isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value);
         });
         rightViewSelect.title = isEditorOnlyMode
-          ? "Editor-only views: editor preview, Changes, Files, or REPL. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P or Cmd/Ctrl+Alt+E switches directly to Preview."
-          : "Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Response Preview; Cmd/Ctrl+Alt+E switches directly to Editor Preview; Cmd/Ctrl+Alt+W switches directly to Working.";
+          ? "Editor-only views: Editor Preview, Changes, Files, or REPL. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7 switch directly to available right-pane views."
+          : "Right pane view mode. F7 cycles; Cmd/Ctrl+Alt+1–7 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W keep their mnemonic Preview/Editor Preview/Working shortcuts.";
       }
 
       function getInitialRightView(source) {
@@ -528,6 +573,9 @@
       let piCurrentModel = null;
       let piThinkingLevel = "";
       let footerModelMenuOpen = false;
+      let piThemeOptions = [];
+      let piCurrentTheme = (document.body && document.body.dataset && document.body.dataset.themeName) || "";
+      let footerThemeMenuOpen = false;
       let terminalSessionLabel = (document.body && document.body.dataset && document.body.dataset.terminalLabel) || "unknown";
       let terminalSessionDetail = (document.body && document.body.dataset && document.body.dataset.terminalDetail) || terminalSessionLabel;
       let contextTokens = null;
@@ -3273,6 +3321,7 @@
 
       function setFooterModelMenuOpen(open) {
         footerModelMenuOpen = Boolean(open);
+        if (footerModelMenuOpen) setFooterThemeMenuOpen(false);
         if (footerModelMenuEl) footerModelMenuEl.hidden = !footerModelMenuOpen;
         if (footerMetaModelEl) {
           footerMetaModelEl.classList.toggle("is-open", footerModelMenuOpen);
@@ -3296,6 +3345,80 @@
         if (!normalized) return;
         const sent = sendMessage({ type: "pi_thinking_level_request", level: normalized });
         if (sent) setStatus("Setting Pi thinking level…", "warning");
+      }
+
+      function normalizePiThemeOptions(options) {
+        return Array.isArray(options)
+          ? options.map((option) => ({
+            name: String(option && option.name || "").trim(),
+            path: String(option && option.path || "").trim(),
+          })).filter((option) => option.name)
+          : [];
+      }
+
+      function updatePiThemeState(message) {
+        if (!message || typeof message !== "object") return;
+        if (Array.isArray(message.piThemes)) {
+          piThemeOptions = normalizePiThemeOptions(message.piThemes);
+        }
+        if (message.currentTheme && typeof message.currentTheme === "object") {
+          const name = String(message.currentTheme.name || "").trim();
+          if (name) piCurrentTheme = name;
+        } else if (typeof message.currentTheme === "string" && message.currentTheme.trim()) {
+          piCurrentTheme = message.currentTheme.trim();
+        }
+        updateFooterThemeButton();
+        renderFooterThemeMenu();
+      }
+
+      function updateFooterThemeButton() {
+        if (!footerThemeBtn) return;
+        const label = piCurrentTheme && piCurrentTheme.trim() ? piCurrentTheme.trim() : "theme";
+        footerThemeBtn.textContent = "Theme: " + label;
+        footerThemeBtn.title = "Switch the active Pi theme. Current theme: " + label + ". This affects terminal Pi and Studio.";
+        footerThemeBtn.setAttribute("aria-expanded", footerThemeMenuOpen ? "true" : "false");
+      }
+
+      function renderFooterThemeMenu() {
+        if (!footerThemeMenuEl) return;
+        const current = piCurrentTheme && piCurrentTheme.trim() ? piCurrentTheme.trim() : "";
+        const optionNames = new Set(piThemeOptions.map((option) => option.name));
+        const options = piThemeOptions.slice();
+        if (current && !optionNames.has(current)) {
+          options.unshift({ name: current, path: "" });
+        }
+        const optionsHtml = options.map((option) => {
+          const selected = option.name === current ? " selected" : "";
+          const title = option.path ? " title='" + escapeHtml(option.path) + "'" : "";
+          return "<option value='" + escapeHtml(option.name) + "'" + selected + title + ">" + escapeHtml(option.name) + "</option>";
+        });
+        footerThemeMenuEl.innerHTML = ""
+          + "<div class='footer-model-menu-heading'>Pi theme</div>"
+          + (optionsHtml.length
+            ? "<label class='footer-model-menu-field'><span>Active theme</span><select id='footerPiThemeSelect'>" + optionsHtml.join("") + "</select></label>"
+            : "<div class='footer-model-menu-note'>No Pi themes are available yet.</div>")
+          + "<div class='footer-model-menu-note'>Switches the active Pi theme and persists it to Pi settings.</div>";
+      }
+
+      function setFooterThemeMenuOpen(open) {
+        footerThemeMenuOpen = Boolean(open);
+        if (footerThemeMenuOpen) setFooterModelMenuOpen(false);
+        if (footerThemeMenuEl) footerThemeMenuEl.hidden = !footerThemeMenuOpen;
+        if (footerThemeBtn) {
+          footerThemeBtn.classList.toggle("is-open", footerThemeMenuOpen);
+          footerThemeBtn.setAttribute("aria-expanded", footerThemeMenuOpen ? "true" : "false");
+        }
+        if (footerThemeMenuOpen) renderFooterThemeMenu();
+      }
+
+      function requestPiThemeSelection(themeName) {
+        const normalized = String(themeName || "").trim();
+        if (!normalized) {
+          setStatus("No Pi theme selected.", "warning");
+          return;
+        }
+        const sent = sendMessage({ type: "pi_theme_select_request", theme: normalized });
+        if (sent) setStatus("Switching Pi theme…", "warning");
       }
 
       function updateFooterMeta() {
@@ -3795,33 +3918,33 @@
         setStatus("Right pane content focused.");
       }
 
+      function switchRightPaneToView(nextView, options) {
+        const requestedView = canonicalRightViewValue(nextView);
+        const label = getRightViewDisplayLabel(requestedView);
+        if (!isRightViewAvailableInCurrentMode(requestedView)) {
+          setStatus(label + " is unavailable in editor-only Studio views.", "warning");
+          return false;
+        }
+        const snapshot = snapshotStudioScrollablePositions();
+        setRightView(requestedView);
+        scheduleStudioScrollablePositionRestore(snapshot);
+        if (!options || options.announce !== false) {
+          setStatus("Right pane view: " + label + ".");
+        }
+        return true;
+      }
+
       function switchRightPaneToPrimaryPreview() {
         const targetView = isEditorOnlyMode ? "editor-preview" : "preview";
-        const snapshot = snapshotStudioScrollablePositions();
-        setRightView(targetView);
-        scheduleStudioScrollablePositionRestore(snapshot);
-        const label = rightViewSelect && rightViewSelect.selectedOptions && rightViewSelect.selectedOptions[0]
-          ? rightViewSelect.selectedOptions[0].textContent
-          : (isEditorOnlyMode ? "Editor (Preview)" : "Response (Preview)");
-        setStatus("Right pane view: " + String(label || "Preview") + ".");
+        switchRightPaneToView(targetView);
       }
 
       function switchRightPaneToWorking() {
-        if (isEditorOnlyMode) {
-          setStatus("Working view is unavailable in editor-only Studio views.", "warning");
-          return;
-        }
-        const snapshot = snapshotStudioScrollablePositions();
-        setRightView("trace");
-        scheduleStudioScrollablePositionRestore(snapshot);
-        setStatus("Right pane view: Working.");
+        switchRightPaneToView("trace");
       }
 
       function switchRightPaneToEditorPreview() {
-        const snapshot = snapshotStudioScrollablePositions();
-        setRightView("editor-preview");
-        scheduleStudioScrollablePositionRestore(snapshot);
-        setStatus("Right pane view: Editor (Preview).");
+        switchRightPaneToView("editor-preview");
       }
 
       function cycleActivePaneView(direction) {
@@ -4119,6 +4242,17 @@
         if (isViewCycleShortcut) {
           event.preventDefault();
           cycleActivePaneView(event.shiftKey ? -1 : 1);
+          return;
+        }
+
+        const numericRightViewShortcut = (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey
+          ? (RIGHT_VIEW_NUMERIC_SHORTCUTS[code] || RIGHT_VIEW_NUMERIC_SHORTCUTS["Digit" + key])
+          : null;
+        if (numericRightViewShortcut) {
+          event.preventDefault();
+          switchRightPaneToView(numericRightViewShortcut);
           return;
         }
 
@@ -18827,6 +18961,7 @@
             updateCompletionSuggestionModelOptions(message.suggestionModels);
           }
           updatePiSessionModelState(message);
+          updatePiThemeState(message);
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
@@ -19403,6 +19538,7 @@
             updateCompletionSuggestionModelOptions(message.suggestionModels);
           }
           updatePiSessionModelState(message);
+          updatePiThemeState(message);
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
@@ -19536,6 +19672,7 @@
               root.style.setProperty(key, message.vars[key]);
             }
           });
+          updatePiThemeState(message);
           updateDocumentTitle();
         }
       }
@@ -20283,6 +20420,7 @@
           closeExportPreviewMenu();
           closePreviewLinkMenu();
           setFooterModelMenuOpen(false);
+          setFooterThemeMenuOpen(false);
         }
       });
 
@@ -20309,10 +20447,35 @@
           }
         });
       }
+      if (footerThemeBtn) {
+        footerThemeBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setFooterThemeMenuOpen(!footerThemeMenuOpen);
+        });
+      }
+      if (footerThemeMenuEl) {
+        footerThemeMenuEl.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        footerThemeMenuEl.addEventListener("change", (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLSelectElement)) return;
+          if (target.id === "footerPiThemeSelect") {
+            requestPiThemeSelection(target.value);
+            setFooterThemeMenuOpen(false);
+          }
+        });
+      }
       document.addEventListener("click", (event) => {
         const target = event.target;
         if (target instanceof Element && (target.closest("#footerModelMenu") || target.closest("#footerMetaModel"))) return;
         setFooterModelMenuOpen(false);
+      });
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (target instanceof Element && (target.closest("#footerThemeMenu") || target.closest("#footerThemeBtn"))) return;
+        setFooterThemeMenuOpen(false);
       });
 
       saveAsBtn.addEventListener("click", () => {

@@ -361,6 +361,11 @@ interface PiThinkingLevelRequestMessage {
 	level: ModelThinkingLevel;
 }
 
+interface PiThemeSelectRequestMessage {
+	type: "pi_theme_select_request";
+	theme: string;
+}
+
 interface QuizGenerateRequestMessage {
 	type: "quiz_generate_request";
 	requestId: string;
@@ -506,6 +511,7 @@ type IncomingStudioMessage =
 	| CompletionSuggestionCancelRequestMessage
 	| PiModelSelectRequestMessage
 	| PiThinkingLevelRequestMessage
+	| PiThemeSelectRequestMessage
 	| QuizGenerateRequestMessage
 	| QuizAnswerRequestMessage
 	| QuizDiscussRequestMessage
@@ -8425,6 +8431,16 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		}
 	}
 
+	if (msg.type === "pi_theme_select_request" && typeof msg.theme === "string") {
+		const theme = msg.theme.trim();
+		if (theme && theme.length <= 200) {
+			return {
+				type: "pi_theme_select_request",
+				theme,
+			};
+		}
+	}
+
 	if (msg.type === "completion_suggestion_request" && typeof msg.requestId === "string" && typeof msg.text === "string") {
 		const textLength = msg.text.length;
 		const rawStart = typeof msg.selectionStart === "number" && Number.isFinite(msg.selectionStart) ? msg.selectionStart : textLength;
@@ -10277,6 +10293,7 @@ function buildStudioHtml(
 	const initialModel = escapeHtmlForInline(initialModelLabel ?? "none");
 	const initialTerminal = escapeHtmlForInline(initialTerminalLabel ?? "unknown");
 	const initialTerminalDetailAttr = escapeHtmlForInline(initialTerminalDetail ?? initialTerminalLabel ?? "unknown");
+	const initialTheme = escapeHtmlForInline(theme?.name ?? "theme");
 	const initialContextTokens =
 		typeof initialContextUsage?.tokens === "number" && Number.isFinite(initialContextUsage.tokens)
 			? String(initialContextUsage.tokens)
@@ -10344,7 +10361,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -10561,7 +10578,7 @@ ${cssVarsBlock}
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+P switches directly to Response Preview; Cmd/Ctrl+Alt+E switches directly to Editor Preview; Cmd/Ctrl+Alt+W switches directly to Working.">
+          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+1–7 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W keep their mnemonic Preview/Editor Preview/Working shortcuts.">
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
@@ -10637,7 +10654,11 @@ ${cssVarsBlock}
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
     <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text"><button id="footerMetaModel" class="footer-meta-part footer-meta-model footer-model-btn" type="button" aria-haspopup="menu" aria-expanded="false">${initialModel}</button><span class="footer-meta-sep">·</span><span id="footerMetaTerminal" class="footer-meta-part footer-meta-terminal">${initialTerminal}</span><span class="footer-meta-sep">·</span><span id="footerMetaContext" class="footer-meta-part footer-meta-context">unknown</span></span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
     <div id="footerModelMenu" class="footer-model-menu" hidden></div>
-    <button id="shortcutsBtn" class="shortcut-hint" type="button" title="Show Studio keyboard shortcuts. Press ? when not editing text.">Shortcuts (?)</button>
+    <div id="footerThemeMenu" class="footer-theme-menu" hidden></div>
+    <span class="footer-actions">
+      <button id="footerThemeBtn" class="shortcut-hint footer-theme-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Switch the active Pi theme. This affects terminal Pi and Studio.">Theme: ${initialTheme}</button>
+      <button id="shortcutsBtn" class="shortcut-hint" type="button" title="Show Studio keyboard shortcuts. Press ? when not editing text.">Shortcuts (?)</button>
+    </span>
   </footer>
 
   <div id="shortcutsOverlay" class="shortcuts-overlay" hidden>
@@ -10655,7 +10676,8 @@ ${cssVarsBlock}
           <dl>
             <div><dt>F6</dt><dd>Switch between editor and right pane</dd></div>
             <div><dt>F7 / Shift+F7</dt><dd>Cycle the active pane's view</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+P</dt><dd>Switch the right pane directly to Response Preview</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+1–7</dt><dd>Switch the right pane directly: Response Raw, Response Preview, Editor Preview, Working, Changes, Files, REPL</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+P</dt><dd>Switch the right pane directly to Response Preview; in editor-only views, Editor Preview</dd></div>
             <div><dt>Cmd/Ctrl+Alt+E</dt><dd>Switch the right pane directly to Editor Preview</dd></div>
             <div><dt>Cmd/Ctrl+Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
             <div><dt>F8</dt><dd>Focus editor text</dd></div>
@@ -11770,6 +11792,25 @@ export default function (pi: ExtensionAPI) {
 		}
 		: null;
 
+	const getStudioThemeOptions = () => {
+		try {
+			const themes = lastCommandCtx?.ui?.getAllThemes?.() ?? [];
+			return themes
+				.map((theme) => ({
+					name: typeof theme.name === "string" ? theme.name.trim() : "",
+					path: typeof theme.path === "string" ? theme.path : undefined,
+				}))
+				.filter((theme) => theme.name);
+		} catch {
+			return [];
+		}
+	};
+
+	const getCurrentStudioThemeDescriptor = () => {
+		const name = typeof lastCommandCtx?.ui?.theme?.name === "string" ? lastCommandCtx.ui.theme.name.trim() : "";
+		return name ? { name } : null;
+	};
+
 	const broadcastState = () => {
 		terminalSessionLabel = buildTerminalSessionLabel(studioCwd, getSessionNameSafe());
 		terminalSessionDetail = buildTerminalSessionDetail(studioCwd, getSessionNameSafe());
@@ -11788,6 +11829,8 @@ export default function (pi: ExtensionAPI) {
 			thinkingLevel: getThinkingLevelSafe() ?? "off",
 			piModels: modelOptions,
 			suggestionModels: modelOptions,
+			currentTheme: getCurrentStudioThemeDescriptor(),
+			piThemes: getStudioThemeOptions(),
 			terminalSessionLabel,
 			terminalSessionDetail,
 			contextTokens: contextUsageSnapshot.tokens,
@@ -12087,6 +12130,8 @@ export default function (pi: ExtensionAPI) {
 				thinkingLevel: getThinkingLevelSafe() ?? "off",
 				piModels: getStudioModelOptions(),
 				suggestionModels: getStudioModelOptions(),
+				currentTheme: getCurrentStudioThemeDescriptor(),
+				piThemes: getStudioThemeOptions(),
 				terminalSessionLabel,
 				terminalSessionDetail,
 				contextTokens: contextUsageSnapshot.tokens,
@@ -12142,6 +12187,36 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "info", level: "info", message: `Pi thinking level set to ${getThinkingLevelSafe() ?? msg.level}.` });
 			} catch (error) {
 				sendToClient(client, { type: "info", level: "error", message: `Thinking level change failed: ${error instanceof Error ? error.message : String(error)}` });
+			}
+			return;
+		}
+
+		if (msg.type === "pi_theme_select_request") {
+			const ui = lastCommandCtx?.ui;
+			if (!ui || typeof ui.setTheme !== "function") {
+				sendToClient(client, { type: "info", level: "warning", message: "Pi theme controls are not available yet." });
+				return;
+			}
+			const themeName = msg.theme.trim();
+			const availableThemes = getStudioThemeOptions();
+			if (availableThemes.length && !availableThemes.some((theme) => theme.name === themeName)) {
+				sendToClient(client, { type: "info", level: "warning", message: `Pi theme not found: ${themeName}` });
+				return;
+			}
+			try {
+				const result = ui.setTheme(themeName);
+				if (!result.success) {
+					sendToClient(client, { type: "info", level: "error", message: `Theme switch failed: ${result.error ?? themeName}` });
+					return;
+				}
+				const vars = buildThemeCssVars(getStudioThemeStyle(ui.theme));
+				lastThemeVarsJson = JSON.stringify(vars);
+				syncCmuxStudioStatus();
+				broadcast({ type: "theme_update", vars, currentTheme: getCurrentStudioThemeDescriptor(), piThemes: getStudioThemeOptions() });
+				broadcastState();
+				sendToClient(client, { type: "info", level: "info", message: `Pi theme switched to ${themeName}.` });
+			} catch (error) {
+				sendToClient(client, { type: "info", level: "error", message: `Theme switch failed: ${error instanceof Error ? error.message : String(error)}` });
 			}
 			return;
 		}
@@ -14335,7 +14410,7 @@ export default function (pi: ExtensionAPI) {
 					lastThemeVarsJson = json;
 					syncCmuxStudioStatus();
 					for (const client of serverState.clients) {
-						sendToClient(client, { type: "theme_update", vars });
+						sendToClient(client, { type: "theme_update", vars, currentTheme: getCurrentStudioThemeDescriptor(), piThemes: getStudioThemeOptions() });
 					}
 				}
 			} catch {

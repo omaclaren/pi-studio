@@ -4277,11 +4277,10 @@
       outline: none;
     }
 
-    .footer-model-menu {
+    .footer-model-menu,
+    .footer-theme-menu {
       position: fixed;
-      left: 12px;
       bottom: 38px;
-      width: min(440px, calc(100vw - 24px));
       padding: 10px;
       border: 1px solid var(--panel-border);
       border-radius: 12px;
@@ -4291,7 +4290,18 @@
       z-index: 110;
     }
 
-    .footer-model-menu[hidden] {
+    .footer-model-menu {
+      left: 12px;
+      width: min(440px, calc(100vw - 24px));
+    }
+
+    .footer-theme-menu {
+      right: 12px;
+      width: min(320px, calc(100vw - 24px));
+    }
+
+    .footer-model-menu[hidden],
+    .footer-theme-menu[hidden] {
       display: none !important;
     }
 
@@ -4348,10 +4358,18 @@
       opacity: 0.72;
     }
 
-    .shortcut-hint {
+    .footer-actions {
       grid-area: hint;
       justify-self: end;
       align-self: center;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .shortcut-hint {
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -4366,12 +4384,21 @@
       opacity: 0.9;
     }
 
+    .footer-theme-btn {
+      max-width: min(28ch, 36vw);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .shortcut-hint:not(:disabled):hover,
-    .shortcut-hint:focus-visible {
+    .shortcut-hint:focus-visible,
+    .shortcut-hint.is-open {
       background: var(--panel-2);
       border-color: var(--control-border);
       color: var(--text);
       opacity: 1;
+      outline: none;
     }
 
     .footer-compact-btn {
@@ -4398,7 +4425,7 @@
     }
 
     body.studio-zen-mode .footer-meta,
-    body.studio-zen-mode .shortcut-hint {
+    body.studio-zen-mode .footer-actions {
       display: none !important;
     }
 
@@ -4993,8 +5020,12 @@
         max-width: 100%;
       }
 
-      .shortcut-hint {
+      .footer-actions {
         justify-self: start;
+        flex-wrap: wrap;
+      }
+
+      .shortcut-hint {
         text-align: left;
         white-space: normal;
         flex-wrap: wrap;

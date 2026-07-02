@@ -6,15 +6,25 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 
 [Watch the 2-minute demo (MP4, 2x speed, no audio)](https://github.com/omaclaren/pi-studio/releases/latest/download/pi-studio-demo-2min.mp4)
 
+_The video shows an earlier version of the Studio interface. The basic workflow is the same, but there have been minor UI changes since it was recorded; the screenshots show the more recent version._
+
 ## Screenshots
 
-**Dark**
+**Dark workspace**
 
 ![Pi Studio workspace (dark)](./assets/screenshots/dark-workspace.png)
 
-**Light**
+**Light workspace**
 
 ![Pi Studio workspace (light)](./assets/screenshots/light-workspace.png)
+
+**Zen mode**
+
+![Pi Studio Zen mode (dark)](./assets/screenshots/dark-zen.png)
+
+**Zen mode with a custom theme and rendered code preview**
+
+![Pi Studio Zen mode with custom theme and rendered code preview](./assets/screenshots/theme-zen-code.png)
 
 ## What it does
 
@@ -22,7 +32,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you want extra editing/preview surfaces; editor-only views can also browse files and use the Studio REPL send controls without taking over the full Studio session view
 - Includes a global **Zen** mode for hiding secondary Studio chrome without changing the current left/right pane layout
 - Runs editor text directly, asks for structured critique (auto/writing/code focus), offers a manual **Suggest completion** action for short cursor-aware continuations (`Option/Alt+Tab` where available or `Cmd/Ctrl+Shift+Space` from the editor, `Tab` to insert a visible suggestion) with an optional editor-plus-latest-response context mode, or opens **Quiz me** for a Studio-native active-recall loop over the current editor text, selection, current file, folder, or repo, with optional focus guidance for shaping question selection
-- Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available, and `Cmd/Ctrl+Alt+P` / `Cmd/Ctrl+Alt+E` / `Cmd/Ctrl+Alt+W` switch directly between Response Preview, Editor Preview, and Working
+- Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available, and `Cmd/Ctrl+Alt+1–7` switches directly between right-pane views while `Cmd/Ctrl+Alt+P` / `Cmd/Ctrl+Alt+E` / `Cmd/Ctrl+Alt+W` keep quick mnemonic shortcuts for Response Preview, Editor Preview, and Working
 - Includes a right-pane **Changes** view for browsing the current git diff by file, previewing per-file diffs, opening changed files, loading the full diff into the editor, and copying the diff
 - Includes a right-pane **Files** view for browsing the current Pi session/resource directory, opening folders, opening the Files root in Finder/the system file manager, loading text/code/CSV/TSV documents into the editor, previewing PDFs/images, opening PDF/image previews in a new Studio tab, converting DOCX/ODT documents to editable Markdown when Pandoc is available after confirmation, copying paths, setting the current folder as the Studio working directory, and revealing files in the file manager
 - Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with Raw/Literate send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/stop/interrupt controls, a compact refresh-persistent **Studio REPL Record** of user and Pi-sent code, a secondary raw tmux mirror, agent-facing `studio_repl_status` / `studio_repl_send` tools, and Markdown/PDF/HTML export
@@ -46,7 +56,7 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
 - Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML into the source file directory, Studio working directory, or Pi session directory; PDF export can open in a Studio preview tab or the default PDF viewer, and HTML export can open in the default browser or in a new Studio editor tab for inspection/commenting, while preserving authored HTML previews as HTML and rendering CSV/TSV editor previews as tables
 - Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf` or `/studio-html <path>` to `<name>.studio.html`; without a path, those commands export the last model response to a timestamped file. Agent tools `studio_export_pdf` and `studio_export_html` expose the same export pipeline for remote/Telegram-style sessions.
-- Shows model/session/context usage in the footer, plus a compact-context action
+- Shows model/session/context usage in the footer, plus compact-context and active-theme controls
 
 ## Commands
 
