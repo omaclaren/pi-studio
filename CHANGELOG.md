@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- Added `max` to the Studio footer Pi thinking selector to match newer Pi thinking levels.
+
 ## [0.9.35] — 2026-07-13
 
 ### Added

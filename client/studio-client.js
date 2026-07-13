@@ -3322,7 +3322,7 @@
       }
 
       function getPiThinkingLevels() {
-        return ["off", "minimal", "low", "medium", "high", "xhigh"];
+        return ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
       }
 
       function renderFooterModelMenu() {
@@ -3339,7 +3339,9 @@
           modelOptionsHtml.unshift("<option value='" + escapeHtml(currentValue) + "' selected>" + escapeHtml(label || "current model") + "</option>");
         }
         const thinking = piThinkingLevel || "off";
-        const thinkingOptionsHtml = getPiThinkingLevels().map((level) => {
+        const thinkingLevels = getPiThinkingLevels();
+        if (thinking && !thinkingLevels.includes(thinking)) thinkingLevels.push(thinking);
+        const thinkingOptionsHtml = thinkingLevels.map((level) => {
           return "<option value='" + escapeHtml(level) + "'" + (level === thinking ? " selected" : "") + ">Thinking: " + escapeHtml(level) + "</option>";
         });
         footerModelMenuEl.innerHTML = ""

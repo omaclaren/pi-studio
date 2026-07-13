@@ -44,6 +44,7 @@ type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci"
 type StudioQuizAngle = "general" | "scientist" | "mathematician" | "statistician" | "developer" | "reviewer";
 type StudioQuizScope = "selection" | "editor" | "file" | "folder" | "repo";
 type StudioQuizThinking = "off" | "minimal" | "low" | "medium" | "high";
+type StudioPiThinkingLevel = ModelThinkingLevel | "max";
 
 const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
@@ -358,7 +359,7 @@ interface PiModelSelectRequestMessage {
 
 interface PiThinkingLevelRequestMessage {
 	type: "pi_thinking_level_request";
-	level: ModelThinkingLevel;
+	level: StudioPiThinkingLevel;
 }
 
 interface PiThemeSelectRequestMessage {
@@ -8445,7 +8446,7 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 
 	if (msg.type === "pi_thinking_level_request" && typeof msg.level === "string") {
 		const level = msg.level.trim().toLowerCase();
-		if (level === "off" || level === "minimal" || level === "low" || level === "medium" || level === "high" || level === "xhigh") {
+		if (level === "off" || level === "minimal" || level === "low" || level === "medium" || level === "high" || level === "xhigh" || level === "max") {
 			return {
 				type: "pi_thinking_level_request",
 				level,
@@ -11076,17 +11077,17 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const getThinkingLevelSafe = (): ModelThinkingLevel | undefined => {
+	const getThinkingLevelSafe = (): StudioPiThinkingLevel | undefined => {
 		try {
-			return pi.getThinkingLevel() as ModelThinkingLevel;
+			return pi.getThinkingLevel() as StudioPiThinkingLevel;
 		} catch {
 			return undefined;
 		}
 	};
 
-	const setThinkingLevelSafe = (level: ModelThinkingLevel) => {
-		// Pi's CLI/model config support "off" as a thinking level; some extension API typings still expose the narrower reasoning-only type.
-		(pi.setThinkingLevel as (nextLevel: ModelThinkingLevel) => void)(level);
+	const setThinkingLevelSafe = (level: StudioPiThinkingLevel) => {
+		// Pi's CLI/model config support "off" and newer levels such as "max"; some extension API typings still expose a narrower reasoning-only type.
+		(pi.setThinkingLevel as (nextLevel: StudioPiThinkingLevel) => void)(level);
 	};
 
 	const refreshRuntimeMetadata = (ctx?: { cwd?: string; model?: { provider?: string; id?: string; name?: string; reasoning?: boolean } | undefined }) => {
