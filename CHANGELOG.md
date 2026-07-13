@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.35] — 2026-07-13
+
 ### Added
 - Added Files-view sort options for name, newest/oldest modified time, and largest/smallest file size.
 
