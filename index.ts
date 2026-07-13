@@ -2752,6 +2752,7 @@ const STUDIO_FILE_BROWSER_IGNORED_DIRS = new Set([
 ]);
 
 type StudioLocalPreviewResourceKind = "pdf" | "text" | "image" | "office" | "other";
+type StudioFileBrowserSortMode = "name" | "mtime-desc" | "mtime-asc" | "size-desc" | "size-asc";
 
 interface StudioLocalPreviewResource {
 	filePath: string;
@@ -2771,6 +2772,29 @@ interface StudioFileBrowserEntry {
 	size: number;
 	mtimeMs: number;
 	hidden: boolean;
+}
+
+function normalizeStudioFileBrowserSortMode(sort: string | null | undefined): StudioFileBrowserSortMode {
+	const value = typeof sort === "string" ? sort.trim().toLowerCase() : "";
+	if (value === "mtime-desc" || value === "modified-desc" || value === "newest") return "mtime-desc";
+	if (value === "mtime-asc" || value === "modified-asc" || value === "oldest") return "mtime-asc";
+	if (value === "size-desc" || value === "largest") return "size-desc";
+	if (value === "size-asc" || value === "smallest") return "size-asc";
+	return "name";
+}
+
+function compareStudioFileBrowserEntryNames(a: StudioFileBrowserEntry, b: StudioFileBrowserEntry): number {
+	return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+}
+
+function compareStudioFileBrowserEntries(a: StudioFileBrowserEntry, b: StudioFileBrowserEntry, sort: StudioFileBrowserSortMode): number {
+	if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+	if (a.hidden !== b.hidden) return a.hidden ? 1 : -1;
+	if (sort === "mtime-desc") return (b.mtimeMs - a.mtimeMs) || compareStudioFileBrowserEntryNames(a, b);
+	if (sort === "mtime-asc") return (a.mtimeMs - b.mtimeMs) || compareStudioFileBrowserEntryNames(a, b);
+	if (sort === "size-desc" && a.type === "file") return (b.size - a.size) || compareStudioFileBrowserEntryNames(a, b);
+	if (sort === "size-asc" && a.type === "file") return (a.size - b.size) || compareStudioFileBrowserEntryNames(a, b);
+	return compareStudioFileBrowserEntryNames(a, b);
 }
 
 function resolveStudioPdfResourcePath(pdfPath: string | undefined, sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
@@ -2922,8 +2946,10 @@ function listStudioFileBrowserDirectory(
 	sourcePath: string | undefined,
 	resourceDir: string | undefined,
 	fallbackCwd: string,
-): { rootDir: string; currentDir: string; relativeDir: string; parentDir: string | null; entries: StudioFileBrowserEntry[]; omitted: number; omittedIgnored: number } {
+	sortMode?: string | null,
+): { rootDir: string; currentDir: string; relativeDir: string; parentDir: string | null; entries: StudioFileBrowserEntry[]; omitted: number; omittedIgnored: number; sort: StudioFileBrowserSortMode } {
 	const context = resolveStudioFileBrowserDirectory(dirPath, sourcePath, resourceDir, fallbackCwd);
+	const sort = normalizeStudioFileBrowserSortMode(sortMode);
 	const entries: StudioFileBrowserEntry[] = [];
 	let omitted = 0;
 	let omittedIgnored = 0;
@@ -2962,14 +2988,10 @@ function listStudioFileBrowserDirectory(
 			omitted += 1;
 		}
 	}
-	entries.sort((a, b) => {
-		if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
-		if (a.hidden !== b.hidden) return a.hidden ? 1 : -1;
-		return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
-	});
+	entries.sort((a, b) => compareStudioFileBrowserEntries(a, b, sort));
 	const limitedEntries = entries.slice(0, STUDIO_FILE_BROWSER_MAX_ENTRIES);
 	omitted += Math.max(0, entries.length - limitedEntries.length);
-	return { ...context, entries: limitedEntries, omitted, omittedIgnored };
+	return { ...context, entries: limitedEntries, omitted, omittedIgnored, sort };
 }
 
 function resolveStudioHtmlPreviewResourcePath(
@@ -14150,6 +14172,7 @@ export default function (pi: ExtensionAPI) {
 					requestUrl.searchParams.get("sourcePath") ?? undefined,
 					requestUrl.searchParams.get("resourceDir") ?? undefined,
 					studioCwd,
+					requestUrl.searchParams.get("sort") ?? undefined,
 				);
 				respondJson(res, 200, { ok: true, ...listing, entries: method === "HEAD" ? [] : listing.entries });
 			} catch (error) {

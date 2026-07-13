@@ -2104,6 +2104,35 @@
       const DEFAULT_RESPONSE_FONT_SIZE = studioUiRefreshEnabled ? 13.5 : 15;
       let editorFontSize = DEFAULT_EDITOR_FONT_SIZE;
       let responseFontSize = DEFAULT_RESPONSE_FONT_SIZE;
+      function normalizeFileBrowserSortMode(sort) {
+        const value = String(sort || "").trim().toLowerCase();
+        if (value === "mtime-desc" || value === "modified-desc" || value === "newest") return "mtime-desc";
+        if (value === "mtime-asc" || value === "modified-asc" || value === "oldest") return "mtime-asc";
+        if (value === "size-desc" || value === "largest") return "size-desc";
+        if (value === "size-asc" || value === "smallest") return "size-asc";
+        return "name";
+      }
+
+      function readFileBrowserSortMode() {
+        try {
+          const stored = window.localStorage ? window.localStorage.getItem("piStudio.fileBrowserSort") : "";
+          return normalizeFileBrowserSortMode(stored);
+        } catch {
+          return "name";
+        }
+      }
+
+      function writeFileBrowserSortMode(sort) {
+        const normalized = normalizeFileBrowserSortMode(sort);
+        try {
+          if (window.localStorage) window.localStorage.setItem("piStudio.fileBrowserSort", normalized);
+        } catch {
+          // Ignore storage failures.
+        }
+        return normalized;
+      }
+
+      let fileBrowserSortMode = readFileBrowserSortMode();
       let fileBrowserState = {
         rootDir: "",
         currentDir: "",
@@ -2112,6 +2141,7 @@
         entries: [],
         omitted: 0,
         omittedIgnored: 0,
+        sort: fileBrowserSortMode,
         loading: false,
         error: "",
         loaded: false,
@@ -8145,6 +8175,9 @@
         critiqueViewEl.addEventListener("click", handleFilesPaneClick);
         critiqueViewEl.addEventListener("click", handleGitChangesPaneClick);
         critiqueViewEl.addEventListener("change", handleReplPaneChange);
+        critiqueViewEl.addEventListener("change", (event) => {
+          void handleFilesPaneChange(event);
+        });
       }
 
       function replaceResponsePaneWithClone() {
@@ -9965,6 +9998,24 @@
         return entry.extension ? entry.extension.replace(/^\./, "") : "file";
       }
 
+      function getFileBrowserSortOptions() {
+        return [
+          { value: "name", label: "Sort: Name" },
+          { value: "mtime-desc", label: "Sort: Newest" },
+          { value: "mtime-asc", label: "Sort: Oldest" },
+          { value: "size-desc", label: "Sort: Largest" },
+          { value: "size-asc", label: "Sort: Smallest" },
+        ];
+      }
+
+      function buildFileBrowserSortSelectHtml() {
+        const currentSort = normalizeFileBrowserSortMode(fileBrowserSortMode || (fileBrowserState && fileBrowserState.sort));
+        const options = getFileBrowserSortOptions().map((option) => {
+          return "<option value='" + escapeHtml(option.value) + "'" + (option.value === currentSort ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
+        }).join("");
+        return "<select class='files-sort-select' data-files-sort aria-label='Files sort order' title='Sort file browser entries. Folders remain grouped first.'>" + options + "</select>";
+      }
+
       function buildFileBrowserPanelHtml() {
         const state = fileBrowserState || {};
         const entries = Array.isArray(state.entries) ? state.entries : [];
@@ -10019,6 +10070,7 @@
           + "<div class='files-toolbar'>"
           + "<div class='files-path-group'><span class='files-label'>Files</span><span class='files-path' title='" + escapeHtml(currentDir) + "'>" + escapeHtml(relativeDir || ".") + "</span></div>"
           + "<div class='files-toolbar-actions'>"
+          + buildFileBrowserSortSelectHtml()
           + "<button type='button' data-files-action='parent'" + parentDisabled + ">Parent</button>"
           + "<button type='button' data-files-action='refresh'>Refresh</button>"
           + (currentDir ? "<button type='button' data-files-action='copy-current' data-files-path='" + escapeHtml(currentDir) + "'>Copy path</button>" : "")
@@ -10045,6 +10097,7 @@
             entries: [],
             omitted: 0,
             omittedIgnored: 0,
+            sort: fileBrowserSortMode,
             loading: false,
             error: "",
             loaded: false,
@@ -10079,8 +10132,10 @@
           if (dir) query.dir = String(dir);
           if (context.sourcePath) query.sourcePath = context.sourcePath;
           if (context.resourceDir) query.resourceDir = context.resourceDir;
+          query.sort = normalizeFileBrowserSortMode(fileBrowserSortMode);
           const payload = await fetchStudioJson("/file-browser", { query });
           if (nonce !== fileBrowserLoadNonce) return;
+          fileBrowserSortMode = normalizeFileBrowserSortMode(payload.sort || fileBrowserSortMode);
           fileBrowserState = {
             rootDir: typeof payload.rootDir === "string" ? payload.rootDir : "",
             currentDir: typeof payload.currentDir === "string" ? payload.currentDir : "",
@@ -10089,6 +10144,7 @@
             entries: Array.isArray(payload.entries) ? payload.entries : [],
             omitted: Number(payload.omitted) || 0,
             omittedIgnored: Number(payload.omittedIgnored) || 0,
+            sort: normalizeFileBrowserSortMode(payload.sort || fileBrowserSortMode),
             loading: false,
             error: "",
             loaded: true,
@@ -10189,6 +10245,17 @@
           body: JSON.stringify(body),
         });
         setStatus(payload && payload.message ? payload.message : "Opened folder in file manager.", "success");
+      }
+
+      async function handleFilesPaneChange(event) {
+        if (rightView !== "files") return;
+        const target = event.target;
+        const sortSelect = target instanceof Element ? target.closest("[data-files-sort]") : null;
+        if (!sortSelect || !("value" in sortSelect)) return;
+        const nextSort = writeFileBrowserSortMode(sortSelect.value);
+        if (nextSort === fileBrowserSortMode && fileBrowserState.loaded && !fileBrowserState.loading) return;
+        fileBrowserSortMode = nextSort;
+        await loadFileBrowserDirectory(fileBrowserState.currentDir || "", { user: true });
       }
 
       async function handleFilesPaneClick(event) {
