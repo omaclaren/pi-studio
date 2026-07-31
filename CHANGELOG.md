@@ -4,6 +4,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Added lazy Lucide and Logos icon-pack support for Mermaid diagrams in live previews, standalone HTML exports, and PDF exports through Mermaid CLI.
+- Added browser regression coverage for real SVG icon rendering and dark/light contrast correction.
+
+### Changed
+- Pinned browser Mermaid rendering to 11.16.0 and pinned the icon-pack data used by browser and PDF exports.
+- Made Mermaid icon paints and node labels meet a 4.5:1 contrast target against their rendered surfaces while retaining readable semantic colours; PDF preprocessing now corrects `classDef`/`style` label colours and targets literal Logos SVG fills over solid custom fills.
+- Resolve Mermaid CLI from `MERMAID_CLI_PATH`, Pi's shared npm binary directory, or `PATH`, in that order.
+
+### Fixed
+- Surface Mermaid icon-pack load failures as visible diagram errors instead of silently rendering empty icon nodes.
+
 ## [0.9.36] — 2026-07-13
 
 ### Changed

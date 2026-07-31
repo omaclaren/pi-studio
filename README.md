@@ -50,7 +50,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
   - shows/hides annotation markers in preview
   - strips markers before send (optional)
   - saves `.annotated.md`
-- Renders Markdown/LaTeX/code previews (math + Mermaid) plus lightweight CSV/TSV table previews, theme-synced with pi, with copy buttons for code blocks and blockquotes
+- Renders Markdown/LaTeX/code previews (math + Mermaid) plus lightweight CSV/TSV table previews, theme-synced with pi, with copy buttons for code blocks and blockquotes; Mermaid previews include Lucide/Logos icon nodes and accessible label contrast over custom fills
 - Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
 - Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks, with a Focus action for temporarily enlarging the embedded viewer
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
@@ -122,6 +122,30 @@ caption: Optional caption
 
 `path` must point to a local `.pdf` within the current Studio resource directory. Relative paths resolve from the opened document's directory, or from Studio's working dir for non-file-backed content. `page` is an initial page hint for the browser PDF viewer, and `height` controls the embedded frame height in pixels. Use normal Markdown links for PDFs when embedding is not useful.
 
+### Mermaid icons
+
+Studio's live previews and standalone HTML exports support Mermaid's `lucide:*` and `logos:*` icon nodes. The corresponding Iconify packs load lazily, so Studio does not fetch either pack unless a diagram uses it. Mermaid and the browser icon-pack URLs are pinned to tested versions.
+
+````md
+```mermaid
+flowchart LR
+  source@{ icon: "lucide:file-code-2", form: "rounded", label: "Source", pos: "b", h: 56 }
+  github@{ icon: "logos:github-icon", form: "rounded", label: "GitHub", pos: "b", h: 56 }
+  source -->|publish| github
+```
+````
+
+Studio also corrects low-contrast Mermaid icon paints and node labels after browser rendering while preserving authored colours that already meet a 4.5:1 contrast ratio. For PDF output, Studio adds or corrects label colours on `classDef` and `style` declarations with solid hex/RGB fills and supplies targeted icon CSS to Mermaid CLI; this also covers Logos icons whose SVG paths use literal fills.
+
+PDF icon nodes require Mermaid CLI 11.12+ so Studio can use pinned icon-pack URLs. Install a current CLI, or set `MERMAID_CLI_PATH` to one:
+
+```bash
+npm install -g @mermaid-js/mermaid-cli@11.16.0
+mmdc --version
+```
+
+Studio only passes icon-pack arguments when a diagram actually references `lucide:` or `logos:`, so ordinary Mermaid PDF diagrams remain compatible with older CLI versions.
+
 ## Notes
 
 - Local-only server (`127.0.0.1`) with tokenized Studio URLs.
@@ -135,7 +159,7 @@ caption: Optional caption
   - `brew install pandoc`
   - install TeX Live/MacTeX for PDF export
 - Export subprocess timeouts default to bounded values and can be tuned with `PI_STUDIO_PANDOC_TIMEOUT_MS`, `PI_STUDIO_LATEX_TIMEOUT_MS`, `PI_STUDIO_MERMAID_TIMEOUT_MS`, and `PI_STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES` for unusually large embedded-asset HTML exports.
-- Mermaid diagrams in exported PDFs may also require Mermaid CLI (`mmdc` / `@mermaid-js/mermaid-cli`) when you want diagram blocks rendered as diagrams rather than left as code.
+- Mermaid diagrams in exported PDFs require Mermaid CLI (`mmdc` / `@mermaid-js/mermaid-cli`) when you want diagram blocks rendered as diagrams rather than left as code; PDF icon nodes require Mermaid CLI 11.12+.
 
 ## License
 

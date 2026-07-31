@@ -2731,7 +2731,10 @@
         throw new Error("Studio annotation helpers failed to load.");
       }
       const EMPTY_OVERLAY_LINE = "\u200b";
-      const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      const mermaidHelpers = globalThis.PiStudioMermaidHelpers || null;
+      const MERMAID_CDN_URL = mermaidHelpers && mermaidHelpers.MERMAID_CDN_URL
+        ? mermaidHelpers.MERMAID_CDN_URL
+        : "https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.esm.min.mjs";
       const MATHJAX_CDN_URL = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
       const PDFJS_CDN_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.min.mjs";
       const PDFJS_WORKER_CDN_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.worker.min.mjs";
@@ -2749,6 +2752,9 @@
       const PDF_PREVIEW_RENDER_FAIL_MESSAGE = "PDF figure preview could not be rendered.";
       let mermaidModulePromise = null;
       let mermaidInitialized = false;
+      const mermaidIconRegistry = mermaidHelpers && typeof mermaidHelpers.createIconPackRegistry === "function"
+        ? mermaidHelpers.createIconPackRegistry()
+        : null;
       let mathJaxPromise = null;
       let pdfJsPromise = null;
 
@@ -8243,8 +8249,12 @@
             if (!mermaidApi) {
               throw new Error("Mermaid module did not expose a default export.");
             }
+            if (!mermaidHelpers || !mermaidIconRegistry) {
+              throw new Error("Studio Mermaid helpers failed to load.");
+            }
 
             if (!mermaidInitialized) {
+              mermaidIconRegistry.register(mermaidApi);
               mermaidApi.initialize(MERMAID_CONFIG);
               mermaidInitialized = true;
             }
@@ -8274,7 +8284,7 @@
           return;
         }
 
-        mermaidBlocks.forEach((preEl) => {
+        const wrappers = Array.from(mermaidBlocks).map((preEl) => {
           const codeEl = preEl.querySelector("code");
           const source = codeEl ? codeEl.textContent : preEl.textContent;
 
@@ -8309,20 +8319,29 @@
           wrapper.appendChild(toolbarEl);
           wrapper.appendChild(diagramEl);
           preEl.replaceWith(wrapper);
+          return wrapper;
         });
 
-        const diagramNodes = Array.from(targetEl.querySelectorAll(".mermaid"));
+        const diagramNodes = wrappers
+          .map((wrapper) => wrapper.querySelector(".mermaid"))
+          .filter(Boolean);
         if (diagramNodes.length === 0) return;
 
         try {
+          mermaidIconRegistry.clearError();
           await mermaidApi.run({ nodes: diagramNodes });
+          const iconPackError = mermaidIconRegistry.getError();
+          if (iconPackError) throw iconPackError;
+          mermaidHelpers.applyAccessibleColors(targetEl);
         } catch (error) {
           try {
-            await mermaidApi.run();
-          } catch (fallbackError) {
-            console.error("Mermaid render failed:", fallbackError || error);
-            appendMermaidNotice(targetEl, MERMAID_RENDER_FAIL_MESSAGE);
+            mermaidHelpers.applyAccessibleColors(targetEl);
+          } catch (contrastError) {
+            console.warn("Mermaid contrast correction failed after a partial render:", contrastError);
           }
+          mermaidHelpers.renderFailures(wrappers, error);
+          console.error("Mermaid render failed:", error);
+          appendMermaidNotice(targetEl, MERMAID_RENDER_FAIL_MESSAGE);
         }
       }
 

@@ -2819,6 +2819,18 @@
       height: auto;
     }
 
+    .rendered-markdown .mermaid-error {
+      margin: 0;
+      padding: 12px 14px;
+      border: 1px solid var(--error);
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--error);
+      text-align: left;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
     .plain-markdown {
       margin: 0;
       white-space: pre-wrap;

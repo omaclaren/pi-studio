@@ -31,6 +31,11 @@ import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js"
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import { renderStudioAnnotationInlineHtml } from "./shared/studio-annotation-render.js";
+import {
+	buildStudioMermaidCliIconArgs,
+	buildStudioMermaidPdfIconContrastCss,
+	ensureStudioMermaidSourceContrast,
+} from "./shared/studio-mermaid.js";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
@@ -48,6 +53,7 @@ type StudioPiThinkingLevel = ModelThinkingLevel | "max";
 
 const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
+const STUDIO_MERMAID_HELPERS_URL = new URL("./client/studio-mermaid-helpers.js", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
 
 interface StudioServerState {
@@ -644,6 +650,13 @@ const STUDIO_PROMPT_METADATA_CUSTOM_TYPE = "pi-studio/direct-prompt";
 const STUDIO_DEFAULT_SCRATCHPAD_DOCUMENT_KEY = "doc:blank:blank";
 const STUDIO_PERSISTENT_STATE_DIR = join(getAgentDir(), "pi-studio");
 const STUDIO_PERSISTENT_STATE_PATH = join(STUDIO_PERSISTENT_STATE_DIR, "local-state.json");
+const PI_STUDIO_MERMAID_CLI_PATH = join(
+	getAgentDir(),
+	"npm",
+	"node_modules",
+	".bin",
+	process.platform === "win32" ? "mmdc.cmd" : "mmdc",
+);
 
 type StudioSubprocessResult = {
 	code: number | null;
@@ -5820,14 +5833,25 @@ function getStudioMermaidPdfTheme(): "default" | "forest" | "dark" | "neutral" {
 	return "default";
 }
 
+function getStudioMermaidCliCommand(): string {
+	return process.env.MERMAID_CLI_PATH?.trim()
+		|| (existsSync(PI_STUDIO_MERMAID_CLI_PATH) ? PI_STUDIO_MERMAID_CLI_PATH : "mmdc");
+}
+
 async function renderStudioMermaidDiagramForPdf(source: string, workDir: string, blockNumber: number): Promise<string> {
-	const mermaidCommand = process.env.MERMAID_CLI_PATH?.trim() || "mmdc";
+	const mermaidCommand = getStudioMermaidCliCommand();
 	const mermaidTheme = getStudioMermaidPdfTheme();
 	const inputPath = join(workDir, `mermaid-diagram-${blockNumber}.mmd`);
 	const outputPath = join(workDir, `mermaid-diagram-${blockNumber}.pdf`);
+	const iconCssPath = join(workDir, `mermaid-diagram-${blockNumber}.css`);
 
-	await writeFile(inputPath, source, "utf-8");
+	const preparedSource = ensureStudioMermaidSourceContrast(source);
+	const iconContrastCss = buildStudioMermaidPdfIconContrastCss(preparedSource);
+	await writeFile(inputPath, preparedSource, "utf-8");
+	if (iconContrastCss) await writeFile(iconCssPath, iconContrastCss, "utf-8");
 	const args = ["-i", inputPath, "-o", outputPath, "-t", mermaidTheme, "-f"];
+	if (iconContrastCss) args.push("-C", iconCssPath);
+	args.push(...buildStudioMermaidCliIconArgs(preparedSource));
 	const result = await runStudioSubprocess(mermaidCommand, args, {
 		timeoutMs: STUDIO_MERMAID_TIMEOUT_MS,
 		label: "Mermaid CLI",
@@ -6317,10 +6341,18 @@ function buildStudioHtmlMermaidConfig(vars: Record<string, string>): Record<stri
 
 function buildStudioStandaloneHtmlMermaidScript(vars: Record<string, string>): string {
 	const mermaidConfigJson = JSON.stringify(buildStudioHtmlMermaidConfig(vars)).replace(/</g, "\\u003c");
+	const mermaidHelpersSource = readFileSync(STUDIO_MERMAID_HELPERS_URL, "utf-8").replace(/<\/script/gi, "<\\/script");
 	return `<script>
+${mermaidHelpersSource}
+</script>
+<script>
 (() => {
-  const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
   const MERMAID_CONFIG = ${mermaidConfigJson};
+  const mermaidHelpers = globalThis.PiStudioMermaidHelpers || null;
+
+  function setMermaidRenderResult(status, error) {
+    window.__piStudioMermaidRenderResult = error ? { status, error } : { status };
+  }
 
   function appendMermaidWarning(message) {
     const documentEl = document.querySelector(".studio-export-document") || document.body;
@@ -6332,32 +6364,56 @@ function buildStudioStandaloneHtmlMermaidScript(vars: Record<string, string>): s
   }
 
   function prepareMermaidBlocks() {
-    const preBlocks = Array.from(document.querySelectorAll("pre.mermaid"));
-    preBlocks.forEach((preEl) => {
-      const source = preEl.querySelector("code") ? preEl.querySelector("code").textContent : preEl.textContent;
+    return Array.from(document.querySelectorAll("pre.mermaid")).map((preEl) => {
+      const codeEl = preEl.querySelector("code");
+      const source = codeEl ? codeEl.textContent : preEl.textContent;
       const wrapper = document.createElement("div");
       wrapper.className = "mermaid-container";
+      wrapper.dataset.mermaidSource = source || "";
       const diagramEl = document.createElement("div");
       diagramEl.className = "mermaid";
       diagramEl.textContent = source || "";
       wrapper.appendChild(diagramEl);
       preEl.replaceWith(wrapper);
+      return wrapper;
     });
-    return Array.from(document.querySelectorAll(".mermaid"));
   }
 
   async function renderMermaid() {
-    const nodes = prepareMermaidBlocks();
-    if (nodes.length === 0) return;
+    const wrappers = prepareMermaidBlocks();
+    if (wrappers.length === 0) {
+      setMermaidRenderResult("skipped");
+      return;
+    }
+    setMermaidRenderResult("pending");
     try {
-      const module = await import(MERMAID_CDN_URL);
+      if (!mermaidHelpers) throw new Error("Studio Mermaid helpers failed to load.");
+      const module = await import(mermaidHelpers.MERMAID_CDN_URL);
       const mermaidApi = module && module.default ? module.default : null;
       if (!mermaidApi) throw new Error("Mermaid module did not expose a default export.");
+      const iconRegistry = mermaidHelpers.createIconPackRegistry();
+      iconRegistry.register(mermaidApi);
       mermaidApi.initialize(MERMAID_CONFIG);
-      await mermaidApi.run({ nodes });
+      iconRegistry.clearError();
+      await mermaidApi.run({ nodes: wrappers.map((wrapper) => wrapper.querySelector(".mermaid")) });
+      const iconPackError = iconRegistry.getError();
+      if (iconPackError) throw iconPackError;
+      mermaidHelpers.applyAccessibleColors(document);
+      setMermaidRenderResult("success");
     } catch (error) {
+      if (mermaidHelpers) {
+        try {
+          mermaidHelpers.applyAccessibleColors(document);
+        } catch (contrastError) {
+          console.warn("Mermaid contrast correction failed after a partial render:", contrastError);
+        }
+      }
+      const message = mermaidHelpers
+        ? mermaidHelpers.renderFailures(wrappers, error)
+        : (error instanceof Error ? error.message : String(error));
+      setMermaidRenderResult("failed", message);
       console.error("Mermaid render failed:", error);
-      appendMermaidWarning("Mermaid renderer unavailable. Showing mermaid source text.");
+      appendMermaidWarning("Mermaid render failed. Showing diagram source text.");
     }
   }
 
@@ -10362,6 +10418,7 @@ function buildStudioHtml(
 	const cssVarsBlock = Object.entries(vars).map(([k, v]) => `      ${k}: ${v};`).join("\n");
 	const stylesheetHref = `/studio.css?token=${encodeURIComponent(studioToken ?? "")}`;
 	const annotationHelpersScriptHref = `/studio-annotation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
+	const mermaidHelpersScriptHref = `/studio-mermaid-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
@@ -10778,6 +10835,7 @@ ${cssVarsBlock}
     window.__PI_STUDIO_BOOT__ = ${bootConfigJson};
   </script>
   <script src="${annotationHelpersScriptHref}"></script>
+  <script src="${mermaidHelpersScriptHref}"></script>
   <script src="${clientScriptHref}"></script>
 </body>
 </html>`;
@@ -13962,7 +14020,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		if (requestUrl.pathname === "/studio-annotation-helpers.js" || requestUrl.pathname === "/studio-client.js") {
+		if (requestUrl.pathname === "/studio-annotation-helpers.js" || requestUrl.pathname === "/studio-mermaid-helpers.js" || requestUrl.pathname === "/studio-client.js") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
 				respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
@@ -13978,10 +14036,14 @@ export default function (pi: ExtensionAPI) {
 
 			const targetUrl = requestUrl.pathname === "/studio-annotation-helpers.js"
 				? STUDIO_ANNOTATION_HELPERS_URL
-				: STUDIO_CLIENT_URL;
+				: requestUrl.pathname === "/studio-mermaid-helpers.js"
+					? STUDIO_MERMAID_HELPERS_URL
+					: STUDIO_CLIENT_URL;
 			const targetLabel = requestUrl.pathname === "/studio-annotation-helpers.js"
 				? "studio annotation helper script"
-				: "studio client script";
+				: requestUrl.pathname === "/studio-mermaid-helpers.js"
+					? "studio Mermaid helper script"
+					: "studio client script";
 
 			try {
 				const clientScript = readFileSync(targetUrl, "utf-8");

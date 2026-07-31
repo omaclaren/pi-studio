@@ -30,3 +30,19 @@ flowchart TD
 | Pressure drawdown | Wellhead transducers | ±0.5 bar |
 
 The forward model maps permeability, porosity, and boundary conditions to these observables. The inverse problem is ill-posed — regularisation via prior information prevents overfitting to noisy data.
+
+## Icon-pack and contrast check
+
+This smaller diagram exercises both supported icon packs and a custom light node fill. It should remain readable in dark and light Studio themes.
+
+```mermaid
+flowchart LR
+  source@{ icon: "lucide:file-code-2", form: "rounded", label: "Source", pos: "b", h: 56 }
+  github@{ icon: "logos:github-icon", form: "rounded", label: "GitHub", pos: "b", h: 56 }
+  payload@{ shape: "rounded", label: "Payload" }
+  source -->|publish| github --> payload
+  classDef light fill:#f8f9fa,stroke:#868e96,stroke-width:2px
+  classDef violet fill:#f3f0ff,stroke:#7950f2,stroke-width:2px
+  class source,payload light
+  class github violet
+```

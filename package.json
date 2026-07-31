@@ -50,8 +50,12 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@iconify-json/logos": "1.2.11",
+    "@iconify-json/lucide": "1.2.120",
     "@types/node": "^24.3.0",
     "@types/ws": "^8.18.1",
+    "mermaid": "11.16.0",
+    "puppeteer-core": "24.22.3",
     "typescript": "^5.7.3"
   }
 }
