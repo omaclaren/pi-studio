@@ -5843,14 +5843,14 @@ async function renderStudioMermaidDiagramForPdf(source: string, workDir: string,
 	const mermaidTheme = getStudioMermaidPdfTheme();
 	const inputPath = join(workDir, `mermaid-diagram-${blockNumber}.mmd`);
 	const outputPath = join(workDir, `mermaid-diagram-${blockNumber}.pdf`);
-	const iconCssPath = join(workDir, `mermaid-diagram-${blockNumber}.css`);
+	const contrastCssPath = join(workDir, `mermaid-diagram-${blockNumber}.css`);
 
 	const preparedSource = ensureStudioMermaidSourceContrast(source);
-	const iconContrastCss = buildStudioMermaidPdfIconContrastCss(preparedSource);
+	const contrastCss = buildStudioMermaidPdfIconContrastCss(preparedSource, { theme: mermaidTheme });
 	await writeFile(inputPath, preparedSource, "utf-8");
-	if (iconContrastCss) await writeFile(iconCssPath, iconContrastCss, "utf-8");
+	if (contrastCss) await writeFile(contrastCssPath, contrastCss, "utf-8");
 	const args = ["-i", inputPath, "-o", outputPath, "-t", mermaidTheme, "-f"];
-	if (iconContrastCss) args.push("-C", iconCssPath);
+	if (contrastCss) args.push("-C", contrastCssPath);
 	args.push(...buildStudioMermaidCliIconArgs(preparedSource));
 	const result = await runStudioSubprocess(mermaidCommand, args, {
 		timeoutMs: STUDIO_MERMAID_TIMEOUT_MS,

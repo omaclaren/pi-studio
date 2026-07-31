@@ -160,10 +160,19 @@ test("PDF Mermaid source gains readable colors for custom solid fills", () => {
   assert.ok(iconStroke, "An icon class should correct the semantic Lucide stroke as well as its label.");
   assert.ok(helpers.contrastRatio(hexCssToRgb(iconStroke[1]), "rgb(248, 249, 250)") >= 4.5);
 
+  const ordinaryCss = buildStudioMermaidPdfIconContrastCss("flowchart LR\n  a --> b");
+  assert.match(ordinaryCss, /-webkit-print-color-adjust: exact !important;/, "PDF printing should preserve corrected text colors.");
+
   const iconCss = buildStudioMermaidPdfIconContrastCss(source);
+  assert.match(iconCss, /\.icon-shape\[id\*="flowchart-icon-"\] \.labelBkg \{ background-color: #ffffff !important; \}/);
+  assert.match(iconCss, /-webkit-text-fill-color: #000000 !important;/, "Default-theme icon labels should remain readable outside custom icon surfaces.");
   assert.match(iconCss, /\.icon-shape\[id\*="flowchart-icon-"\] svg \{ color: #[0-9a-f]{6} !important; \}/i);
   assert.match(iconCss, /\.icon-shape\[id\*="flowchart-icon-"\] svg path\[fill\]:not\(\[fill="none"\]\)/);
   assert.match(iconCss, /fill: #[0-9a-f]{6} !important;/i, "Literal Logos path fills should receive a PDF override.");
+
+  const darkIconCss = buildStudioMermaidPdfIconContrastCss(source, { theme: "dark" });
+  assert.match(darkIconCss, /\.icon-shape\[id\*="flowchart-icon-"\] \.labelBkg \{ background-color: #1f2937 !important; \}/);
+  assert.match(darkIconCss, /-webkit-text-fill-color: #ffffff !important;/);
 });
 
 test("live, standalone HTML, and PDF rendering paths use the Mermaid helpers", () => {
@@ -173,7 +182,7 @@ test("live, standalone HTML, and PDF rendering paths use the Mermaid helpers", (
   assert.match(indexSource, /STUDIO_MERMAID_HELPERS_URL/);
   assert.match(indexSource, /buildStudioStandaloneHtmlMermaidScript[\s\S]*?PiStudioMermaidHelpers/);
   assert.match(indexSource, /ensureStudioMermaidSourceContrast\(source\)/);
-  assert.match(indexSource, /buildStudioMermaidPdfIconContrastCss\(preparedSource\)/);
+  assert.match(indexSource, /buildStudioMermaidPdfIconContrastCss\(preparedSource, \{ theme: mermaidTheme \}\)/);
   assert.match(indexSource, /buildStudioMermaidCliIconArgs\(preparedSource\)/);
   assert.match(indexSource, /existsSync\(PI_STUDIO_MERMAID_CLI_PATH\)/);
   assert.match(clientSource, /mermaidIconRegistry\.register\(mermaidApi\)/);
@@ -330,7 +339,7 @@ test("Mermaid icons and custom-fill labels render accessibly in dark and light b
               pathCount: icon ? icon.querySelectorAll("path").length : 0,
               iconColor: icon ? getComputedStyle(icon).color : "",
               iconSurface: firstOpaqueFill(node.firstElementChild),
-              labelColor: label ? getComputedStyle(label).color : "",
+              labelColor: label ? getComputedStyle(label.querySelector("p") || label).color : "",
               labelSurface: label ? getComputedStyle(document.getElementById("root")).backgroundColor : "",
               paints: icon ? Array.from(icon.querySelectorAll("g, path, rect, polygon, circle, ellipse, line, polyline")).flatMap((element) => {
                 const style = getComputedStyle(element);
@@ -342,7 +351,7 @@ test("Mermaid icons and custom-fill labels render accessibly in dark and light b
             const label = node.querySelector(".nodeLabel");
             return {
               label: label ? label.textContent.trim() : "",
-              color: label ? getComputedStyle(label).color : "",
+              color: label ? getComputedStyle(label.querySelector("p") || label).color : "",
               fill: firstOpaqueFill(node),
             };
           }),

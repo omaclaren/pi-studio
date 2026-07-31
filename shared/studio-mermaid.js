@@ -232,12 +232,44 @@ function buildStudioMermaidIconPaintRule(selector, color) {
   ].join("\n");
 }
 
-export function buildStudioMermaidPdfIconContrastCss(source) {
+function buildStudioMermaidPdfPrintColorRule() {
+  return [
+    ".node, .node *, .icon-shape, .icon-shape * {",
+    "  -webkit-print-color-adjust: exact !important;",
+    "  print-color-adjust: exact !important;",
+    "}",
+  ].join("\n");
+}
+
+function buildStudioMermaidPdfIconLabelRule(selectors, theme) {
+  if (selectors.length === 0) return "";
+  const darkTheme = String(theme || "default").toLowerCase() === "dark";
+  const background = darkTheme ? "#1f2937" : "#ffffff";
+  const foreground = darkTheme ? "#ffffff" : "#000000";
+  const backgroundSelectors = selectors.map((selector) => `${selector} .labelBkg`).join(",\n");
+  const textSelectors = selectors.flatMap((selector) => [
+    `${selector} .nodeLabel`,
+    `${selector} .nodeLabel *`,
+  ]).join(",\n");
+  return [
+    `${backgroundSelectors} { background-color: ${background} !important; }`,
+    `${textSelectors} {`,
+    `  color: ${foreground} !important;`,
+    `  fill: ${foreground} !important;`,
+    `  -webkit-text-fill-color: ${foreground} !important;`,
+    "  opacity: 1 !important;",
+    "}",
+  ].join("\n");
+}
+
+export function buildStudioMermaidPdfIconContrastCss(source, options = {}) {
   const preparedSource = ensureStudioMermaidSourceContrast(source);
   const { iconNodeIds, classNamesByNode } = collectStudioMermaidIconStyleTargets(preparedSource);
-  if (iconNodeIds.size === 0) return "";
+  const printColorRule = buildStudioMermaidPdfPrintColorRule();
+  if (iconNodeIds.size === 0) return printColorRule;
   const classStyles = collectStudioMermaidStylesByTarget(preparedSource, "classDef");
   const directStyles = collectStudioMermaidStylesByTarget(preparedSource, "style");
+  const iconSelectors = Array.from(iconNodeIds, (iconNodeId) => `.icon-shape[id*="flowchart-${iconNodeId}-"]`);
   const rulesBySelector = new Map();
 
   for (const iconNodeId of iconNodeIds) {
@@ -250,5 +282,9 @@ export function buildStudioMermaidPdfIconContrastCss(source) {
     if (paint) rulesBySelector.set(`.icon-shape[id*="flowchart-${iconNodeId}-"]`, paint);
   }
 
-  return Array.from(rulesBySelector, ([selector, color]) => buildStudioMermaidIconPaintRule(selector, color)).join("\n");
+  return [
+    printColorRule,
+    buildStudioMermaidPdfIconLabelRule(iconSelectors, options.theme),
+    ...Array.from(rulesBySelector, ([selector, color]) => buildStudioMermaidIconPaintRule(selector, color)),
+  ].filter(Boolean).join("\n");
 }
