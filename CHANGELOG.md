@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.38] — 2026-08-01
+
 ### Fixed
 - Preserved corrected Mermaid node colours during Chromium PDF printing and gave external icon-node labels a theme-aware backdrop, preventing washed-out labels beside custom icon fills.
 
