@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.37] — 2026-08-01
+
 ### Added
 - Added lazy Lucide and Logos icon-pack support for Mermaid diagrams in live previews, standalone HTML exports, and PDF exports through Mermaid CLI.
 - Added browser regression coverage for real SVG icon rendering and dark/light contrast correction.
