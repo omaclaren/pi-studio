@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.39] — 2026-08-07
+
 ### Added
 - Added a contextual **Editor (Quarto Preview)** right-pane view for file-backed `.qmd`, `.md`, and `.markdown` documents, with dependency/project inspection, explicit loopback `quarto preview --no-execute` startup, an embedded authoritative Quarto page, saved-file dirty warnings, logs, browser pop-out, restart/stop controls, and clean process shutdown.
 
