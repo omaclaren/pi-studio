@@ -36,6 +36,13 @@ import {
 	buildStudioMermaidPdfIconContrastCss,
 	ensureStudioMermaidSourceContrast,
 } from "./shared/studio-mermaid.js";
+import {
+	appendStudioQuartoLog,
+	buildStudioQuartoPreviewArgs,
+	isStudioQuartoDocumentPath,
+	parseStudioQuartoInspect,
+	parseStudioQuartoPreviewUrl,
+} from "./shared/studio-quarto-preview.js";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
@@ -50,6 +57,34 @@ type StudioQuizAngle = "general" | "scientist" | "mathematician" | "statistician
 type StudioQuizScope = "selection" | "editor" | "file" | "folder" | "repo";
 type StudioQuizThinking = "off" | "minimal" | "low" | "medium" | "high";
 type StudioPiThinkingLevel = ModelThinkingLevel | "max";
+type StudioQuartoPreviewStatus = "idle" | "starting" | "running" | "stopping" | "stopped" | "error";
+
+interface StudioQuartoPreviewContext {
+	sourcePath: string;
+	requestedSourcePath: string;
+	available: boolean;
+	reason: "ready" | "not-found" | "invalid-source" | "inspect-error";
+	version: string;
+	projectRoot: string;
+	projectType: string;
+	projectLabel: string;
+	outputFile: string;
+	isProject: boolean;
+	error: string | null;
+	inspectLog: string;
+}
+
+interface StudioQuartoPreviewState {
+	status: StudioQuartoPreviewStatus;
+	sourcePath: string;
+	url: string;
+	log: string;
+	error: string | null;
+	context: StudioQuartoPreviewContext | null;
+	startedAt: number | null;
+	updatedAt: number;
+	actionRequestId: string | null;
+}
 
 const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
@@ -485,6 +520,23 @@ interface GetFromEditorRequestMessage {
 	requestId: string;
 }
 
+interface QuartoPreviewCheckRequestMessage {
+	type: "quarto_preview_check_request";
+	requestId: string;
+	sourcePath: string;
+}
+
+interface QuartoPreviewStartRequestMessage {
+	type: "quarto_preview_start_request";
+	requestId: string;
+	sourcePath: string;
+}
+
+interface QuartoPreviewStopRequestMessage {
+	type: "quarto_preview_stop_request";
+	requestId: string;
+}
+
 interface GitChangesRequestMessage {
 	type: "git_changes_request";
 	requestId: string;
@@ -534,6 +586,9 @@ type IncomingStudioMessage =
 	| RefreshFromDiskRequestMessage
 	| SendToEditorRequestMessage
 	| GetFromEditorRequestMessage
+	| QuartoPreviewCheckRequestMessage
+	| QuartoPreviewStartRequestMessage
+	| QuartoPreviewStopRequestMessage
 	| GitChangesRequestMessage
 	| OpenEditorOnlyRequestMessage
 	| CancelRequestMessage;
@@ -564,6 +619,9 @@ const MAX_PREPARED_HTML_EXPORTS = 8;
 const STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES = 80;
 const STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS = 20_000;
 const STUDIO_TRACE_TOOL_ARGS_MAX_CHARS = 20_000;
+const STUDIO_QUARTO_CHECK_TIMEOUT_MS = 30_000;
+const STUDIO_QUARTO_START_TIMEOUT_MS = 3 * 60_000;
+const STUDIO_QUARTO_LOG_MAX_CHARS = 80_000;
 const STUDIO_TRACE_IMAGE_MAX_COUNT = 8;
 const STUDIO_TRACE_IMAGE_MAX_BASE64_CHARS = 2_500_000;
 const STUDIO_TRACE_SNAPSHOT_MAX_IMAGES = 12;
@@ -816,7 +874,7 @@ $if(subtitle)$
 <p class="subtitle">$subtitle$</p>
 $endif$
 $for(author)$
-<p class="author">$author$</p>
+<p class="author">$if(author.name)$$author.name$$else$$author$$endif$</p>
 $endfor$
 $if(date)$
 <p class="date">$date$</p>
@@ -8714,6 +8772,37 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 	}
 
 	if (
+		msg.type === "quarto_preview_check_request"
+		&& typeof msg.requestId === "string"
+		&& typeof msg.sourcePath === "string"
+	) {
+		return {
+			type: "quarto_preview_check_request",
+			requestId: msg.requestId,
+			sourcePath: msg.sourcePath,
+		};
+	}
+
+	if (
+		msg.type === "quarto_preview_start_request"
+		&& typeof msg.requestId === "string"
+		&& typeof msg.sourcePath === "string"
+	) {
+		return {
+			type: "quarto_preview_start_request",
+			requestId: msg.requestId,
+			sourcePath: msg.sourcePath,
+		};
+	}
+
+	if (msg.type === "quarto_preview_stop_request" && typeof msg.requestId === "string") {
+		return {
+			type: "quarto_preview_stop_request",
+			requestId: msg.requestId,
+		};
+	}
+
+	if (
 		msg.type === "git_changes_request"
 		&& typeof msg.requestId === "string"
 		&& (msg.sourcePath === undefined || typeof msg.sourcePath === "string")
@@ -10662,6 +10751,7 @@ ${cssVarsBlock}
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
+            <option value="editor-quarto-preview" hidden>Editor (Quarto Preview)</option>
             <option value="trace">Working</option>
             <option value="changes">Changes</option>
             <option value="files">Files</option>
@@ -10882,6 +10972,22 @@ export default function (pi: ExtensionAPI) {
 	let compactInProgress = false;
 	let compactRequestId: string | null = null;
 	const activeCompletionSuggestions = new Map<string, AbortController>();
+	let studioQuartoPreviewProcess: ReturnType<typeof spawn> | null = null;
+	let studioQuartoPreviewGeneration = 0;
+	let studioQuartoPreviewStartupTimer: NodeJS.Timeout | null = null;
+	let studioQuartoPreviewBroadcastTimer: NodeJS.Timeout | null = null;
+	let studioQuartoPreviewOperation: Promise<void> = Promise.resolve();
+	let studioQuartoPreviewState: StudioQuartoPreviewState = {
+		status: "idle",
+		sourcePath: "",
+		url: "",
+		log: "",
+		error: null,
+		context: null,
+		startedAt: null,
+		updatedAt: Date.now(),
+		actionRequestId: null,
+	};
 
 	const selectStudioReplSessionForTool = (params: { sessionName?: string; target?: string }): { session: StudioReplSessionInfo | null; error?: string; sessions: StudioReplSessionInfo[] } => {
 		const state = listStudioReplSessions();
@@ -11535,6 +11641,305 @@ export default function (pi: ExtensionAPI) {
 				// Ignore transport errors; close handler will clean up
 			}
 		}
+	};
+
+	const getStudioQuartoPreviewSnapshot = (): StudioQuartoPreviewState => ({
+		...studioQuartoPreviewState,
+		context: studioQuartoPreviewState.context ? { ...studioQuartoPreviewState.context } : null,
+	});
+
+	const broadcastStudioQuartoPreviewState = () => {
+		if (studioQuartoPreviewBroadcastTimer) {
+			clearTimeout(studioQuartoPreviewBroadcastTimer);
+			studioQuartoPreviewBroadcastTimer = null;
+		}
+		broadcast({ type: "quarto_preview_state", preview: getStudioQuartoPreviewSnapshot() });
+	};
+
+	const scheduleStudioQuartoPreviewBroadcast = () => {
+		if (studioQuartoPreviewBroadcastTimer) return;
+		studioQuartoPreviewBroadcastTimer = setTimeout(() => {
+			studioQuartoPreviewBroadcastTimer = null;
+			broadcast({ type: "quarto_preview_state", preview: getStudioQuartoPreviewSnapshot() });
+		}, 120);
+	};
+
+	const updateStudioQuartoPreviewState = (
+		patch: Partial<StudioQuartoPreviewState>,
+		options?: { immediate?: boolean },
+	) => {
+		studioQuartoPreviewState = {
+			...studioQuartoPreviewState,
+			...patch,
+			updatedAt: Date.now(),
+		};
+		if (options?.immediate) {
+			broadcastStudioQuartoPreviewState();
+		} else {
+			scheduleStudioQuartoPreviewBroadcast();
+		}
+	};
+
+	const makeUnavailableStudioQuartoContext = (
+		sourcePath: string,
+		reason: StudioQuartoPreviewContext["reason"],
+		error: string,
+		inspectLog = "",
+	): StudioQuartoPreviewContext => ({
+		sourcePath,
+		requestedSourcePath: sourcePath,
+		available: false,
+		reason,
+		version: "",
+		projectRoot: sourcePath ? dirname(sourcePath) : "",
+		projectType: "",
+		projectLabel: sourcePath ? basename(sourcePath) : "Quarto document",
+		outputFile: "",
+		isProject: false,
+		error,
+		inspectLog,
+	});
+
+	const resolveStudioQuartoSourcePath = (requestedPath: string): { ok: true; path: string } | { ok: false; context: StudioQuartoPreviewContext } => {
+		const rawPath = String(requestedPath || "").trim();
+		if (!rawPath || rawPath.length > 32_000) {
+			return {
+				ok: false,
+				context: makeUnavailableStudioQuartoContext(rawPath, "invalid-source", "Quarto preview requires a file-backed .qmd, .md, or .markdown document."),
+			};
+		}
+		const candidate = resolve(studioCwd, rawPath);
+		if (!isStudioQuartoDocumentPath(candidate)) {
+			return {
+				ok: false,
+				context: makeUnavailableStudioQuartoContext(candidate, "invalid-source", "Quarto preview is currently available only for file-backed .qmd, .md, and .markdown documents."),
+			};
+		}
+		try {
+			const resolvedPath = realpathSync(candidate);
+			if (!statSync(resolvedPath).isFile()) {
+				throw new Error("Path is not a regular file.");
+			}
+			return { ok: true, path: resolvedPath };
+		} catch (error) {
+			return {
+				ok: false,
+				context: makeUnavailableStudioQuartoContext(
+					candidate,
+					"invalid-source",
+					`Quarto source is unavailable on disk: ${error instanceof Error ? error.message : String(error)}`,
+				),
+			};
+		}
+	};
+
+	const inspectStudioQuartoPreviewContext = async (requestedPath: string): Promise<StudioQuartoPreviewContext> => {
+		const requestedSourcePath = resolve(studioCwd, String(requestedPath || "").trim());
+		const resolved = resolveStudioQuartoSourcePath(requestedPath);
+		if (resolved.ok === false) return resolved.context;
+		const sourcePath = resolved.path;
+		const makeInspectedUnavailableContext = (
+			reason: StudioQuartoPreviewContext["reason"],
+			error: string,
+			inspectLog = "",
+		): StudioQuartoPreviewContext => ({
+			...makeUnavailableStudioQuartoContext(sourcePath, reason, error, inspectLog),
+			requestedSourcePath,
+		});
+		let versionResult: StudioSubprocessResult;
+		try {
+			versionResult = await runStudioSubprocess("quarto", ["--version"], {
+				cwd: dirname(sourcePath),
+				timeoutMs: STUDIO_QUARTO_CHECK_TIMEOUT_MS,
+				stdoutMaxBytes: 32_000,
+				stderrMaxBytes: 32_000,
+				label: "Quarto version check",
+				notFoundMessage: "Quarto is not installed or is not available on Studio's PATH.",
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return makeInspectedUnavailableContext(
+				/was not found|not installed|ENOENT/i.test(message) ? "not-found" : "inspect-error",
+				message,
+			);
+		}
+		const version = (versionResult.stdout || versionResult.stderr).split(/\r?\n/)[0]?.trim() ?? "";
+		if (versionResult.code !== 0) {
+			const detail = versionResult.stderr || versionResult.stdout || `Quarto exited with code ${versionResult.code}.`;
+			return makeInspectedUnavailableContext("inspect-error", `Quarto version check failed: ${detail}`, detail);
+		}
+
+		let inspectResult: StudioSubprocessResult;
+		try {
+			inspectResult = await runStudioSubprocess("quarto", ["inspect", sourcePath], {
+				cwd: dirname(sourcePath),
+				timeoutMs: STUDIO_QUARTO_CHECK_TIMEOUT_MS,
+				stdoutMaxBytes: 1_000_000,
+				stderrMaxBytes: 200_000,
+				label: "Quarto inspect",
+				notFoundMessage: "Quarto is not installed or is not available on Studio's PATH.",
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return makeInspectedUnavailableContext("inspect-error", message);
+		}
+		const inspectLog = inspectResult.stderr.trim();
+		if (inspectResult.code !== 0) {
+			const detail = inspectLog || inspectResult.stdout || `Quarto exited with code ${inspectResult.code}.`;
+			return makeInspectedUnavailableContext("inspect-error", `Quarto could not inspect this document: ${detail}`, detail);
+		}
+		try {
+			const inspected = parseStudioQuartoInspect(inspectResult.stdout, sourcePath, version);
+			return {
+				...inspected,
+				requestedSourcePath,
+				available: true,
+				reason: "ready",
+				error: null,
+				inspectLog,
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return makeInspectedUnavailableContext("inspect-error", message, inspectLog);
+		}
+	};
+
+	const clearStudioQuartoPreviewStartupTimer = () => {
+		if (!studioQuartoPreviewStartupTimer) return;
+		clearTimeout(studioQuartoPreviewStartupTimer);
+		studioQuartoPreviewStartupTimer = null;
+	};
+
+	const terminateStudioQuartoChild = async (child: ReturnType<typeof spawn>): Promise<void> => {
+		if (child.exitCode !== null || child.signalCode !== null) return;
+		await new Promise<void>((resolvePromise) => {
+			let settled = false;
+			let forceTimer: NodeJS.Timeout | null = null;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				if (forceTimer) clearTimeout(forceTimer);
+				resolvePromise();
+			};
+			const signalProcess = (signal: NodeJS.Signals) => {
+				try {
+					if (process.platform === "win32" && child.pid && signal === "SIGKILL") {
+						spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", timeout: 2_000 });
+					} else if (process.platform !== "win32" && child.pid) {
+						process.kill(-child.pid, signal);
+					} else {
+						child.kill(signal);
+					}
+				} catch {
+					try { child.kill(signal); } catch {}
+				}
+			};
+			child.once("close", finish);
+			signalProcess("SIGTERM");
+			forceTimer = setTimeout(() => {
+				signalProcess("SIGKILL");
+				setTimeout(finish, 400);
+			}, 2_000);
+		});
+	};
+
+	const stopStudioQuartoPreview = async (
+		actionRequestId: string | null = null,
+		options?: { preserveError?: boolean; quiet?: boolean },
+	) => {
+		studioQuartoPreviewGeneration += 1;
+		clearStudioQuartoPreviewStartupTimer();
+		const child = studioQuartoPreviewProcess;
+		studioQuartoPreviewProcess = null;
+		if (child && !options?.quiet) {
+			updateStudioQuartoPreviewState({ status: "stopping", actionRequestId }, { immediate: true });
+		}
+		if (child) await terminateStudioQuartoChild(child);
+		updateStudioQuartoPreviewState({
+			status: studioQuartoPreviewState.sourcePath ? "stopped" : "idle",
+			url: "",
+			error: options?.preserveError ? studioQuartoPreviewState.error : null,
+			actionRequestId,
+		}, { immediate: !options?.quiet });
+	};
+
+	const failStudioQuartoPreview = (generation: number, message: string) => {
+		if (generation !== studioQuartoPreviewGeneration) return;
+		clearStudioQuartoPreviewStartupTimer();
+		const child = studioQuartoPreviewProcess;
+		studioQuartoPreviewProcess = null;
+		studioQuartoPreviewGeneration += 1;
+		updateStudioQuartoPreviewState({
+			status: "error",
+			url: "",
+			error: message,
+			log: appendStudioQuartoLog(studioQuartoPreviewState.log, `\n[Studio] ${message}\n`, STUDIO_QUARTO_LOG_MAX_CHARS),
+		}, { immediate: true });
+		if (child) void terminateStudioQuartoChild(child);
+	};
+
+	const startStudioQuartoPreview = async (context: StudioQuartoPreviewContext, actionRequestId: string) => {
+		await stopStudioQuartoPreview(null, { quiet: true });
+		const generation = studioQuartoPreviewGeneration + 1;
+		studioQuartoPreviewGeneration = generation;
+		const args = buildStudioQuartoPreviewArgs(context.sourcePath);
+		updateStudioQuartoPreviewState({
+			status: "starting",
+			sourcePath: context.sourcePath,
+			url: "",
+			log: `[Studio] Starting Quarto ${context.version || "preview"} with computational cell execution disabled (--no-execute).\n`,
+			error: null,
+			context,
+			startedAt: Date.now(),
+			actionRequestId,
+		}, { immediate: true });
+
+		let child: ReturnType<typeof spawn>;
+		try {
+			child = spawn("quarto", args, {
+				cwd: context.projectRoot || dirname(context.sourcePath),
+				stdio: ["ignore", "pipe", "pipe"],
+				detached: process.platform !== "win32",
+				env: { ...process.env, NO_COLOR: "1" },
+			});
+		} catch (error) {
+			failStudioQuartoPreview(generation, `Could not start Quarto: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+		studioQuartoPreviewProcess = child;
+
+		const handleOutput = (chunk: Buffer | string) => {
+			if (generation !== studioQuartoPreviewGeneration) return;
+			const log = appendStudioQuartoLog(studioQuartoPreviewState.log, chunk, STUDIO_QUARTO_LOG_MAX_CHARS);
+			const previewUrl = studioQuartoPreviewState.url || parseStudioQuartoPreviewUrl(log) || "";
+			if (previewUrl && studioQuartoPreviewState.status === "starting") {
+				clearStudioQuartoPreviewStartupTimer();
+				updateStudioQuartoPreviewState({ status: "running", url: previewUrl, log, error: null }, { immediate: true });
+				return;
+			}
+			updateStudioQuartoPreviewState({ log, url: previewUrl });
+		};
+		child.stdout?.on("data", handleOutput);
+		child.stderr?.on("data", handleOutput);
+		child.once("error", (error) => {
+			failStudioQuartoPreview(generation, `Quarto preview failed to start: ${error.message}`);
+		});
+		child.once("close", (code, signal) => {
+			if (generation !== studioQuartoPreviewGeneration) return;
+			studioQuartoPreviewProcess = null;
+			clearStudioQuartoPreviewStartupTimer();
+			const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
+			failStudioQuartoPreview(generation, `Quarto preview exited unexpectedly (${detail}).`);
+		});
+		studioQuartoPreviewStartupTimer = setTimeout(() => {
+			failStudioQuartoPreview(generation, `Quarto did not report a loopback preview URL within ${Math.round(STUDIO_QUARTO_START_TIMEOUT_MS / 1000)} seconds.`);
+		}, STUDIO_QUARTO_START_TIMEOUT_MS);
+	};
+
+	const enqueueStudioQuartoPreviewOperation = (operation: () => Promise<void>): Promise<void> => {
+		const next = studioQuartoPreviewOperation.then(operation, operation);
+		studioQuartoPreviewOperation = next.catch(() => {});
+		return next;
 	};
 
 	const sendReplStateToClient = (client: WebSocket, extra?: Record<string, unknown>) => {
@@ -12227,6 +12632,7 @@ export default function (pi: ExtensionAPI) {
 				responseHistory: studioResponseHistory,
 				traceState: studioTraceState,
 				initialDocument: initialStudioDocument,
+				quartoPreview: getStudioQuartoPreviewSnapshot(),
 			});
 			return;
 		}
@@ -12326,6 +12732,62 @@ export default function (pi: ExtensionAPI) {
 				responseHistoryId,
 				traceState: stored?.traceState ?? createEmptyStudioTraceState(),
 				summary: stored?.summary ?? summarizeStudioTraceSnapshot(createEmptyStudioTraceState()),
+			});
+			return;
+		}
+
+		if (msg.type === "quarto_preview_check_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "quarto_preview_action_error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			void inspectStudioQuartoPreviewContext(msg.sourcePath)
+				.then((context) => {
+					sendToClient(client, { type: "quarto_preview_context", requestId: msg.requestId, context });
+				})
+				.catch((error) => {
+					sendToClient(client, {
+						type: "quarto_preview_action_error",
+						requestId: msg.requestId,
+						message: `Quarto check failed: ${error instanceof Error ? error.message : String(error)}`,
+					});
+				});
+			return;
+		}
+
+		if (msg.type === "quarto_preview_start_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "quarto_preview_action_error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			void enqueueStudioQuartoPreviewOperation(async () => {
+				const context = await inspectStudioQuartoPreviewContext(msg.sourcePath);
+				sendToClient(client, { type: "quarto_preview_context", requestId: msg.requestId, context });
+				if (!context.available) return;
+				await startStudioQuartoPreview(context, msg.requestId);
+			}).catch((error) => {
+				sendToClient(client, {
+					type: "quarto_preview_action_error",
+					requestId: msg.requestId,
+					message: `Quarto preview failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
+		if (msg.type === "quarto_preview_stop_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "quarto_preview_action_error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			void enqueueStudioQuartoPreviewOperation(async () => {
+				await stopStudioQuartoPreview(msg.requestId);
+			}).catch((error) => {
+				sendToClient(client, {
+					type: "quarto_preview_action_error",
+					requestId: msg.requestId,
+					message: `Could not stop Quarto preview: ${error instanceof Error ? error.message : String(error)}`,
+				});
 			});
 			return;
 		}
@@ -14517,6 +14979,13 @@ export default function (pi: ExtensionAPI) {
 		clearPreparedPdfExports();
 		clearPreparedHtmlExports();
 		clearCompactionState();
+		await enqueueStudioQuartoPreviewOperation(async () => {
+			await stopStudioQuartoPreview(null, { quiet: true });
+		}).catch(() => {});
+		if (studioQuartoPreviewBroadcastTimer) {
+			clearTimeout(studioQuartoPreviewBroadcastTimer);
+			studioQuartoPreviewBroadcastTimer = null;
+		}
 		closeAllClients(1001, "Server shutting down");
 
 		const state = serverState;

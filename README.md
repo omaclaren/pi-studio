@@ -28,7 +28,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
 
 ## What it does
 
-- Opens a two-pane browser workspace: **Editor** (left) + **Response/Working/Editor Preview** (right)
+- Opens a two-pane browser workspace: **Editor** (left) + **Response/Working/Editor Preview/Quarto Preview** (right)
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you want extra editing/preview surfaces; editor-only views can also browse files and use the Studio REPL send controls without taking over the full Studio session view
 - Includes a global **Zen** mode for hiding secondary Studio chrome without changing the current left/right pane layout
 - Runs editor text directly, asks for structured critique (auto/writing/code focus), offers a manual **Suggest completion** action for short cursor-aware continuations (`Option/Alt+Tab` where available or `Cmd/Ctrl+Shift+Space` from the editor, `Tab` to insert a visible suggestion) with an optional editor-plus-latest-response context mode, or opens **Quiz me** for a Studio-native active-recall loop over the current editor text, selection, current file, folder, or repo, with optional focus guidance for shaping question selection
@@ -51,6 +51,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
   - strips markers before send (optional)
   - saves `.annotated.md`
 - Renders Markdown/LaTeX/code previews (math + Mermaid) plus lightweight CSV/TSV table previews, theme-synced with pi, with copy buttons for code blocks and blockquotes; Mermaid previews include Lucide/Logos icon nodes and accessible label contrast over custom fills
+- Adds a contextual **Editor (Quarto Preview)** right-pane view for file-backed `.qmd`, `.md`, and `.markdown` documents. Studio checks Quarto and the document/project configuration before showing an explicit start action, launches a single loopback `quarto preview` process with `--no-execute`, embeds Quarto's authoritative saved-file output without restyling it, and provides open-in-browser, restart, stop, logs, and unsaved-editor warnings. If Quarto is missing, the view remains available with an actionable dependency message.
 - Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
 - Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks, with a Focus action for temporarily enlarging the embedded viewer
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
@@ -158,6 +159,8 @@ Studio only passes icon-pack arguments when a diagram actually references `lucid
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
   - `brew install pandoc`
   - install TeX Live/MacTeX for PDF export
+- **Editor (Quarto Preview)** is optional and requires the `quarto` CLI on Studio's `PATH`. It supports saved `.qmd`, `.md`, and `.markdown` files, whether standalone or part of a Quarto project. Selecting the view only inspects the saved document; starting the preview is explicit. Studio passes `--no-execute`, which prevents computational cells from running, but trusted Quarto project extensions, filters, configuration, and render hooks are still processed, and Quarto may create or update its normal rendered output files. The preview reflects disk, not unsaved editor text.
+- Quarto serves its embedded page on a second random loopback port. When Studio itself is reached through SSH port forwarding, that Quarto port (shown in **Show log**) must also be forwarded, or the preview should be opened from a Studio process running on the browser's machine.
 - Export subprocess timeouts default to bounded values and can be tuned with `PI_STUDIO_PANDOC_TIMEOUT_MS`, `PI_STUDIO_LATEX_TIMEOUT_MS`, `PI_STUDIO_MERMAID_TIMEOUT_MS`, and `PI_STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES` for unusually large embedded-asset HTML exports.
 - Mermaid diagrams in exported PDFs require Mermaid CLI (`mmdc` / `@mermaid-js/mermaid-cli`) when you want diagram blocks rendered as diagrams rather than left as code; PDF icon nodes require Mermaid CLI 11.12+.
 

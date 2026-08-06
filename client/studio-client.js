@@ -180,11 +180,12 @@
         : "full";
       const isEditorOnlyMode = studioMode === "editor-only";
       const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
-      const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "files", "changes", "repl"]);
+      const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "editor-quarto-preview", "files", "changes", "repl"]);
       const RIGHT_VIEW_LABELS = {
         markdown: "Response (Raw)",
         preview: "Response (Preview)",
         "editor-preview": "Editor (Preview)",
+        "editor-quarto-preview": "Editor (Quarto Preview)",
         trace: "Working",
         changes: "Changes",
         files: "Files",
@@ -276,17 +277,22 @@
           ? "preview"
           : (raw === "editor-preview"
             ? "editor-preview"
-            : (raw === "repl"
-              ? "repl"
-              : (raw === "files"
-                ? "files"
-                : (raw === "changes"
-                  ? "changes"
-                  : ((raw === "trace" || raw === "thinking") ? "trace" : "markdown")))));
+            : (raw === "editor-quarto-preview"
+              ? "editor-quarto-preview"
+              : (raw === "repl"
+                ? "repl"
+                : (raw === "files"
+                  ? "files"
+                  : (raw === "changes"
+                    ? "changes"
+                    : ((raw === "trace" || raw === "thinking") ? "trace" : "markdown"))))));
       }
 
       function normalizeRightViewValue(nextView) {
         const normalized = canonicalRightViewValue(nextView);
+        if (normalized === "editor-quarto-preview" && !isCurrentStudioQuartoDocument()) {
+          return "editor-preview";
+        }
         if (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized)) {
           return "editor-preview";
         }
@@ -295,6 +301,7 @@
 
       function isRightViewAvailableInCurrentMode(view) {
         const normalized = canonicalRightViewValue(view);
+        if (normalized === "editor-quarto-preview" && !isCurrentStudioQuartoDocument()) return false;
         return !isEditorOnlyMode || EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized);
       }
 
@@ -309,13 +316,16 @@
 
       function syncRightViewModeOptions() {
         if (!rightViewSelect || !rightViewSelect.options) return;
+        const quartoRelevant = isCurrentStudioQuartoDocument();
         Array.from(rightViewSelect.options).forEach((option) => {
           if (!option) return;
-          option.disabled = isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value);
+          const isQuartoOption = option.value === "editor-quarto-preview";
+          if (isQuartoOption) option.hidden = !quartoRelevant;
+          option.disabled = (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value)) || (isQuartoOption && !quartoRelevant);
         });
         rightViewSelect.title = isEditorOnlyMode
-          ? "Editor-only views: Editor Preview, Changes, Files, or REPL. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7 switch directly to available right-pane views."
-          : "Right pane view mode. F7 cycles; Cmd/Ctrl+Alt+1–7 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W keep their mnemonic Preview/Editor Preview/Working shortcuts.";
+          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, or REPL. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7 switch directly to numbered right-pane views."
+          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–7 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W keep their mnemonic Preview/Editor Preview/Working shortcuts.";
       }
 
       function getInitialRightView(source) {
@@ -2008,6 +2018,22 @@
         label: initialSourceState.label,
         path: initialSourceState.path,
         draftId: initialSourceState.draftId,
+      };
+      let quartoPreviewContext = null;
+      let quartoPreviewCheckRequestId = null;
+      let quartoPreviewCheckSourcePath = "";
+      let quartoPreviewActionRequestId = null;
+      let quartoPreviewLogVisible = false;
+      let quartoPreviewState = {
+        status: "idle",
+        sourcePath: "",
+        url: "",
+        log: "",
+        error: null,
+        context: null,
+        startedAt: null,
+        updatedAt: 0,
+        actionRequestId: null,
       };
       let fileBackedBaselineText = null;
       let activePane = "left";
@@ -3908,7 +3934,7 @@
       function getSelectEnabledValues(selectEl) {
         if (!selectEl || !selectEl.options) return [];
         return Array.from(selectEl.options)
-          .filter((option) => option && !option.disabled)
+          .filter((option) => option && !option.disabled && !option.hidden)
           .map((option) => option.value)
           .filter((value) => typeof value === "string" && value);
       }
@@ -4740,6 +4766,22 @@
             + (entryCount ? (" · " + entryCount + " entr" + (entryCount === 1 ? "y" : "ies")) : "")
             + (context.summary && context.summary.truncated ? " · truncated" : "")
             + (time ? (" · " + time) : "");
+          return;
+        }
+
+        if (rightView === "editor-quarto-preview") {
+          const context = getCurrentStudioQuartoContext();
+          const current = getStudioQuartoProcessStatusForCurrentSource();
+          const label = context && context.projectLabel ? context.projectLabel : (sourceState.label || "Quarto document");
+          const statusLabel = quartoPreviewCheckRequestId
+            ? "checking"
+            : (context && !context.available
+              ? "unavailable"
+              : (current.sameSource
+                ? (current.status === "running" ? "running" : (current.status === "starting" ? "starting" : (current.status === "error" ? "error" : "stopped")))
+                : ((quartoPreviewState.status === "running" || quartoPreviewState.status === "starting") ? "another preview running" : "ready to start")));
+          referenceBadgeEl.textContent = "Quarto: " + label + " · " + statusLabel + " · saved-file preview"
+            + (isStudioQuartoEditorDirty() ? " · unsaved changes excluded" : "");
           return;
         }
 
@@ -8182,6 +8224,7 @@
         critiqueViewEl.addEventListener("click", handleReplPaneClick);
         critiqueViewEl.addEventListener("click", handleFilesPaneClick);
         critiqueViewEl.addEventListener("click", handleGitChangesPaneClick);
+        critiqueViewEl.addEventListener("click", handleStudioQuartoPreviewClick);
         critiqueViewEl.addEventListener("change", handleReplPaneChange);
         critiqueViewEl.addEventListener("change", (event) => {
           void handleFilesPaneChange(event);
@@ -8207,7 +8250,7 @@
 
       function applyPendingResponseScrollReset() {
         if (!pendingResponseScrollReset || !critiqueViewEl) return false;
-        if (rightView === "editor-preview") return false;
+        if (rightView === "editor-preview" || rightView === "editor-quarto-preview") return false;
 
         pendingResponseScrollReset = false;
         let targetEl = replaceResponsePaneWithClone();
@@ -8216,7 +8259,7 @@
           : (cb) => window.setTimeout(cb, 16);
         const resetScroll = () => {
           if (!targetEl || !targetEl.isConnected) return;
-          if (rightView === "editor-preview") return;
+          if (rightView === "editor-preview" || rightView === "editor-quarto-preview") return;
           targetEl.scrollTop = 0;
           targetEl.scrollLeft = 0;
         };
@@ -10548,8 +10591,289 @@
         }
       }
 
+      function getStudioQuartoProcessStatusForCurrentSource() {
+        const sourcePath = getCurrentStudioQuartoSourcePath();
+        return {
+          sameSource: studioQuartoPathsMatch(quartoPreviewState.sourcePath, sourcePath)
+            || Boolean(quartoPreviewState.context && studioQuartoPathsMatch(quartoPreviewState.context.requestedSourcePath, sourcePath)),
+          sourcePath,
+          status: quartoPreviewState.status,
+        };
+      }
+
+      function isStudioQuartoEditorDirty() {
+        return Boolean(isCurrentStudioQuartoDocument() && editorDiffersFromFileBackedBaseline());
+      }
+
+      function requestStudioQuartoPreviewCheck(force) {
+        const sourcePath = getCurrentStudioQuartoSourcePath();
+        if (!isCurrentStudioQuartoDocument()) return false;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        if (!force && getCurrentStudioQuartoContext()) return true;
+        if (!force && quartoPreviewCheckRequestId && studioQuartoPathsMatch(quartoPreviewCheckSourcePath, sourcePath)) return true;
+        const requestId = makeRequestId();
+        quartoPreviewCheckRequestId = requestId;
+        quartoPreviewCheckSourcePath = sourcePath;
+        quartoPreviewContext = null;
+        if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
+        const sent = sendMessage({ type: "quarto_preview_check_request", requestId, sourcePath });
+        if (!sent) {
+          quartoPreviewCheckRequestId = null;
+          quartoPreviewCheckSourcePath = "";
+          if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
+        }
+        return sent;
+      }
+
+      function requestStudioQuartoPreviewStart() {
+        const sourcePath = getCurrentStudioQuartoSourcePath();
+        if (!isCurrentStudioQuartoDocument()) {
+          setStatus("Quarto preview requires a file-backed .qmd, .md, or .markdown document.", "warning");
+          return false;
+        }
+        if (quartoPreviewActionRequestId) return false;
+        const requestId = makeRequestId();
+        quartoPreviewActionRequestId = requestId;
+        const sent = sendMessage({ type: "quarto_preview_start_request", requestId, sourcePath });
+        if (!sent) quartoPreviewActionRequestId = null;
+        renderQuartoPreviewView();
+        if (sent) setStatus("Starting Quarto preview with computational cell execution disabled…", "warning");
+        return sent;
+      }
+
+      function requestStudioQuartoPreviewStop() {
+        if (quartoPreviewActionRequestId) return false;
+        const requestId = makeRequestId();
+        quartoPreviewActionRequestId = requestId;
+        const sent = sendMessage({ type: "quarto_preview_stop_request", requestId });
+        if (!sent) quartoPreviewActionRequestId = null;
+        renderQuartoPreviewView();
+        if (sent) setStatus("Stopping Quarto preview…", "warning");
+        return sent;
+      }
+
+      function openStudioQuartoPreviewInBrowser() {
+        const rawUrl = String(quartoPreviewState.url || "").trim();
+        if (!rawUrl) {
+          setStatus("Quarto preview is not running yet.", "warning");
+          return false;
+        }
+        try {
+          const parsed = new URL(rawUrl);
+          const hostname = parsed.hostname.toLowerCase();
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Unsupported preview protocol.");
+          if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") throw new Error("Preview URL is not loopback-only.");
+          const opened = window.open(parsed.href, "_blank");
+          if (!opened) {
+            setStatus("Browser blocked the Quarto preview tab. Allow pop-ups and try again.", "warning");
+            return false;
+          }
+          try { opened.opener = null; } catch {}
+          setStatus("Opening Quarto preview in a browser tab.", "success");
+          return true;
+        } catch (error) {
+          setStatus("Could not open Quarto preview: " + ((error && error.message) ? error.message : String(error)), "error");
+          return false;
+        }
+      }
+
+      function openStudioQuartoInstallationInstructions() {
+        try {
+          const opened = window.open("https://quarto.org/docs/get-started/", "_blank");
+          if (!opened) {
+            setStatus("Browser blocked the Quarto installation page.", "warning");
+            return;
+          }
+          try { opened.opener = null; } catch {}
+        } catch (error) {
+          setStatus("Could not open Quarto installation instructions.", "warning");
+        }
+      }
+
+      function buildStudioQuartoLogDetails(log, open) {
+        const text = String(log || "").trim();
+        if (!text) return "";
+        return "<details class='quarto-preview-log-details'" + (open ? " open" : "") + ">"
+          + "<summary>Quarto log</summary>"
+          + "<pre>" + escapeHtml(text) + "</pre>"
+          + "</details>";
+      }
+
+      function buildStudioQuartoContextSummary(context) {
+        if (!context) return "Quarto document";
+        const kind = context.isProject
+          ? (context.projectType ? (context.projectType.charAt(0).toUpperCase() + context.projectType.slice(1) + " project") : "Quarto project")
+          : "Standalone document";
+        return kind + (context.version ? " · Quarto " + context.version : "");
+      }
+
+      function updateStudioQuartoRunningShell() {
+        const context = getCurrentStudioQuartoContext() || quartoPreviewState.context;
+        const url = String(quartoPreviewState.url || "");
+        let shell = critiqueViewEl ? critiqueViewEl.querySelector(".quarto-preview-shell[data-preview-url]") : null;
+        if (!shell || shell.getAttribute("data-preview-url") !== url) {
+          const label = context && context.projectLabel ? context.projectLabel : (sourceState.label || "Quarto document");
+          critiqueViewEl.innerHTML = ""
+            + "<div class='quarto-preview-shell' data-preview-url='" + escapeHtml(url) + "'>"
+            + "<div class='quarto-preview-toolbar'>"
+            + "<div class='quarto-preview-title-group'>"
+            + "<span class='quarto-preview-title'>" + escapeHtml(label) + "</span>"
+            + "<span class='quarto-preview-subtitle'>" + escapeHtml(buildStudioQuartoContextSummary(context)) + "</span>"
+            + "</div>"
+            + "<div class='quarto-preview-actions'>"
+            + "<button type='button' data-quarto-action='open'>Open in browser ↗</button>"
+            + "<button type='button' data-quarto-action='restart'>Restart</button>"
+            + "<button type='button' data-quarto-action='toggle-log'>Show log</button>"
+            + "<button type='button' data-quarto-action='stop'>Stop</button>"
+            + "</div>"
+            + "</div>"
+            + "<div class='quarto-preview-dirty-warning' hidden>Unsaved editor changes are not included. Save the editor to update Quarto.</div>"
+            + "<iframe class='quarto-preview-frame' src='" + escapeHtml(url) + "' title='Quarto preview for " + escapeHtml(label) + "' sandbox='allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads' allow='clipboard-write; fullscreen' allowfullscreen referrerpolicy='no-referrer'></iframe>"
+            + "<div class='quarto-preview-live-log' hidden><pre></pre></div>"
+            + "</div>";
+          shell = critiqueViewEl.querySelector(".quarto-preview-shell[data-preview-url]");
+        }
+        const warningEl = shell ? shell.querySelector(".quarto-preview-dirty-warning") : null;
+        if (warningEl) warningEl.hidden = !isStudioQuartoEditorDirty();
+        const logPanelEl = shell ? shell.querySelector(".quarto-preview-live-log") : null;
+        const logPreEl = logPanelEl ? logPanelEl.querySelector("pre") : null;
+        if (logPanelEl) logPanelEl.hidden = !quartoPreviewLogVisible;
+        if (logPreEl && logPreEl.textContent !== quartoPreviewState.log) logPreEl.textContent = quartoPreviewState.log;
+        const toggleLogBtn = shell ? shell.querySelector("[data-quarto-action='toggle-log']") : null;
+        if (toggleLogBtn) toggleLogBtn.textContent = quartoPreviewLogVisible ? "Hide log" : "Show log";
+        if (shell) {
+          shell.querySelectorAll("button[data-quarto-action]").forEach((button) => {
+            if (button.getAttribute("data-quarto-action") === "open" || button.getAttribute("data-quarto-action") === "toggle-log") return;
+            button.disabled = Boolean(quartoPreviewActionRequestId);
+          });
+        }
+      }
+
+      function renderQuartoPreviewView() {
+        if (!critiqueViewEl) return;
+        finishPreviewRender(critiqueViewEl);
+        if (!isCurrentStudioQuartoDocument()) {
+          critiqueViewEl.innerHTML = "<div class='quarto-preview-card'><h2>Quarto preview unavailable</h2><p>Open a file-backed <code>.qmd</code>, <code>.md</code>, or <code>.markdown</code> document to use this view.</p></div>";
+          return;
+        }
+
+        const current = getStudioQuartoProcessStatusForCurrentSource();
+        const context = getCurrentStudioQuartoContext();
+        const checking = Boolean(quartoPreviewCheckRequestId && studioQuartoPathsMatch(quartoPreviewCheckSourcePath, current.sourcePath));
+        const actionPending = Boolean(quartoPreviewActionRequestId);
+        if (current.sameSource && current.status === "running" && quartoPreviewState.url) {
+          updateStudioQuartoRunningShell();
+          return;
+        }
+
+        if (checking && !context) {
+          critiqueViewEl.innerHTML = "<div class='quarto-preview-card quarto-preview-card-centered'>"
+            + "<div class='quarto-preview-spinner' aria-hidden='true'></div>"
+            + "<h2>Checking Quarto…</h2>"
+            + "<p>Inspecting the saved document and its project configuration.</p>"
+            + "</div>";
+          return;
+        }
+
+        if (!context) {
+          critiqueViewEl.innerHTML = "<div class='quarto-preview-card quarto-preview-card-centered'>"
+            + "<h2>Editor (Quarto Preview)</h2>"
+            + "<p>Check the installed Quarto version and this saved document before starting a preview.</p>"
+            + "<div class='quarto-preview-card-actions'><button type='button' data-quarto-action='check'>Check Quarto</button></div>"
+            + "</div>";
+          return;
+        }
+
+        if (!context.available) {
+          const missing = context.reason === "not-found";
+          critiqueViewEl.innerHTML = "<div class='quarto-preview-card quarto-preview-card-centered'>"
+            + "<h2>" + (missing ? "Quarto not found" : "Quarto preview unavailable") + "</h2>"
+            + "<p>" + escapeHtml(context.error || "Studio could not inspect this Quarto document.") + "</p>"
+            + (missing ? "<p class='quarto-preview-note'>Studio could not find <code>quarto</code> on its PATH.</p>" : "")
+            + "<div class='quarto-preview-card-actions'>"
+            + "<button type='button' data-quarto-action='check'>Check again</button>"
+            + (missing ? "<button type='button' data-quarto-action='install'>Installation instructions ↗</button>" : "")
+            + "</div>"
+            + buildStudioQuartoLogDetails(context.inspectLog, true)
+            + "</div>";
+          return;
+        }
+
+        const runningAnother = !current.sameSource && (current.status === "running" || current.status === "starting" || current.status === "stopping");
+        const dirtyWarning = isStudioQuartoEditorDirty()
+          ? "<div class='quarto-preview-dirty-warning'>Unsaved editor changes are not included. Save before starting or refreshing Quarto.</div>"
+          : "";
+        if (current.sameSource && (current.status === "starting" || current.status === "stopping")) {
+          const stopping = current.status === "stopping";
+          critiqueViewEl.innerHTML = "<div class='quarto-preview-card quarto-preview-card-centered'>"
+            + "<div class='quarto-preview-spinner' aria-hidden='true'></div>"
+            + "<h2>" + (stopping ? "Stopping Quarto preview…" : "Starting Quarto preview…") + "</h2>"
+            + "<p>" + escapeHtml(buildStudioQuartoContextSummary(context)) + " · computational cells will not be executed.</p>"
+            + dirtyWarning
+            + (!stopping ? "<div class='quarto-preview-card-actions'><button type='button' data-quarto-action='stop'" + (actionPending ? " disabled" : "") + ">Stop</button></div>" : "")
+            + buildStudioQuartoLogDetails(quartoPreviewState.log, true)
+            + "</div>";
+          return;
+        }
+
+        const sameSourceError = current.sameSource && current.status === "error";
+        const label = context.projectLabel || sourceState.label || "Quarto document";
+        critiqueViewEl.innerHTML = "<div class='quarto-preview-card quarto-preview-card-centered'>"
+          + "<h2>" + (sameSourceError ? "Quarto preview stopped with an error" : "Ready to preview with Quarto") + "</h2>"
+          + "<p><strong>" + escapeHtml(label) + "</strong><br>" + escapeHtml(buildStudioQuartoContextSummary(context)) + "</p>"
+          + (sameSourceError ? "<div class='quarto-preview-error'>" + escapeHtml(quartoPreviewState.error || "Quarto preview failed.") + "</div>" : "")
+          + (runningAnother ? "<div class='quarto-preview-note'>Another Quarto document is currently being previewed. Starting this one will replace it.</div>" : "")
+          + dirtyWarning
+          + "<div class='quarto-preview-safety-note'><strong>Saved-file preview.</strong> Studio starts Quarto on <code>127.0.0.1</code> with <code>--no-execute</code>, so computational cells are not run. Quarto still processes the project's trusted configuration, extensions, filters, and render hooks, controls the page styling, and may create or update its normal rendered output files.</div>"
+          + "<div class='quarto-preview-card-actions'>"
+          + "<button type='button' class='quarto-preview-primary' data-quarto-action='start'" + (actionPending ? " disabled" : "") + ">" + (sameSourceError ? "Retry Quarto preview" : (runningAnother ? "Preview this document" : "Start Quarto preview")) + "</button>"
+          + (runningAnother && quartoPreviewState.url ? "<button type='button' data-quarto-action='open'>Open running preview ↗</button>" : "")
+          + (runningAnother ? "<button type='button' data-quarto-action='stop'" + (actionPending ? " disabled" : "") + ">Stop running preview</button>" : "")
+          + "</div>"
+          + buildStudioQuartoLogDetails(sameSourceError ? quartoPreviewState.log : context.inspectLog, sameSourceError)
+          + "</div>";
+      }
+
+      function syncStudioQuartoDirtyUi() {
+        if (rightView !== "editor-quarto-preview") return;
+        const warningEl = critiqueViewEl ? critiqueViewEl.querySelector(".quarto-preview-dirty-warning") : null;
+        if (warningEl && warningEl.classList && warningEl.closest(".quarto-preview-shell")) {
+          warningEl.hidden = !isStudioQuartoEditorDirty();
+        }
+        updateReferenceBadge();
+      }
+
+      function handleStudioQuartoPreviewClick(event) {
+        if (rightView !== "editor-quarto-preview") return;
+        const target = event && event.target instanceof Element ? event.target.closest("[data-quarto-action]") : null;
+        if (!target || !critiqueViewEl.contains(target)) return;
+        event.preventDefault();
+        const action = target.getAttribute("data-quarto-action");
+        if (action === "check") {
+          requestStudioQuartoPreviewCheck(true);
+        } else if (action === "start" || action === "restart") {
+          requestStudioQuartoPreviewStart();
+        } else if (action === "stop") {
+          requestStudioQuartoPreviewStop();
+        } else if (action === "open") {
+          openStudioQuartoPreviewInBrowser();
+        } else if (action === "install") {
+          openStudioQuartoInstallationInstructions();
+        } else if (action === "toggle-log") {
+          quartoPreviewLogVisible = !quartoPreviewLogVisible;
+          updateStudioQuartoRunningShell();
+        }
+      }
+
       function renderActiveResult() {
-        if (critiqueViewEl) critiqueViewEl.classList.toggle("git-changes-host", rightView === "changes");
+        if (critiqueViewEl) {
+          critiqueViewEl.classList.toggle("git-changes-host", rightView === "changes");
+          critiqueViewEl.classList.toggle("quarto-preview-host", rightView === "editor-quarto-preview");
+        }
+        if (rightView === "editor-quarto-preview") {
+          renderQuartoPreviewView();
+          return;
+        }
         if (rightView === "trace") {
           renderTraceView();
           return;
@@ -10648,7 +10972,7 @@
           : normalizeForCompare(sourceTextEl.value);
         const responseLoaded = hasResponse && normalizedEditor === latestResponseNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
-        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl" || rightView === "files" || rightView === "changes";
+        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl" || rightView === "files" || rightView === "changes" || rightView === "editor-quarto-preview";
 
         if (responseWrapEl) {
           responseWrapEl.hidden = showingAuxiliaryRightPane;
@@ -10732,6 +11056,7 @@
             : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML and open it in the default browser." : "Export the current right-pane preview as standalone HTML and open it in the default browser.");
         }
         if (exportPreviewControlsEl) {
+          exportPreviewControlsEl.hidden = rightView === "editor-quarto-preview";
           exportPreviewControlsEl.title = canExportPreview
             ? (exportingReplJournal
               ? "Choose a format and export destination for the Studio REPL record."
@@ -10746,6 +11071,7 @@
         pullLatestBtn.textContent = queuedLatestResponse ? "Fetch latest response *" : "Fetch latest response";
 
         updateSyncBadge(normalizedEditor);
+        syncStudioQuartoDirtyUi();
       }
 
       function refreshResponseUi() {
@@ -10798,6 +11124,86 @@
         if (sourceState.source === "upload" && sourceState.label && resourceDir) {
           var name = stripImportedFileLabel(sourceState.label);
           if (name) return resourceDir.replace(/\/$/, "") + "/" + name;
+        }
+        return null;
+      }
+
+      function normalizeStudioQuartoClientPath(value) {
+        const normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+        return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+      }
+
+      function getCurrentStudioQuartoSourcePath() {
+        return sourceState && typeof sourceState.path === "string" ? sourceState.path.trim() : "";
+      }
+
+      function isCurrentStudioQuartoDocument() {
+        return /\.(?:qmd|md|markdown)$/i.test(getCurrentStudioQuartoSourcePath());
+      }
+
+      function studioQuartoPathsMatch(left, right) {
+        const a = normalizeStudioQuartoClientPath(left);
+        const b = normalizeStudioQuartoClientPath(right);
+        return Boolean(a && b && a === b);
+      }
+
+      function normalizeStudioQuartoContext(value) {
+        if (!value || typeof value !== "object") return null;
+        return {
+          sourcePath: typeof value.sourcePath === "string" ? value.sourcePath : "",
+          requestedSourcePath: typeof value.requestedSourcePath === "string" ? value.requestedSourcePath : (typeof value.sourcePath === "string" ? value.sourcePath : ""),
+          available: value.available === true,
+          reason: typeof value.reason === "string" ? value.reason : "inspect-error",
+          version: typeof value.version === "string" ? value.version : "",
+          projectRoot: typeof value.projectRoot === "string" ? value.projectRoot : "",
+          projectType: typeof value.projectType === "string" ? value.projectType : "",
+          projectLabel: typeof value.projectLabel === "string" ? value.projectLabel : "Quarto document",
+          outputFile: typeof value.outputFile === "string" ? value.outputFile : "",
+          isProject: value.isProject === true,
+          error: typeof value.error === "string" && value.error ? value.error : null,
+          inspectLog: typeof value.inspectLog === "string" ? value.inspectLog : "",
+        };
+      }
+
+      function normalizeStudioQuartoPreviewState(value) {
+        if (!value || typeof value !== "object") return {
+          status: "idle",
+          sourcePath: "",
+          url: "",
+          log: "",
+          error: null,
+          context: null,
+          startedAt: null,
+          updatedAt: 0,
+          actionRequestId: null,
+        };
+        const allowedStatuses = new Set(["idle", "starting", "running", "stopping", "stopped", "error"]);
+        return {
+          status: allowedStatuses.has(value.status) ? value.status : "idle",
+          sourcePath: typeof value.sourcePath === "string" ? value.sourcePath : "",
+          url: typeof value.url === "string" ? value.url : "",
+          log: typeof value.log === "string" ? value.log : "",
+          error: typeof value.error === "string" && value.error ? value.error : null,
+          context: normalizeStudioQuartoContext(value.context),
+          startedAt: typeof value.startedAt === "number" && Number.isFinite(value.startedAt) ? value.startedAt : null,
+          updatedAt: typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt) ? value.updatedAt : 0,
+          actionRequestId: typeof value.actionRequestId === "string" ? value.actionRequestId : null,
+        };
+      }
+
+      function getCurrentStudioQuartoContext() {
+        const sourcePath = getCurrentStudioQuartoSourcePath();
+        if (quartoPreviewContext && (
+          studioQuartoPathsMatch(quartoPreviewContext.sourcePath, sourcePath)
+          || studioQuartoPathsMatch(quartoPreviewContext.requestedSourcePath, sourcePath)
+        )) {
+          return quartoPreviewContext;
+        }
+        if (quartoPreviewState.context && (
+          studioQuartoPathsMatch(quartoPreviewState.context.sourcePath, sourcePath)
+          || studioQuartoPathsMatch(quartoPreviewState.context.requestedSourcePath, sourcePath)
+        )) {
+          return quartoPreviewState.context;
         }
         return null;
       }
@@ -10917,6 +11323,7 @@
 
       function setSourceState(next, options) {
         const previousDescriptor = getCurrentStudioDocumentDescriptor();
+        const previousQuartoPath = getCurrentStudioQuartoSourcePath();
         const nextPath = next && next.path ? next.path : null;
         sourceState = {
           source: next && next.source ? next.source : "blank",
@@ -10926,8 +11333,23 @@
             ? null
             : (next && next.draftId ? next.draftId : makeStudioDraftId()),
         };
+        const nextQuartoPath = getCurrentStudioQuartoSourcePath();
+        const quartoSourceChanged = !studioQuartoPathsMatch(previousQuartoPath, nextQuartoPath);
+        if (quartoSourceChanged) {
+          quartoPreviewContext = null;
+          quartoPreviewCheckRequestId = null;
+          quartoPreviewCheckSourcePath = "";
+          quartoPreviewActionRequestId = null;
+          quartoPreviewLogVisible = false;
+        }
         if (!sourceState.path) {
           clearFileBackedBaseline();
+        }
+        syncRightViewModeOptions();
+        const leavingUnavailableQuartoView = rightView === "editor-quarto-preview" && !isCurrentStudioQuartoDocument();
+        if (leavingUnavailableQuartoView) {
+          rightView = "editor-preview";
+          rightViewSelect.value = rightView;
         }
         updateStudioDocumentUrlState(sourceState);
         updateSourceBadge();
@@ -10942,6 +11364,9 @@
           previousDescriptor: previousDescriptor,
           carryCurrentMetadataToNewDocument: Boolean(options && options.carryCurrentMetadataToNewDocument),
         });
+        const refreshChangedQuartoView = rightView === "editor-quarto-preview" && quartoSourceChanged && isCurrentStudioQuartoDocument();
+        if (refreshChangedQuartoView) requestStudioQuartoPreviewCheck(false);
+        if (leavingUnavailableQuartoView || refreshChangedQuartoView) refreshResponseUi();
         scheduleWorkspacePersistence();
       }
 
@@ -11758,6 +12183,9 @@
         }
         if (rightView !== "editor-preview") {
           clearPreviewJumpHighlight(critiqueViewEl);
+        }
+        if (rightView === "editor-quarto-preview") {
+          requestStudioQuartoPreviewCheck(false);
         }
 
         refreshResponseUi();
@@ -19038,6 +19466,80 @@
           return;
         }
 
+        if (message.type === "quarto_preview_context") {
+          const requestId = typeof message.requestId === "string" ? message.requestId : "";
+          const context = normalizeStudioQuartoContext(message.context);
+          const matchesCheck = Boolean(requestId && quartoPreviewCheckRequestId === requestId);
+          const matchesAction = Boolean(requestId && quartoPreviewActionRequestId === requestId);
+          if (!matchesCheck && !matchesAction) return;
+          if (matchesCheck) {
+            quartoPreviewCheckRequestId = null;
+            quartoPreviewCheckSourcePath = "";
+          }
+          if (context) quartoPreviewContext = context;
+          if (matchesAction && (!context || !context.available)) {
+            quartoPreviewActionRequestId = null;
+          }
+          if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
+          updateReferenceBadge();
+          return;
+        }
+
+        if (message.type === "quarto_preview_state") {
+          const previousQuartoStatus = quartoPreviewState.status;
+          quartoPreviewState = normalizeStudioQuartoPreviewState(message.preview);
+          if (quartoPreviewState.actionRequestId && quartoPreviewActionRequestId === quartoPreviewState.actionRequestId) {
+            quartoPreviewActionRequestId = null;
+          }
+          if (quartoPreviewState.context && (
+            studioQuartoPathsMatch(quartoPreviewState.context.sourcePath, getCurrentStudioQuartoSourcePath())
+            || studioQuartoPathsMatch(quartoPreviewState.context.requestedSourcePath, getCurrentStudioQuartoSourcePath())
+          )) {
+            quartoPreviewContext = quartoPreviewState.context;
+          }
+          if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
+          updateReferenceBadge();
+          syncActionButtons();
+          if (quartoPreviewState.status !== previousQuartoStatus) {
+            if (quartoPreviewState.status === "running") {
+              setStatus("Quarto preview is running with computational cell execution disabled.", "success");
+            } else if (quartoPreviewState.status === "error" && quartoPreviewState.error) {
+              setStatus(quartoPreviewState.error, "error");
+            } else if (quartoPreviewState.status === "stopped") {
+              setStatus("Quarto preview stopped.");
+            }
+          }
+          return;
+        }
+
+        if (message.type === "quarto_preview_action_error") {
+          const requestId = typeof message.requestId === "string" ? message.requestId : "";
+          if (requestId && quartoPreviewCheckRequestId === requestId) {
+            quartoPreviewCheckRequestId = null;
+            quartoPreviewCheckSourcePath = "";
+          }
+          if (requestId && quartoPreviewActionRequestId === requestId) quartoPreviewActionRequestId = null;
+          const messageText = typeof message.message === "string" ? message.message : "Quarto preview request failed.";
+          quartoPreviewContext = {
+            sourcePath: getCurrentStudioQuartoSourcePath(),
+            requestedSourcePath: getCurrentStudioQuartoSourcePath(),
+            available: false,
+            reason: "inspect-error",
+            version: "",
+            projectRoot: "",
+            projectType: "",
+            projectLabel: sourceState.label || "Quarto document",
+            outputFile: "",
+            isProject: false,
+            error: messageText,
+            inspectLog: "",
+          };
+          if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
+          updateReferenceBadge();
+          setStatus(messageText, "error");
+          return;
+        }
+
         if (message.type === "hello_ack") {
           const busy = Boolean(message.busy);
           agentBusyFromServer = Boolean(message.agentBusy);
@@ -19050,6 +19552,15 @@
           }
           updatePiSessionModelState(message);
           updatePiThemeState(message);
+          if (message.quartoPreview && typeof message.quartoPreview === "object") {
+            quartoPreviewState = normalizeStudioQuartoPreviewState(message.quartoPreview);
+            if (quartoPreviewState.context && (
+              studioQuartoPathsMatch(quartoPreviewState.context.sourcePath, getCurrentStudioQuartoSourcePath())
+              || studioQuartoPathsMatch(quartoPreviewState.context.requestedSourcePath, getCurrentStudioQuartoSourcePath())
+            )) {
+              quartoPreviewContext = quartoPreviewState.context;
+            }
+          }
           if (typeof message.terminalSessionLabel === "string") {
             terminalSessionLabel = message.terminalSessionLabel;
           }
@@ -19128,6 +19639,11 @@
                 ? "critique"
                 : (isStructuredCritique(lastMarkdown) ? "critique" : "annotation");
             handleIncomingResponse(lastMarkdown, lastResponseKind, message.lastResponse.timestamp, message.lastResponse.thinking);
+          }
+
+          if (rightView === "editor-quarto-preview") {
+            requestStudioQuartoPreviewCheck(false);
+            renderQuartoPreviewView();
           }
 
           if (pendingRequestId) {
@@ -19840,6 +20356,10 @@
           if (ws === socket) {
             ws = null;
           }
+          quartoPreviewCheckRequestId = null;
+          quartoPreviewCheckSourcePath = "";
+          quartoPreviewActionRequestId = null;
+          if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
           setBusy(true);
 
           if (kind === "invalidated") {
@@ -21295,6 +21815,7 @@
         resourceDirInput.value = normalizeStudioResourceDirValue(initialResourceDir);
       }
       setSourceState(initialSourceState);
+      if (initialSourceState.path) markFileBackedBaseline(sourceTextEl.value);
       refreshResponseUi();
       updateAnnotatedReplyHeaderButton();
       setActivePane("left");
