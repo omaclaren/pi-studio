@@ -1210,8 +1210,18 @@
 
       function getStudioShortcutLabel(kind) {
         const mac = isMacShortcutPlatform();
-        if (kind === "repl-send") return mac ? "⇧⌘↵" : "Ctrl+Shift+Enter";
+        if (kind === "repl-send") return mac ? "⌃⇧↵" : "Ctrl+Shift+Enter";
         if (kind === "run") return mac ? "⌘↵" : "Ctrl+Enter";
+        return "";
+      }
+
+      function getStudioShortcutDescription(kind) {
+        if (kind === "repl-send") {
+          return isMacShortcutPlatform()
+            ? "Ctrl+Shift+Enter (Cmd+Shift+Enter also works where available)"
+            : "Ctrl+Shift+Enter";
+        }
+        if (kind === "run") return "Cmd/Ctrl+Enter";
         return "";
       }
 
@@ -19188,6 +19198,7 @@
         const canQueueSteering = studioRunChainActive && !critiqueIsStop;
         const hasReplSession = Boolean(getActiveReplSessionForCurrentRuntime());
         const showReplSend = rightView === "repl";
+        const replSendShortcut = getStudioShortcutDescription("repl-send");
 
         if (isEditorOnlyMode) {
           if (sendRunBtn) {
@@ -19209,8 +19220,8 @@
             sendReplBtn.textContent = showReplSend ? withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send") : "Send to REPL";
             sendReplBtn.title = hasReplSession
               ? (replSendMode === "literate"
-                ? "Literate send: selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk. Shortcut: Cmd/Ctrl+Shift+Enter."
-                : "Raw send: selection, or full editor if no selection. Shortcut: Cmd/Ctrl+Shift+Enter.")
+                ? "Literate send: selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk. Shortcut: " + replSendShortcut + "."
+                : "Raw send: selection, or full editor if no selection. Shortcut: " + replSendShortcut + ".")
               : "Start or select a REPL session in the right pane first.";
             const replActionLine = sendReplBtn.closest(".repl-action-line");
             if (replActionLine instanceof HTMLElement) replActionLine.hidden = !showReplSend;
@@ -19270,8 +19281,8 @@
           sendReplBtn.textContent = showReplSend ? withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send") : "Send to REPL";
           sendReplBtn.title = hasReplSession
             ? (replSendMode === "literate"
-              ? "Literate send: selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk. Shortcut: Cmd/Ctrl+Shift+Enter."
-              : "Raw send: selection, or full editor if no selection. Shortcut: Cmd/Ctrl+Shift+Enter.")
+              ? "Literate send: selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk. Shortcut: " + replSendShortcut + "."
+              : "Raw send: selection, or full editor if no selection. Shortcut: " + replSendShortcut + ".")
             : "Start or select a REPL session in the right pane first.";
           const replActionLine = sendReplBtn.closest(".repl-action-line");
           if (replActionLine instanceof HTMLElement) replActionLine.hidden = !showReplSend;

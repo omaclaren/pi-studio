@@ -29,6 +29,7 @@ import {
 } from "./shared/studio-markdown-latex-literals.js";
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
+import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import { renderStudioAnnotationInlineHtml } from "./shared/studio-annotation-render.js";
 import {
@@ -9626,7 +9627,7 @@ function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, options
 		};
 	}
 	const command = getStudioReplRuntimeCommand(runtime, commandOverride);
-	const result = runStudioTmux(["new-session", "-d", "-s", sessionName, "-c", cwd || process.cwd(), command], { timeout: 5_000 });
+	const result = runStudioTmux(buildStudioReplTmuxStartArgs(sessionName, cwd || process.cwd(), command), { timeout: 5_000 });
 	if (!result.ok) return { ok: false, message: result.message || `Failed to start ${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL.` };
 	return {
 		ok: true,
