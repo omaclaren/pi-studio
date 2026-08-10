@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Preserve Studio’s left/right **Focus pane** layout across reloads and reconstructed browser surfaces without carrying that state into newly opened Studio tabs.
+
 ## [0.9.40] — 2026-08-10
 
 ### Fixed

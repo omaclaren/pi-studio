@@ -208,7 +208,12 @@
         Numpad7: "repl",
       };
 
+      const navigationHelpers = globalThis.PiStudioNavigationHelpers;
+      if (!navigationHelpers || typeof navigationHelpers.readPaneFocusTarget !== "function") {
+        throw new Error("Studio navigation helpers failed to load.");
+      }
       const initialQueryParams = new URLSearchParams(window.location.search || "");
+      const initialPaneFocusTarget = navigationHelpers.readPaneFocusTarget(window.location);
       const skipInitialWorkspaceRestore = initialQueryParams.get("skipWorkspaceRestore") === "1";
       const explicitDocumentIdentityFromUrl = initialQueryParams.has("docId")
         || initialQueryParams.has("docSource")
@@ -2046,8 +2051,8 @@
         actionRequestId: null,
       };
       let fileBackedBaselineText = null;
-      let activePane = "left";
-      let paneFocusTarget = "off";
+      let activePane = initialPaneFocusTarget === "right" ? "right" : "left";
+      let paneFocusTarget = initialPaneFocusTarget;
       let paneSplitPercent = 50;
       const PANE_SPLIT_STORAGE_KEY = "piStudio.paneSplitPercent";
       const PANE_SPLIT_MIN_PERCENT = 20;
@@ -3864,6 +3869,14 @@
         updatePaneFocusButtons();
       }
 
+      function persistPaneFocusUrlState() {
+        try {
+          navigationHelpers.replacePaneFocusUrlState(window, paneFocusTarget);
+        } catch {
+          // Ignore URL-state update failures; focus mode still works for this page lifetime.
+        }
+      }
+
       function snapshotStudioScrollablePositions() {
         return [sourceTextEl, sourcePreviewEl, critiqueViewEl]
           .filter((el) => el && typeof el.scrollTop === "number" && typeof el.scrollLeft === "number")
@@ -3918,6 +3931,7 @@
         if (paneFocusTarget !== "off" && paneFocusTarget !== activePane) {
           paneFocusTarget = activePane;
           applyPaneFocusClasses();
+          persistPaneFocusUrlState();
         }
       }
 
@@ -4058,6 +4072,7 @@
         setActivePane(pane);
         paneFocusTarget = pane;
         applyPaneFocusClasses();
+        persistPaneFocusUrlState();
         setStatus("Focus mode: " + paneLabel(pane) + " pane. Toggle with F10 or Cmd/Ctrl+Esc.");
       }
 
@@ -4065,6 +4080,7 @@
         if (paneFocusTarget === activePane) {
           paneFocusTarget = "off";
           applyPaneFocusClasses();
+          persistPaneFocusUrlState();
           setStatus("Focus mode off.");
           return;
         }
@@ -4076,6 +4092,7 @@
         if (paneFocusTarget === "off") return false;
         paneFocusTarget = "off";
         applyPaneFocusClasses();
+        persistPaneFocusUrlState();
         setStatus("Focus mode off.");
         return true;
       }
@@ -21829,7 +21846,9 @@
       if (initialSourceState.path) markFileBackedBaseline(sourceTextEl.value);
       refreshResponseUi();
       updateAnnotatedReplyHeaderButton();
-      setActivePane("left");
+      setActivePane(initialPaneFocusTarget === "off" ? "left" : initialPaneFocusTarget);
+      applyPaneFocusClasses();
+      persistPaneFocusUrlState();
 
       const storedEditorHighlightEnabled = readStoredEditorHighlightEnabled();
       const initialHighlightEnabled = storedEditorHighlightEnabled ?? Boolean(highlightSelect && highlightSelect.value !== "off");

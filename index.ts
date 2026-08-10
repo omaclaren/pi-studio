@@ -90,6 +90,7 @@ interface StudioQuartoPreviewState {
 const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
 const STUDIO_MERMAID_HELPERS_URL = new URL("./client/studio-mermaid-helpers.js", import.meta.url);
+const STUDIO_NAVIGATION_HELPERS_URL = new URL("./client/studio-navigation-helpers.js", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
 
 interface StudioServerState {
@@ -10509,6 +10510,7 @@ function buildStudioHtml(
 	const stylesheetHref = `/studio.css?token=${encodeURIComponent(studioToken ?? "")}`;
 	const annotationHelpersScriptHref = `/studio-annotation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const mermaidHelpersScriptHref = `/studio-mermaid-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
+	const navigationHelpersScriptHref = `/studio-navigation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
@@ -10927,6 +10929,7 @@ ${cssVarsBlock}
   </script>
   <script src="${annotationHelpersScriptHref}"></script>
   <script src="${mermaidHelpersScriptHref}"></script>
+  <script src="${navigationHelpersScriptHref}"></script>
   <script src="${clientScriptHref}"></script>
 </body>
 </html>`;
@@ -14483,7 +14486,12 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		if (requestUrl.pathname === "/studio-annotation-helpers.js" || requestUrl.pathname === "/studio-mermaid-helpers.js" || requestUrl.pathname === "/studio-client.js") {
+		if (
+			requestUrl.pathname === "/studio-annotation-helpers.js"
+			|| requestUrl.pathname === "/studio-mermaid-helpers.js"
+			|| requestUrl.pathname === "/studio-navigation-helpers.js"
+			|| requestUrl.pathname === "/studio-client.js"
+		) {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
 				respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
@@ -14501,12 +14509,16 @@ export default function (pi: ExtensionAPI) {
 				? STUDIO_ANNOTATION_HELPERS_URL
 				: requestUrl.pathname === "/studio-mermaid-helpers.js"
 					? STUDIO_MERMAID_HELPERS_URL
-					: STUDIO_CLIENT_URL;
+					: requestUrl.pathname === "/studio-navigation-helpers.js"
+						? STUDIO_NAVIGATION_HELPERS_URL
+						: STUDIO_CLIENT_URL;
 			const targetLabel = requestUrl.pathname === "/studio-annotation-helpers.js"
 				? "studio annotation helper script"
 				: requestUrl.pathname === "/studio-mermaid-helpers.js"
 					? "studio Mermaid helper script"
-					: "studio client script";
+					: requestUrl.pathname === "/studio-navigation-helpers.js"
+						? "studio navigation helper script"
+						: "studio client script";
 
 			try {
 				const clientScript = readFileSync(targetUrl, "utf-8");
