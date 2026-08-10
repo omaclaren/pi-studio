@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.40] — 2026-08-10
+
 ### Fixed
 - Prevented Studio-owned REPL sessions from inheriting terminal-local `PROMPT_COMMAND` hooks without their function definitions, avoiding repeated `__bp_precmd_invoke_cmd` / `__bp_interactive_mode` errors under cmux and Ghostty on macOS Bash 3.2.
 - Show the reliable `Ctrl+Shift+Enter` shortcut on the **Send to REPL** button on macOS while continuing to accept `Cmd+Shift+Enter` where the browser or host does not reserve it.
