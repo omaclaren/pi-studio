@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.41] — 2026-08-11
+
 ### Fixed
 - Preserve Studio’s left/right **Focus pane** layout across reloads and reconstructed browser surfaces without carrying that state into newly opened Studio tabs.
 - Open known Studio/browser targets directly and route asynchronously prepared editor, preview, companion, and export tabs through one authenticated pending page, preventing duplicate or orphaned blank tabs when browser hosts return no window handle.
