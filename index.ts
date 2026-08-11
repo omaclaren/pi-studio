@@ -29,6 +29,7 @@ import {
 } from "./shared/studio-markdown-latex-literals.js";
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
+import { isStudioCmuxSession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
 import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import {
@@ -7544,27 +7545,6 @@ async function handleRevealLocalPreviewResourceRequest(req: IncomingMessage, res
 	}
 }
 
-function openUrlInDefaultBrowser(url: string): Promise<void> {
-	const openCommand =
-		process.platform === "darwin"
-			? { command: "open", args: [url] }
-			: process.platform === "win32"
-				? { command: "cmd", args: ["/c", "start", "", url] }
-				: { command: "xdg-open", args: [url] };
-
-	return new Promise<void>((resolve, reject) => {
-		const child = spawn(openCommand.command, openCommand.args, {
-			stdio: "ignore",
-			detached: true,
-		});
-		child.once("error", reject);
-		child.once("spawn", () => {
-			child.unref();
-			resolve();
-		});
-	});
-}
-
 function openPathInDefaultViewer(path: string): Promise<void> {
 	const openCommand =
 		process.platform === "darwin"
@@ -11328,14 +11308,7 @@ export default function (pi: ExtensionAPI) {
 		return null;
 	};
 
-	const isProbablyCmuxSession = (): boolean => {
-		const workspaceId = String(process.env.CMUX_WORKSPACE_ID ?? "").trim();
-		if (workspaceId) return true;
-		const termProgram = String(process.env.TERM_PROGRAM ?? "").trim().toLowerCase();
-		if (termProgram === "cmux") return true;
-		const term = String(process.env.TERM ?? "").trim().toLowerCase();
-		return term.includes("cmux");
-	};
+	const isProbablyCmuxSession = (): boolean => isStudioCmuxSession(process.env);
 
 	const sanitizeTerminalNotificationText = (value: string, maxLength = 240): string => {
 		const sanitized = String(value)
@@ -15836,7 +15809,7 @@ export default function (pi: ExtensionAPI) {
 				const skipReason = launchOpenFlags.noBrowser ? "--no-browser was used" : "SSH was detected";
 				ctx.ui.notify(`${openedLabel} is ready. Browser auto-open was skipped because ${skipReason}.`, "info");
 			} else {
-				await openUrlInDefaultBrowser(url);
+				await openStudioUrlInBrowser(url);
 				if (selected.source === "file") {
 					ctx.ui.notify(`Opened ${openedLabel} with file loaded: ${selected.label}`, "info");
 				} else if (selected.source === "last-response") {

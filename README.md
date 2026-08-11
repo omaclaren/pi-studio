@@ -63,7 +63,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
 
 | Command | Description |
 |---|---|
-| `/studio` | Open with last assistant response (fallback: blank) |
+| `/studio` | Open in cmux when available, otherwise the system browser, with the last assistant response (fallback: blank) |
 | `/studio <path>` | Open with file preloaded |
 | `/studio --last` | Force last response |
 | `/studio --blank` | Force blank editor |
@@ -150,6 +150,7 @@ Studio only passes icon-pack arguments when a diagram actually references `lucid
 ## Notes
 
 - Local-only server (`127.0.0.1`) with tokenized Studio URLs.
+- When Pi runs inside cmux, Studio opens as a focused cmux browser surface in the caller’s workspace. If cmux is unavailable or declines the request, Studio falls back to the system browser.
 - For remote SSH sessions, keep Studio bound to localhost and use SSH local port forwarding; `/studio` and `/studio --status` print the full tokenized localhost URL. The SSH hint repeats the full URL so it is visible even if your terminal only shows the latest notification. Open that URL through the tunnel, preserving the `?token=...` parameter. If SSH is not auto-detected, use `/studio --no-browser`; for stable forwarding, use `/studio --port <port>` or combine them, e.g. `/studio --no-browser --port 3417`.
 - Full Studio is a singleton per Pi session: use `/studio` to open it, `/studio-replace` to explicitly replace it, and `/studio-editor-only` for extra editing/preview tabs that do not take over the full Studio session view.
 - Studio is designed as a complement to terminal pi, not a replacement.

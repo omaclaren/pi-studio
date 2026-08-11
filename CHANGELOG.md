@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- Open Studio as a focused cmux browser surface in the caller’s workspace when launched from cmux, with a bounded system-browser fallback when cmux is unavailable or declines the request.
+
 ## [0.9.41] — 2026-08-11
 
 ### Fixed
