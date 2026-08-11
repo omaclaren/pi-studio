@@ -75,6 +75,107 @@ test("pane-focus replacement preserves history state and never pushes an entry",
   assert.equal(replacements.length, 1, "Unchanged focus state should not replace the URL again.");
 });
 
+class FakeStorage {
+  constructor(options = {}) {
+    this.values = new Map();
+    this.failWrites = Boolean(options.failWrites);
+  }
+
+  get length() {
+    return this.values.size;
+  }
+
+  key(index) {
+    return Array.from(this.values.keys())[index] ?? null;
+  }
+
+  getItem(key) {
+    return this.values.has(key) ? this.values.get(key) : null;
+  }
+
+  setItem(key, value) {
+    if (this.failWrites) throw new Error("QuotaExceededError");
+    this.values.set(String(key), String(value));
+  }
+
+  removeItem(key) {
+    this.values.delete(String(key));
+  }
+}
+
+function makeTabStateId(character) {
+  return "tab_" + String(character || "a").repeat(32);
+}
+
+test("Studio tab-state IDs are stable in the URL and preserve document identity", () => {
+  const replacements = [];
+  const historyState = { existing: "state" };
+  const windowLike = {
+    crypto: { randomUUID: () => "12345678-1234-4234-9234-123456789abc" },
+    location: { href: "http://127.0.0.1:4321/?token=secret&mode=editor-only&docPath=%2Ftmp%2Fnotes.qmd#preview" },
+    history: {
+      state: historyState,
+      replaceState(state, title, href) {
+        replacements.push({ state, title, href });
+        windowLike.location.href = href;
+      },
+    },
+  };
+
+  const tabStateId = helpers.ensureStudioTabStateId(windowLike);
+  assert.equal(helpers.isValidStudioTabStateId(tabStateId), true);
+  assert.equal(replacements.length, 1);
+  assert.equal(replacements[0].state, historyState);
+  const updated = new URL(windowLike.location.href);
+  assert.equal(updated.searchParams.get("token"), "secret");
+  assert.equal(updated.searchParams.get("docPath"), "/tmp/notes.qmd");
+  assert.equal(updated.searchParams.get(helpers.STUDIO_TAB_STATE_PARAM), tabStateId);
+  assert.equal(updated.hash, "#preview");
+
+  assert.equal(helpers.ensureStudioTabStateId(windowLike), tabStateId);
+  assert.equal(replacements.length, 1, "An existing tab-state ID should not rewrite the URL.");
+});
+
+test("workspace state remains isolated in the current browser tab session", () => {
+  const sessionStorage = new FakeStorage();
+  const tabStateId = makeTabStateId("a");
+  const state = {
+    version: 1,
+    savedAt: Date.now(),
+    sourceState: { source: "file", label: "notes.qmd", path: "/tmp/notes.qmd" },
+    editorView: "markdown",
+    rightView: "editor-quarto-preview",
+    text: "unsaved editor text",
+  };
+
+  assert.equal(helpers.persistStudioWorkspaceState({ sessionStorage }, tabStateId, state), true);
+  assert.deepEqual(helpers.readStudioWorkspaceState({ sessionStorage }, tabStateId), state);
+  assert.equal(helpers.readStudioWorkspaceState({ sessionStorage }, makeTabStateId("b")), null, "Another Studio tab must not inherit this editor state.");
+  helpers.clearStudioWorkspaceState({ sessionStorage }, tabStateId);
+  assert.equal(helpers.readStudioWorkspaceState({ sessionStorage }, tabStateId), null);
+});
+
+test("workspace state fails softly when browser session storage is unavailable", () => {
+  const tabStateId = makeTabStateId("c");
+  const state = { version: 1, savedAt: Date.now(), text: "session fallback" };
+
+  assert.equal(helpers.persistStudioWorkspaceState({}, tabStateId, state), false);
+  assert.equal(helpers.readStudioWorkspaceState({}, tabStateId), null);
+  assert.doesNotThrow(() => helpers.clearStudioWorkspaceState({}, tabStateId));
+});
+
+test("legacy tab session state migrates to the tab-scoped key", () => {
+  const sessionStorage = new FakeStorage();
+  const tabStateId = makeTabStateId("d");
+  const sessionState = { version: 1, savedAt: Date.now(), text: "legacy session" };
+  sessionStorage.setItem(helpers.STUDIO_WORKSPACE_LEGACY_STORAGE_KEY, JSON.stringify(sessionState));
+
+  assert.deepEqual(helpers.readStudioWorkspaceState({ sessionStorage }, tabStateId), sessionState);
+  assert.equal(helpers.persistStudioWorkspaceState({ sessionStorage }, tabStateId, sessionState), true);
+  assert.equal(sessionStorage.getItem(helpers.STUDIO_WORKSPACE_LEGACY_STORAGE_KEY), null);
+  assert.deepEqual(helpers.readStudioWorkspaceState({ sessionStorage }, tabStateId), sessionState);
+});
+
 function createFakeBroadcastHub() {
   const channels = new Map();
   class FakeBroadcastChannel {
@@ -396,13 +497,16 @@ test("a synchronous tab-open exception cleans up the launch and propagates", () 
   assert.equal(Array.from(hub.channels.values())[0].size, 0, "Failed launch channel must be closed.");
 });
 
-test("Studio serves navigation helpers before the client and wires pane focus centrally", () => {
+test("Studio serves navigation helpers before the client and wires reconstruction state centrally", () => {
   const indexSource = readFileSync(resolve(projectRoot, "index.ts"), "utf-8");
   const clientSource = readFileSync(resolve(projectRoot, "client/studio-client.js"), "utf-8");
 
   assert.match(indexSource, /STUDIO_NAVIGATION_HELPERS_URL/);
   assert.match(indexSource, /<script src="\$\{navigationHelpersScriptHref\}"><\/script>\s*<script src="\$\{clientScriptHref\}"><\/script>/);
   assert.match(indexSource, /requestUrl\.pathname === "\/studio-navigation-helpers\.js"/);
+  assert.match(clientSource, /studioTabStateId = navigationHelpers\.ensureStudioTabStateId\(window\)/);
+  assert.match(clientSource, /navigationHelpers\.readStudioWorkspaceState\(window, studioTabStateId\)/);
+  assert.match(clientSource, /navigationHelpers\.persistStudioWorkspaceState\(window, studioTabStateId, payload\)/);
   assert.match(clientSource, /initialPaneFocusTarget = navigationHelpers\.readPaneFocusTarget\(window\.location\)/);
   assert.match(clientSource, /setActivePane\(initialPaneFocusTarget === "off" \? "left" : initialPaneFocusTarget\)/);
   assert.match(clientSource, /navigationHelpers\.replacePaneFocusUrlState\(window, paneFocusTarget\)/);

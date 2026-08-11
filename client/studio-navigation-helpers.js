@@ -2,6 +2,10 @@
   const PANE_FOCUS_PARAM = "paneFocus";
   const PANE_FOCUS_OFF = "off";
   const PANE_FOCUS_TARGETS = Object.freeze(["left", "right"]);
+  const STUDIO_TAB_STATE_PARAM = "studioTabState";
+  const STUDIO_TAB_STATE_ID_PATTERN = /^[a-zA-Z0-9_-]{20,128}$/;
+  const STUDIO_WORKSPACE_STORAGE_PREFIX = "piStudio.workspaceState.v2:";
+  const STUDIO_WORKSPACE_LEGACY_STORAGE_KEY = "piStudio.workspaceState.v1";
   const STUDIO_LAUNCH_PROTOCOL_VERSION = 1;
   const STUDIO_LAUNCH_CHANNEL_PREFIX = "pi-studio-launch-v1:";
   const STUDIO_PENDING_KINDS = Object.freeze(["document", "preview", "export"]);
@@ -46,6 +50,98 @@
     if (nextHref === currentHref) return false;
     windowLike.history.replaceState(windowLike.history.state, "", nextHref);
     return true;
+  }
+
+  function isValidStudioTabStateId(value) {
+    return typeof value === "string" && STUDIO_TAB_STATE_ID_PATTERN.test(value);
+  }
+
+  function makeStudioTabStateId(cryptoLike) {
+    try {
+      const launchId = makeStudioLaunchId(cryptoLike);
+      const candidate = "tab_" + launchId;
+      if (isValidStudioTabStateId(candidate)) return candidate;
+    } catch {
+      // This ID isolates local browser state; it is not an authentication secret.
+    }
+    const candidate = "tab_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2).padEnd(16, "0");
+    if (isValidStudioTabStateId(candidate)) return candidate;
+    throw new Error("Could not create a Studio tab-state ID.");
+  }
+
+  function ensureStudioTabStateId(windowLike) {
+    if (!windowLike || !windowLike.location) throw new Error("Studio tab-state URL is unavailable.");
+    const currentHref = String(windowLike.location.href || "");
+    const url = new URL(currentHref);
+    const existing = url.searchParams.getAll(STUDIO_TAB_STATE_PARAM);
+    if (existing.length === 1 && isValidStudioTabStateId(existing[0])) return existing[0];
+
+    const tabStateId = makeStudioTabStateId(windowLike.crypto);
+    url.searchParams.delete(STUDIO_TAB_STATE_PARAM);
+    url.searchParams.set(STUDIO_TAB_STATE_PARAM, tabStateId);
+    if (windowLike.history && typeof windowLike.history.replaceState === "function") {
+      windowLike.history.replaceState(windowLike.history.state, "", url.toString());
+    }
+    return tabStateId;
+  }
+
+  function getStudioWorkspaceStorageKey(tabStateId) {
+    if (!isValidStudioTabStateId(tabStateId)) throw new Error("Invalid Studio tab-state ID.");
+    return STUDIO_WORKSPACE_STORAGE_PREFIX + tabStateId;
+  }
+
+  function getStudioSessionStorage(windowLike) {
+    try {
+      return windowLike && windowLike.sessionStorage ? windowLike.sessionStorage : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function parseStudioWorkspaceState(raw) {
+    try {
+      const parsed = JSON.parse(String(raw || ""));
+      if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || typeof parsed.text !== "string") return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function readStudioWorkspaceState(windowLike, tabStateId) {
+    const key = getStudioWorkspaceStorageKey(tabStateId);
+    const sessionStorage = getStudioSessionStorage(windowLike);
+    if (!sessionStorage || typeof sessionStorage.getItem !== "function") return null;
+    try {
+      const current = parseStudioWorkspaceState(sessionStorage.getItem(key));
+      if (current) return current;
+      return parseStudioWorkspaceState(sessionStorage.getItem(STUDIO_WORKSPACE_LEGACY_STORAGE_KEY));
+    } catch {
+      return null;
+    }
+  }
+
+  function persistStudioWorkspaceState(windowLike, tabStateId, state) {
+    const key = getStudioWorkspaceStorageKey(tabStateId);
+    const sessionStorage = getStudioSessionStorage(windowLike);
+    if (!sessionStorage || typeof sessionStorage.setItem !== "function") return false;
+    try {
+      sessionStorage.setItem(key, JSON.stringify(state));
+      sessionStorage.removeItem(STUDIO_WORKSPACE_LEGACY_STORAGE_KEY);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function clearStudioWorkspaceState(windowLike, tabStateId) {
+    const key = getStudioWorkspaceStorageKey(tabStateId);
+    const sessionStorage = getStudioSessionStorage(windowLike);
+    if (!sessionStorage || typeof sessionStorage.removeItem !== "function") return;
+    try {
+      sessionStorage.removeItem(key);
+      sessionStorage.removeItem(STUDIO_WORKSPACE_LEGACY_STORAGE_KEY);
+    } catch {}
   }
 
   function normalizeStudioPendingKind(value) {
@@ -490,6 +586,9 @@
     PANE_FOCUS_OFF,
     PANE_FOCUS_PARAM,
     PANE_FOCUS_TARGETS,
+    STUDIO_TAB_STATE_PARAM,
+    STUDIO_WORKSPACE_LEGACY_STORAGE_KEY,
+    STUDIO_WORKSPACE_STORAGE_PREFIX,
     STUDIO_LAUNCH_CHANNEL_PREFIX,
     STUDIO_LAUNCH_DELIVERY_TIMEOUT_MS,
     STUDIO_LAUNCH_MESSAGE_MAX_CHARS,
@@ -501,14 +600,21 @@
     buildPendingStudioUrl,
     canOpenPendingStudioLaunch,
     createPendingStudioLaunch,
+    clearStudioWorkspaceState,
+    ensureStudioTabStateId,
+    getStudioWorkspaceStorageKey,
     isValidStudioLaunchId,
+    isValidStudioTabStateId,
     makeStudioLaunchId,
+    makeStudioTabStateId,
     normalizePaneFocusTarget,
     normalizeStudioLaunchMessage,
     normalizeStudioPendingKind,
     normalizeStudioRelativeTarget,
     openStudioTabDirect,
+    persistStudioWorkspaceState,
     readPaneFocusTarget,
+    readStudioWorkspaceState,
     replacePaneFocusUrlState,
     startStudioPendingPage,
     studioLaunchChannelName,

@@ -1,4 +1,4 @@
-    (() => {
+    (async () => {
       const statusLineEl = document.getElementById("statusLine");
       const statusEl = document.getElementById("status");
       const statusSpinnerEl = document.getElementById("statusSpinner");
@@ -209,9 +209,17 @@
       };
 
       const navigationHelpers = globalThis.PiStudioNavigationHelpers;
-      if (!navigationHelpers || typeof navigationHelpers.readPaneFocusTarget !== "function") {
+      if (
+        !navigationHelpers
+        || typeof navigationHelpers.readPaneFocusTarget !== "function"
+        || typeof navigationHelpers.ensureStudioTabStateId !== "function"
+        || typeof navigationHelpers.readStudioWorkspaceState !== "function"
+        || typeof navigationHelpers.persistStudioWorkspaceState !== "function"
+        || typeof navigationHelpers.clearStudioWorkspaceState !== "function"
+      ) {
         throw new Error("Studio navigation helpers failed to load.");
       }
+      const studioTabStateId = navigationHelpers.ensureStudioTabStateId(window);
       const initialQueryParams = new URLSearchParams(window.location.search || "");
       const initialPaneFocusTarget = navigationHelpers.readPaneFocusTarget(window.location);
       const skipInitialWorkspaceRestore = initialQueryParams.get("skipWorkspaceRestore") === "1";
@@ -2059,8 +2067,9 @@
       const PANE_SPLIT_MIN_PERCENT = 20;
       const PANE_SPLIT_MAX_PERCENT = 80;
       const PANE_SPLIT_SNAP_TO_CENTER_PERCENT = 1;
-      const STUDIO_WORKSPACE_STORAGE_KEY = "piStudio.workspaceState.v1";
       const STUDIO_WORKSPACE_MAX_TEXT_CHARS = 900_000;
+      const STUDIO_WORKSPACE_PERSIST_INTERVAL_MS = 300;
+      const STUDIO_WORKSPACE_RECOVERY_FETCH_TIMEOUT_MS = 1_500;
       const EDITOR_HIGHLIGHT_MAX_CHARS = 100_000;
       const EDITOR_HIGHLIGHT_STORAGE_KEY = "piStudio.editorHighlightEnabled";
       const EDITOR_LANGUAGE_STORAGE_KEY = "piStudio.editorLanguage";
@@ -2217,6 +2226,8 @@
       let workspacePersistenceReady = false;
       let workspacePersistTimer = null;
       let workspaceRestoredFromBrowser = false;
+      let workspaceServerPersistenceBlocked = false;
+      let lastWorkspacePersistenceSavedAt = 0;
       let suppressedEditorSelectionStart = null;
       let suppressedEditorSelectionEnd = null;
       const previewJumpHighlightState = new WeakMap();
@@ -3605,11 +3616,13 @@
       });
 
       document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) {
-          windowHasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : windowHasFocus;
-          if (windowHasFocus) {
-            clearTitleAttention();
-          }
+        if (document.hidden) {
+          flushWorkspacePersistence({ beacon: false });
+          return;
+        }
+        windowHasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : windowHasFocus;
+        if (windowHasFocus) {
+          clearTitleAttention();
         }
       });
 
@@ -11377,32 +11390,44 @@
         return "source:" + normalized.source + ":" + normalized.label;
       }
 
-      function getWorkspacePersistenceStorage() {
-        try {
-          return window.sessionStorage || null;
-        } catch {
-          return null;
-        }
-      }
-
-      function clearLegacyWorkspacePersistenceStorage() {
-        try {
-          if (window.localStorage) window.localStorage.removeItem(STUDIO_WORKSPACE_STORAGE_KEY);
-        } catch {}
-      }
-
       function readPersistedWorkspaceState() {
         try {
-          const storage = getWorkspacePersistenceStorage();
-          const raw = storage ? storage.getItem(STUDIO_WORKSPACE_STORAGE_KEY) : null;
-          if (!raw) return null;
-          const parsed = JSON.parse(raw);
-          if (!parsed || typeof parsed !== "object" || parsed.version !== 1) return null;
-          if (typeof parsed.text !== "string") return null;
-          return parsed;
+          return navigationHelpers.readStudioWorkspaceState(window, studioTabStateId);
         } catch {
           return null;
         }
+      }
+
+      async function readServerWorkspaceRecoveryState() {
+        if (skipInitialWorkspaceRestore) return { status: "skipped", state: null };
+        const controller = typeof AbortController === "function" ? new AbortController() : null;
+        const timer = controller
+          ? window.setTimeout(() => controller.abort(), STUDIO_WORKSPACE_RECOVERY_FETCH_TIMEOUT_MS)
+          : null;
+        try {
+          const payload = await fetchStudioJson("/tab-workspace-state", {
+            query: { tabStateId: studioTabStateId },
+            signal: controller ? controller.signal : undefined,
+          });
+          const state = payload && payload.state && typeof payload.state === "object" ? payload.state : null;
+          return { status: state ? "found" : "empty", state };
+        } catch {
+          return { status: "unavailable", state: null };
+        } finally {
+          if (timer !== null) window.clearTimeout(timer);
+        }
+      }
+
+      function getWorkspaceStateSavedAt(state) {
+        return state && typeof state.savedAt === "number" && Number.isFinite(state.savedAt)
+          ? state.savedAt
+          : 0;
+      }
+
+      function chooseNewestRestorableWorkspaceState(states) {
+        return states
+          .filter((state) => shouldRestorePersistedWorkspaceState(state))
+          .sort((a, b) => getWorkspaceStateSavedAt(b) - getWorkspaceStateSavedAt(a))[0] || null;
       }
 
       function shouldRestorePersistedWorkspaceState(state) {
@@ -11417,9 +11442,10 @@
       }
 
       function buildWorkspacePersistencePayload() {
+        lastWorkspacePersistenceSavedAt = Math.max(Date.now(), lastWorkspacePersistenceSavedAt + 1);
         return {
           version: 1,
-          savedAt: Date.now(),
+          savedAt: lastWorkspacePersistenceSavedAt,
           sourceState: normalizeWorkspaceSourceState(sourceState),
           resourceDir: getCurrentResourceDirValue(),
           editorView,
@@ -11434,38 +11460,63 @@
         };
       }
 
-      function persistWorkspaceStateNow() {
+      function sendServerWorkspaceRecoveryState(payload, options) {
+        if ((options && options.skipServer) || (workspaceServerPersistenceBlocked && !(options && options.forceServer))) return;
+        const body = { tabStateId: studioTabStateId, state: payload };
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: "workspace_state_update", ...body }));
+            return;
+          } catch {
+            // Fall through to the authenticated HTTP path.
+          }
+        }
+        if (options && options.beacon && trySendStudioJsonBeacon("/tab-workspace-state", body)) return;
+        void fetchStudioJson("/tab-workspace-state", {
+          method: "POST",
+          body: JSON.stringify(body),
+          keepalive: Boolean(options && options.beacon),
+        }).catch(() => {
+          // Session storage remains the in-page fallback if server recovery fails.
+        });
+      }
+
+      function persistWorkspaceStateNow(options) {
         if (!workspacePersistenceReady) return;
         try {
-          const storage = getWorkspacePersistenceStorage();
-          if (!storage) return;
-          clearLegacyWorkspacePersistenceStorage();
           const payload = buildWorkspacePersistencePayload();
           if (payload.text.length > STUDIO_WORKSPACE_MAX_TEXT_CHARS) {
-            storage.removeItem(STUDIO_WORKSPACE_STORAGE_KEY);
+            navigationHelpers.clearStudioWorkspaceState(window, studioTabStateId);
+            sendServerWorkspaceRecoveryState({
+              ...payload,
+              sourceState: { source: "recovery-omitted", label: "oversized editor", path: null, draftId: null },
+              resourceDir: "",
+              rightView: "editor-preview",
+              text: "",
+            }, { ...(options || {}), forceServer: true });
             return;
           }
-          storage.setItem(STUDIO_WORKSPACE_STORAGE_KEY, JSON.stringify(payload));
+          navigationHelpers.persistStudioWorkspaceState(window, studioTabStateId, payload);
+          sendServerWorkspaceRecoveryState(payload, options);
         } catch {
-          // Ignore browser storage failures and quota limits.
+          // Ignore browser storage, serialization, and recovery-request failures.
         }
       }
 
       function scheduleWorkspacePersistence() {
-        if (!workspacePersistenceReady) return;
-        if (workspacePersistTimer !== null) window.clearTimeout(workspacePersistTimer);
+        if (!workspacePersistenceReady || workspacePersistTimer !== null) return;
         workspacePersistTimer = window.setTimeout(() => {
           workspacePersistTimer = null;
           persistWorkspaceStateNow();
-        }, 160);
+        }, STUDIO_WORKSPACE_PERSIST_INTERVAL_MS);
       }
 
-      function flushWorkspacePersistence() {
+      function flushWorkspacePersistence(options) {
         if (workspacePersistTimer !== null) {
           window.clearTimeout(workspacePersistTimer);
           workspacePersistTimer = null;
         }
-        persistWorkspaceStateNow();
+        persistWorkspaceStateNow(options || { beacon: true });
       }
 
       function clearPersistedWorkspaceState() {
@@ -11474,10 +11525,16 @@
           workspacePersistTimer = null;
         }
         try {
-          const storage = getWorkspacePersistenceStorage();
-          if (storage) storage.removeItem(STUDIO_WORKSPACE_STORAGE_KEY);
+          navigationHelpers.clearStudioWorkspaceState(window, studioTabStateId);
+          const marker = buildWorkspacePersistencePayload();
+          sendServerWorkspaceRecoveryState({
+            ...marker,
+            sourceState: { source: "recovery-cleared", label: "cleared editor", path: null, draftId: null },
+            resourceDir: "",
+            rightView: "editor-preview",
+            text: "",
+          }, { beacon: true, forceServer: true });
         } catch {}
-        clearLegacyWorkspacePersistenceStorage();
       }
 
       function applyPersistedWorkspaceState(state) {
@@ -12555,6 +12612,8 @@
           headers,
           body: init.body,
           cache: "no-store",
+          signal: init.signal,
+          keepalive: init.keepalive === true,
         });
         let payload = null;
         try {
@@ -21892,13 +21951,26 @@
       setAnnotationsEnabled(initialAnnotationsEnabled, { silent: true });
       setReplSendMode(replSendMode);
 
-      const persistedWorkspaceState = readPersistedWorkspaceState();
+      const sessionWorkspaceState = readPersistedWorkspaceState();
+      const serverWorkspaceRecovery = await readServerWorkspaceRecoveryState();
+      workspaceServerPersistenceBlocked = serverWorkspaceRecovery.status === "unavailable";
+      const serverWorkspaceState = serverWorkspaceRecovery.state;
+      lastWorkspacePersistenceSavedAt = Math.max(
+        lastWorkspacePersistenceSavedAt,
+        getWorkspaceStateSavedAt(sessionWorkspaceState),
+        getWorkspaceStateSavedAt(serverWorkspaceState),
+      );
+      const persistedWorkspaceState = chooseNewestRestorableWorkspaceState([
+        sessionWorkspaceState,
+        serverWorkspaceState,
+      ]);
       applyPersistedWorkspaceState(persistedWorkspaceState);
 
       setEditorView(editorView);
       setRightView(rightView);
       renderSourcePreview();
       workspacePersistenceReady = true;
+      persistWorkspaceStateNow({ skipServer: serverWorkspaceRecovery.status === "unavailable" });
       if (workspaceRestoredFromBrowser) {
         setStatus("Restored editor workspace from this browser tab. Use Reset editor to discard it.", "success");
       }

@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Preserve each Studio tab’s unsaved editor text and selected views when cmux reconstructs a hidden browser surface after switching workspaces, while keeping tab recovery state isolated and bounded in the running Studio server.
+
 ## [0.9.42] — 2026-08-11
 
 ### Changed

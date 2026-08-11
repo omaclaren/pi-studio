@@ -38,6 +38,11 @@ import {
 	isValidStudioLaunchId,
 	normalizeStudioPendingKind,
 } from "./shared/studio-tab-launcher.js";
+import {
+	createStudioWorkspaceStateStore,
+	isValidStudioTabStateId,
+	normalizeStudioWorkspaceRecoveryState,
+} from "./shared/studio-workspace-state.js";
 import { renderStudioAnnotationInlineHtml } from "./shared/studio-annotation-render.js";
 import {
 	buildStudioMermaidCliIconArgs,
@@ -567,6 +572,12 @@ interface CancelRequestMessage {
 	requestId: string;
 }
 
+interface WorkspaceStateUpdateMessage {
+	type: "workspace_state_update";
+	tabStateId: string;
+	state: ReturnType<typeof normalizeStudioWorkspaceRecoveryState>;
+}
+
 type IncomingStudioMessage =
 	| HelloMessage
 	| PingMessage
@@ -600,7 +611,8 @@ type IncomingStudioMessage =
 	| QuartoPreviewStopRequestMessage
 	| GitChangesRequestMessage
 	| OpenEditorOnlyRequestMessage
-	| CancelRequestMessage;
+	| CancelRequestMessage
+	| WorkspaceStateUpdateMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
@@ -619,6 +631,7 @@ const STUDIO_QUIZ_CONTEXT_MAX_FILES = 18;
 const STUDIO_QUIZ_SNIPPET_MAX_CHARS = 8_000;
 const STUDIO_QUIZ_DISCUSSION_MAX_CHARS = 6_000;
 const REQUEST_BODY_MAX_BYTES = 1_000_000;
+const STUDIO_WORKSPACE_STATE_REQUEST_MAX_BYTES = 4_000_000;
 const RESPONSE_HISTORY_LIMIT = 30;
 const CMUX_NOTIFY_TIMEOUT_MS = 1200;
 const PREPARED_PDF_EXPORT_TTL_MS = 5 * 60 * 1000;
@@ -8498,6 +8511,10 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 
 	if (msg.type === "hello") return { type: "hello" };
 	if (msg.type === "ping") return { type: "ping" };
+	if (msg.type === "workspace_state_update" && typeof msg.tabStateId === "string" && isValidStudioTabStateId(msg.tabStateId)) {
+		const state = normalizeStudioWorkspaceRecoveryState(msg.state);
+		if (state) return { type: "workspace_state_update", tabStateId: msg.tabStateId, state };
+	}
 	if (msg.type === "get_latest_response") return { type: "get_latest_response" };
 	if (msg.type === "get_trace_snapshot" && typeof msg.responseHistoryId === "string") {
 		return {
@@ -10938,6 +10955,7 @@ ${cssVarsBlock}
 
 export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
+	const studioWorkspaceStateStore = createStudioWorkspaceStateStore();
 	let activeRequest: ActiveStudioRequest | null = null;
 	let studioDirectRunChain: StudioDirectRunChain | null = null;
 	let queuedStudioDirectRequests: QueuedStudioDirectRequest[] = [];
@@ -12589,6 +12607,10 @@ export default function (pi: ExtensionAPI) {
 	const handleStudioMessage = (client: WebSocket, msg: IncomingStudioMessage) => {
 		if (msg.type === "ping") {
 			sendToClient(client, { type: "pong", timestamp: Date.now() });
+			return;
+		}
+		if (msg.type === "workspace_state_update") {
+			studioWorkspaceStateStore.set(msg.tabStateId, msg.state);
 			return;
 		}
 
@@ -14553,6 +14575,66 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/tab-workspace-state") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			void (async () => {
+				const method = (req.method ?? "GET").toUpperCase();
+				if (method === "GET") {
+					const tabStateId = requestUrl.searchParams.get("tabStateId") ?? "";
+					if (!isValidStudioTabStateId(tabStateId)) {
+						respondJson(res, 400, { ok: false, error: "Invalid Studio tab-state ID." });
+						return;
+					}
+					respondJson(res, 200, { ok: true, state: studioWorkspaceStateStore.get(tabStateId) });
+					return;
+				}
+
+				if (method !== "POST") {
+					res.setHeader("Allow", "GET, POST");
+					respondJson(res, 405, { ok: false, error: "Method not allowed. Use GET or POST." });
+					return;
+				}
+
+				let rawBody = "";
+				try {
+					rawBody = await readRequestBody(req, STUDIO_WORKSPACE_STATE_REQUEST_MAX_BYTES);
+				} catch (error) {
+					respondJson(res, 413, { ok: false, error: error instanceof Error ? error.message : String(error) });
+					return;
+				}
+				let payload: Record<string, unknown> = {};
+				try {
+					payload = rawBody ? JSON.parse(rawBody) as Record<string, unknown> : {};
+				} catch {
+					respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+					return;
+				}
+				const tabStateId = typeof payload.tabStateId === "string" ? payload.tabStateId : "";
+				if (!isValidStudioTabStateId(tabStateId)) {
+					respondJson(res, 400, { ok: false, error: "Invalid Studio tab-state ID." });
+					return;
+				}
+				const state = normalizeStudioWorkspaceRecoveryState(payload.state);
+				if (!state) {
+					respondJson(res, 400, { ok: false, error: "Invalid or oversized Studio workspace state." });
+					return;
+				}
+				const stored = studioWorkspaceStateStore.set(tabStateId, state);
+				respondJson(res, 200, { ok: true, stored });
+			})().catch((error) => {
+				respondJson(res, 500, {
+					ok: false,
+					error: `Studio workspace recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
+			return;
+		}
+
 		if (requestUrl.pathname === "/scratchpad-state") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
@@ -15029,6 +15111,7 @@ export default function (pi: ExtensionAPI) {
 		await new Promise<void>((resolve) => {
 			state.server.close(() => resolve());
 		});
+		studioWorkspaceStateStore.clear();
 	};
 
 	const hydrateLatestAssistant = (entries: SessionEntry[]) => {
