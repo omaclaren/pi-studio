@@ -31,6 +31,12 @@ import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js"
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
+import {
+	buildStudioPendingPage,
+	buildStudioPendingSecurityHeaders,
+	isValidStudioLaunchId,
+	normalizeStudioPendingKind,
+} from "./shared/studio-tab-launcher.js";
 import { renderStudioAnnotationInlineHtml } from "./shared/studio-annotation-render.js";
 import {
 	buildStudioMermaidCliIconArgs,
@@ -7260,6 +7266,17 @@ function respondText(res: ServerResponse, status: number, text: string): void {
 	res.end(text);
 }
 
+function respondStudioPendingError(res: ServerResponse, status: number, text: string, allow?: string): void {
+	const nonce = randomUUID().replace(/-/g, "");
+	const headers = {
+		...buildStudioPendingSecurityHeaders(nonce),
+		"Content-Type": "text/plain; charset=utf-8",
+		...(allow ? { Allow: allow } : {}),
+	};
+	res.writeHead(status, headers);
+	res.end(text);
+}
+
 function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: string): void {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "GET" && method !== "HEAD") {
@@ -7395,12 +7412,9 @@ async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResp
 		}
 		const document = buildStudioLocalResourcePreviewDocument(resource);
 		const docId = storeTransientStudioDocument(document);
-		const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
-		const parsedUrl = new URL(url);
 		respondJson(res, 200, {
 			...basePayload,
-			url,
-			relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+			relativeUrl: buildStudioRelativeUrl(serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true }),
 		});
 		return;
 	}
@@ -7460,13 +7474,10 @@ async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResp
 	}
 
 	const docId = storeTransientStudioDocument(document);
-	const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
-	const parsedUrl = new URL(url);
 	respondJson(res, 200, {
 		...basePayload,
 		converted,
-		url,
-		relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+		relativeUrl: buildStudioRelativeUrl(serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true }),
 	});
 }
 
@@ -10079,8 +10090,7 @@ function readTransientStudioDocument(id: string): InitialStudioDocument | null {
 	return entry ? { ...entry.document } : null;
 }
 
-function buildStudioUrl(
-	port: number,
+function buildStudioRelativeUrl(
 	token: string,
 	mode: StudioUiMode = "full",
 	doc?: InitialStudioDocument | null,
@@ -10096,7 +10106,18 @@ function buildStudioUrl(
 	if (doc?.draftId) params.set("draftId", doc.draftId);
 	if (doc?.resourceDir) params.set("resourceDir", doc.resourceDir);
 	if (options?.skipWorkspaceRestore) params.set("skipWorkspaceRestore", "1");
-	return `http://127.0.0.1:${port}/?${params.toString()}`;
+	return `/?${params.toString()}`;
+}
+
+function buildStudioUrl(
+	port: number,
+	token: string,
+	mode: StudioUiMode = "full",
+	doc?: InitialStudioDocument | null,
+	docId?: string,
+	options?: { skipWorkspaceRestore?: boolean },
+): string {
+	return `http://127.0.0.1:${port}${buildStudioRelativeUrl(token, mode, doc, docId, options)}`;
 }
 
 interface StudioLaunchFlags {
@@ -12855,13 +12876,10 @@ export default function (pi: ExtensionAPI) {
 				resourceDir,
 			};
 			const docId = storeTransientStudioDocument(document);
-			const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
-			const parsedUrl = new URL(url);
 			sendToClient(client, {
 				type: "editor_only_ready",
 				requestId: msg.requestId,
-				url,
-				relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+				relativeUrl: buildStudioRelativeUrl(serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true }),
 				message: hasContent
 					? "Editor tab is ready with a detached copy of the current editor text."
 					: "Blank editor tab is ready.",
@@ -14241,8 +14259,6 @@ export default function (pi: ExtensionAPI) {
 					resourceDir: dirname(exportedPath),
 				};
 				const docId = storeTransientStudioDocument(document);
-				const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
-				const parsedUrl = new URL(url);
 				respondJson(res, 200, {
 					ok: true,
 					filename,
@@ -14250,8 +14266,7 @@ export default function (pi: ExtensionAPI) {
 					writeError: writeResult.error,
 					warning: warning ?? null,
 					openedStudio: true,
-					url,
-					relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+					relativeUrl: buildStudioRelativeUrl(serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true }),
 					downloadUrl: `/export-pdf?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}`,
 				});
 				return;
@@ -14388,8 +14403,6 @@ export default function (pi: ExtensionAPI) {
 					draftId: exportedPath ? undefined : createStudioDraftId(),
 				};
 				const docId = storeTransientStudioDocument(document);
-				const url = buildStudioUrl(serverState.port, serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true });
-				const parsedUrl = new URL(url);
 				respondJson(res, 200, {
 					ok: true,
 					filename,
@@ -14397,8 +14410,7 @@ export default function (pi: ExtensionAPI) {
 					writeError: writeResult.error,
 					warning: warning ?? null,
 					openedStudio: true,
-					url,
-					relativeUrl: `${parsedUrl.pathname}${parsedUrl.search}`,
+					relativeUrl: buildStudioRelativeUrl(serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true }),
 					downloadUrl: `/export-html?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}`,
 				});
 				return;
@@ -14454,6 +14466,39 @@ export default function (pi: ExtensionAPI) {
 		if (requestUrl.pathname === "/favicon.ico") {
 			res.writeHead(204, { "Cache-Control": "no-store" });
 			res.end();
+			return;
+		}
+
+		if (requestUrl.pathname === "/studio-open-pending") {
+			const tokens = requestUrl.searchParams.getAll("token");
+			if (tokens.length !== 1 || tokens[0] !== serverState.token) {
+				respondStudioPendingError(res, 403, "Invalid or expired studio token. Re-run /studio.");
+				return;
+			}
+
+			const method = (req.method ?? "GET").toUpperCase();
+			if (method !== "GET") {
+				respondStudioPendingError(res, 405, "Method not allowed. Use GET.", "GET");
+				return;
+			}
+
+			const allowedKeys = new Set(["token", "launchId", "kind"]);
+			if (Array.from(requestUrl.searchParams.keys()).some((key) => !allowedKeys.has(key))) {
+				respondStudioPendingError(res, 400, "Unsupported Studio pending-page parameter.");
+				return;
+			}
+			const launchIds = requestUrl.searchParams.getAll("launchId");
+			const kinds = requestUrl.searchParams.getAll("kind");
+			const launchId = launchIds.length === 1 ? launchIds[0] : "";
+			const kind = kinds.length === 1 ? normalizeStudioPendingKind(kinds[0]) : null;
+			if (!isValidStudioLaunchId(launchId) || !kind) {
+				respondStudioPendingError(res, 400, "Invalid Studio pending-page request.");
+				return;
+			}
+
+			const nonce = randomUUID().replace(/-/g, "");
+			res.writeHead(200, buildStudioPendingSecurityHeaders(nonce));
+			res.end(buildStudioPendingPage({ token: serverState.token, launchId, kind, nonce }));
 			return;
 		}
 

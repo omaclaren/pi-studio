@@ -75,6 +75,327 @@ test("pane-focus replacement preserves history state and never pushes an entry",
   assert.equal(replacements.length, 1, "Unchanged focus state should not replace the URL again.");
 });
 
+function createFakeBroadcastHub() {
+  const channels = new Map();
+  class FakeBroadcastChannel {
+    constructor(name) {
+      this.name = name;
+      this.listeners = new Set();
+      this.closed = false;
+      if (!channels.has(name)) channels.set(name, new Set());
+      channels.get(name).add(this);
+    }
+
+    addEventListener(type, listener) {
+      if (type === "message") this.listeners.add(listener);
+    }
+
+    removeEventListener(type, listener) {
+      if (type === "message") this.listeners.delete(listener);
+    }
+
+    postMessage(data) {
+      if (this.closed) throw new Error("Channel is closed.");
+      for (const peer of channels.get(this.name) || []) {
+        if (peer === this || peer.closed) continue;
+        for (const listener of peer.listeners) listener({ data });
+        if (typeof peer.onmessage === "function") peer.onmessage({ data });
+      }
+    }
+
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      channels.get(this.name)?.delete(this);
+    }
+  }
+  return { BroadcastChannel: FakeBroadcastChannel, channels };
+}
+
+function createLaunchWindow(hub, overrides = {}) {
+  const openCalls = [];
+  const location = {
+    href: "http://127.0.0.1:4321/?token=session-token",
+    replace(target) {
+      this.replacedWith = target;
+      this.href = new URL(target, this.href).href;
+    },
+  };
+  return {
+    BroadcastChannel: hub.BroadcastChannel,
+    crypto: { randomUUID: () => "12345678-1234-4234-9234-123456789abc" },
+    location,
+    open(...args) {
+      openCalls.push(args);
+      return null;
+    },
+    openCalls,
+    setTimeout,
+    clearTimeout,
+    addEventListener() {},
+    close() {},
+    ...overrides,
+  };
+}
+
+function createPendingDocument() {
+  const elements = new Map([
+    ["pendingTitle", { textContent: "", hidden: false }],
+    ["pendingDetail", { textContent: "", hidden: false }],
+    ["pendingCloseBtn", { textContent: "", hidden: true, addEventListener() {} }],
+  ]);
+  return {
+    elements,
+    getElementById(id) {
+      return elements.get(id) || null;
+    },
+  };
+}
+
+test("Studio relative targets are root-only, same-origin, and exact-token", () => {
+  const location = { href: "http://127.0.0.1:4321/?token=session-token" };
+  assert.equal(
+    helpers.normalizeStudioRelativeTarget("/?token=session-token&mode=editor-only", location, "session-token"),
+    "/?token=session-token&mode=editor-only",
+  );
+  for (const target of [
+    "http://127.0.0.1:4321/?token=session-token",
+    "//evil.example/?token=session-token",
+    "/other?token=session-token",
+    "/?token=wrong",
+    "/?token=session-token&token=session-token",
+    "/\\evil?token=session-token",
+  ]) {
+    assert.throws(() => helpers.normalizeStudioRelativeTarget(target, location, "session-token"));
+  }
+});
+
+test("pending launch opens once, queues a fast result, and waits for terminal acceptance", () => {
+  const hub = createFakeBroadcastHub();
+  const windowLike = createLaunchWindow(hub);
+  const events = [];
+  let accepted = null;
+  const launch = helpers.createPendingStudioLaunch({
+    window: windowLike,
+    token: "session-token",
+    kind: "document",
+    readyTimeoutMs: 1_000,
+    deliveryTimeoutMs: 1_000,
+    onEvent: (event) => events.push(event),
+    onAccepted: (result) => { accepted = result; },
+  });
+  assert.ok(launch);
+  assert.equal(windowLike.openCalls.length, 1);
+  assert.deepEqual(windowLike.openCalls[0].slice(1), ["_blank", "noopener"]);
+  const pendingUrl = new URL(windowLike.openCalls[0][0], windowLike.location.href);
+  assert.equal(pendingUrl.pathname, "/studio-open-pending");
+  assert.equal(pendingUrl.searchParams.get("token"), "session-token");
+  assert.equal(pendingUrl.searchParams.get("kind"), "document");
+
+  assert.equal(launch.navigate("/?token=session-token&mode=editor-only"), true);
+  assert.equal(launch.getSnapshot().state, "waiting");
+  const peer = new hub.BroadcastChannel(helpers.studioLaunchChannelName(launch.launchId));
+  let terminalMessage = null;
+  peer.addEventListener("message", ({ data }) => {
+    if (data.type !== "navigate") return;
+    terminalMessage = data;
+    peer.postMessage({
+      protocol: helpers.STUDIO_LAUNCH_PROTOCOL_VERSION,
+      type: "accepted",
+      launchId: launch.launchId,
+      terminalType: "navigate",
+      ok: true,
+    });
+  });
+  peer.postMessage({
+    protocol: helpers.STUDIO_LAUNCH_PROTOCOL_VERSION,
+    type: "ready",
+    launchId: launch.launchId,
+  });
+
+  assert.equal(terminalMessage.target, "/?token=session-token&mode=editor-only");
+  assert.equal(launch.getSnapshot().state, "accepted");
+  assert.equal(accepted.ok, true);
+  assert.ok(events.includes("ready"));
+  assert.ok(events.includes("terminal-sent"));
+  assert.ok(events.includes("accepted"));
+  peer.close();
+});
+
+test("pending launch timeout never opens an automatic fallback tab", async () => {
+  const hub = createFakeBroadcastHub();
+  const windowLike = createLaunchWindow(hub);
+  let deliveryTimedOut = false;
+  const launch = helpers.createPendingStudioLaunch({
+    window: windowLike,
+    token: "session-token",
+    kind: "preview",
+    readyTimeoutMs: 100,
+    deliveryTimeoutMs: 100,
+    onDeliveryTimeout: () => { deliveryTimedOut = true; },
+  });
+  launch.navigate("/?token=session-token&mode=editor-only");
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 140));
+  assert.equal(deliveryTimedOut, true);
+  assert.equal(launch.getSnapshot().state, "abandoned");
+  assert.equal(windowLike.openCalls.length, 1);
+});
+
+test("pending-page receiver acknowledges before replacing its own location", async () => {
+  const hub = createFakeBroadcastHub();
+  const originWindow = createLaunchWindow(hub);
+  let accepted = null;
+  const launch = helpers.createPendingStudioLaunch({
+    window: originWindow,
+    token: "session-token",
+    kind: "export",
+    readyTimeoutMs: 1_000,
+    deliveryTimeoutMs: 1_000,
+    onAccepted: (result) => { accepted = result; },
+  });
+  launch.navigate("/?token=session-token&mode=editor-only&docLabel=export");
+
+  const pendingWindow = createLaunchWindow(hub);
+  const pendingDocument = createPendingDocument();
+  const receiver = helpers.startStudioPendingPage(pendingWindow, pendingDocument, {
+    launchId: launch.launchId,
+    kind: "export",
+    token: "session-token",
+    stillWaitingMs: 1_000,
+  });
+  assert.ok(receiver);
+  assert.equal(accepted.ok, true, "Origin should receive terminal acceptance synchronously in the test channel.");
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 35));
+  assert.equal(
+    pendingWindow.location.replacedWith,
+    "/?token=session-token&mode=editor-only&docLabel=export",
+  );
+  assert.equal(pendingDocument.elements.get("pendingTitle").textContent, "Opening Studio tab…");
+});
+
+test("launch controller latches the first terminal message and correlates acceptance", () => {
+  const hub = createFakeBroadcastHub();
+  const windowLike = createLaunchWindow(hub);
+  const launch = helpers.createPendingStudioLaunch({
+    window: windowLike,
+    token: "session-token",
+    kind: "document",
+    readyTimeoutMs: 1_000,
+    deliveryTimeoutMs: 1_000,
+  });
+  const peer = new hub.BroadcastChannel(helpers.studioLaunchChannelName(launch.launchId));
+  let terminal = null;
+  peer.addEventListener("message", ({ data }) => {
+    if (data.type === "error") terminal = data;
+  });
+  assert.equal(launch.fail("First terminal"), true);
+  assert.equal(launch.navigate("/?token=session-token"), false);
+  peer.postMessage({ protocol: helpers.STUDIO_LAUNCH_PROTOCOL_VERSION, type: "ready", launchId: launch.launchId });
+  assert.equal(terminal.type, "error");
+  peer.postMessage({
+    protocol: helpers.STUDIO_LAUNCH_PROTOCOL_VERSION,
+    type: "accepted",
+    launchId: launch.launchId,
+    terminalType: "navigate",
+    ok: true,
+  });
+  assert.equal(launch.getSnapshot().state, "terminal-sent", "Mismatched acceptance must be ignored.");
+  peer.postMessage({
+    protocol: helpers.STUDIO_LAUNCH_PROTOCOL_VERSION,
+    type: "accepted",
+    launchId: launch.launchId,
+    terminalType: "error",
+    ok: true,
+  });
+  assert.equal(launch.getSnapshot().state, "accepted");
+  peer.close();
+});
+
+test("pending page rejects a hostile navigation and reports failed acceptance", () => {
+  const hub = createFakeBroadcastHub();
+  const pendingWindow = createLaunchWindow(hub);
+  const pendingDocument = createPendingDocument();
+  const launchId = "12345678-1234-4234-9234-123456789abc";
+  const sender = new hub.BroadcastChannel(helpers.studioLaunchChannelName(launchId));
+  let acceptance = null;
+  sender.addEventListener("message", ({ data }) => {
+    if (data.type === "accepted") acceptance = data;
+  });
+  const receiver = helpers.startStudioPendingPage(pendingWindow, pendingDocument, {
+    launchId,
+    kind: "preview",
+    token: "session-token",
+    stillWaitingMs: 1_000,
+  });
+  assert.ok(receiver);
+  sender.postMessage({
+    protocol: helpers.STUDIO_LAUNCH_PROTOCOL_VERSION,
+    type: "navigate",
+    launchId,
+    target: "https://evil.example/?token=session-token",
+  });
+  assert.equal(acceptance.terminalType, "navigate");
+  assert.equal(acceptance.ok, false);
+  assert.equal(pendingWindow.location.replacedWith, undefined);
+  assert.equal(pendingDocument.elements.get("pendingTitle").textContent, "Could not open Studio tab");
+  sender.close();
+  receiver.close();
+});
+
+test("crypto launch IDs use getRandomValues when randomUUID is unavailable", () => {
+  const cryptoLike = {
+    getRandomValues(bytes) {
+      bytes.fill(0xab);
+      return bytes;
+    },
+  };
+  const launchId = helpers.makeStudioLaunchId(cryptoLike);
+  assert.equal(launchId, "launch_" + "ab".repeat(24));
+  assert.equal(helpers.isValidStudioLaunchId(launchId), true);
+  assert.throws(() => helpers.makeStudioLaunchId({}));
+});
+
+test("direct opens do not interpret a null window handle", () => {
+  const hub = createFakeBroadcastHub();
+  const windowLike = createLaunchWindow(hub);
+  const result = helpers.openStudioTabDirect(windowLike, "https://quarto.org/docs/get-started/");
+  assert.equal(result, undefined);
+  assert.deepEqual(windowLike.openCalls, [["https://quarto.org/docs/get-started/", "_blank", "noopener"]]);
+});
+
+test("unsupported pending launches fail before reserving a tab", () => {
+  const hub = createFakeBroadcastHub();
+  const windowLike = createLaunchWindow(hub, { BroadcastChannel: undefined });
+  assert.throws(
+    () => helpers.createPendingStudioLaunch({ window: windowLike, token: "session-token", kind: "document" }),
+    /does not support asynchronously prepared Studio tabs/,
+  );
+  assert.equal(windowLike.openCalls.length, 0);
+});
+
+test("a synchronous tab-open exception cleans up the launch and propagates", () => {
+  const hub = createFakeBroadcastHub();
+  const openError = new Error("Browser rejected open");
+  const windowLike = createLaunchWindow(hub, {
+    open() {
+      throw openError;
+    },
+  });
+  const events = [];
+  assert.throws(
+    () => helpers.createPendingStudioLaunch({
+      window: windowLike,
+      token: "session-token",
+      kind: "document",
+      onEvent: (event) => events.push(event),
+    }),
+    (error) => error === openError,
+  );
+  assert.ok(events.includes("open-error"));
+  assert.equal(hub.channels.size, 1);
+  assert.equal(Array.from(hub.channels.values())[0].size, 0, "Failed launch channel must be closed.");
+});
+
 test("Studio serves navigation helpers before the client and wires pane focus centrally", () => {
   const indexSource = readFileSync(resolve(projectRoot, "index.ts"), "utf-8");
   const clientSource = readFileSync(resolve(projectRoot, "client/studio-client.js"), "utf-8");

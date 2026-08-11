@@ -269,7 +269,8 @@
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
-      const pendingCompanionWindows = new Map();
+      const pendingCompanionLaunches = new Map();
+      const activeStudioTabLaunches = new Set();
       let sourceOriginSummaryEl = null;
       let sourceResetOriginBtn = null;
       let sourceOpenCurrentFileTabBtn = null;
@@ -2580,17 +2581,12 @@
               return;
             }
             closeStudioUiRefreshMenus();
-            const targetUrl = buildAuthedStudioUrl("/", {
-              mode: "editor-only",
-              docSource: "file",
-              docLabel: sourceState && sourceState.label ? sourceState.label : basenameForStudioPath(path),
-              docPath: path,
-              resourceDir: getCurrentResourceDirValue() || dirnameForDisplayPath(path),
-              skipWorkspaceRestore: "1",
-            });
             try {
-              window.open(targetUrl, "_blank", "noopener");
-              setStatus("Opening current file in a new editor tab.", "success");
+              openFileBackedStudioEditorTab(path, {
+                label: sourceState && sourceState.label ? sourceState.label : basenameForStudioPath(path),
+                resourceDir: getCurrentResourceDirValue() || dirnameForDisplayPath(path),
+              });
+              setStatus("Opening current file in a new editor tab.");
             } catch (error) {
               setStatus((error && error.message) ? error.message : String(error || "Could not open file tab."), "warning");
             }
@@ -5735,7 +5731,7 @@
           return source.replace(/<head\b[^>]*>/i, (match) => match + "\n" + headMarkup + "\n");
         }
         if (/<body\b[^>]*>/i.test(source)) {
-          return source.replace(/<body\b/i, "<head>\n" + headMarkup + "\n</head>\n<body");
+          return source.replace(/<body\b/i, () => "<head>\n" + headMarkup + "\n</head>\n<body");
         }
         if (/<html\b[^>]*>/i.test(source)) {
           return source.replace(/<html\b[^>]*>/i, (match) => match + "\n<head>\n" + headMarkup + "\n</head>\n");
@@ -6072,8 +6068,7 @@
           return;
         }
         if (kind === "text" || kind === "office") {
-          const pendingWindow = window.open("", "_blank");
-          void openPreviewDocumentInNewEditor(context.href, pendingWindow, context).catch((error) => {
+          void openPreviewDocumentInNewEditor(context.href, context).catch((error) => {
             setStatus((error && error.message) ? error.message : String(error || "Could not open linked file."), "warning");
           });
           return;
@@ -8536,19 +8531,14 @@
       async function exportRightPanePdf(options) {
         const exportOptions = options && typeof options === "object" ? options : {};
         const openTarget = exportOptions.openTarget === "studio" ? "studio" : "default";
-        let studioPopup = null;
-        if (openTarget === "studio") {
-          studioPopup = openExportStudioPlaceholderWindow("PDF");
-        }
+        let studioLaunch = null;
         if (uiBusy || previewExportInProgress) {
-          closeExportStudioWindow(studioPopup);
           setStatus("Studio is busy.", "warning");
           return;
         }
 
         const token = getToken();
         if (!token) {
-          closeExportStudioWindow(studioPopup);
           setStatus("Missing Studio token in URL. Re-run /studio.", "error");
           return;
         }
@@ -8556,20 +8546,17 @@
         const exportingReplJournal = rightView === "repl";
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         if (!rightPaneShowsPreview && !exportingReplJournal) {
-          closeExportStudioWindow(studioPopup);
           setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL to export PDF.", "warning");
           return;
         }
         const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
         if (exportingReplJournal && !replJournalExportEntries.length) {
-          closeExportStudioWindow(studioPopup);
           setStatus("No Studio REPL record entries to export for this session yet.", "warning");
           return;
         }
 
         const htmlArtifactSource = exportingReplJournal ? "" : getRightPaneHtmlArtifactSource();
         if (htmlArtifactSource) {
-          closeExportStudioWindow(studioPopup);
           setStatus("PDF export does not support interactive HTML previews yet. Export as HTML or use the browser print dialog inside the preview.", "warning");
           return;
         }
@@ -8580,7 +8567,6 @@
             ? prepareEditorTextForPdfExport(sourceTextEl.value)
             : prepareEditorTextForPreview(latestResponseMarkdown));
         if (!markdown || !markdown.trim()) {
-          closeExportStudioWindow(studioPopup);
           setStatus("Nothing to export yet.", "warning");
           return;
         }
@@ -8601,6 +8587,14 @@
           filenameHint = stem + ".studio.pdf";
         }
 
+        if (openTarget === "studio") {
+          try {
+            studioLaunch = openPendingStudioTab("export");
+          } catch (error) {
+            setStatus((error && error.message) ? error.message : "Could not prepare a Studio export tab.", "error");
+            return;
+          }
+        }
         previewExportInProgress = true;
         updateResultActionButtons();
         setStatus(openTarget === "studio" ? "Exporting PDF for Studio…" : "Exporting PDF…", "warning");
@@ -8658,30 +8652,30 @@
             }
 
             if (openTarget === "studio") {
-              const targetUrl = typeof payload.relativeUrl === "string" && payload.relativeUrl
-                ? new URL(payload.relativeUrl, window.location.href).href
-                : (typeof payload.url === "string" ? payload.url : "");
-              const openedStudio = navigateExportStudioWindow(studioPopup, targetUrl);
-              if (!openedStudio) {
-                closeExportStudioWindow(studioPopup);
+              const targetUrl = typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
+              const openedStudio = Boolean(targetUrl);
+              if (openedStudio) {
+                navigatePendingStudioTab(studioLaunch, targetUrl);
+              } else {
+                failPendingStudioTab(studioLaunch, "Studio did not return a preview-tab URL for this PDF export.");
                 const viewerUrl = getStudioPdfViewerUrlForExportPayload(payload);
                 if (viewerUrl) openStudioPdfFocusViewer(viewerUrl, downloadName);
               }
               if (writeError) {
                 setStatus(openedStudio
-                  ? "Opened exported PDF in a Studio preview tab, but could not write project file: " + writeError
-                  : "Exported PDF, but could not open a Studio preview tab and could not write project file: " + writeError,
+                  ? "Opening exported PDF in a Studio preview tab, but could not write project file: " + writeError
+                  : "Exported PDF, but Studio did not return a preview-tab URL and could not write the project file: " + writeError,
                   "warning");
               } else if (exportWarning) {
                 setStatus(openedStudio
-                  ? "Opened exported PDF in a Studio preview tab with warning: " + exportWarning
-                  : "Exported PDF, but could not open a Studio preview tab. Warning: " + exportWarning,
+                  ? "Opening exported PDF in a Studio preview tab with warning: " + exportWarning
+                  : "Exported PDF, but Studio did not return a preview-tab URL. Warning: " + exportWarning,
                   "warning");
               } else {
                 setStatus(openedStudio
-                  ? "Opened exported PDF in a Studio preview tab: " + (exportPath || downloadName)
-                  : "Exported PDF, but could not open a Studio preview tab" + (targetUrl ? ": " + targetUrl : "."),
-                  openedStudio ? "success" : "warning");
+                  ? "Opening exported PDF in a Studio preview tab: " + (exportPath || downloadName)
+                  : "Exported PDF, but Studio did not return a preview-tab URL.",
+                  openedStudio ? undefined : "warning");
               }
               return;
             }
@@ -8721,6 +8715,9 @@
             return;
           }
 
+          if (openTarget === "studio") {
+            failPendingStudioTab(studioLaunch, "Studio returned a download instead of a PDF preview tab.");
+          }
           const exportWarning = String(response.headers.get("x-pi-studio-export-warning") || "").trim();
           const blob = await response.blob();
           const headerFilename = parseContentDispositionFilename(response.headers.get("content-disposition"));
@@ -8747,7 +8744,7 @@
             setStatus("Exported PDF: " + downloadName, "success");
           }
         } catch (error) {
-          closeExportStudioWindow(studioPopup);
+          failPendingStudioTab(studioLaunch, "Studio could not prepare this PDF export tab. Return to the originating Studio page for details.");
           const detail = error && error.message ? error.message : String(error || "unknown error");
           setStatus("PDF export failed: " + detail, "error");
         } finally {
@@ -8756,58 +8753,17 @@
         }
       }
 
-      function openExportStudioPlaceholderWindow(formatLabel) {
-        const label = String(formatLabel || "preview").trim() || "preview";
-        let popup = null;
-        try {
-          popup = window.open("", "_blank");
-          if (popup && popup.document && popup.document.body) {
-            popup.document.title = "Opening " + label + " in Studio…";
-            popup.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Exporting " + escapeHtml(label) + " and opening it in Studio…</p>";
-          }
-        } catch {
-          popup = null;
-        }
-        return popup;
-      }
-
-      function navigateExportStudioWindow(popup, targetUrl) {
-        if (!targetUrl) return false;
-        if (popup && !popup.closed) {
-          try {
-            popup.opener = null;
-            popup.location.href = targetUrl;
-            return true;
-          } catch {}
-        }
-        try {
-          return Boolean(window.open(targetUrl, "_blank", "noopener"));
-        } catch {
-          return false;
-        }
-      }
-
-      function closeExportStudioWindow(popup) {
-        if (!popup || popup.closed) return;
-        try { popup.close(); } catch {}
-      }
-
       async function exportRightPaneHtml(options) {
         const exportOptions = options && typeof options === "object" ? options : {};
         const openTarget = exportOptions.openTarget === "studio" ? "studio" : "browser";
-        let studioPopup = null;
-        if (openTarget === "studio") {
-          studioPopup = openExportStudioPlaceholderWindow("HTML");
-        }
+        let studioLaunch = null;
         if (uiBusy || previewExportInProgress) {
-          closeExportStudioWindow(studioPopup);
           setStatus("Studio is busy.", "warning");
           return;
         }
 
         const token = getToken();
         if (!token) {
-          closeExportStudioWindow(studioPopup);
           setStatus("Missing Studio token in URL. Re-run /studio.", "error");
           return;
         }
@@ -8815,13 +8771,11 @@
         const exportingReplJournal = rightView === "repl";
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         if (!rightPaneShowsPreview && !exportingReplJournal) {
-          closeExportStudioWindow(studioPopup);
           setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL to export HTML.", "warning");
           return;
         }
         const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
         if (exportingReplJournal && !replJournalExportEntries.length) {
-          closeExportStudioWindow(studioPopup);
           setStatus("No Studio REPL record entries to export for this session yet.", "warning");
           return;
         }
@@ -8831,7 +8785,6 @@
           ? prepareEditorTextForHtmlExport(sourceTextEl.value)
           : prepareEditorTextForPreview(latestResponseMarkdown)));
         if (!markdown || !markdown.trim()) {
-          closeExportStudioWindow(studioPopup);
           setStatus("Nothing to export yet.", "warning");
           return;
         }
@@ -8854,6 +8807,14 @@
           titleHint = stem + " preview";
         }
 
+        if (openTarget === "studio") {
+          try {
+            studioLaunch = openPendingStudioTab("export");
+          } catch (error) {
+            setStatus((error && error.message) ? error.message : "Could not prepare a Studio export tab.", "error");
+            return;
+          }
+        }
         previewExportInProgress = true;
         updateResultActionButtons();
         setStatus(openTarget === "studio" ? "Exporting HTML for Studio…" : "Exporting HTML…", "warning");
@@ -8912,26 +8873,28 @@
             }
 
             if (openTarget === "studio") {
-              const targetUrl = typeof payload.relativeUrl === "string" && payload.relativeUrl
-                ? new URL(payload.relativeUrl, window.location.href).href
-                : (typeof payload.url === "string" ? payload.url : "");
-              const openedStudio = navigateExportStudioWindow(studioPopup, targetUrl);
-              if (!openedStudio) closeExportStudioWindow(studioPopup);
+              const targetUrl = typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
+              const openedStudio = Boolean(targetUrl);
+              if (openedStudio) {
+                navigatePendingStudioTab(studioLaunch, targetUrl);
+              } else {
+                failPendingStudioTab(studioLaunch, "Studio did not return an editor URL for this HTML export.");
+              }
               if (writeError) {
                 setStatus(openedStudio
-                  ? "Opened exported HTML in Studio as an unsaved copy; could not write project file: " + writeError
-                  : "Exported HTML for Studio, but the popup was blocked and the project file could not be written: " + writeError,
+                  ? "Opening exported HTML in Studio as an unsaved copy; could not write project file: " + writeError
+                  : "Exported HTML for Studio, but Studio did not return an editor URL and the project file could not be written: " + writeError,
                   "warning");
               } else if (exportWarning) {
                 setStatus(openedStudio
-                  ? "Opened exported HTML in Studio with warning: " + exportWarning
-                  : "Exported HTML for Studio, but the popup was blocked. Warning: " + exportWarning,
+                  ? "Opening exported HTML in Studio with warning: " + exportWarning
+                  : "Exported HTML for Studio, but Studio did not return an editor URL. Warning: " + exportWarning,
                   "warning");
               } else {
                 setStatus(openedStudio
-                  ? "Opened exported HTML in Studio: " + (exportPath || downloadName)
-                  : (targetUrl ? "Exported HTML for Studio: " + targetUrl : "Exported HTML, but Studio did not receive an editor URL."),
-                  openedStudio ? "success" : "warning");
+                  ? "Opening exported HTML in Studio: " + (exportPath || downloadName)
+                  : "Exported HTML, but Studio did not receive an editor URL.",
+                  openedStudio ? undefined : "warning");
               }
               return;
             }
@@ -8971,7 +8934,7 @@
             return;
           }
 
-          closeExportStudioWindow(studioPopup);
+          failPendingStudioTab(studioLaunch, "Studio returned a download instead of an HTML editor tab.");
           const exportWarning = String(response.headers.get("x-pi-studio-export-warning") || "").trim();
           const blob = await response.blob();
           const headerFilename = parseContentDispositionFilename(response.headers.get("content-disposition"));
@@ -8998,7 +8961,7 @@
             setStatus("Exported HTML: " + downloadName, "success");
           }
         } catch (error) {
-          closeExportStudioWindow(studioPopup);
+          failPendingStudioTab(studioLaunch, "Studio could not prepare this HTML export tab. Return to the originating Studio page for details.");
           const detail = error && error.message ? error.message : String(error || "unknown error");
           setStatus("HTML export failed: " + detail, "error");
         } finally {
@@ -10376,11 +10339,19 @@
             return;
           }
           if (action === "open-new") {
-            await openPreviewDocumentInNewEditor(path, null, getFileBrowserLocalLinkContext());
+            if (kind === "text" && isLikelyAbsoluteStudioPath(path)) {
+              openFileBackedStudioEditorTab(path, {
+                label: basenameForStudioPath(path),
+                resourceDir: fileBrowserState.rootDir || getCurrentResourceDirValue() || dirnameForDisplayPath(path),
+              });
+              setStatus("Opening file-backed document in a new editor.");
+              return;
+            }
+            await openPreviewDocumentInNewEditor(path, getFileBrowserLocalLinkContext());
             return;
           }
           if (action === "open-preview-new") {
-            await openPreviewResourceInNewEditor(path, null, getFileBrowserLocalLinkContext());
+            await openPreviewResourceInNewEditor(path, getFileBrowserLocalLinkContext());
             return;
           }
           if (action === "copy-path" || action === "copy-root" || action === "copy-current") {
@@ -10690,13 +10661,8 @@
           const hostname = parsed.hostname.toLowerCase();
           if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Unsupported preview protocol.");
           if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") throw new Error("Preview URL is not loopback-only.");
-          const opened = window.open(parsed.href, "_blank");
-          if (!opened) {
-            setStatus("Browser blocked the Quarto preview tab. Allow pop-ups and try again.", "warning");
-            return false;
-          }
-          try { opened.opener = null; } catch {}
-          setStatus("Opening Quarto preview in a browser tab.", "success");
+          openStudioTabDirect(parsed.href);
+          setStatus("Opening Quarto preview in a browser tab.");
           return true;
         } catch (error) {
           setStatus("Could not open Quarto preview: " + ((error && error.message) ? error.message : String(error)), "error");
@@ -10706,12 +10672,8 @@
 
       function openStudioQuartoInstallationInstructions() {
         try {
-          const opened = window.open("https://quarto.org/docs/get-started/", "_blank");
-          if (!opened) {
-            setStatus("Browser blocked the Quarto installation page.", "warning");
-            return;
-          }
-          try { opened.opener = null; } catch {}
+          openStudioTabDirect("https://quarto.org/docs/get-started/");
+          setStatus("Opening Quarto installation instructions.");
         } catch (error) {
           setStatus("Could not open Quarto installation instructions.", "warning");
         }
@@ -12464,6 +12426,99 @@
         return pathname + "?" + params.toString();
       }
 
+      function openStudioTabDirect(targetUrl) {
+        navigationHelpers.openStudioTabDirect(window, targetUrl);
+        debugTrace("studio_tab_launch", { event: "direct-open-requested" });
+      }
+
+      function removeActiveStudioTabLaunch(launch) {
+        if (launch) activeStudioTabLaunches.delete(launch);
+      }
+
+      function openPendingStudioTab(kind) {
+        const token = getToken();
+        if (!token) throw new Error("Missing Studio token in URL.");
+        const launch = navigationHelpers.createPendingStudioLaunch({
+          window,
+          token,
+          kind,
+          onEvent(event, detail) {
+            debugTrace("studio_tab_launch", {
+              event,
+              launchId: detail && detail.launchId ? detail.launchId : null,
+              kind: detail && detail.kind ? detail.kind : kind,
+              state: detail && detail.state ? detail.state : null,
+              terminalType: detail && detail.terminalType ? detail.terminalType : null,
+              ok: detail && typeof detail.ok === "boolean" ? detail.ok : undefined,
+            });
+          },
+          onReadyTimeout() {
+            setStatus("No new tab has acknowledged yet. The operation is still running; Studio will not open a fallback tab.", "warning");
+          },
+          onDeliveryTimeout(controller) {
+            removeActiveStudioTabLaunch(controller);
+            setStatus("Studio could not confirm delivery to the new tab. No replacement tab was opened.", "warning");
+          },
+          onAccepted(result) {
+            removeActiveStudioTabLaunch(result && result.controller);
+            if (result && result.ok === false) {
+              setStatus("The pending tab rejected the Studio navigation target.", "error");
+            }
+          },
+          onOpenError() {
+            setStatus("The browser rejected the new-tab request. Studio will not open a fallback tab.", "warning");
+          },
+        });
+        if (!launch) {
+          throw new Error("This browser could not prepare a Studio tab.");
+        }
+        activeStudioTabLaunches.add(launch);
+        return launch;
+      }
+
+      function navigatePendingStudioTab(launch, relativeUrl) {
+        if (!launch || typeof launch.navigate !== "function") {
+          throw new Error("Studio did not prepare a pending tab for this operation.");
+        }
+        const token = getToken();
+        const normalized = navigationHelpers.normalizeStudioRelativeTarget(relativeUrl, window.location, token);
+        return launch.navigate(normalized);
+      }
+
+      function failPendingStudioTab(launch, message) {
+        if (!launch) return false;
+        return launch.fail(message || "Studio could not prepare this tab. Return to the originating Studio page for details.");
+      }
+
+      function abandonAllStudioTabLaunches(message) {
+        const launches = Array.from(activeStudioTabLaunches);
+        activeStudioTabLaunches.clear();
+        launches.forEach((launch) => {
+          try { launch.abandon(message || "The originating Studio page was closed."); } catch {}
+        });
+      }
+
+      function buildFileBackedStudioEditorUrl(path, options) {
+        const cleanPath = stripPreviewLocalLinkUrlSuffix(path || "").trim();
+        if (!isLikelyAbsoluteStudioPath(cleanPath)) {
+          throw new Error("Opening a file-backed Studio tab requires an absolute local path.");
+        }
+        const config = options && typeof options === "object" ? options : {};
+        return buildAuthedStudioUrl("/", {
+          mode: "editor-only",
+          docSource: "file",
+          docLabel: config.label || basenameForStudioPath(cleanPath),
+          docPath: cleanPath,
+          resourceDir: normalizeStudioResourceDirValue(config.resourceDir || "") || dirnameForDisplayPath(cleanPath),
+          skipWorkspaceRestore: "1",
+        });
+      }
+
+      function openFileBackedStudioEditorTab(path, options) {
+        const targetUrl = buildFileBackedStudioEditorUrl(path, options);
+        openStudioTabDirect(targetUrl);
+      }
+
       function updateStudioDocumentUrlState(state) {
         try {
           const currentUrl = new URL(window.location.href);
@@ -12740,10 +12795,7 @@
         return true;
       }
 
-      async function openPreviewImageLink(href, title, contextOverride, pendingWindow) {
-        if (pendingWindow && !pendingWindow.closed) {
-          try { pendingWindow.close(); } catch {}
-        }
+      async function openPreviewImageLink(href, title, contextOverride) {
         const payload = await fetchStudioJson("/html-preview-resource", {
           query: getPreviewLinkResourceQuery(href, contextOverride),
         });
@@ -12829,73 +12881,33 @@
           : (path ? ("Opened file-backed document in editor: " + label) : ("Opened linked file copy in editor: " + label)), "success");
       }
 
-      async function openPreviewDocumentInNewEditor(href, pendingWindow, contextOverride) {
-        if (!confirmPreviewOfficeConversion(href, "new")) {
-          if (pendingWindow && !pendingWindow.closed) {
-            try { pendingWindow.close(); } catch {}
-          }
-          return;
-        }
-        const popup = pendingWindow || window.open("", "_blank");
-        const openingLabel = getPreviewLocalLinkKind(href) === "office" ? "Opening converted document…" : "Opening file tab…";
+      async function openPreviewDocumentInNewEditor(href, contextOverride) {
+        if (!confirmPreviewOfficeConversion(href, "new")) return;
+        let launch = null;
         try {
-          if (popup && popup.document && popup.document.body) {
-            popup.document.title = openingLabel;
-            popup.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">" + escapeHtml(openingLabel) + "</p>";
-          }
-        } catch {}
-        try {
+          launch = openPendingStudioTab("document");
           const payload = await fetchPreviewLocalLink("editor-url", href, contextOverride);
-          const targetUrl = payload && typeof payload.relativeUrl === "string"
-            ? new URL(payload.relativeUrl, window.location.href).href
-            : (payload && typeof payload.url === "string" ? payload.url : "");
-          if (!targetUrl) throw new Error("Studio did not return an editor URL.");
-          if (popup && !popup.closed) {
-            try {
-              popup.opener = null;
-              popup.location.href = targetUrl;
-              setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening file-backed document in a new editor.", "success");
-              return;
-            } catch {}
-          }
-          window.open(targetUrl, "_blank", "noopener");
-          setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening file-backed document in a new editor.", "success");
+          const relativeUrl = payload && typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
+          if (!relativeUrl) throw new Error("Studio did not return an editor URL.");
+          navigatePendingStudioTab(launch, relativeUrl);
+          setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening file-backed document in a new editor.");
         } catch (error) {
-          if (popup && !popup.closed) {
-            try { popup.close(); } catch {}
-          }
+          failPendingStudioTab(launch, "Studio could not prepare this document tab. Return to the originating Studio page for details.");
           throw error;
         }
       }
 
-      async function openPreviewResourceInNewEditor(href, pendingWindow, contextOverride) {
-        const popup = pendingWindow || window.open("", "_blank");
+      async function openPreviewResourceInNewEditor(href, contextOverride) {
+        let launch = null;
         try {
-          if (popup && popup.document && popup.document.body) {
-            popup.document.title = "Opening preview…";
-            popup.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Opening preview…</p>";
-          }
-        } catch {}
-        try {
+          launch = openPendingStudioTab("preview");
           const payload = await fetchPreviewLocalLink("preview-url", href, contextOverride);
-          const targetUrl = payload && typeof payload.relativeUrl === "string"
-            ? new URL(payload.relativeUrl, window.location.href).href
-            : (payload && typeof payload.url === "string" ? payload.url : "");
-          if (!targetUrl) throw new Error("Studio did not return a preview URL.");
-          if (popup && !popup.closed) {
-            try {
-              popup.opener = null;
-              popup.location.href = targetUrl;
-              setStatus("Opening preview in a new Studio tab.", "success");
-              return;
-            } catch {}
-          }
-          window.open(targetUrl, "_blank", "noopener");
-          setStatus("Opening preview in a new Studio tab.", "success");
+          const relativeUrl = payload && typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
+          if (!relativeUrl) throw new Error("Studio did not return a preview URL.");
+          navigatePendingStudioTab(launch, relativeUrl);
+          setStatus("Opening preview in a new Studio tab.");
         } catch (error) {
-          if (popup && !popup.closed) {
-            try { popup.close(); } catch {}
-          }
+          failPendingStudioTab(launch, "Studio could not prepare this preview tab. Return to the originating Studio page for details.");
           throw error;
         }
       }
@@ -12927,11 +12939,11 @@
             return;
           }
           if (action === "open-new") {
-            await openPreviewDocumentInNewEditor(href, null, context);
+            await openPreviewDocumentInNewEditor(href, context);
             return;
           }
           if (action === "open-preview-new") {
-            await openPreviewResourceInNewEditor(href, null, context);
+            await openPreviewResourceInNewEditor(href, context);
             return;
           }
           if (action === "open-here") {
@@ -12974,8 +12986,7 @@
           return;
         }
         if (kind === "text" || kind === "office") {
-          const pendingWindow = kind === "office" ? null : window.open("", "_blank");
-          void openPreviewDocumentInNewEditor(href, pendingWindow).catch((error) => {
+          void openPreviewDocumentInNewEditor(href).catch((error) => {
             setStatus((error && error.message) ? error.message : String(error || "Could not open linked file."), "warning");
           });
           return;
@@ -20137,24 +20148,31 @@
 
         if (message.type === "editor_only_ready") {
           const responseRequestId = typeof message.requestId === "string" ? message.requestId : "";
-          if (responseRequestId && pendingRequestId === responseRequestId) {
-            pendingRequestId = null;
-            pendingKind = null;
-            clearArmedTitleAttention(responseRequestId);
-            stickyStudioKind = null;
+          if (!responseRequestId || !pendingCompanionLaunches.has(responseRequestId)) return;
+          if (pendingRequestId !== responseRequestId || pendingKind !== "open_editor_only") {
+            failPendingCompanionLaunch(responseRequestId, "This companion editor request was superseded.");
+            return;
           }
+          pendingRequestId = null;
+          pendingKind = null;
+          clearArmedTitleAttention(responseRequestId);
+          stickyStudioKind = null;
           setBusy(false);
           setWsState("Ready");
-          const targetUrl = resolveCompanionEditorTargetUrl(message);
-          const opened = navigatePendingCompanionWindow(responseRequestId, targetUrl);
+          const relativeUrl = resolveCompanionEditorRelativeUrl(message);
+          let queued = false;
+          try {
+            queued = navigatePendingCompanionLaunch(responseRequestId, relativeUrl);
+          } catch (error) {
+            setStatus((error && error.message) ? error.message : "Studio rejected the companion editor URL.", "error");
+            return;
+          }
           const readyMessage = typeof message.message === "string" && message.message.trim()
             ? message.message.trim()
-            : "Opened editor tab with a detached copy of the current editor text.";
+            : "Opening an editor tab with a detached copy of the current editor text.";
           setStatus(
-            opened
-              ? readyMessage
-              : (targetUrl ? "Editor tab ready: " + targetUrl : "Editor tab is ready, but Studio did not receive a URL."),
-            opened ? "success" : "warning",
+            queued ? readyMessage : "Editor tab is ready, but Studio did not receive a valid relative URL.",
+            queued ? undefined : "warning",
           );
           return;
         }
@@ -20231,7 +20249,7 @@
 
         if (message.type === "busy") {
           if (typeof message.requestId === "string") {
-            closePendingCompanionWindow(message.requestId);
+            failPendingCompanionLaunch(message.requestId, "Studio could not start the companion editor because another request was busy.");
           }
           if (message.requestId && pendingRequestId === message.requestId) {
             if (pendingKind === "compact") {
@@ -20252,7 +20270,7 @@
 
         if (message.type === "error") {
           if (typeof message.requestId === "string") {
-            closePendingCompanionWindow(message.requestId);
+            failPendingCompanionLaunch(message.requestId, "Studio could not prepare the companion editor. Return to the originating Studio page for details.");
           }
           if (message.requestId && pendingRequestId === message.requestId) {
             if (pendingKind === "compact") {
@@ -20387,6 +20405,7 @@
           quartoPreviewCheckRequestId = null;
           quartoPreviewCheckSourcePath = "";
           quartoPreviewActionRequestId = null;
+          failAllPendingCompanionLaunches("The originating Studio connection was lost before the companion editor was ready.");
           if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
           setBusy(true);
 
@@ -20477,73 +20496,70 @@
         return requestId;
       }
 
-      function openPendingCompanionWindow(requestId) {
+      function openPendingCompanionLaunch(requestId) {
         if (!requestId) return null;
-        let companionWindow = null;
-        try {
-          companionWindow = window.open("", "_blank");
-          if (companionWindow && companionWindow.document && companionWindow.document.body) {
-            companionWindow.document.title = "Opening editor tab…";
-            companionWindow.document.body.innerHTML = "<p style=\"font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;\">Opening editor tab…</p>";
+        const launch = openPendingStudioTab("document");
+        pendingCompanionLaunches.set(requestId, launch);
+        return launch;
+      }
+
+      function takePendingCompanionLaunch(requestId) {
+        if (!requestId || !pendingCompanionLaunches.has(requestId)) return { found: false, launch: null };
+        const launch = pendingCompanionLaunches.get(requestId) || null;
+        pendingCompanionLaunches.delete(requestId);
+        return { found: true, launch };
+      }
+
+      function failPendingCompanionLaunch(requestId, message) {
+        const pending = takePendingCompanionLaunch(requestId);
+        if (!pending.found) return false;
+        failPendingStudioTab(
+          pending.launch,
+          message || "Studio could not prepare this companion editor. Return to the originating Studio page for details.",
+        );
+        return true;
+      }
+
+      function failAllPendingCompanionLaunches(message) {
+        const requestIds = Array.from(pendingCompanionLaunches.keys());
+        requestIds.forEach((requestId) => failPendingCompanionLaunch(requestId, message));
+      }
+
+      function resolveCompanionEditorRelativeUrl(message) {
+        return message && typeof message.relativeUrl === "string" ? message.relativeUrl : "";
+      }
+
+      function navigatePendingCompanionLaunch(requestId, relativeUrl) {
+        const pending = takePendingCompanionLaunch(requestId);
+        if (!pending.found || !relativeUrl) {
+          if (pending.found) {
+            failPendingStudioTab(pending.launch, "Studio did not return a companion editor target.");
           }
-        } catch {
-          companionWindow = null;
-        }
-        if (companionWindow) {
-          pendingCompanionWindows.set(requestId, companionWindow);
-        }
-        return companionWindow;
-      }
-
-      function takePendingCompanionWindow(requestId) {
-        if (!requestId || !pendingCompanionWindows.has(requestId)) return null;
-        const companionWindow = pendingCompanionWindows.get(requestId);
-        pendingCompanionWindows.delete(requestId);
-        return companionWindow || null;
-      }
-
-      function closePendingCompanionWindow(requestId) {
-        const companionWindow = takePendingCompanionWindow(requestId);
-        if (!companionWindow || companionWindow.closed) return;
-        try {
-          companionWindow.close();
-        } catch {}
-      }
-
-      function resolveCompanionEditorTargetUrl(message) {
-        const relativeUrl = message && typeof message.relativeUrl === "string" ? message.relativeUrl : "";
-        if (relativeUrl) {
-          try {
-            return new URL(relativeUrl, window.location.href).href;
-          } catch {}
-        }
-        return message && typeof message.url === "string" ? message.url : "";
-      }
-
-      function navigatePendingCompanionWindow(requestId, targetUrl) {
-        if (!targetUrl) {
-          closePendingCompanionWindow(requestId);
           return false;
         }
-        const companionWindow = takePendingCompanionWindow(requestId);
-        if (companionWindow && !companionWindow.closed) {
-          try {
-            companionWindow.opener = null;
-            companionWindow.location.href = targetUrl;
-            return true;
-          } catch {}
-        }
         try {
-          return Boolean(window.open(targetUrl, "_blank", "noopener"));
-        } catch {
-          return false;
+          navigatePendingStudioTab(pending.launch, relativeUrl);
+          return true;
+        } catch (error) {
+          failPendingStudioTab(pending.launch, "Studio rejected the companion editor target.");
+          throw error;
         }
       }
 
       function requestOpenEditorOnlyDocument(content, options) {
         const requestId = beginUiAction("open_editor_only");
         if (!requestId) return false;
-        openPendingCompanionWindow(requestId);
+        try {
+          openPendingCompanionLaunch(requestId);
+        } catch (error) {
+          pendingRequestId = null;
+          pendingKind = null;
+          stickyStudioKind = null;
+          setBusy(false);
+          setWsState("Ready");
+          setStatus((error && error.message) ? error.message : "Could not prepare a companion editor tab.", "error");
+          return false;
+        }
         const config = options && typeof options === "object" ? options : {};
         const sent = sendMessage({
           type: "open_editor_only_request",
@@ -20554,9 +20570,10 @@
           resourceDir: config.resourceDir || undefined,
         });
         if (!sent) {
-          closePendingCompanionWindow(requestId);
+          failPendingCompanionLaunch(requestId, "Studio could not send the companion editor request.");
           pendingRequestId = null;
           pendingKind = null;
+          stickyStudioKind = null;
           setBusy(false);
         }
         return sent;
@@ -20688,6 +20705,10 @@
 
       updatePaneFocusButtons();
       window.addEventListener("keydown", handlePaneShortcut);
+      window.addEventListener("pagehide", () => {
+        pendingCompanionLaunches.clear();
+        abandonAllStudioTabLaunches("The originating Studio page was closed before this tab finished opening.");
+      });
       window.addEventListener("beforeunload", () => {
         stopFooterSpinner();
         flushWorkspacePersistence();
