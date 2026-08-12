@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add a primary **Annotate response** action that loads the selected response into the raw editor and opens **Editor (Preview)**, while retaining the existing secondary load-only action and warning before replacing response-derived edits or annotations.
+
 ## [0.9.43] — 2026-08-11
 
 ### Fixed

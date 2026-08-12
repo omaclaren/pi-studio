@@ -10830,6 +10830,7 @@ ${cssVarsBlock}
             <button id="historyLastBtn" type="button" title="Jump to the latest loaded response in the current branch history.">Last response ▶|</button>
           </div>
           <div class="response-actions-row response-result-row">
+            <button id="annotateResponseBtn" type="button" title="Load the selected response into the raw editor and show Editor Preview. This replaces the current editor text.">Annotate response</button>
             <button id="loadResponseBtn" type="button">Load response into editor</button>
             <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
             <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>

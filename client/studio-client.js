@@ -90,6 +90,7 @@
       const resourceDirInput = document.getElementById("resourceDirInput");
       const resourceDirClearBtn = document.getElementById("resourceDirClearBtn");
       const loadResponseBtn = document.getElementById("loadResponseBtn");
+      const annotateResponseBtn = document.getElementById("annotateResponseBtn");
       const loadCritiqueNotesBtn = document.getElementById("loadCritiqueNotesBtn");
       const loadCritiqueFullBtn = document.getElementById("loadCritiqueFullBtn");
       const copyResponseBtn = document.getElementById("copyResponseBtn");
@@ -3876,6 +3877,7 @@
           document.body.classList.add("pane-focus-right");
         }
         updatePaneFocusButtons();
+        updateResultActionButtons();
       }
 
       function persistPaneFocusUrlState() {
@@ -10984,11 +10986,22 @@
         const critiqueNotesLoaded = Boolean(critiqueNotes) && normalizedEditor === latestCritiqueNotesNormalized;
 
         loadResponseBtn.hidden = isCritiqueResponse;
+        annotateResponseBtn.hidden = isCritiqueResponse;
         loadCritiqueNotesBtn.hidden = !isCritiqueResponse;
         loadCritiqueFullBtn.hidden = !isCritiqueResponse;
 
         loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse;
         loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
+
+        const annotationWorkspaceReady = responseLoaded
+          && editorView === "markdown"
+          && rightView === "editor-preview"
+          && paneFocusTarget === "off";
+        annotateResponseBtn.disabled = uiBusy || !hasResponse || isCritiqueResponse || annotationWorkspaceReady;
+        annotateResponseBtn.textContent = annotationWorkspaceReady ? "Response ready to annotate" : "Annotate response";
+        annotateResponseBtn.title = annotationWorkspaceReady
+          ? "The selected response is exactly in the raw editor with Editor Preview open."
+          : "Load the selected response into the raw editor and show Editor Preview. This replaces the current editor text.";
 
         loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
         loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
@@ -21052,14 +21065,45 @@
         });
       }
 
-      loadResponseBtn.addEventListener("click", () => {
+      function loadSelectedResponseIntoEditor(options) {
         if (!latestResponseMarkdown.trim()) {
           setStatus("No response available yet.", "warning");
-          return;
+          return false;
+        }
+        const prepareForAnnotation = Boolean(options && options.annotate);
+        const currentEditorText = String(sourceTextEl.value || "");
+        const replacingEditedResponse = prepareForAnnotation
+          && sourceState.source === "last-response"
+          && Boolean(currentEditorText.trim())
+          && normalizeForCompare(currentEditorText) !== latestResponseNormalized;
+        if (
+          replacingEditedResponse
+          && !window.confirm("Replace your edited response with a fresh copy? Existing edits and annotations will be lost.")
+        ) {
+          setStatus("Kept the current editor text.");
+          return false;
         }
         setEditorText(latestResponseMarkdown, { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "last-response", label: "last model response", path: null });
+        if (prepareForAnnotation) {
+          if (editorView !== "markdown") setEditorView("markdown");
+          exitPaneFocus();
+          setRightView("editor-preview");
+          setActivePane("left");
+          window.setTimeout(focusSourceTextNoScroll, 0);
+          setStatus("Response loaded and Editor Preview opened for annotation.", "success");
+          return true;
+        }
         setStatus("Loaded response into editor.", "success");
+        return true;
+      }
+
+      loadResponseBtn.addEventListener("click", () => {
+        loadSelectedResponseIntoEditor();
+      });
+
+      annotateResponseBtn.addEventListener("click", () => {
+        loadSelectedResponseIntoEditor({ annotate: true });
       });
 
       loadCritiqueNotesBtn.addEventListener("click", () => {

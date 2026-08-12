@@ -198,7 +198,7 @@
     #sendRunBtn:not(:disabled):not(.request-stop-active):not(.repl-secondary-action),
     #queueSteerBtn:not(:disabled),
     #sendReplBtn.repl-primary-action:not(:disabled),
-    #loadResponseBtn:not(:disabled):not([hidden]) {
+    #annotateResponseBtn:not(:disabled):not([hidden]) {
       background: var(--accent);
       border-color: var(--accent);
       color: var(--accent-contrast);
@@ -208,7 +208,7 @@
     #sendRunBtn:not(:disabled):not(.request-stop-active):not(.repl-secondary-action):hover,
     #queueSteerBtn:not(:disabled):hover,
     #sendReplBtn.repl-primary-action:not(:disabled):hover,
-    #loadResponseBtn:not(:disabled):not([hidden]):hover {
+    #annotateResponseBtn:not(:disabled):not([hidden]):hover {
       filter: brightness(0.95);
     }
 
@@ -414,6 +414,7 @@
     body[data-studio-mode="editor-only"] #historyNextBtn,
     body[data-studio-mode="editor-only"] #historyLastBtn,
     body[data-studio-mode="editor-only"] #loadResponseBtn,
+    body[data-studio-mode="editor-only"] #annotateResponseBtn,
     body[data-studio-mode="editor-only"] #loadCritiqueNotesBtn,
     body[data-studio-mode="editor-only"] #loadCritiqueFullBtn,
     body[data-studio-mode="editor-only"] #loadHistoryPromptBtn,
@@ -6073,7 +6074,8 @@
     body.studio-ui-refresh #sendRunBtn,
     body.studio-ui-refresh #queueSteerBtn,
     body.studio-ui-refresh #sendReplBtn,
-    body.studio-ui-refresh #loadResponseBtn:not([hidden]) {
+    body.studio-ui-refresh #loadResponseBtn:not([hidden]),
+    body.studio-ui-refresh #annotateResponseBtn:not([hidden]) {
       height: 28px;
       min-height: 28px;
       padding: 4px 9px;

@@ -42,7 +42,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
 - Turns local preview links, including links inside sandboxed HTML previews, into Studio actions: PDFs open in the embedded viewer, images open in a zoomable focus viewer, PDF/image links can open in a new Studio preview tab, text/code/CSV/TSV document links can open in a new editor tab, DOCX/ODT links can be converted to editable Markdown, and right-click menus provide **Open here**, **Reveal in file manager**, and **Copy path** for local resources
 - Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with transient **Comment** / **Jump** actions from raw-editor selections plus editor-preview selections for Markdown, LaTeX, code/text/diff previews, and an opt-in comment mode for editor HTML previews; source-anchored comments can be toggled into inline `[an: ...]` annotations when you want comments reflected in the document text
 - Browses response history (`Prev/Next/Last`) and loads either:
-  - response text
+  - response text, with a one-click **Annotate response** action that also opens **Editor (Preview)**
   - critique notes/full critique
   - the prompt that generated a selected response
 - Supports an annotation workflow for `[an: ...]` markers:
