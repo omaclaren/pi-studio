@@ -56,10 +56,14 @@ import {
 	parseStudioQuartoInspect,
 	parseStudioQuartoPreviewUrl,
 } from "./shared/studio-quarto-preview.js";
+import {
+	buildStudioShowMePrompt,
+	isStudioShowMePrompt,
+} from "./shared/studio-show-me.js";
 
 type Lens = "writing" | "code";
 type RequestedLens = Lens | "auto";
-type StudioRequestKind = "critique" | "annotation" | "direct" | "compact";
+type StudioRequestKind = "critique" | "show-me" | "annotation" | "direct" | "compact";
 type StudioUiMode = "full" | "editor-only";
 type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
@@ -71,6 +75,7 @@ type StudioQuizScope = "selection" | "editor" | "file" | "folder" | "repo";
 type StudioQuizThinking = "off" | "minimal" | "low" | "medium" | "high";
 type StudioPiThinkingLevel = ModelThinkingLevel | "max";
 type StudioQuartoPreviewStatus = "idle" | "starting" | "running" | "stopping" | "stopped" | "error";
+type StudioShowMeSourceKind = "selection" | "response" | "editor" | "context";
 
 interface StudioQuartoPreviewContext {
 	sourcePath: string;
@@ -103,6 +108,7 @@ const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
 const STUDIO_MERMAID_HELPERS_URL = new URL("./client/studio-mermaid-helpers.js", import.meta.url);
 const STUDIO_NAVIGATION_HELPERS_URL = new URL("./client/studio-navigation-helpers.js", import.meta.url);
+const STUDIO_SHOW_ME_HELPERS_URL = new URL("./client/studio-show-me-helpers.js", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
 
 interface StudioServerState {
@@ -373,6 +379,14 @@ interface CritiqueRequestMessage {
 	lens?: RequestedLens;
 }
 
+interface ShowMeRequestMessage {
+	type: "show_me_request";
+	requestId: string;
+	sourceKind: StudioShowMeSourceKind;
+	sourceLabel: string;
+	sourceText: string;
+}
+
 interface AnnotationRequestMessage {
 	type: "annotation_request";
 	requestId: string;
@@ -584,6 +598,7 @@ type IncomingStudioMessage =
 	| GetLatestResponseMessage
 	| GetTraceSnapshotMessage
 	| CritiqueRequestMessage
+	| ShowMeRequestMessage
 	| AnnotationRequestMessage
 	| SendRunRequestMessage
 	| CompletionSuggestionRequestMessage
@@ -8140,7 +8155,8 @@ async function runStudioCompletionSuggestion(ctx: StudioModelRequestContext, opt
 	return suggestion;
 }
 
-function inferStudioResponseKind(markdown: string): StudioRequestKind {
+function inferStudioResponseKind(markdown: string, prompt?: string | null): StudioRequestKind {
+	if (isStudioShowMePrompt(prompt)) return "show-me";
 	const lower = markdown.toLowerCase();
 	if (lower.includes("## critiques") && lower.includes("## document")) return "critique";
 	return "annotation";
@@ -8420,7 +8436,7 @@ function buildResponseHistoryFromEntries(entries: SessionEntry[], limit = RESPON
 			markdown,
 			thinking,
 			timestamp: parseEntryTimestamp((entry as { timestamp?: unknown }).timestamp),
-			kind: inferStudioResponseKind(markdown),
+			kind: inferStudioResponseKind(markdown, promptDescriptor.prompt),
 			prompt: promptDescriptor.prompt,
 			promptMode: promptDescriptor.promptMode,
 			promptTriggerKind: promptDescriptor.promptTriggerKind,
@@ -8534,6 +8550,24 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 			requestId: msg.requestId,
 			document: msg.document,
 			lens: msg.lens as RequestedLens | undefined,
+		};
+	}
+
+	if (
+		msg.type === "show_me_request"
+		&& typeof msg.requestId === "string"
+		&& (msg.sourceKind === "selection" || msg.sourceKind === "response" || msg.sourceKind === "editor" || msg.sourceKind === "context")
+		&& typeof msg.sourceLabel === "string"
+		&& msg.sourceLabel.length <= 500
+		&& typeof msg.sourceText === "string"
+		&& msg.sourceText.length <= 20_000
+	) {
+		return {
+			type: "show_me_request",
+			requestId: msg.requestId,
+			sourceKind: msg.sourceKind,
+			sourceLabel: msg.sourceLabel,
+			sourceText: msg.sourceText,
 		};
 	}
 
@@ -10529,6 +10563,7 @@ function buildStudioHtml(
 	const annotationHelpersScriptHref = `/studio-annotation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const mermaidHelpersScriptHref = `/studio-mermaid-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const navigationHelpersScriptHref = `/studio-navigation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
+	const showMeHelpersScriptHref = `/studio-show-me-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
@@ -10635,6 +10670,8 @@ ${cssVarsBlock}
                 <option value="code">Critique: Code</option>
               </select>
               <button id="critiqueBtn" type="button">Critique text</button>
+              <button id="showMeBtn" type="button" title="Explain the editor selection, editor document, or current topic using the smallest useful visual or structural representation.">Explain editor document</button>
+              <button id="showMeResponseBtn" type="button" hidden title="Explain the response displayed in the right pane using the smallest useful visual or structural representation.">Explain displayed response</button>
               <button id="quizBtn" type="button" title="Open an active quiz for the current editor selection or document.">Quiz me</button>
               <select id="highlightSelect" aria-label="Editor syntax highlighting">
                 <option value="off">Syntax highlight: Off</option>
@@ -10949,6 +10986,7 @@ ${cssVarsBlock}
   <script src="${annotationHelpersScriptHref}"></script>
   <script src="${mermaidHelpersScriptHref}"></script>
   <script src="${navigationHelpersScriptHref}"></script>
+  <script src="${showMeHelpersScriptHref}"></script>
   <script src="${clientScriptHref}"></script>
 </body>
 </html>`;
@@ -11548,6 +11586,7 @@ export default function (pi: ExtensionAPI) {
 
 	const getStudioRequestCompletionNotification = (kind: StudioRequestKind): string => {
 		if (kind === "critique") return "Studio: critique ready.";
+		if (kind === "show-me") return "Studio: visual explanation ready.";
 		return "Studio: response ready.";
 	};
 
@@ -12929,6 +12968,37 @@ export default function (pi: ExtensionAPI) {
 					type: "error",
 					requestId: msg.requestId,
 					message: `Failed to send critique request: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			}
+			return;
+		}
+
+		if (msg.type === "show_me_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+
+			if (msg.sourceKind !== "context" && !msg.sourceText.trim()) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Show me source is empty." });
+				return;
+			}
+
+			const prompt = buildStudioShowMePrompt({
+				sourceKind: msg.sourceKind,
+				sourceLabel: msg.sourceLabel,
+				sourceText: msg.sourceText,
+			});
+			if (!beginRequest(msg.requestId, "show-me", buildStudioPromptDescriptor(prompt))) return;
+
+			try {
+				pi.sendUserMessage(prompt);
+			} catch (error) {
+				clearActiveRequest();
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: `Failed to send Show me request: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
 			return;
@@ -14531,6 +14601,7 @@ export default function (pi: ExtensionAPI) {
 			requestUrl.pathname === "/studio-annotation-helpers.js"
 			|| requestUrl.pathname === "/studio-mermaid-helpers.js"
 			|| requestUrl.pathname === "/studio-navigation-helpers.js"
+			|| requestUrl.pathname === "/studio-show-me-helpers.js"
 			|| requestUrl.pathname === "/studio-client.js"
 		) {
 			const token = requestUrl.searchParams.get("token") ?? "";
@@ -14552,14 +14623,18 @@ export default function (pi: ExtensionAPI) {
 					? STUDIO_MERMAID_HELPERS_URL
 					: requestUrl.pathname === "/studio-navigation-helpers.js"
 						? STUDIO_NAVIGATION_HELPERS_URL
-						: STUDIO_CLIENT_URL;
+						: requestUrl.pathname === "/studio-show-me-helpers.js"
+							? STUDIO_SHOW_ME_HELPERS_URL
+							: STUDIO_CLIENT_URL;
 			const targetLabel = requestUrl.pathname === "/studio-annotation-helpers.js"
 				? "studio annotation helper script"
 				: requestUrl.pathname === "/studio-mermaid-helpers.js"
 					? "studio Mermaid helper script"
 					: requestUrl.pathname === "/studio-navigation-helpers.js"
 						? "studio navigation helper script"
-						: "studio client script";
+						: requestUrl.pathname === "/studio-show-me-helpers.js"
+							? "studio Show me helper script"
+							: "studio client script";
 
 			try {
 				const clientScript = readFileSync(targetUrl, "utf-8");
@@ -15349,7 +15424,7 @@ export default function (pi: ExtensionAPI) {
 				markdown,
 				thinking,
 				timestamp: Date.now(),
-				kind: inferStudioResponseKind(markdown),
+				kind: activeRequest?.kind ?? inferStudioResponseKind(markdown, fallbackPromptDescriptor.prompt),
 				prompt: fallbackPromptDescriptor.prompt,
 				promptMode: fallbackPromptDescriptor.promptMode,
 				promptTriggerKind: fallbackPromptDescriptor.promptTriggerKind,
@@ -15400,7 +15475,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const inferredKind = inferStudioResponseKind(markdown);
+		const inferredKind = inferStudioResponseKind(markdown, latestItem?.prompt ?? latestSessionUserPrompt);
 		lastStudioResponse = {
 			markdown,
 			thinking: responseThinking,

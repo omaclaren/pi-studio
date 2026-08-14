@@ -502,7 +502,7 @@ test("Studio serves navigation helpers before the client and wires reconstructio
   const clientSource = readFileSync(resolve(projectRoot, "client/studio-client.js"), "utf-8");
 
   assert.match(indexSource, /STUDIO_NAVIGATION_HELPERS_URL/);
-  assert.match(indexSource, /<script src="\$\{navigationHelpersScriptHref\}"><\/script>\s*<script src="\$\{clientScriptHref\}"><\/script>/);
+  assert.match(indexSource, /<script src="\$\{navigationHelpersScriptHref\}"><\/script>[\s\S]*<script src="\$\{clientScriptHref\}"><\/script>/);
   assert.match(indexSource, /requestUrl\.pathname === "\/studio-navigation-helpers\.js"/);
   assert.match(clientSource, /studioTabStateId = navigationHelpers\.ensureStudioTabStateId\(window\)/);
   assert.match(clientSource, /navigationHelpers\.readStudioWorkspaceState\(window, studioTabStateId\)/);

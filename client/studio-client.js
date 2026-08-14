@@ -81,6 +81,8 @@
       const pullLatestBtn = document.getElementById("pullLatestBtn");
       const insertHeaderBtn = document.getElementById("insertHeaderBtn");
       const critiqueBtn = document.getElementById("critiqueBtn");
+      const showMeBtn = document.getElementById("showMeBtn");
+      const showMeResponseBtn = document.getElementById("showMeResponseBtn");
       const quizBtn = document.getElementById("quizBtn");
       const lensSelect = document.getElementById("lensSelect");
       const fileInput = document.getElementById("fileInput");
@@ -219,6 +221,10 @@
         || typeof navigationHelpers.clearStudioWorkspaceState !== "function"
       ) {
         throw new Error("Studio navigation helpers failed to load.");
+      }
+      const showMeHelpers = globalThis.PiStudioShowMeHelpers;
+      if (!showMeHelpers || typeof showMeHelpers.chooseStudioShowMeFocus !== "function") {
+        throw new Error("Studio Show me helpers failed to load.");
       }
       const studioTabStateId = navigationHelpers.ensureStudioTabStateId(window);
       const initialQueryParams = new URLSearchParams(window.location.search || "");
@@ -2540,6 +2546,7 @@
         buttonEl.setAttribute("aria-expanded", "false");
         buttonEl.addEventListener("click", (event) => {
           event.stopPropagation();
+          if (name === "review") syncShowMeButton();
           if (name === "review" && getAbortablePendingKind() === "critique") {
             requestCancelForPendingRequest("critique");
             return;
@@ -2561,7 +2568,7 @@
         if (!isEditorOnlyMode && critiqueBtn && lensSelect) {
           const reviewButton = makeStudioUiRefreshElement("button", "studio-refresh-tool-tab studio-refresh-review-btn", "Review");
           reviewMenu = makeStudioUiRefreshMenu(reviewButton, "review", "studio-refresh-review-anchor");
-          appendStudioUiRefreshMenuSection(reviewMenu.menu, "Action", [critiqueBtn, quizBtn]);
+          appendStudioUiRefreshMenuSection(reviewMenu.menu, "Action", [critiqueBtn, showMeBtn, showMeResponseBtn, quizBtn]);
           appendStudioUiRefreshMenuSection(reviewMenu.menu, "Setting", [lensSelect]);
         }
 
@@ -2887,7 +2894,7 @@
         if (isEditorOnlyMode) {
           return "Editor-only mode: edit, browse files, annotate, preview, save, suggest, refresh file-backed text, or send to a REPL.";
         }
-        return "Edit, load, or annotate text, then run, save, send to pi editor, or critique.";
+        return "Edit, load, or annotate text, then run, save, review, or ask Studio to show the current structure.";
       }
 
       function normalizeTerminalPhase(phase) {
@@ -2955,6 +2962,7 @@
       function getStudioActionLabel(kind) {
         if (kind === "annotation") return "sending annotated reply";
         if (kind === "critique") return "running critique";
+        if (kind === "show-me") return "building a compact explanation";
         if (kind === "direct") return "running editor text";
         if (kind === "compact") return "compacting context";
         if (kind === "send_to_editor") return "sending to pi editor";
@@ -3140,7 +3148,7 @@
       }
 
       function isTitleAttentionRequestKind(kind) {
-        return kind === "annotation" || kind === "critique" || kind === "direct";
+        return kind === "annotation" || kind === "critique" || kind === "show-me" || kind === "direct";
       }
 
       function armTitleAttentionForRequest(requestId, kind) {
@@ -3174,6 +3182,7 @@
 
       function getTitleAttentionMessage(kind) {
         if (kind === "critique") return "● Critique ready";
+        if (kind === "show-me") return "● Visual explanation ready";
         if (kind === "direct") return "● Response ready";
         return "● Reply ready";
       }
@@ -3211,6 +3220,7 @@
       function getTitleActionMessage(kind) {
         if (kind === "annotation") return "Replying…";
         if (kind === "critique") return "Critiquing…";
+        if (kind === "show-me") return "Showing…";
         if (kind === "direct") return "Running…";
         if (kind === "compact") return "Compacting…";
         if (kind === "send_to_editor") return "Sending to editor…";
@@ -3251,6 +3261,7 @@
 
         if (terminalActivityPhase === "responding") {
           if (activeKind === "critique") return "Critiquing…";
+          if (activeKind === "show-me") return "Showing…";
           if (activeKind === "annotation") return "Replying…";
           if (activeKind === "direct") return "Thinking…";
           return "Working…";
@@ -4431,7 +4442,7 @@
 
         if (plainEscape) {
           const activeKind = getAbortablePendingKind();
-          if (activeKind === "direct" || activeKind === "critique") {
+          if (activeKind === "direct" || activeKind === "critique" || activeKind === "show-me") {
             event.preventDefault();
             requestCancelForPendingRequest(activeKind);
             return;
@@ -4509,7 +4520,10 @@
       }
 
       function normalizeHistoryKind(kind) {
-        return kind === "critique" ? "critique" : "annotation";
+        if (kind === "critique") return "critique";
+        if (kind === "show-me") return "show-me";
+        if (kind === "direct") return "direct";
+        return "annotation";
       }
 
       function normalizeTraceSummary(summary) {
@@ -4577,6 +4591,61 @@
         if (!Array.isArray(responseHistory) || responseHistory.length === 0) return null;
         if (responseHistoryIndex < 0 || responseHistoryIndex >= responseHistory.length) return null;
         return responseHistory[responseHistoryIndex] || null;
+      }
+
+      function getStudioShowMeFocus(target) {
+        const selection = getEditorSelectionRange();
+        const selectedResponse = getSelectedHistoryItem();
+        const responseText = selectedResponse && typeof selectedResponse.markdown === "string"
+          ? selectedResponse.markdown
+          : latestResponseMarkdown;
+        const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
+        const selected = total > 0 && responseHistoryIndex >= 0 && responseHistoryIndex < total
+          ? responseHistoryIndex + 1
+          : 0;
+        return showMeHelpers.chooseStudioShowMeFocus({
+          target: target === "response" ? "response" : "editor",
+          selectionText: selection.selected,
+          responseText,
+          responseVisible: (rightView === "markdown" || rightView === "preview") && paneFocusTarget !== "left",
+          editorText: sourceTextEl.value,
+          responseIndex: selected,
+          responseTotal: total,
+        });
+      }
+
+      function syncShowMeButton() {
+        if (!showMeBtn) return;
+        const showMeIsStop = getAbortablePendingKind() === "show-me";
+        const unavailableForRunChain = studioRunChainActive && !showMeIsStop;
+        const editorFocus = getStudioShowMeFocus("editor");
+        const responseFocus = getStudioShowMeFocus("response");
+        const showEditorAction = showMeIsStop || editorFocus.sourceKind !== "context" || !responseFocus;
+        showMeBtn.hidden = !showEditorAction;
+        const editorMenuItem = showMeBtn.closest(".studio-refresh-menu-item");
+        if (editorMenuItem) editorMenuItem.hidden = !showEditorAction;
+        showMeBtn.textContent = showMeIsStop ? "Stop showing" : editorFocus.actionLabel;
+        showMeBtn.classList.toggle("request-stop-active", showMeIsStop);
+        showMeBtn.disabled = showMeIsStop
+          ? wsState === "Disconnected"
+          : isEditorOnlyMode || wsState === "Disconnected" || uiBusy || unavailableForRunChain;
+        showMeBtn.title = showMeIsStop
+          ? "Stop the running Show me request. Shortcut: Esc."
+          : (isEditorOnlyMode
+            ? "Show me is unavailable in editor-only mode."
+            : (unavailableForRunChain
+              ? "Show me is unavailable while Run editor text is active."
+              : "Explain the " + editorFocus.sourceLabel + " using the smallest useful visual or structural representation."));
+        if (showMeResponseBtn) {
+          showMeResponseBtn.hidden = !responseFocus;
+          const responseMenuItem = showMeResponseBtn.closest(".studio-refresh-menu-item");
+          if (responseMenuItem) responseMenuItem.hidden = !responseFocus;
+          showMeResponseBtn.disabled = !responseFocus || showMeIsStop || isEditorOnlyMode || wsState === "Disconnected" || uiBusy || unavailableForRunChain;
+          showMeResponseBtn.textContent = "Explain displayed response";
+          showMeResponseBtn.title = responseFocus
+            ? "Explain the " + responseFocus.sourceLabel + " using the smallest useful visual or structural representation."
+            : "Available when a response is displayed in the right pane.";
+        }
       }
 
       function syncTraceForSelectedHistoryItem() {
@@ -4666,6 +4735,7 @@
               : "Load the prompt that generated the selected response into the editor.")
             : "Prompt unavailable for the selected response.";
         }
+        syncShowMeButton();
       }
 
       function applySelectedHistoryItem(options) {
@@ -4700,7 +4770,9 @@
         if (applied && !(options && options.silent)) {
           const item = getSelectedHistoryItem();
           if (item) {
-            const responseLabel = item.kind === "critique" ? "critique" : "response";
+            const responseLabel = item.kind === "critique"
+              ? "critique"
+              : (item.kind === "show-me" ? "visual explanation" : "response");
             setStatus("Viewing " + responseLabel + " in current branch history " + (nextIndex + 1) + "/" + total + ".");
           }
         }
@@ -4842,7 +4914,9 @@
         }
 
         const time = formatReferenceTime(latestResponseTimestamp);
-        const responseLabel = latestResponseKind === "critique" ? "assistant critique" : "assistant response";
+        const responseLabel = latestResponseKind === "critique"
+          ? "assistant critique"
+          : (latestResponseKind === "show-me" ? "visual explanation" : "assistant response");
         const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
         const selected = total > 0 && responseHistoryIndex >= 0 && responseHistoryIndex < total
           ? responseHistoryIndex + 1
@@ -11087,6 +11161,7 @@
 
         updateSyncBadge(normalizedEditor);
         syncStudioQuartoDirtyUi();
+        syncShowMeButton();
       }
 
       function refreshResponseUi() {
@@ -19274,7 +19349,7 @@
 
       function getAbortablePendingKind() {
         if (!pendingRequestId) return null;
-        return pendingKind === "direct" || pendingKind === "critique" ? pendingKind : null;
+        return pendingKind === "direct" || pendingKind === "critique" || pendingKind === "show-me" ? pendingKind : null;
       }
 
       function requestCancelForPendingRequest(expectedKind) {
@@ -19417,6 +19492,7 @@
               ? "Resume the current Studio quiz."
               : "Open an active quiz for the current editor selection or document.");
         }
+        syncShowMeButton();
         syncStudioUiRefreshReviewTrigger();
       }
 
@@ -19499,7 +19575,7 @@
             ? timestamp
             : Date.now();
         const responseThinking = typeof thinking === "string" ? thinking : "";
-        const responseKind = kind === "critique" ? "critique" : "annotation";
+        const responseKind = normalizeHistoryKind(kind);
         const resetScroll = options && Object.prototype.hasOwnProperty.call(options, "resetScroll")
           ? Boolean(options.resetScroll)
           : (
@@ -19517,7 +19593,7 @@
         latestResponseThinking = responseThinking;
         latestResponseKind = responseKind;
         latestResponseTimestamp = responseTimestamp;
-        latestResponseIsStructuredCritique = isStructuredCritique(markdown);
+        latestResponseIsStructuredCritique = responseKind === "critique" && isStructuredCritique(markdown);
         latestResponseHasContent = Boolean(markdown && markdown.trim());
         latestResponseNormalized = normalizeForCompare(markdown);
         latestResponseThinkingNormalized = normalizeForCompare(latestResponseThinking);
@@ -19535,7 +19611,7 @@
 
       function applyLatestPayload(payload, options) {
         if (!payload || typeof payload.markdown !== "string") return false;
-        const responseKind = payload.kind === "critique" ? "critique" : "annotation";
+        const responseKind = normalizeHistoryKind(payload.kind);
         handleIncomingResponse(payload.markdown, responseKind, payload.timestamp, payload.thinking, options);
         return true;
       }
@@ -19746,8 +19822,8 @@
           if (!appliedHistory && message.lastResponse && typeof message.lastResponse.markdown === "string") {
             const lastMarkdown = message.lastResponse.markdown;
             const lastResponseKind =
-              message.lastResponse.kind === "critique"
-                ? "critique"
+              typeof message.lastResponse.kind === "string"
+                ? normalizeHistoryKind(message.lastResponse.kind)
                 : (isStructuredCritique(lastMarkdown) ? "critique" : "annotation");
             handleIncomingResponse(lastMarkdown, lastResponseKind, message.lastResponse.timestamp, message.lastResponse.thinking);
           }
@@ -19991,7 +20067,7 @@
           const responseKind =
             typeof message.kind === "string"
               ? message.kind
-              : (pendingKind === "critique" ? "critique" : "annotation");
+              : normalizeHistoryKind(pendingKind);
 
           stickyStudioKind = responseKind;
           pendingRequestId = null;
@@ -20016,6 +20092,8 @@
 
           if (responseKind === "critique") {
             setStatus("Critique ready.", "success");
+          } else if (responseKind === "show-me") {
+            setStatus("Visual explanation ready.", "success");
           } else if (responseKind === "direct") {
             setStatus("Model response ready.", "success");
           } else {
@@ -20042,7 +20120,7 @@
 
           if (typeof message.markdown === "string") {
             const payload = {
-              kind: message.kind === "critique" ? "critique" : "annotation",
+              kind: normalizeHistoryKind(message.kind),
               markdown: message.markdown,
               thinking: typeof message.thinking === "string" ? message.thinking : null,
               timestamp: message.timestamp,
@@ -20981,6 +21059,7 @@
           }
         }
         updateEditorSelectionCommentUi();
+        syncShowMeButton();
       });
 
       sourceTextEl.addEventListener("keyup", () => {
@@ -21058,6 +21137,49 @@
           setBusy(false);
         }
       });
+
+      function submitStudioShowMe(target) {
+        const focus = getStudioShowMeFocus(target);
+        if (!focus) {
+          setStatus("That explanation source is no longer displayed.", "warning");
+          syncShowMeButton();
+          return;
+        }
+        const requestId = beginUiAction("show-me");
+        if (!requestId) return;
+        closeStudioUiRefreshMenus();
+
+        const sent = sendMessage({
+          type: "show_me_request",
+          requestId,
+          sourceKind: focus.sourceKind,
+          sourceLabel: focus.sourceLabel,
+          sourceText: focus.sourceText,
+        });
+
+        if (!sent) {
+          pendingRequestId = null;
+          pendingKind = null;
+          setBusy(false);
+        }
+      }
+
+      if (showMeBtn) {
+        showMeBtn.addEventListener("click", () => {
+          if (getAbortablePendingKind() === "show-me") {
+            requestCancelForPendingRequest("show-me");
+            return;
+          }
+          submitStudioShowMe("editor");
+        });
+      }
+
+      if (showMeResponseBtn) {
+        showMeResponseBtn.addEventListener("click", () => {
+          if (getAbortablePendingKind() === "show-me") return;
+          submitStudioShowMe("response");
+        });
+      }
 
       if (quizBtn) {
         quizBtn.addEventListener("click", () => {
