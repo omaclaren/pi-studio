@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- Open Studio in Muxy’s built-in browser when launched from a Muxy pane, using Muxy’s pane-local environment and CLI without global shell hooks, while retaining the bounded cmux and system-browser fallbacks.
+
 ## [0.9.44] — 2026-08-14
 
 ### Added

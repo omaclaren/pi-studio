@@ -1,6 +1,40 @@
 import { spawn } from "node:child_process";
 
-export const STUDIO_CMUX_BROWSER_OPEN_TIMEOUT_MS = 5_000;
+export const STUDIO_TERMINAL_BROWSER_OPEN_TIMEOUT_MS = 5_000;
+export const STUDIO_MUXY_CLI_TIMEOUT_SECONDS = 4;
+// Retain the original exported name for callers that imported the cmux-only helper.
+export const STUDIO_CMUX_BROWSER_OPEN_TIMEOUT_MS = STUDIO_TERMINAL_BROWSER_OPEN_TIMEOUT_MS;
+
+/** @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env */
+function isStudioNestedZedTerminal(env) {
+	const zedTerm = String(env.ZED_TERM ?? "").trim().toLowerCase();
+	return zedTerm === "1" || zedTerm === "true";
+}
+
+/**
+ * Detect whether the current process is running inside Muxy itself rather than
+ * a nested application terminal that inherited Muxy's environment.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+export function isStudioMuxySession(env = process.env) {
+	const paneId = String(env.MUXY_PANE_ID ?? "").trim();
+	const socketPath = String(env.MUXY_SOCKET_PATH ?? "").trim();
+	return Boolean(paneId && socketPath && !isStudioNestedZedTerminal(env));
+}
+
+/**
+ * Build the Muxy CLI invocation for opening Studio in its built-in browser.
+ *
+ * @param {string} target
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {{ command: string, args: string[] } | undefined}
+ */
+export function getStudioMuxyBrowserOpenCommand(target, env = process.env) {
+	if (!isStudioMuxySession(env)) return undefined;
+	return { command: "muxy", args: ["browser", "open", target] };
+}
 
 /**
  * Detect whether the current process is running inside cmux.
@@ -9,6 +43,7 @@ export const STUDIO_CMUX_BROWSER_OPEN_TIMEOUT_MS = 5_000;
  * @returns {boolean}
  */
 export function isStudioCmuxSession(env = process.env) {
+	if (isStudioNestedZedTerminal(env)) return false;
 	const workspaceId = String(env.CMUX_WORKSPACE_ID ?? "").trim();
 	const termProgram = String(env.TERM_PROGRAM ?? "").trim().toLowerCase();
 	const term = String(env.TERM ?? "").trim().toLowerCase();
@@ -73,24 +108,23 @@ function spawnDetachedBrowser(openCommand, spawnProcess) {
 }
 
 /**
- * Try to open Studio in a focused cmux browser surface.
+ * Try a terminal application's bounded browser-open command.
  *
- * @param {string} target
+ * @param {{ command: string, args: string[] } | undefined} openCommand
  * @param {{
- *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
  *   spawnProcess?: typeof spawn,
  *   timeoutMs?: number,
+ *   spawnEnv?: NodeJS.ProcessEnv | Record<string, string | undefined>,
  * }} [options]
  * @returns {Promise<boolean>}
  */
-export async function tryOpenStudioUrlInCmuxBrowser(target, options = {}) {
-	const openCommand = getStudioCmuxBrowserOpenCommand(target, options.env ?? process.env);
+async function tryOpenStudioUrlWithTerminalBrowser(openCommand, options = {}) {
 	if (!openCommand) return false;
 
 	const spawnProcess = options.spawnProcess ?? spawn;
 	const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs >= 0
 		? options.timeoutMs
-		: STUDIO_CMUX_BROWSER_OPEN_TIMEOUT_MS;
+		: STUDIO_TERMINAL_BROWSER_OPEN_TIMEOUT_MS;
 
 	return await new Promise((resolve) => {
 		let settled = false;
@@ -108,7 +142,10 @@ export async function tryOpenStudioUrlInCmuxBrowser(target, options = {}) {
 		timeout.unref?.();
 
 		try {
-			child = spawnProcess(openCommand.command, openCommand.args, { stdio: "ignore" });
+			const spawnOptions = options.spawnEnv
+				? { stdio: "ignore", env: options.spawnEnv }
+				: { stdio: "ignore" };
+			child = spawnProcess(openCommand.command, openCommand.args, spawnOptions);
 		} catch {
 			finish(false);
 			return;
@@ -119,7 +156,47 @@ export async function tryOpenStudioUrlInCmuxBrowser(target, options = {}) {
 }
 
 /**
- * Open Studio in cmux when available, falling back to the system browser.
+ * Try to open Studio in Muxy's built-in browser.
+ *
+ * @param {string} target
+ * @param {{
+ *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+ *   spawnProcess?: typeof spawn,
+ *   timeoutMs?: number,
+ * }} [options]
+ * @returns {Promise<boolean>}
+ */
+export async function tryOpenStudioUrlInMuxyBrowser(target, options = {}) {
+	const env = options.env ?? process.env;
+	const openCommand = getStudioMuxyBrowserOpenCommand(target, env);
+	return await tryOpenStudioUrlWithTerminalBrowser(openCommand, {
+		...options,
+		spawnEnv: {
+			...env,
+			MUXY_CLI_TIMEOUT: String(STUDIO_MUXY_CLI_TIMEOUT_SECONDS),
+		},
+	});
+}
+
+/**
+ * Try to open Studio in a focused cmux browser surface.
+ *
+ * @param {string} target
+ * @param {{
+ *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+ *   spawnProcess?: typeof spawn,
+ *   timeoutMs?: number,
+ * }} [options]
+ * @returns {Promise<boolean>}
+ */
+export async function tryOpenStudioUrlInCmuxBrowser(target, options = {}) {
+	const openCommand = getStudioCmuxBrowserOpenCommand(target, options.env ?? process.env);
+	return await tryOpenStudioUrlWithTerminalBrowser(openCommand, options);
+}
+
+/**
+ * Open Studio in the caller's supported terminal browser when available,
+ * falling back once to the system browser.
  *
  * @param {string} target
  * @param {{
@@ -128,10 +205,15 @@ export async function tryOpenStudioUrlInCmuxBrowser(target, options = {}) {
  *   spawnProcess?: typeof spawn,
  *   timeoutMs?: number,
  * }} [options]
- * @returns {Promise<"cmux" | "system">}
+ * @returns {Promise<"muxy" | "cmux" | "system">}
  */
 export async function openStudioUrlInBrowser(target, options = {}) {
-	if (await tryOpenStudioUrlInCmuxBrowser(target, options)) return "cmux";
+	const env = options.env ?? process.env;
+	if (isStudioMuxySession(env)) {
+		if (await tryOpenStudioUrlInMuxyBrowser(target, options)) return "muxy";
+	} else if (isStudioCmuxSession(env)) {
+		if (await tryOpenStudioUrlInCmuxBrowser(target, options)) return "cmux";
+	}
 
 	const openCommand = getStudioDefaultBrowserOpenCommand(target, options.platform ?? process.platform);
 	await spawnDetachedBrowser(openCommand, options.spawnProcess ?? spawn);
