@@ -108,6 +108,7 @@ const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
 const STUDIO_MERMAID_HELPERS_URL = new URL("./client/studio-mermaid-helpers.js", import.meta.url);
 const STUDIO_NAVIGATION_HELPERS_URL = new URL("./client/studio-navigation-helpers.js", import.meta.url);
+const STUDIO_PREVIEW_RESOURCE_HELPERS_URL = new URL("./client/studio-preview-resource-helpers.js", import.meta.url);
 const STUDIO_SHOW_ME_HELPERS_URL = new URL("./client/studio-show-me-helpers.js", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
 
@@ -10563,6 +10564,7 @@ function buildStudioHtml(
 	const annotationHelpersScriptHref = `/studio-annotation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const mermaidHelpersScriptHref = `/studio-mermaid-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const navigationHelpersScriptHref = `/studio-navigation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
+	const previewResourceHelpersScriptHref = `/studio-preview-resource-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const showMeHelpersScriptHref = `/studio-show-me-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const faviconHref = buildStudioFaviconDataUri(style);
@@ -10986,6 +10988,7 @@ ${cssVarsBlock}
   <script src="${annotationHelpersScriptHref}"></script>
   <script src="${mermaidHelpersScriptHref}"></script>
   <script src="${navigationHelpersScriptHref}"></script>
+  <script src="${previewResourceHelpersScriptHref}"></script>
   <script src="${showMeHelpersScriptHref}"></script>
   <script src="${clientScriptHref}"></script>
 </body>
@@ -14601,6 +14604,7 @@ export default function (pi: ExtensionAPI) {
 			requestUrl.pathname === "/studio-annotation-helpers.js"
 			|| requestUrl.pathname === "/studio-mermaid-helpers.js"
 			|| requestUrl.pathname === "/studio-navigation-helpers.js"
+			|| requestUrl.pathname === "/studio-preview-resource-helpers.js"
 			|| requestUrl.pathname === "/studio-show-me-helpers.js"
 			|| requestUrl.pathname === "/studio-client.js"
 		) {
@@ -14623,18 +14627,22 @@ export default function (pi: ExtensionAPI) {
 					? STUDIO_MERMAID_HELPERS_URL
 					: requestUrl.pathname === "/studio-navigation-helpers.js"
 						? STUDIO_NAVIGATION_HELPERS_URL
-						: requestUrl.pathname === "/studio-show-me-helpers.js"
-							? STUDIO_SHOW_ME_HELPERS_URL
-							: STUDIO_CLIENT_URL;
+						: requestUrl.pathname === "/studio-preview-resource-helpers.js"
+							? STUDIO_PREVIEW_RESOURCE_HELPERS_URL
+							: requestUrl.pathname === "/studio-show-me-helpers.js"
+								? STUDIO_SHOW_ME_HELPERS_URL
+								: STUDIO_CLIENT_URL;
 			const targetLabel = requestUrl.pathname === "/studio-annotation-helpers.js"
 				? "studio annotation helper script"
 				: requestUrl.pathname === "/studio-mermaid-helpers.js"
 					? "studio Mermaid helper script"
 					: requestUrl.pathname === "/studio-navigation-helpers.js"
 						? "studio navigation helper script"
-						: requestUrl.pathname === "/studio-show-me-helpers.js"
-							? "studio Show me helper script"
-							: "studio client script";
+						: requestUrl.pathname === "/studio-preview-resource-helpers.js"
+							? "studio preview resource helper script"
+							: requestUrl.pathname === "/studio-show-me-helpers.js"
+								? "studio Show me helper script"
+								: "studio client script";
 
 			try {
 				const clientScript = readFileSync(targetUrl, "utf-8");

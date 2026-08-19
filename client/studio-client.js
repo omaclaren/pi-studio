@@ -222,6 +222,14 @@
       ) {
         throw new Error("Studio navigation helpers failed to load.");
       }
+      const previewResourceHelpers = globalThis.PiStudioPreviewResourceHelpers;
+      if (
+        !previewResourceHelpers
+        || typeof previewResourceHelpers.areStudioPreviewResourceContextsEqual !== "function"
+        || typeof previewResourceHelpers.hydrateStudioPreviewLocalImages !== "function"
+      ) {
+        throw new Error("Studio preview resource helpers failed to load.");
+      }
       const showMeHelpers = globalThis.PiStudioShowMeHelpers;
       if (!showMeHelpers || typeof showMeHelpers.chooseStudioShowMeFocus !== "function") {
         throw new Error("Studio Show me helpers failed to load.");
@@ -403,6 +411,7 @@
       const HTML_EXPORT_FETCH_TIMEOUT_MS = 180_000;
       const HTML_ARTIFACT_MATH_RENDER_FETCH_TIMEOUT_MS = 30_000;
       const HTML_ARTIFACT_RESOURCE_FETCH_TIMEOUT_MS = 30_000;
+      const RENDERED_PREVIEW_IMAGE_FETCH_TIMEOUT_MS = 8_000;
       const EDITOR_TAB_TEXT = "  ";
       const QUIZ_DEFAULT_COUNT = 5;
       const COMPLETION_CONTEXT_STORAGE_KEY = "piStudio.completionContextMode";
@@ -6035,17 +6044,31 @@
         }).filter(Boolean);
       }
 
-      function buildHtmlArtifactResourceFetchUrl(record, resourceUrl) {
+      function buildLocalPreviewResourceFetchUrl(context, resourceUrl) {
         const token = getToken();
         if (!token) return "";
         const params = new URLSearchParams({ token, path: String(resourceUrl || "") });
-        if (record && record.sourcePath) {
-          params.set("sourcePath", record.sourcePath);
+        if (context && context.sourcePath) {
+          params.set("sourcePath", context.sourcePath);
         }
-        if (record && record.resourceDir) {
-          params.set("resourceDir", record.resourceDir);
+        if (context && context.resourceDir) {
+          params.set("resourceDir", context.resourceDir);
         }
         return "/html-preview-resource?" + params.toString();
+      }
+
+      async function fetchLocalPreviewResourceDataUrl(context, resourceUrl, timeoutMs, timeoutLabel) {
+        const fetchUrl = buildLocalPreviewResourceFetchUrl(context, resourceUrl);
+        if (!fetchUrl) throw new Error("Missing Studio token in URL.");
+        const response = await fetchWithTimeout(fetchUrl, { method: "GET" }, timeoutMs, timeoutLabel);
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload || payload.ok !== true || typeof payload.dataUrl !== "string") {
+          const message = payload && typeof payload.error === "string"
+            ? payload.error
+            : (timeoutLabel || "Local preview resource load") + " failed with HTTP " + response.status + ".";
+          throw new Error(message);
+        }
+        return payload.dataUrl;
       }
 
       function postHtmlArtifactResourceResults(record, results) {
@@ -6064,15 +6087,13 @@
       async function fetchHtmlArtifactResource(record, item) {
         const resourceId = item && item.resourceId ? item.resourceId : "";
         try {
-          const fetchUrl = buildHtmlArtifactResourceFetchUrl(record, item.url);
-          if (!fetchUrl) throw new Error("Missing Studio token in URL.");
-          const response = await fetchWithTimeout(fetchUrl, { method: "GET" }, HTML_ARTIFACT_RESOURCE_FETCH_TIMEOUT_MS, "HTML preview resource load");
-          const payload = await response.json().catch(() => null);
-          if (!response.ok || !payload || payload.ok !== true || typeof payload.dataUrl !== "string") {
-            const message = payload && typeof payload.error === "string" ? payload.error : "HTML preview resource load failed with HTTP " + response.status + ".";
-            throw new Error(message);
-          }
-          return { resourceId, ok: true, dataUrl: payload.dataUrl };
+          const dataUrl = await fetchLocalPreviewResourceDataUrl(
+            record,
+            item.url,
+            HTML_ARTIFACT_RESOURCE_FETCH_TIMEOUT_MS,
+            "HTML preview resource load",
+          );
+          return { resourceId, ok: true, dataUrl };
         } catch (error) {
           return { resourceId, ok: false, error: error && error.message ? error.message : String(error || "HTML preview resource load failed.") };
         }
@@ -8513,15 +8534,23 @@
         const timeoutId = controller ? window.setTimeout(() => controller.abort(), 8000) : null;
 
         const previewOptions = options && typeof options === "object" ? options : {};
+        const requestedResourceContext = previewOptions.resourceContext && typeof previewOptions.resourceContext === "object"
+          ? previewOptions.resourceContext
+          : null;
 
         let response;
         try {
           const effectivePath = getEffectiveSavePath();
-          const sourcePath = effectivePath || sourceState.path || "";
+          const sourcePath = requestedResourceContext
+            ? String(requestedResourceContext.sourcePath || "")
+            : (effectivePath || sourceState.path || "");
+          const resourceDir = requestedResourceContext
+            ? String(requestedResourceContext.resourceDir || "")
+            : ((resourceDirInput && !sourcePath) ? getCurrentResourceDirValue() : "");
           const payload = {
             markdown: String(markdown || ""),
             sourcePath: sourcePath,
-            resourceDir: (!sourcePath && resourceDirInput) ? getCurrentResourceDirValue() : "",
+            resourceDir: sourcePath ? "" : resourceDir,
           };
           if (previewOptions.includeEditorLanguage) {
             payload.editorLanguage = String(editorLanguage || "");
@@ -9282,10 +9311,12 @@
           stripMarkdownHtmlComments: !previewingEditorText || editorLanguage !== "latex",
         };
         const pdfPrepared = prepareStudioPdfBlocksForPreview(previewPrepared.markdown);
+        const previewResourceContext = getHtmlPreviewResourceContextOptions();
 
         try {
           const renderedHtml = await renderMarkdownWithPandoc(pdfPrepared.markdown, {
             includeEditorLanguage: pane === "source" || rightView === "editor-preview",
+            resourceContext: previewResourceContext,
           });
 
           if (pane === "source") {
@@ -9297,6 +9328,14 @@
           clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown, previewFallbackOptions);
+          await previewResourceHelpers.hydrateStudioPreviewLocalImages(targetEl, (resourceUrl) => (
+            fetchLocalPreviewResourceDataUrl(
+              previewResourceContext,
+              resourceUrl,
+              RENDERED_PREVIEW_IMAGE_FETCH_TIMEOUT_MS,
+              "Preview image load",
+            )
+          ));
           renderStudioPdfBlocksInElement(targetEl, pdfPrepared.blocks, previewingEditorText);
           applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
           await renderAnnotationMathInElement(targetEl);
@@ -9403,6 +9442,13 @@
         }
         if (rightView === "editor-preview") {
           scheduleResponseEditorPreviewRender(previewDelayMs);
+        }
+      }
+
+      function refreshPreviewsForResourceContextChange() {
+        renderSourcePreview();
+        if (rightView === "preview") {
+          renderActiveResult();
         }
       }
 
@@ -11414,6 +11460,7 @@
       function setSourceState(next, options) {
         const previousDescriptor = getCurrentStudioDocumentDescriptor();
         const previousQuartoPath = getCurrentStudioQuartoSourcePath();
+        const previousPreviewResourceContext = getHtmlPreviewResourceContextOptions();
         const nextPath = next && next.path ? next.path : null;
         sourceState = {
           source: next && next.source ? next.source : "blank",
@@ -11457,6 +11504,10 @@
         const refreshChangedQuartoView = rightView === "editor-quarto-preview" && quartoSourceChanged && isCurrentStudioQuartoDocument();
         if (refreshChangedQuartoView) requestStudioQuartoPreviewCheck(false);
         if (leavingUnavailableQuartoView || refreshChangedQuartoView) refreshResponseUi();
+        const nextPreviewResourceContext = getHtmlPreviewResourceContextOptions();
+        if (!previewResourceHelpers.areStudioPreviewResourceContextsEqual(previousPreviewResourceContext, nextPreviewResourceContext)) {
+          refreshPreviewsForResourceContextChange();
+        }
         scheduleWorkspacePersistence();
       }
 
@@ -21993,7 +22044,7 @@
         }
         updateSaveFileTooltip();
         syncActionButtons();
-        renderSourcePreview();
+        refreshPreviewsForResourceContextChange();
         scheduleWorkspacePersistence();
       }
       if (sourceBadgeEl) {
@@ -22036,7 +22087,7 @@
           showResourceDirState("button");
           updateSaveFileTooltip();
           syncActionButtons();
-          renderSourcePreview();
+          refreshPreviewsForResourceContextChange();
           scheduleWorkspacePersistence();
         });
       }
