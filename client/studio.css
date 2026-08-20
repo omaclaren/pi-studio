@@ -1749,6 +1749,7 @@
 
     .rendered-markdown .studio-pdf-card-header {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
@@ -1777,10 +1778,13 @@
     }
 
     .rendered-markdown .studio-pdf-card-actions {
-      flex: 0 0 auto;
+      flex: 0 1 auto;
       display: inline-flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
       align-items: center;
       gap: 8px;
+      margin-left: auto;
     }
 
     .rendered-markdown .studio-pdf-card-link,
@@ -1907,6 +1911,7 @@
     .studio-pdf-focus-header {
       flex: 0 0 auto;
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
@@ -1934,10 +1939,13 @@
     }
 
     .studio-pdf-focus-actions {
-      flex: 0 0 auto;
+      flex: 0 1 auto;
       display: inline-flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
       align-items: center;
       gap: 8px;
+      margin-left: auto;
     }
 
     .studio-pdf-focus-link,

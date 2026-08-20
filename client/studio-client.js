@@ -268,10 +268,13 @@
       let studioPdfFocusFrameEl = null;
       let studioPdfFocusTitleEl = null;
       let studioPdfFocusOpenLinkEl = null;
+      let studioPdfFocusSystemViewerBtn = null;
+      let studioPdfFocusRevealBtn = null;
       let studioPdfFocusFullscreenBtn = null;
       let studioPdfFocusCloseBtn = null;
       let studioPdfFocusLastFocusedEl = null;
       let studioPdfFocusMovedFrameState = null;
+      let studioPdfFocusResourceQuery = null;
       let studioHtmlFocusOverlayEl = null;
       let studioHtmlFocusShellEl = null;
       let studioHtmlFocusFullscreenBtn = null;
@@ -6723,8 +6726,29 @@
         openLink.className = "studio-pdf-focus-link";
         openLink.target = "_blank";
         openLink.rel = "noopener noreferrer";
-        openLink.textContent = "Open PDF";
+        openLink.textContent = "Browser tab";
+        openLink.title = "Open this PDF in a browser tab.";
         actions.appendChild(openLink);
+
+        const systemViewerBtn = document.createElement("button");
+        systemViewerBtn.type = "button";
+        systemViewerBtn.className = "studio-pdf-focus-btn studio-pdf-focus-system-viewer";
+        systemViewerBtn.textContent = "System viewer";
+        systemViewerBtn.title = "Open the local PDF in the operating system's default PDF viewer.";
+        systemViewerBtn.addEventListener("click", () => {
+          void runStudioPdfLocalAction("system-viewer", studioPdfFocusResourceQuery);
+        });
+        actions.appendChild(systemViewerBtn);
+
+        const revealBtn = document.createElement("button");
+        revealBtn.type = "button";
+        revealBtn.className = "studio-pdf-focus-btn studio-pdf-focus-reveal";
+        revealBtn.textContent = "Show in folder";
+        revealBtn.title = "Reveal the local PDF in Finder or the system file manager.";
+        revealBtn.addEventListener("click", () => {
+          void runStudioPdfLocalAction("reveal", studioPdfFocusResourceQuery);
+        });
+        actions.appendChild(revealBtn);
 
         const refreshBtn = document.createElement("button");
         refreshBtn.type = "button";
@@ -6789,16 +6813,21 @@
         studioPdfFocusFrameEl = frame;
         studioPdfFocusTitleEl = titleEl;
         studioPdfFocusOpenLinkEl = openLink;
+        studioPdfFocusSystemViewerBtn = systemViewerBtn;
+        studioPdfFocusRevealBtn = revealBtn;
         studioPdfFocusFullscreenBtn = fullscreenBtn;
         studioPdfFocusCloseBtn = closeBtn;
         syncStudioPdfFocusFullscreenButton();
+        syncStudioPdfFocusResourceActions();
         return overlay;
       }
 
-      function openStudioPdfFocusViewer(viewerUrl, title, sourceFrame) {
+      function openStudioPdfFocusViewer(viewerUrl, title, sourceFrame, resourceQuery) {
         const src = String(viewerUrl || "").trim();
         if (!src) return;
         ensureStudioPdfFocusViewer();
+        studioPdfFocusResourceQuery = normalizeStudioPdfResourceQuery(resourceQuery);
+        syncStudioPdfFocusResourceActions();
         studioPdfFocusLastFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         if (studioPdfFocusTitleEl) studioPdfFocusTitleEl.textContent = String(title || "PDF preview").trim() || "PDF preview";
         if (studioPdfFocusOpenLinkEl) studioPdfFocusOpenLinkEl.href = src;
@@ -6827,6 +6856,8 @@
         restoreStudioPdfFocusMovedFrame();
         if (studioPdfFocusFrameEl) studioPdfFocusFrameEl.src = "about:blank";
         if (document.body) document.body.classList.remove("studio-pdf-focus-open");
+        studioPdfFocusResourceQuery = null;
+        syncStudioPdfFocusResourceActions();
         syncStudioPdfFocusFullscreenButton();
         const focusTarget = studioPdfFocusLastFocusedEl;
         studioPdfFocusLastFocusedEl = null;
@@ -6836,24 +6867,66 @@
         return true;
       }
 
-      function buildStudioPdfResourceUrl(options, useEditorResourceContext) {
-        const token = getToken();
-        if (!token) return "";
+      function buildStudioPdfResourceQuery(options, useEditorResourceContext) {
         const pdfPath = String(options && options.path ? options.path : "").trim();
-        if (!pdfPath) return "";
+        if (!pdfPath) return null;
         const explicitSourcePath = options && typeof options.sourcePath === "string" ? options.sourcePath.trim() : "";
         const explicitResourceDir = options && typeof options.resourceDir === "string" ? normalizeStudioResourceDirValue(options.resourceDir) : "";
         const effectivePath = getEffectiveSavePath();
         const sourcePath = explicitSourcePath || (useEditorResourceContext ? (effectivePath || sourceState.path || "") : "");
         const resourceDir = explicitResourceDir || getCurrentResourceDirValue();
-        const params = new URLSearchParams({ token, path: pdfPath });
-        if (sourcePath) {
-          params.set("sourcePath", sourcePath);
+        const query = { path: pdfPath };
+        if (sourcePath) query.sourcePath = sourcePath;
+        if (resourceDir) query.resourceDir = resourceDir;
+        return query;
+      }
+
+      function buildStudioPdfResourceUrl(options, useEditorResourceContext) {
+        const token = getToken();
+        const query = buildStudioPdfResourceQuery(options, useEditorResourceContext);
+        if (!token || !query) return "";
+        return "/pdf-resource?" + new URLSearchParams({ token, ...query }).toString();
+      }
+
+      function normalizeStudioPdfResourceQuery(value) {
+        if (!value || typeof value !== "object") return null;
+        const path = typeof value.path === "string" ? value.path.trim() : "";
+        if (!path) return null;
+        const query = { path };
+        if (typeof value.sourcePath === "string" && value.sourcePath.trim()) query.sourcePath = value.sourcePath.trim();
+        if (typeof value.resourceDir === "string" && value.resourceDir.trim()) query.resourceDir = value.resourceDir.trim();
+        return query;
+      }
+
+      async function runStudioPdfLocalAction(action, resourceQuery) {
+        const query = normalizeStudioPdfResourceQuery(resourceQuery);
+        if (!query) {
+          setStatus("Could not resolve this PDF's local path.", "warning");
+          return false;
         }
-        if (resourceDir) {
-          params.set("resourceDir", resourceDir);
+        const openInSystemViewer = action === "system-viewer";
+        const endpoint = openInSystemViewer ? "/open-local-resource" : "/reveal-local-resource";
+        try {
+          const payload = await fetchStudioJson(endpoint, {
+            method: "POST",
+            body: JSON.stringify(query),
+          });
+          setStatus(payload && payload.message
+            ? payload.message
+            : (openInSystemViewer ? "Opened PDF in the system viewer." : "Revealed PDF in the file manager."), "success");
+          return true;
+        } catch (error) {
+          setStatus((error && error.message)
+            ? error.message
+            : (openInSystemViewer ? "Could not open PDF in the system viewer." : "Could not reveal PDF in the file manager."), "warning");
+          return false;
         }
-        return "/pdf-resource?" + params.toString();
+      }
+
+      function syncStudioPdfFocusResourceActions() {
+        const available = Boolean(normalizeStudioPdfResourceQuery(studioPdfFocusResourceQuery));
+        if (studioPdfFocusSystemViewerBtn) studioPdfFocusSystemViewerBtn.disabled = !available;
+        if (studioPdfFocusRevealBtn) studioPdfFocusRevealBtn.disabled = !available;
       }
 
       function buildRefreshedStudioPdfViewerUrl(value) {
@@ -6989,8 +7062,15 @@
           || String(card && card.dataset ? (card.dataset.studioPdfTitle || "") : "").trim()
           || "PDF preview";
         const sourceFrame = card && typeof card.querySelector === "function" ? card.querySelector("iframe.studio-pdf-frame") : null;
+        const resourceQuery = card && card.dataset
+          ? normalizeStudioPdfResourceQuery({
+              path: card.dataset.studioPdfPath || "",
+              sourcePath: card.dataset.studioPdfSourcePath || "",
+              resourceDir: card.dataset.studioPdfResourceDir || "",
+            })
+          : null;
         if (!viewerUrl) return false;
-        openStudioPdfFocusViewer(viewerUrl, title, sourceFrame);
+        openStudioPdfFocusViewer(viewerUrl, title, sourceFrame, resourceQuery);
         return true;
       }
 
@@ -7403,6 +7483,7 @@
         const caption = String(options.caption || "").trim();
         const height = normalizeStudioPdfHeight(options.height);
         const page = normalizeStudioPdfPage(options.page);
+        const resourceQuery = buildStudioPdfResourceQuery(options, useEditorResourceContext);
         const resourceUrl = buildStudioPdfResourceUrl(options, useEditorResourceContext);
         const viewerUrl = resourceUrl && page ? resourceUrl + "#page=" + encodeURIComponent(String(page)) : resourceUrl;
 
@@ -7411,6 +7492,9 @@
         if (card.dataset) {
           card.dataset.studioPdfViewerUrl = viewerUrl || "";
           card.dataset.studioPdfTitle = title;
+          card.dataset.studioPdfPath = resourceQuery && resourceQuery.path ? resourceQuery.path : "";
+          card.dataset.studioPdfSourcePath = resourceQuery && resourceQuery.sourcePath ? resourceQuery.sourcePath : "";
+          card.dataset.studioPdfResourceDir = resourceQuery && resourceQuery.resourceDir ? resourceQuery.resourceDir : "";
         }
 
         const header = document.createElement("figcaption");
@@ -7447,8 +7531,33 @@
           openLink.href = viewerUrl;
           openLink.target = "_blank";
           openLink.rel = "noopener noreferrer";
-          openLink.textContent = "Open PDF";
+          openLink.textContent = "Browser tab";
+          openLink.title = "Open this PDF in a browser tab.";
           actions.appendChild(openLink);
+
+          const systemViewerBtn = document.createElement("button");
+          systemViewerBtn.type = "button";
+          systemViewerBtn.className = "studio-pdf-card-action studio-pdf-card-system-viewer";
+          systemViewerBtn.textContent = "System viewer";
+          systemViewerBtn.title = "Open the local PDF in the operating system's default PDF viewer.";
+          systemViewerBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void runStudioPdfLocalAction("system-viewer", resourceQuery);
+          });
+          actions.appendChild(systemViewerBtn);
+
+          const revealBtn = document.createElement("button");
+          revealBtn.type = "button";
+          revealBtn.className = "studio-pdf-card-action studio-pdf-card-reveal";
+          revealBtn.textContent = "Show in folder";
+          revealBtn.title = "Reveal the local PDF in Finder or the system file manager.";
+          revealBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void runStudioPdfLocalAction("reveal", resourceQuery);
+          });
+          actions.appendChild(revealBtn);
 
           const refreshBtn = document.createElement("button");
           refreshBtn.type = "button";
@@ -8777,7 +8886,13 @@
               } else {
                 failPendingStudioTab(studioLaunch, "Studio did not return a preview-tab URL for this PDF export.");
                 const viewerUrl = getStudioPdfViewerUrlForExportPayload(payload);
-                if (viewerUrl) openStudioPdfFocusViewer(viewerUrl, downloadName);
+                const resourceQuery = exportPath
+                  ? buildStudioPdfResourceQuery({
+                      path: exportPath,
+                      resourceDir: exportPath.split(/[\\/]/).slice(0, -1).join("/"),
+                    }, false)
+                  : null;
+                if (viewerUrl) openStudioPdfFocusViewer(viewerUrl, downloadName, null, resourceQuery);
               }
               if (writeError) {
                 setStatus(openedStudio
@@ -12863,7 +12978,7 @@
         if (!raw || raw.charAt(0) === "#") return false;
         if (/^\/\//.test(raw)) return false;
         if (/^(?:https?|mailto|tel|data|blob|javascript|about):/i.test(raw)) return false;
-        if (/^\/(?:pdf-resource|html-preview-resource|export-pdf|export-html|render-preview|render-math|local-preview-link|reveal-local-resource)(?:[?#/]|$)/i.test(raw)) return false;
+        if (/^\/(?:pdf-resource|html-preview-resource|export-pdf|export-html|render-preview|render-math|local-preview-link|reveal-local-resource|open-local-resource)(?:[?#/]|$)/i.test(raw)) return false;
         return true;
       }
 
@@ -12949,6 +13064,7 @@
         if (kind === "pdf") {
           appendPreviewLinkMenuButton(menu, "Open PDF preview", "open-pdf");
           appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
+          appendPreviewLinkMenuButton(menu, "Open in system viewer", "open-system");
         } else if (kind === "text") {
           appendPreviewLinkMenuButton(menu, "Open file tab", "open-new");
           appendPreviewLinkMenuButton(menu, "Open here", "open-here");
@@ -12989,7 +13105,14 @@
           setStatus("Could not resolve this PDF link. Open the source file or set a working directory first.", "warning");
           return false;
         }
-        openStudioPdfFocusViewer(viewerUrl, title || href);
+        const cleanPath = stripPreviewLocalLinkUrlSuffix(href);
+        const context = contextOverride && typeof contextOverride === "object" ? contextOverride : {};
+        const resourceQuery = buildStudioPdfResourceQuery({
+          path: cleanPath,
+          sourcePath: context.sourcePath || "",
+          resourceDir: context.resourceDir || "",
+        }, true);
+        openStudioPdfFocusViewer(viewerUrl, title || href, null, resourceQuery);
         return true;
       }
 
@@ -13134,6 +13257,10 @@
         try {
           if (action === "open-pdf") {
             openPreviewPdfLink(href, context.title || href, context);
+            return;
+          }
+          if (action === "open-system") {
+            await runStudioPdfLocalAction("system-viewer", getPreviewLinkResourceQuery(href, context));
             return;
           }
           if (action === "open-new") {

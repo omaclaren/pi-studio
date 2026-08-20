@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add explicit browser-tab, system-viewer, and file-manager actions to local PDF preview cards and the focused PDF viewer.
+
 ### Fixed
 - Keep Pandoc-based LaTeX previews and right-preview PDF/HTML exports usable when a local legacy style overrides LaTeX document startup, omitting only the incompatible package from the conversion while preserving includes and warning that package-specific layout is absent.
 

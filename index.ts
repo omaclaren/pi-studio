@@ -7627,6 +7627,50 @@ async function handleRevealLocalPreviewResourceRequest(req: IncomingMessage, res
 	}
 }
 
+async function handleOpenLocalPreviewResourceRequest(req: IncomingMessage, res: ServerResponse, studioCwd: string): Promise<void> {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "POST") {
+		res.setHeader("Allow", "POST");
+		respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+		return;
+	}
+	if (isSshSession()) {
+		respondJson(res, 409, { ok: false, error: "Cannot open a system PDF viewer from an SSH/headless Studio session. Copy the path instead." });
+		return;
+	}
+
+	const rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+	let payload: Record<string, unknown> = {};
+	try {
+		payload = rawBody ? JSON.parse(rawBody) : {};
+	} catch {
+		respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+		return;
+	}
+
+	try {
+		const resource = resolveStudioLocalPreviewResourcePath(
+			typeof payload.path === "string" ? payload.path : "",
+			typeof payload.sourcePath === "string" ? payload.sourcePath : undefined,
+			typeof payload.resourceDir === "string" ? payload.resourceDir : undefined,
+			studioCwd,
+		);
+		if (resource.kind !== "pdf") {
+			respondJson(res, 400, { ok: false, error: "Only local PDF previews can be opened in the system PDF viewer." });
+			return;
+		}
+		await openPathInDefaultViewer(resource.filePath);
+		respondJson(res, 200, {
+			ok: true,
+			message: "Opened PDF in the system viewer.",
+			path: resource.filePath,
+			label: resource.label,
+		});
+	} catch (error) {
+		respondJson(res, 404, { ok: false, error: `Local PDF unavailable: ${error instanceof Error ? error.message : String(error)}` });
+	}
+}
+
 function openPathInDefaultViewer(path: string): Promise<void> {
 	const openCommand =
 		process.platform === "darwin"
@@ -15001,6 +15045,19 @@ export default function (pi: ExtensionAPI) {
 
 			void handleRevealLocalPreviewResourceRequest(req, res, studioCwd).catch((error) => {
 				respondJson(res, 500, { ok: false, error: `Reveal failed: ${error instanceof Error ? error.message : String(error)}` });
+			});
+			return;
+		}
+
+		if (requestUrl.pathname === "/open-local-resource") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			void handleOpenLocalPreviewResourceRequest(req, res, studioCwd).catch((error) => {
+				respondJson(res, 500, { ok: false, error: `Open in system viewer failed: ${error instanceof Error ? error.message : String(error)}` });
 			});
 			return;
 		}
