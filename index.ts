@@ -31,7 +31,7 @@ import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js"
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { createStudioPandocHtmlResourceFlagResolver } from "./shared/studio-pandoc-resource-flag.js";
 import { prepareStudioLatexForPandoc } from "./shared/studio-latex-pandoc-compat.js";
-import { isStudioCmuxSession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
+import { isStudioCmuxSession, isStudioMuxySession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
 import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import {
@@ -649,6 +649,7 @@ const STUDIO_QUIZ_CONTEXT_MAX_FILES = 18;
 const STUDIO_QUIZ_SNIPPET_MAX_CHARS = 8_000;
 const STUDIO_QUIZ_DISCUSSION_MAX_CHARS = 6_000;
 const REQUEST_BODY_MAX_BYTES = 1_000_000;
+const STUDIO_IMPORT_FILE_MAX_BYTES = 10_000_000;
 const STUDIO_WORKSPACE_STATE_REQUEST_MAX_BYTES = 4_000_000;
 const RESPONSE_HISTORY_LIMIT = 30;
 const CMUX_NOTIFY_TIMEOUT_MS = 1200;
@@ -7592,6 +7593,64 @@ function revealStudioLocalFile(filePath: string): { ok: true; message: string } 
 	return { ok: true, message: process.platform === "linux" ? "Opened containing folder." : "Revealed resource in file manager." };
 }
 
+async function handleImportStudioFileCopyRequest(req: IncomingMessage, res: ServerResponse, studioCwd: string): Promise<void> {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "POST") {
+		res.setHeader("Allow", "POST");
+		respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+		return;
+	}
+
+	const rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+	let payload: Record<string, unknown> = {};
+	try {
+		payload = rawBody ? JSON.parse(rawBody) : {};
+	} catch {
+		respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+		return;
+	}
+
+	const requestedPath = typeof payload.path === "string" ? payload.path : "";
+	const resolved = resolveStudioPath(requestedPath, studioCwd);
+	if (resolved.ok === false) {
+		respondJson(res, 400, { ok: false, error: resolved.message });
+		return;
+	}
+
+	try {
+		const stats = statSync(resolved.resolved);
+		if (!stats.isFile()) {
+			respondJson(res, 400, { ok: false, error: `Path is not a file: ${resolved.label}` });
+			return;
+		}
+		if (stats.size > STUDIO_IMPORT_FILE_MAX_BYTES) {
+			respondJson(res, 413, {
+				ok: false,
+				error: `File is too large to import into Studio (${stats.size} bytes; limit ${STUDIO_IMPORT_FILE_MAX_BYTES} bytes).`,
+			});
+			return;
+		}
+	} catch (error) {
+		respondJson(res, 404, {
+			ok: false,
+			error: `Could not access file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
+		});
+		return;
+	}
+
+	const file = readStudioFile(resolved.resolved, studioCwd);
+	if (file.ok === false) {
+		respondJson(res, 400, { ok: false, error: file.message });
+		return;
+	}
+	respondJson(res, 200, {
+		ok: true,
+		text: file.text,
+		filename: basename(file.resolvedPath),
+		resolvedPath: file.resolvedPath,
+	});
+}
+
 async function handleRevealLocalPreviewResourceRequest(req: IncomingMessage, res: ServerResponse, studioCwd: string): Promise<void> {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "POST") {
@@ -10667,6 +10726,7 @@ function buildStudioHtml(
 	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
 	const initialSshSession = isSshSession() ? "1" : "0";
+	const initialMuxySession = isStudioMuxySession() ? "1" : "0";
 	const isEditorOnlyMode = studioMode === "editor-only";
 	const appTitle = isEditorOnlyMode ? "π Studio — Editor" : "π Studio";
 	const appSubtitle = isEditorOnlyMode ? "Editor Workspace" : "Editor & Response Workspace";
@@ -10685,7 +10745,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}" data-muxy-session="${initialMuxySession}">
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -10693,7 +10753,8 @@ ${cssVarsBlock}
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
-      <label class="file-label" title="Browser import: load a selected text file as a detached copy. Use Save editor as… to attach this copy to a file path and make it file-backed, or use the Files view to open a refreshable file-backed document directly.">Import file copy…<input id="fileInput" type="file" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" /></label>
+      <button id="importFileBtn" type="button" title="Import a selected text file as a detached editor copy.">Import file copy…</button>
+      <input id="fileInput" class="file-input-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" />
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>
     </div>
@@ -15009,6 +15070,19 @@ export default function (pi: ExtensionAPI) {
 
 			void handleOpenStudioFileBrowserDirectoryRequest(req, res, studioCwd).catch((error) => {
 				respondJson(res, 500, { ok: false, error: `Open folder failed: ${error instanceof Error ? error.message : String(error)}` });
+			});
+			return;
+		}
+
+		if (requestUrl.pathname === "/import-file-copy") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			void handleImportStudioFileCopyRequest(req, res, studioCwd).catch((error) => {
+				respondJson(res, 500, { ok: false, error: `File import failed: ${error instanceof Error ? error.message : String(error)}` });
 			});
 			return;
 		}

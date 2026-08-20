@@ -85,6 +85,7 @@
       const showMeResponseBtn = document.getElementById("showMeResponseBtn");
       const quizBtn = document.getElementById("quizBtn");
       const lensSelect = document.getElementById("lensSelect");
+      const importFileBtn = document.getElementById("importFileBtn");
       const fileInput = document.getElementById("fileInput");
       const resourceDirBtn = document.getElementById("resourceDirBtn");
       const resourceDirLabel = document.getElementById("resourceDirLabel");
@@ -255,6 +256,15 @@
       };
       const initialResourceDir = initialQueryParams.get("resourceDir")
         || ((document.body && document.body.dataset && document.body.dataset.initialResourceDir) || "");
+      const studioUserAgent = typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "";
+      const isEmbeddedWebKitBrowser = /AppleWebKit\//i.test(studioUserAgent)
+        && !/(?:Chrome|Chromium|CriOS|Edg(?:A|iOS)?|OPR|Safari|Firefox|FxiOS)\//i.test(studioUserAgent);
+      const useServerPathFileImport = Boolean(
+        document.body
+        && document.body.dataset
+        && document.body.dataset.muxySession === "1"
+        && isEmbeddedWebKitBrowser
+      );
 
       let ws = null;
       let wsState = "Connecting";
@@ -11694,6 +11704,12 @@
         const canRefreshFromDisk = hasRefreshableFilePath();
 
         fileInput.disabled = uiBusy;
+        if (importFileBtn) {
+          importFileBtn.disabled = uiBusy;
+          importFileBtn.title = useServerPathFileImport
+            ? "Import a local text file by path as a detached editor copy."
+            : "Choose a text file and import it as a detached editor copy.";
+        }
         if (sourceBadgeEl) sourceBadgeEl.disabled = uiBusy;
         if (sourceResetOriginBtn) sourceResetOriginBtn.disabled = uiBusy;
         if (sourceOpenCurrentFileTabBtn) {
@@ -13161,7 +13177,7 @@
         if (!raw || raw.charAt(0) === "#") return false;
         if (/^\/\//.test(raw)) return false;
         if (/^(?:https?|mailto|tel|data|blob|javascript|about):/i.test(raw)) return false;
-        if (/^\/(?:pdf-resource|html-preview-resource|export-pdf|export-html|render-preview|render-math|local-preview-link|reveal-local-resource|open-local-resource)(?:[?#/]|$)/i.test(raw)) return false;
+        if (/^\/(?:pdf-resource|html-preview-resource|export-pdf|export-html|render-preview|render-math|import-file-copy|local-preview-link|reveal-local-resource|open-local-resource)(?:[?#/]|$)/i.test(raw)) return false;
         return true;
       }
 
@@ -22437,6 +22453,52 @@
         });
       }
 
+      function applyImportedFileCopy(text, filename) {
+        const name = String(filename || "imported file").trim() || "imported file";
+        setEditorText(String(text || ""), { preserveScroll: false, preserveSelection: false });
+        setSourceState({
+          source: "upload",
+          label: "imported copy: " + name,
+          path: null,
+        });
+        refreshResponseUi();
+        const detectedLang = detectLanguageFromName(name);
+        if (detectedLang) setEditorLanguage(detectedLang);
+        setStatus("Imported file copy: " + name + ".", "success");
+      }
+
+      async function importStudioFileCopyByPath() {
+        const resourceDir = getCurrentResourceDirValue();
+        const suggestedPath = resourceDir ? resourceDir.replace(/[\\/]$/, "") + "/" : "./";
+        const path = await requestStudioTextInput(
+          "Enter the local path of a text file to import as a detached editor copy:",
+          suggestedPath,
+          { title: "Import file copy", confirmLabel: "Import" },
+        );
+        if (!path) return;
+        try {
+          const payload = await fetchStudioJson("/import-file-copy", {
+            method: "POST",
+            body: JSON.stringify({ path }),
+          });
+          if (typeof payload.text !== "string") throw new Error("Studio did not return file text.");
+          applyImportedFileCopy(payload.text, typeof payload.filename === "string" ? payload.filename : path);
+        } catch (error) {
+          setStatus("Could not import file copy: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+        }
+      }
+
+      if (importFileBtn) {
+        importFileBtn.addEventListener("click", () => {
+          if (useServerPathFileImport) {
+            void importStudioFileCopyByPath();
+            return;
+          }
+          fileInput.value = "";
+          fileInput.click();
+        });
+      }
+
       fileInput.addEventListener("change", () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
@@ -22448,18 +22510,7 @@
         const reader = new FileReader();
         reader.onload = () => {
           const text = typeof reader.result === "string" ? reader.result : "";
-          setEditorText(text, { preserveScroll: false, preserveSelection: false });
-          setSourceState({
-            source: "upload",
-            label: "imported copy: " + file.name,
-            path: null,
-          });
-          refreshResponseUi();
-          const detectedLang = detectLanguageFromName(file.name);
-          if (detectedLang) {
-            setEditorLanguage(detectedLang);
-          }
-          setStatus("Imported file copy: " + file.name + ".", "success");
+          applyImportedFileCopy(text, file.name);
         };
         reader.onerror = () => {
           setStatus("Failed to read file.", "error");

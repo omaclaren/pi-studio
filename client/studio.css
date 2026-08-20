@@ -148,7 +148,7 @@
       background: var(--panel-2);
     }
 
-    button, select, .file-label {
+    button, select {
       border: 1px solid var(--control-border);
       background: var(--panel);
       color: var(--text);
@@ -163,14 +163,12 @@
     }
 
     button:not(:disabled):hover,
-    select:hover,
-    .file-label:hover {
+    select:hover {
       background: var(--panel-2);
     }
 
     button:focus-visible,
-    select:focus-visible,
-    .file-label:focus-within {
+    select:focus-visible {
       outline: 2px solid var(--accent-soft-strong);
       outline-offset: 1px;
     }
@@ -229,15 +227,8 @@
       filter: none;
     }
 
-    .file-label {
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .file-label input {
-      display: none;
+    .file-input-hidden {
+      display: none !important;
     }
 
     main {
@@ -5374,7 +5365,6 @@
     }
 
     body.studio-ui-refresh > header button,
-    body.studio-ui-refresh > header .file-label,
     body.studio-ui-refresh #responseActions button,
     body.studio-ui-refresh #responseActions select {
       padding: 5px 7px;
