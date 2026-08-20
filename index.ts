@@ -30,6 +30,7 @@ import {
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { createStudioPandocHtmlResourceFlagResolver } from "./shared/studio-pandoc-resource-flag.js";
+import { prepareStudioLatexForPandoc } from "./shared/studio-latex-pandoc-compat.js";
 import { isStudioCmuxSession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
 import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
@@ -6127,6 +6128,31 @@ function decorateStudioPandocSyntaxHtml(html: string): string {
 	);
 }
 
+function buildStudioLatexPandocCompatibilityWarning(omittedPackages: Array<{ name: string }>): string | undefined {
+	const packageNames = Array.from(new Set(
+		omittedPackages
+			.map((entry) => String(entry?.name ?? "").trim())
+			.filter(Boolean),
+	));
+	if (packageNames.length === 0) return undefined;
+	const packageLabel = packageNames
+		.map((name) => name.toLowerCase().endsWith(".sty") ? name : `${name}.sty`)
+		.join(", ");
+	const noun = packageNames.length === 1 ? "package" : "packages";
+	const subject = packageNames.length === 1 ? "it redefines" : "they redefine";
+	return `Studio omitted local LaTeX ${noun} ${packageLabel} from this Pandoc rendering because ${subject} document startup. Package-specific layout may be absent; compile the source directly with LaTeX for authoritative output.`;
+}
+
+function combineStudioWarnings(...warnings: Array<string | undefined>): string | undefined {
+	const messages = Array.from(new Set(warnings.map((warning) => String(warning ?? "").trim()).filter(Boolean)));
+	return messages.length > 0 ? messages.join(" ") : undefined;
+}
+
+function renderStudioLatexPandocCompatibilityWarningHtml(warning: string | undefined): string {
+	if (!warning) return "";
+	return `<div class="preview-warning studio-latex-compatibility-warning" role="note">${escapeStudioHtmlText(warning)}</div>`;
+}
+
 const resolveStudioPandocHtmlResourceFlag = createStudioPandocHtmlResourceFlagResolver(async (pandocCommand: string) => {
 	const result = await runStudioSubprocess(pandocCommand, ["--help"], {
 		timeoutMs: 5_000,
@@ -6150,8 +6176,15 @@ function preprocessStudioLatexFootnotemarksForPreview(latex: string): string {
 
 async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
-	const latexPreviewSource = isLatex ? preprocessStudioLatexFootnotemarksForPreview(markdown) : markdown;
-	const markdownWithNormalizedFences = isLatex ? latexPreviewSource : normalizeStudioMarkdownSmartFences(markdown);
+	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath)
+		?? resolveStudioPandocWorkingDir(sourcePath ? dirname(sourcePath) : undefined);
+	const latexPandocCompatibility = isLatex
+		? prepareStudioLatexForPandoc(markdown, pandocWorkingDir)
+		: { source: markdown, omittedPackages: [] as Array<{ name: string; path: string }> };
+	const latexPandocCompatibilityWarning = buildStudioLatexPandocCompatibilityWarning(latexPandocCompatibility.omittedPackages);
+	const pandocInputSource = latexPandocCompatibility.source;
+	const latexPreviewSource = isLatex ? preprocessStudioLatexFootnotemarksForPreview(pandocInputSource) : pandocInputSource;
+	const markdownWithNormalizedFences = isLatex ? latexPreviewSource : normalizeStudioMarkdownSmartFences(pandocInputSource);
 	const markdownWithoutHtmlComments = isLatex ? markdownWithNormalizedFences : stripStudioMarkdownHtmlCommentsPreservingYamlFrontMatter(markdownWithNormalizedFences);
 	const markdownWithPreviewPageBreaks = isLatex ? markdownWithoutHtmlComments : replaceStudioPreviewPageBreakCommands(markdownWithoutHtmlComments);
 	const latexSubfigurePreviewTransform = isLatex
@@ -6164,7 +6197,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 		? preprocessStudioLatexReferences(latexAlgorithmPreviewTransform.markdown, sourcePath, resourcePath)
 		: markdownWithPreviewPageBreaks;
 	const inputFormat = isLatex ? "latex" : "markdown+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header+tex_math_dollars+tex_math_single_backslash+tex_math_double_backslash+autolink_bare_uris-raw_html";
-	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
+	const bibliographyArgs = buildStudioPandocBibliographyArgs(pandocInputSource, isLatex, resourcePath);
 	const args = ["-f", inputFormat, "-t", "html5", "--mathml", "--wrap=none", ...bibliographyArgs];
 	let htmlTemplateDir: string | null = null;
 	const useStudioHtmlTemplate = Boolean(resourcePath || isLatex);
@@ -6185,7 +6218,6 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 	const normalizedMarkdown = isLatex
 		? sourceWithResolvedRefs
 		: normalizeStudioMarkdownFencedBlocks(prepareStudioMarkdownForPandoc(sourceWithResolvedRefs));
-	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
 
 	let pandocResult: StudioSubprocessResult;
 	try {
@@ -6230,6 +6262,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 		renderedHtml = decorateStudioPreviewPageBreakHtml(renderedHtml);
 	}
 	renderedHtml = decorateStudioPandocSyntaxHtml(renderedHtml);
+	renderedHtml = renderStudioLatexPandocCompatibilityWarningHtml(latexPandocCompatibilityWarning) + renderedHtml;
 	return stripMathMlAnnotationTags(renderedHtml);
 }
 
@@ -6616,8 +6649,15 @@ async function renderStudioStandaloneHtmlWithPandoc(
 	sourcePath?: string,
 	options?: StudioHtmlRenderOptions,
 ): Promise<{ html: Buffer; warning?: string }> {
-	const delimitedMarkdown = isLatex ? null : formatStudioDelimitedTextAsMarkdown(markdown, editorLanguage);
-	const input = delimitedMarkdown ?? markdown;
+	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath)
+		?? resolveStudioPandocWorkingDir(sourcePath ? dirname(sourcePath) : undefined);
+	const latexPandocCompatibility = isLatex
+		? prepareStudioLatexForPandoc(markdown, pandocWorkingDir)
+		: { source: markdown, omittedPackages: [] as Array<{ name: string; path: string }> };
+	const latexPandocCompatibilityWarning = buildStudioLatexPandocCompatibilityWarning(latexPandocCompatibility.omittedPackages);
+	const pandocCompatibleMarkdown = latexPandocCompatibility.source;
+	const delimitedMarkdown = isLatex ? null : formatStudioDelimitedTextAsMarkdown(pandocCompatibleMarkdown, editorLanguage);
+	const input = delimitedMarkdown ?? pandocCompatibleMarkdown;
 	const effectiveEditorLanguage = delimitedMarkdown ? "markdown" : inferStudioPdfLanguage(input, editorLanguage);
 	if (!isLatex && isLikelyStandaloneStudioHtml(input, effectiveEditorLanguage)) {
 		return { html: Buffer.from(String(input ?? ""), "utf-8") };
@@ -6634,8 +6674,12 @@ async function renderStudioStandaloneHtmlWithPandoc(
 	let renderedHtml = await renderStudioMarkdownWithPandoc(pdfPrepared.markdown, isLatex, resourcePath, sourcePath);
 	renderedHtml = renderStudioPdfBlocksInHtml(renderedHtml, pdfPrepared.blocks, sourcePath, resourcePath);
 	renderedHtml = applyStudioAnnotationPlaceholdersToHtml(renderedHtml, annotationPrepared.placeholders);
+	renderedHtml = renderStudioLatexPandocCompatibilityWarningHtml(latexPandocCompatibilityWarning) + renderedHtml;
 	const standaloneHtml = buildStudioStandaloneHtmlDocument(renderedHtml, resourcePath, options);
-	return { html: Buffer.from(standaloneHtml, "utf-8") };
+	return {
+		html: Buffer.from(standaloneHtml, "utf-8"),
+		warning: latexPandocCompatibilityWarning,
+	};
 }
 
 async function renderStudioLiteralTextPdf(text: string, title = "Studio export", options?: StudioPdfRenderOptions): Promise<Buffer> {
@@ -7024,19 +7068,26 @@ async function renderStudioPdfWithPandoc(
 ): Promise<{ pdf: Buffer; warning?: string }> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pdfEngine = process.env.PANDOC_PDF_ENGINE?.trim() || "xelatex";
+	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath)
+		?? resolveStudioPandocWorkingDir(sourcePath ? dirname(sourcePath) : undefined);
+	const latexPandocCompatibility = isLatex
+		? prepareStudioLatexForPandoc(markdown, pandocWorkingDir)
+		: { source: markdown, omittedPackages: [] as Array<{ name: string; path: string }> };
+	const latexPandocCompatibilityWarning = buildStudioLatexPandocCompatibilityWarning(latexPandocCompatibility.omittedPackages);
+	const pandocInputSource = latexPandocCompatibility.source;
 	const latexSubfigurePdfTransform = isLatex
-		? preprocessStudioLatexSubfiguresForPdf(markdown)
-		: { markdown, groups: [] };
+		? preprocessStudioLatexSubfiguresForPdf(pandocInputSource)
+		: { markdown: pandocInputSource, groups: [] };
 	const latexPdfSource = isLatex
 		? preprocessStudioLatexAlgorithmsForPdf(
 			latexSubfigurePdfTransform.markdown,
 			sourcePath,
 			resourcePath,
 		)
-		: markdown;
+		: pandocInputSource;
 	const sourceWithResolvedRefs = isLatex
 		? injectStudioLatexEquationTags(preprocessStudioLatexReferences(latexPdfSource, sourcePath, resourcePath), sourcePath, resourcePath)
-		: markdown;
+		: pandocInputSource;
 	const effectiveEditorLanguage = inferStudioPdfLanguage(sourceWithResolvedRefs, editorPdfLanguage);
 	const pdfCalloutTransform = !isLatex && (!effectiveEditorLanguage || effectiveEditorLanguage === "markdown")
 		? preprocessStudioMarkdownCalloutsForPdf(sourceWithResolvedRefs)
@@ -7044,8 +7095,7 @@ async function renderStudioPdfWithPandoc(
 	const pdfAlignedImageTransform = !isLatex && (!effectiveEditorLanguage || effectiveEditorLanguage === "markdown")
 		? preprocessStudioMarkdownImageAlignmentForPdf(pdfCalloutTransform.markdown)
 		: { markdown: pdfCalloutTransform.markdown, blocks: [] as StudioPdfAlignedImageBlock[] };
-	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath);
-	const bibliographyArgs = buildStudioPandocBibliographyArgs(markdown, isLatex, resourcePath);
+	const bibliographyArgs = buildStudioPandocBibliographyArgs(pandocInputSource, isLatex, resourcePath);
 
 	const runPandocPdfExport = async (
 		inputFormat: string,
@@ -7098,7 +7148,7 @@ async function renderStudioPdfWithPandoc(
 	};
 
 	if (isLatex && (latexSubfigurePdfTransform.groups.length > 0 || collectStudioInlineAnnotationMarkers(sourceWithResolvedRefs).length > 0)) {
-		return await renderStudioPdfFromGeneratedLatex(
+		const rendered = await renderStudioPdfFromGeneratedLatex(
 			sourceWithResolvedRefs,
 			pandocCommand,
 			pdfEngine,
@@ -7114,6 +7164,10 @@ async function renderStudioPdfWithPandoc(
 			"",
 			themeStyle,
 		);
+		return {
+			pdf: rendered.pdf,
+			warning: combineStudioWarnings(latexPandocCompatibilityWarning, rendered.warning),
+		};
 	}
 
 	if (!isLatex && effectiveEditorLanguage === "diff") {
@@ -7187,7 +7241,10 @@ async function renderStudioPdfWithPandoc(
 			themeStyle,
 		);
 		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-		return { pdf: rendered.pdf, warning: mermaidPrepared.warning ?? rendered.warning };
+		return {
+			pdf: rendered.pdf,
+			warning: combineStudioWarnings(latexPandocCompatibilityWarning, mermaidPrepared.warning, rendered.warning),
+		};
 	}
 
 	const hasYamlHeaderIncludesForPdf = !isLatex && hasStudioYamlHeaderIncludes(markdownForPdf);
@@ -7222,7 +7279,10 @@ async function renderStudioPdfWithPandoc(
 			throw new Error(`pandoc PDF export failed with exit code ${pandocResult.code}${stderr ? `: ${stderr}` : ""}${hint}`);
 		}
 
-		return { pdf: await readFile(outputPath), warning: mermaidPrepared.warning };
+		return {
+			pdf: await readFile(outputPath),
+			warning: combineStudioWarnings(latexPandocCompatibilityWarning, mermaidPrepared.warning),
+		};
 	} finally {
 		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
 	}

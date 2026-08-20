@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Keep Pandoc-based LaTeX previews and right-preview PDF/HTML exports usable when a local legacy style overrides LaTeX document startup, omitting only the incompatible package from the conversion while preserving includes and warning that package-specific layout is absent.
+
 ## [0.9.47] — 2026-08-20
 
 ### Fixed
