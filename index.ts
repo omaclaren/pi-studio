@@ -29,6 +29,7 @@ import {
 } from "./shared/studio-markdown-latex-literals.js";
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
+import { createStudioPandocHtmlResourceFlagResolver } from "./shared/studio-pandoc-resource-flag.js";
 import { isStudioCmuxSession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
 import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
@@ -6126,27 +6127,19 @@ function decorateStudioPandocSyntaxHtml(html: string): string {
 	);
 }
 
-const studioPandocHtmlResourceFlagCache = new Map<string, Promise<"--embed-resources" | "--self-contained">>();
-
-async function getStudioPandocHtmlResourceFlag(pandocCommand: string): Promise<"--embed-resources" | "--self-contained"> {
-	let cached = studioPandocHtmlResourceFlagCache.get(pandocCommand);
-	if (!cached) {
-		cached = runStudioSubprocess(pandocCommand, ["--help"], {
-			timeoutMs: 5_000,
-			stdoutMaxBytes: 250_000,
-			stderrMaxBytes: 20_000,
-			label: "pandoc capability probe",
-			notFoundMessage: "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary.",
-		}).then((result) => {
-			if (result.code !== 0) {
-				throw new Error(`pandoc capability probe failed with exit code ${result.code}${result.stderr ? `: ${result.stderr}` : ""}`);
-			}
-			return result.stdout.includes("--embed-resources") ? "--embed-resources" : "--self-contained";
-		});
-		studioPandocHtmlResourceFlagCache.set(pandocCommand, cached);
+const resolveStudioPandocHtmlResourceFlag = createStudioPandocHtmlResourceFlagResolver(async (pandocCommand: string) => {
+	const result = await runStudioSubprocess(pandocCommand, ["--help"], {
+		timeoutMs: 5_000,
+		stdoutMaxBytes: 250_000,
+		stderrMaxBytes: 20_000,
+		label: "pandoc capability probe",
+		notFoundMessage: "pandoc was not found. Install pandoc or set PANDOC_PATH to the pandoc binary.",
+	});
+	if (result.code !== 0) {
+		throw new Error(`pandoc capability probe failed with exit code ${result.code}${result.stderr ? `: ${result.stderr}` : ""}`);
 	}
-	return cached;
-}
+	return result.stdout;
+});
 
 function preprocessStudioLatexFootnotemarksForPreview(latex: string): string {
 	return String(latex ?? "").replace(/\\footnotemark\s*\[\s*([^\]\r\n]+?)\s*\]/g, (_match, marker: string) => {
@@ -6186,7 +6179,7 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 		await mkdir(htmlTemplateDir, { recursive: true });
 		const htmlTemplatePath = join(htmlTemplateDir, "template.html");
 		await writeFile(htmlTemplatePath, STUDIO_PANDOC_HTML_FRAGMENT_TEMPLATE, "utf-8");
-		if (resourcePath) args.push(await getStudioPandocHtmlResourceFlag(pandocCommand));
+		if (resourcePath) args.push(await resolveStudioPandocHtmlResourceFlag(pandocCommand));
 		args.push("--standalone", `--template=${htmlTemplatePath}`);
 	}
 	const normalizedMarkdown = isLatex
