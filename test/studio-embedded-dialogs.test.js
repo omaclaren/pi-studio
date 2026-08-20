@@ -1,0 +1,34 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
+const cssSource = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
+
+test("Studio does not depend on native JavaScript dialogs", () => {
+  assert.doesNotMatch(clientSource, /window\.(?:confirm|prompt|alert)\s*\(/);
+  assert.match(clientSource, /async function requestStudioConfirmation\(/);
+  assert.match(clientSource, /async function requestStudioTextInput\(/);
+  assert.match(clientSource, /mode: "confirm"/);
+  assert.match(clientSource, /mode: "prompt"/);
+});
+
+test("the in-page decision dialog is modal, cancellable, and keyboard accessible", () => {
+  assert.match(clientSource, /dialog\.setAttribute\("role", "alertdialog"\)/);
+  assert.match(clientSource, /dialog\.setAttribute\("aria-modal", "true"\)/);
+  assert.match(clientSource, /if \(event\.target === overlay\) finishStudioDecision\(null\)/);
+  assert.match(clientSource, /if \(event\.key === "Escape"\)[\s\S]*finishStudioDecision\(null\)/);
+  assert.match(clientSource, /if \(event\.key !== "Tab"\) return;/);
+  assert.match(clientSource, /studioDecisionCancelBtn\.focus\(\)/);
+  assert.match(clientSource, /studioDecisionInputEl\.select\(\)/);
+  assert.match(cssSource, /\.studio-decision-overlay \{[\s\S]*?z-index: 13000;/);
+  assert.match(cssSource, /\.studio-decision-overlay\[hidden\] \{[\s\S]*?display: none !important;/);
+});
+
+test("comment deletion and save paths use the in-page dialogs", () => {
+  assert.match(clientSource, /async function deleteReviewNote\([\s\S]*?await requestStudioConfirmation\("Delete this local comment\?"/);
+  assert.match(clientSource, /async function deleteAllReviewNotes\([\s\S]*?await requestStudioConfirmation\(/);
+  assert.match(clientSource, /saveAsBtn\.addEventListener\("click", async \(\) => \{[\s\S]*?await requestStudioTextInput\("Save editor content as:"/);
+  assert.match(clientSource, /saveAnnotatedBtn\.addEventListener\("click", async \(\) => \{[\s\S]*?await requestStudioTextInput\("Save annotated editor content as:"/);
+  assert.match(clientSource, /confirmLabel: "Delete"[\s\S]*?destructive: true/);
+});

@@ -11,14 +11,14 @@ test("Annotate response prepares the raw editor and Editor Preview without chang
 	assert.match(clientSource, /annotateResponseBtn\.disabled = uiBusy \|\| !hasResponse \|\| isCritiqueResponse \|\| annotationWorkspaceReady/);
 	assert.match(clientSource, /annotationWorkspaceReady \? "Response ready to annotate" : "Annotate response"/);
 	assert.doesNotMatch(clientSource, /"Open annotation view"|"Continue annotating"/);
-	assert.match(clientSource, /annotateResponseBtn\.addEventListener\("click", \(\) => \{\s*loadSelectedResponseIntoEditor\(\{ annotate: true \}\);/);
+	assert.match(clientSource, /annotateResponseBtn\.addEventListener\("click", \(\) => \{\s*void loadSelectedResponseIntoEditor\(\{ annotate: true \}\);/);
 
-	const prepareStart = clientSource.indexOf("function loadSelectedResponseIntoEditor(options)");
+	const prepareStart = clientSource.indexOf("async function loadSelectedResponseIntoEditor(options)");
 	const prepareEnd = clientSource.indexOf("loadResponseBtn.addEventListener", prepareStart);
 	assert.ok(prepareStart >= 0 && prepareEnd > prepareStart);
 	const prepareSource = clientSource.slice(prepareStart, prepareEnd);
 	assert.match(prepareSource, /replacingEditedResponse = prepareForAnnotation\s*&& sourceState\.source === "last-response"\s*&& Boolean\(currentEditorText\.trim\(\)\)\s*&& normalizeForCompare\(currentEditorText\) !== latestResponseNormalized/);
-	assert.match(prepareSource, /window\.confirm\("Replace your edited response with a fresh copy\? Existing edits and annotations will be lost\."\)/);
+	assert.match(prepareSource, /await requestStudioConfirmation\([\s\S]*"Replace your edited response with a fresh copy\? Existing edits and annotations will be lost\."/);
 	assert.match(prepareSource, /setStatus\("Kept the current editor text\."\);\s*return false/);
 	assert.match(prepareSource, /setEditorText\(latestResponseMarkdown/);
 	assert.match(prepareSource, /setSourceState\(\{ source: "last-response"/);

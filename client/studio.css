@@ -6113,6 +6113,102 @@
       font-weight: 700;
     }
 
+    .studio-decision-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 13000;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.58);
+      backdrop-filter: blur(2px);
+    }
+
+    .studio-decision-overlay[hidden] {
+      display: none !important;
+    }
+
+    .studio-decision-dialog {
+      width: min(560px, calc(100vw - 32px));
+      max-height: min(80vh, 680px);
+      overflow: auto;
+      padding: 20px;
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+    }
+
+    .studio-decision-title {
+      margin: 0;
+      color: var(--text);
+      font-size: 17px;
+      line-height: 1.3;
+    }
+
+    .studio-decision-message {
+      margin-top: 10px;
+      color: var(--studio-info-text, var(--muted));
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .studio-decision-input {
+      width: 100%;
+      margin-top: 16px;
+      padding: 9px 10px;
+      border: 1px solid var(--control-border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }
+
+    .studio-decision-input[hidden] {
+      display: none !important;
+    }
+
+    .studio-decision-input:focus {
+      border-color: var(--accent);
+      outline: 2px solid var(--accent-soft);
+      outline-offset: 1px;
+    }
+
+    .studio-decision-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .studio-decision-confirm:not(.is-destructive) {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: var(--accent-contrast);
+      font-weight: 650;
+    }
+
+    .studio-decision-confirm.is-destructive {
+      border-color: var(--warn-border);
+      background: color-mix(in srgb, var(--warn) 15%, var(--panel));
+      color: var(--warn);
+      font-weight: 650;
+    }
+
+    .studio-decision-confirm.is-destructive:hover,
+    .studio-decision-confirm.is-destructive:focus-visible {
+      background: color-mix(in srgb, var(--warn) 24%, var(--panel));
+    }
+
+    body.studio-decision-open {
+      overflow: hidden;
+    }
+
     .studio-preview-link-menu {
       position: fixed;
       z-index: 12000;

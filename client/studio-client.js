@@ -292,6 +292,14 @@
       let studioImageFocusLastFocusedEl = null;
       let studioImageFocusZoomMode = "fit";
       let studioImageFocusZoom = 1;
+      let studioDecisionOverlayEl = null;
+      let studioDecisionDialogEl = null;
+      let studioDecisionTitleEl = null;
+      let studioDecisionMessageEl = null;
+      let studioDecisionInputEl = null;
+      let studioDecisionCancelBtn = null;
+      let studioDecisionConfirmBtn = null;
+      let studioDecisionState = null;
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
@@ -2598,7 +2606,7 @@
             event.preventDefault();
             event.stopPropagation();
             closeStudioUiRefreshMenus();
-            resetEditorOrigin();
+            void resetEditorOrigin();
           });
           sourceOpenCurrentFileTabBtn = makeStudioUiRefreshElement("button", "source-open-file-tab-btn", "Open current file in new editor tab");
           sourceOpenCurrentFileTabBtn.type = "button";
@@ -3628,6 +3636,175 @@
         });
       }
 
+      function finishStudioDecision(value, restoreFocus) {
+        const state = studioDecisionState;
+        if (!state) return;
+        studioDecisionState = null;
+        if (studioDecisionOverlayEl) studioDecisionOverlayEl.hidden = true;
+        if (document.body) document.body.classList.remove("studio-decision-open");
+        const returnFocusEl = state.returnFocusEl;
+        state.resolve(value);
+        if (restoreFocus !== false && returnFocusEl && typeof returnFocusEl.focus === "function") {
+          window.setTimeout(() => {
+            if (returnFocusEl.isConnected) returnFocusEl.focus({ preventScroll: true });
+          }, 0);
+        }
+      }
+
+      function getStudioDecisionFocusableElements() {
+        return [studioDecisionInputEl, studioDecisionCancelBtn, studioDecisionConfirmBtn]
+          .filter((element) => element && !element.hidden && !element.disabled);
+      }
+
+      function ensureStudioDecisionDialog() {
+        if (studioDecisionOverlayEl) return studioDecisionOverlayEl;
+
+        const overlay = document.createElement("div");
+        overlay.className = "studio-decision-overlay";
+        overlay.hidden = true;
+
+        const dialog = document.createElement("div");
+        dialog.className = "studio-decision-dialog";
+        dialog.setAttribute("role", "alertdialog");
+        dialog.setAttribute("aria-modal", "true");
+        dialog.setAttribute("aria-labelledby", "studioDecisionTitle");
+        dialog.setAttribute("aria-describedby", "studioDecisionMessage");
+
+        const title = document.createElement("h2");
+        title.id = "studioDecisionTitle";
+        title.className = "studio-decision-title";
+        dialog.appendChild(title);
+
+        const message = document.createElement("div");
+        message.id = "studioDecisionMessage";
+        message.className = "studio-decision-message";
+        dialog.appendChild(message);
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "studio-decision-input";
+        input.hidden = true;
+        input.autocomplete = "off";
+        input.spellcheck = false;
+        input.setAttribute("autocapitalize", "off");
+        input.setAttribute("aria-label", "Value");
+        dialog.appendChild(input);
+
+        const actions = document.createElement("div");
+        actions.className = "studio-decision-actions";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "studio-decision-cancel";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.addEventListener("click", () => finishStudioDecision(null));
+        actions.appendChild(cancelBtn);
+
+        const confirmBtn = document.createElement("button");
+        confirmBtn.type = "button";
+        confirmBtn.className = "studio-decision-confirm";
+        confirmBtn.textContent = "Confirm";
+        confirmBtn.addEventListener("click", () => {
+          if (!studioDecisionState) return;
+          finishStudioDecision(studioDecisionState.mode === "prompt" ? input.value : true);
+        });
+        actions.appendChild(confirmBtn);
+
+        dialog.appendChild(actions);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        overlay.addEventListener("click", (event) => {
+          if (event.target === overlay) finishStudioDecision(null);
+        });
+        dialog.addEventListener("keydown", (event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            finishStudioDecision(null);
+            return;
+          }
+          if (event.key === "Enter" && event.target === input) {
+            event.preventDefault();
+            confirmBtn.click();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const focusable = getStudioDecisionFocusableElements();
+          if (focusable.length < 2) return;
+          const currentIndex = focusable.indexOf(document.activeElement);
+          const nextIndex = event.shiftKey
+            ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
+            : (currentIndex < 0 || currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
+          event.preventDefault();
+          focusable[nextIndex].focus();
+        });
+
+        studioDecisionOverlayEl = overlay;
+        studioDecisionDialogEl = dialog;
+        studioDecisionTitleEl = title;
+        studioDecisionMessageEl = message;
+        studioDecisionInputEl = input;
+        studioDecisionCancelBtn = cancelBtn;
+        studioDecisionConfirmBtn = confirmBtn;
+        return overlay;
+      }
+
+      function openStudioDecision(options) {
+        const settings = options && typeof options === "object" ? options : {};
+        const mode = settings.mode === "prompt" ? "prompt" : "confirm";
+        ensureStudioDecisionDialog();
+        if (studioDecisionState) finishStudioDecision(null, false);
+        const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+        studioDecisionTitleEl.textContent = String(settings.title || (mode === "prompt" ? "Enter a value" : "Confirm action"));
+        studioDecisionMessageEl.textContent = String(settings.message || "");
+        studioDecisionInputEl.hidden = mode !== "prompt";
+        studioDecisionInputEl.value = mode === "prompt" ? String(settings.defaultValue || "") : "";
+        studioDecisionCancelBtn.textContent = String(settings.cancelLabel || "Cancel");
+        studioDecisionConfirmBtn.textContent = String(settings.confirmLabel || (mode === "prompt" ? "Continue" : "Confirm"));
+        studioDecisionConfirmBtn.classList.toggle("is-destructive", settings.destructive === true);
+        studioDecisionDialogEl.classList.toggle("is-destructive", settings.destructive === true);
+        studioDecisionOverlayEl.hidden = false;
+        if (document.body) document.body.classList.add("studio-decision-open");
+
+        return new Promise((resolve) => {
+          const decisionState = { mode, resolve, returnFocusEl };
+          studioDecisionState = decisionState;
+          const schedule = typeof window.requestAnimationFrame === "function"
+            ? window.requestAnimationFrame.bind(window)
+            : (callback) => window.setTimeout(callback, 16);
+          schedule(() => {
+            if (studioDecisionState !== decisionState) return;
+            if (mode === "prompt") {
+              studioDecisionInputEl.focus();
+              studioDecisionInputEl.select();
+            } else {
+              studioDecisionCancelBtn.focus();
+            }
+          });
+        });
+      }
+
+      async function requestStudioConfirmation(message, options) {
+        const value = await openStudioDecision({
+          ...(options && typeof options === "object" ? options : {}),
+          mode: "confirm",
+          message: String(message || ""),
+        });
+        return value === true;
+      }
+
+      async function requestStudioTextInput(message, defaultValue, options) {
+        const value = await openStudioDecision({
+          ...(options && typeof options === "object" ? options : {}),
+          mode: "prompt",
+          message: String(message || ""),
+          defaultValue: String(defaultValue || ""),
+        });
+        return typeof value === "string" ? value : null;
+      }
+
       renderStatus();
 
       window.addEventListener("focus", () => {
@@ -3717,14 +3894,17 @@
         }
       }
 
-      function resetEditorOrigin() {
+      async function resetEditorOrigin() {
         const descriptor = getCurrentStudioDocumentDescriptor();
         const message = descriptor.fileBacked
           ? ("Reset editor origin and detach the current text from\n\n" + descriptor.label + "\n\ninto a new draft? The file on disk will not be changed, and the current scratchpad/review notes will carry into the new draft.")
           : ("Reset editor origin and start a new independent draft? The current editor text, scratchpad, and review notes will carry into the new draft.");
-        if (!window.confirm(message)) {
-          return;
-        }
+        const confirmed = await requestStudioConfirmation(message, {
+          title: descriptor.fileBacked ? "Detach editor from file?" : "Reset editor origin?",
+          confirmLabel: descriptor.fileBacked ? "Detach" : "Reset origin",
+          destructive: true,
+        });
+        if (!confirmed) return;
         const nextLabel = String(sourceTextEl.value || "").trim() ? "draft" : "blank";
         setSourceState({
           source: "blank",
@@ -11829,12 +12009,15 @@
         return true;
       }
 
-      function clearStudioWorkspace() {
+      async function clearStudioWorkspace() {
         if (uiBusy) {
           setStatus("Studio is busy.", "warning");
           return;
         }
-        const confirmed = window.confirm("Reset the editor to a fresh blank draft in this browser tab? Saved files and responses are not changed.");
+        const confirmed = await requestStudioConfirmation(
+          "Reset the editor to a fresh blank draft in this browser tab? Saved files and responses are not changed.",
+          { title: "Reset editor?", confirmLabel: "Reset editor", destructive: true },
+        );
         if (!confirmed) return;
         const preservedResponseState = {
           responseHistory: Array.isArray(responseHistory) ? responseHistory.slice() : [],
@@ -13145,16 +13328,17 @@
         }
       }
 
-      function confirmPreviewOfficeConversion(href, destination) {
+      async function confirmPreviewOfficeConversion(href, destination) {
         if (getPreviewLocalLinkKind(href) !== "office") return true;
         const label = getPreviewOfficeConversionLabel(href);
         const target = destination === "here"
           ? "replace the current editor contents with an editable Markdown copy"
           : "open an editable Markdown copy in a new Studio tab";
-        const confirmed = window.confirm(
+        const confirmed = await requestStudioConfirmation(
           "Convert " + label + " to Markdown?\n\n"
           + "Studio will use Pandoc to " + target + ". Some layout or formatting may change. "
-          + "The original DOCX/ODT file will not be overwritten, and edits will not round-trip back to it."
+          + "The original DOCX/ODT file will not be overwritten, and edits will not round-trip back to it.",
+          { title: "Convert document?", confirmLabel: "Convert" },
         );
         if (!confirmed) setStatus("Document conversion cancelled.", "warning");
         return confirmed;
@@ -13166,13 +13350,17 @@
       }
 
       async function openPreviewDocumentHere(href, contextOverride, options) {
-        if (!confirmPreviewOfficeConversion(href, "here")) return;
+        if (!(await confirmPreviewOfficeConversion(href, "here"))) return;
         if (editorHasPotentialUnsavedContent()) {
           const kind = getPreviewLocalLinkKind(href);
           const prompt = kind === "office"
             ? "Replace the current editor contents with this converted Markdown copy? Unsaved editor changes may be lost."
             : "Open this file-backed document in the current editor?\n\nThis will replace the current editor contents and attach the editor to the file on disk, so Save editor and Refresh from disk use that file. Unsaved editor changes may be lost.";
-          const confirmed = window.confirm(prompt);
+          const confirmed = await requestStudioConfirmation(prompt, {
+            title: "Replace editor contents?",
+            confirmLabel: "Replace",
+            destructive: true,
+          });
           if (!confirmed) return;
         }
         const payload = await fetchPreviewLocalLink("document", href, contextOverride);
@@ -13203,7 +13391,7 @@
       }
 
       async function openPreviewDocumentInNewEditor(href, contextOverride) {
-        if (!confirmPreviewOfficeConversion(href, "new")) return;
+        if (!(await confirmPreviewOfficeConversion(href, "new"))) return;
         let launch = null;
         try {
           launch = openPendingStudioTab("document");
@@ -14951,7 +15139,10 @@
             return;
           }
           if (String(scratchpadText || "").trim() && String(scratchpadText || "") !== String(text || "")) {
-            const confirmed = window.confirm("Replace the current scratchpad with this recent scratchpad? Current scratchpad text will remain saved under its current document/draft identity, but this panel will show the loaded text for the current document.");
+            const confirmed = await requestStudioConfirmation(
+              "Replace the current scratchpad with this recent scratchpad? Current scratchpad text will remain saved under its current document/draft identity, but this panel will show the loaded text for the current document.",
+              { title: "Replace scratchpad?", confirmLabel: "Replace", destructive: true },
+            );
             if (!confirmed) return;
           }
           setScratchpadText(text);
@@ -18773,7 +18964,7 @@
           deleteBtn.textContent = "Delete";
           deleteBtn.title = "Delete this local comment.";
           deleteBtn.addEventListener("click", () => {
-            deleteReviewNote(note.id);
+            void deleteReviewNote(note.id);
           });
           actions.appendChild(deleteBtn);
 
@@ -19137,24 +19328,29 @@
         });
       }
 
-      function deleteReviewNote(noteId) {
+      async function deleteReviewNote(noteId) {
         const note = reviewNotes.find((entry) => entry && entry.id === noteId);
         if (!note) return;
-        const confirmed = window.confirm("Delete this local comment?");
+        const confirmed = await requestStudioConfirmation("Delete this local comment?", {
+          title: "Delete comment?",
+          confirmLabel: "Delete",
+          destructive: true,
+        });
         if (!confirmed) return;
         setReviewNotes(reviewNotes.filter((entry) => entry && entry.id !== noteId));
         setStatus("Deleted local comment.", "success");
       }
 
-      function deleteAllReviewNotes() {
+      async function deleteAllReviewNotes() {
         if (!reviewNotes.length) {
           setStatus("No local comments to delete.", "warning");
           return;
         }
         const count = reviewNotes.length;
-        const confirmed = window.confirm(
+        const confirmed = await requestStudioConfirmation(
           "Delete all " + count + " local comment" + (count === 1 ? "" : "s") + " for this document?\n\n"
             + "Existing inline [an: ...] annotations in the editor text will not be removed.",
+          { title: "Delete all comments?", confirmLabel: "Delete all", destructive: true },
         );
         if (!confirmed) return;
         setReviewNotes([]);
@@ -21365,7 +21561,7 @@
         });
       }
 
-      function loadSelectedResponseIntoEditor(options) {
+      async function loadSelectedResponseIntoEditor(options) {
         if (!latestResponseMarkdown.trim()) {
           setStatus("No response available yet.", "warning");
           return false;
@@ -21376,12 +21572,15 @@
           && sourceState.source === "last-response"
           && Boolean(currentEditorText.trim())
           && normalizeForCompare(currentEditorText) !== latestResponseNormalized;
-        if (
-          replacingEditedResponse
-          && !window.confirm("Replace your edited response with a fresh copy? Existing edits and annotations will be lost.")
-        ) {
-          setStatus("Kept the current editor text.");
-          return false;
+        if (replacingEditedResponse) {
+          const confirmed = await requestStudioConfirmation(
+            "Replace your edited response with a fresh copy? Existing edits and annotations will be lost.",
+            { title: "Replace edited response?", confirmLabel: "Replace", destructive: true },
+          );
+          if (!confirmed) {
+            setStatus("Kept the current editor text.");
+            return false;
+          }
         }
         setEditorText(latestResponseMarkdown, { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "last-response", label: "last model response", path: null });
@@ -21399,11 +21598,11 @@
       }
 
       loadResponseBtn.addEventListener("click", () => {
-        loadSelectedResponseIntoEditor();
+        void loadSelectedResponseIntoEditor();
       });
 
       annotateResponseBtn.addEventListener("click", () => {
-        loadSelectedResponseIntoEditor({ annotate: true });
+        void loadSelectedResponseIntoEditor({ annotate: true });
       });
 
       loadCritiqueNotesBtn.addEventListener("click", () => {
@@ -21538,7 +21737,7 @@
         setFooterThemeMenuOpen(false);
       });
 
-      saveAsBtn.addEventListener("click", () => {
+      saveAsBtn.addEventListener("click", async () => {
         const content = sourceTextEl.value;
         if (!content.trim()) {
           setStatus("Editor is empty. Nothing to save.", "warning");
@@ -21548,7 +21747,10 @@
         var suggestedName = sourceState.label ? stripImportedFileLabel(sourceState.label) : "draft.md";
         var suggestedDir = getCurrentResourceDirValue() ? getCurrentResourceDirValue().replace(/\/$/, "") + "/" : "./";
         const suggested = sourceState.path || (suggestedDir + suggestedName);
-        const path = window.prompt("Save editor content as:", suggested);
+        const path = await requestStudioTextInput("Save editor content as:", suggested, {
+          title: "Save editor as",
+          confirmLabel: "Save",
+        });
         if (!path) return;
 
         const requestId = beginUiAction("save_as");
@@ -21568,16 +21770,19 @@
         }
       });
 
-      saveOverBtn.addEventListener("click", () => {
+      saveOverBtn.addEventListener("click", async () => {
         var effectivePath = getEffectiveSavePath();
         if (!effectivePath) {
           setStatus("Save editor requires a file path. Open via /studio <path>, set a working dir, or use Save editor as…", "warning");
           return;
         }
 
-        if (!window.confirm("Overwrite " + effectivePath + "?")) {
-          return;
-        }
+        const confirmed = await requestStudioConfirmation("Overwrite " + effectivePath + "?", {
+          title: "Overwrite file?",
+          confirmLabel: "Overwrite",
+          destructive: true,
+        });
+        if (!confirmed) return;
 
         const requestId = beginUiAction("save_over");
         if (!requestId) return;
@@ -21598,14 +21803,17 @@
       });
 
       if (refreshFromDiskBtn) {
-        refreshFromDiskBtn.addEventListener("click", () => {
+        refreshFromDiskBtn.addEventListener("click", async () => {
           if (!hasRefreshableFilePath()) {
             setStatus("Refresh from disk needs a file path. Use Files → Open here, Files → Open file tab, or /studio-editor-only <path> for a refreshable editor tab.", "warning");
             return;
           }
 
           if (editorDiffersFromFileBackedBaseline()) {
-            const confirmed = window.confirm("Replace current editor contents with the latest version from disk?");
+            const confirmed = await requestStudioConfirmation(
+              "Replace current editor contents with the latest version from disk?",
+              { title: "Refresh from disk?", confirmLabel: "Replace", destructive: true },
+            );
             if (!confirmed) return;
           }
 
@@ -21628,7 +21836,7 @@
 
       if (clearWorkspaceBtn) {
         clearWorkspaceBtn.addEventListener("click", () => {
-          clearStudioWorkspace();
+          void clearStudioWorkspace();
         });
       }
 
@@ -21891,7 +22099,7 @@
 
       if (reviewNotesDeleteAllBtn) {
         reviewNotesDeleteAllBtn.addEventListener("click", () => {
-          deleteAllReviewNotes();
+          void deleteAllReviewNotes();
         });
       }
 
@@ -22093,9 +22301,13 @@
       }
 
       if (scratchpadClearBtn) {
-        scratchpadClearBtn.addEventListener("click", () => {
+        scratchpadClearBtn.addEventListener("click", async () => {
           if (!String(scratchpadText || "").length) return;
-          const confirmed = window.confirm("Clear scratchpad text?");
+          const confirmed = await requestStudioConfirmation("Clear scratchpad text?", {
+            title: "Clear scratchpad?",
+            confirmLabel: "Clear",
+            destructive: true,
+          });
           if (!confirmed) return;
           setScratchpadText("");
           if (scratchpadTextEl) scratchpadTextEl.focus();
@@ -22104,7 +22316,7 @@
       }
 
       if (saveAnnotatedBtn) {
-        saveAnnotatedBtn.addEventListener("click", () => {
+        saveAnnotatedBtn.addEventListener("click", async () => {
           const content = sourceTextEl.value;
           if (!content.trim()) {
             setStatus("Editor is empty. Nothing to save.", "warning");
@@ -22112,7 +22324,10 @@
           }
 
           const suggested = buildAnnotatedSaveSuggestion();
-          const path = window.prompt("Save annotated editor content as:", suggested);
+          const path = await requestStudioTextInput("Save annotated editor content as:", suggested, {
+            title: "Save annotated editor as",
+            confirmLabel: "Save",
+          });
           if (!path) return;
 
           const requestId = beginUiAction("save_as");
@@ -22134,14 +22349,17 @@
       }
 
       if (stripAnnotationsBtn) {
-        stripAnnotationsBtn.addEventListener("click", () => {
+        stripAnnotationsBtn.addEventListener("click", async () => {
           const content = sourceTextEl.value;
           if (!hasAnnotationMarkers(content)) {
             setStatus("No [an: ...] markers found in editor.", "warning");
             return;
           }
 
-          const confirmed = window.confirm("Remove all [an: ...] markers from editor text? This cannot be undone.");
+          const confirmed = await requestStudioConfirmation(
+            "Remove all [an: ...] markers from editor text? This cannot be undone.",
+            { title: "Remove all annotations?", confirmLabel: "Remove", destructive: true },
+          );
           if (!confirmed) return;
 
           const strippedContent = stripAnnotationMarkers(content);
@@ -22176,7 +22394,7 @@
       }
       if (sourceBadgeEl) {
         sourceBadgeEl.addEventListener("click", () => {
-          if (!studioUiRefreshEnabled) resetEditorOrigin();
+          if (!studioUiRefreshEnabled) void resetEditorOrigin();
         });
       }
       if (resourceDirBtn) {
