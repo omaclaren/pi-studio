@@ -31,7 +31,7 @@ import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js"
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { createStudioPandocHtmlResourceFlagResolver } from "./shared/studio-pandoc-resource-flag.js";
 import { prepareStudioLatexForPandoc } from "./shared/studio-latex-pandoc-compat.js";
-import { isStudioCmuxSession, isStudioMuxySession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
+import { isStudioCmuxSession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
 import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import {
@@ -10726,7 +10726,6 @@ function buildStudioHtml(
 	const faviconHref = buildStudioFaviconDataUri(style);
 	const bootConfigJson = JSON.stringify({ mermaidConfig }).replace(/</g, "\\u003c");
 	const initialSshSession = isSshSession() ? "1" : "0";
-	const initialMuxySession = isStudioMuxySession() ? "1" : "0";
 	const isEditorOnlyMode = studioMode === "editor-only";
 	const appTitle = isEditorOnlyMode ? "π Studio — Editor" : "π Studio";
 	const appSubtitle = isEditorOnlyMode ? "Editor Workspace" : "Editor & Response Workspace";
@@ -10745,7 +10744,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}" data-muxy-session="${initialMuxySession}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
   <header>
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -10753,7 +10752,19 @@ ${cssVarsBlock}
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
-      <button id="importFileBtn" type="button" title="Import a selected text file as a detached editor copy.">Import file copy…</button>
+      <span id="importFileControls" class="import-file-controls">
+        <button id="importFileBtn" class="import-file-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose how to import a text file as a detached editor copy.">Import file copy…</button>
+        <div id="importFileMenu" class="import-file-menu" role="menu" aria-labelledby="importFileBtn" hidden>
+          <button id="importFileChooseBtn" type="button" role="menuitem">
+            <span class="import-file-menu-label">Choose file in browser…</span>
+            <span class="import-file-menu-hint">Uses this browser's chooser; use the host-path option below if unavailable.</span>
+          </button>
+          <button id="importFilePathBtn" type="button" role="menuitem">
+            <span class="import-file-menu-label">Import from Studio host path…</span>
+            <span class="import-file-menu-hint">Reads a path on the machine running Pi.</span>
+          </button>
+        </div>
+      </span>
       <input id="fileInput" class="file-input-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" />
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>

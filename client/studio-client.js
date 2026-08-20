@@ -85,7 +85,11 @@
       const showMeResponseBtn = document.getElementById("showMeResponseBtn");
       const quizBtn = document.getElementById("quizBtn");
       const lensSelect = document.getElementById("lensSelect");
+      const importFileControlsEl = document.getElementById("importFileControls");
       const importFileBtn = document.getElementById("importFileBtn");
+      const importFileMenuEl = document.getElementById("importFileMenu");
+      const importFileChooseBtn = document.getElementById("importFileChooseBtn");
+      const importFilePathBtn = document.getElementById("importFilePathBtn");
       const fileInput = document.getElementById("fileInput");
       const resourceDirBtn = document.getElementById("resourceDirBtn");
       const resourceDirLabel = document.getElementById("resourceDirLabel");
@@ -256,15 +260,6 @@
       };
       const initialResourceDir = initialQueryParams.get("resourceDir")
         || ((document.body && document.body.dataset && document.body.dataset.initialResourceDir) || "");
-      const studioUserAgent = typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "";
-      const isEmbeddedWebKitBrowser = /AppleWebKit\//i.test(studioUserAgent)
-        && !/(?:Chrome|Chromium|CriOS|Edg(?:A|iOS)?|OPR|Safari|Firefox|FxiOS)\//i.test(studioUserAgent);
-      const useServerPathFileImport = Boolean(
-        document.body
-        && document.body.dataset
-        && document.body.dataset.muxySession === "1"
-        && isEmbeddedWebKitBrowser
-      );
 
       let ws = null;
       let wsState = "Connecting";
@@ -9393,6 +9388,80 @@
         }
       }
 
+      function getImportFileMenuItems() {
+        if (!importFileMenuEl) return [];
+        return Array.from(importFileMenuEl.querySelectorAll('[role="menuitem"]'))
+          .filter((element) => element instanceof HTMLButtonElement && !element.disabled);
+      }
+
+      function positionImportFileMenu() {
+        if (!importFileControlsEl || !importFileMenuEl || importFileMenuEl.hidden) return;
+        importFileMenuEl.style.left = "";
+        importFileMenuEl.style.right = "0px";
+        const menuRect = importFileMenuEl.getBoundingClientRect();
+        const controlsRect = importFileControlsEl.getBoundingClientRect();
+        const viewportMargin = 12;
+        const maxLeft = Math.max(viewportMargin, window.innerWidth - menuRect.width - viewportMargin);
+        const clampedLeft = Math.max(viewportMargin, Math.min(menuRect.left, maxLeft));
+        importFileMenuEl.style.left = Math.round(clampedLeft - controlsRect.left) + "px";
+        importFileMenuEl.style.right = "auto";
+      }
+
+      function closeImportFileMenu(options) {
+        if (!importFileMenuEl) return;
+        importFileMenuEl.hidden = true;
+        if (importFileBtn) {
+          importFileBtn.classList.remove("is-open");
+          importFileBtn.setAttribute("aria-expanded", "false");
+          if (options && options.restoreFocus && !importFileBtn.disabled) {
+            importFileBtn.focus({ preventScroll: true });
+          }
+        }
+      }
+
+      function toggleImportFileMenu() {
+        if (!importFileMenuEl || !importFileBtn || importFileBtn.disabled) return;
+        const willOpen = importFileMenuEl.hidden;
+        if (!willOpen) {
+          closeImportFileMenu();
+          return;
+        }
+        closeExportPreviewMenu();
+        if (typeof closeStudioUiRefreshMenus === "function") {
+          closeStudioUiRefreshMenus();
+        }
+        importFileMenuEl.hidden = false;
+        importFileBtn.classList.add("is-open");
+        importFileBtn.setAttribute("aria-expanded", "true");
+        positionImportFileMenu();
+        const firstItem = getImportFileMenuItems()[0];
+        if (firstItem) {
+          window.setTimeout(() => {
+            if (!importFileMenuEl.hidden && firstItem.isConnected) firstItem.focus({ preventScroll: true });
+          }, 0);
+        }
+      }
+
+      function handleImportFileMenuKeydown(event) {
+        if (!importFileMenuEl || importFileMenuEl.hidden) return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          closeImportFileMenu({ restoreFocus: true });
+          return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        const items = getImportFileMenuItems();
+        if (!items.length) return;
+        const currentIndex = items.indexOf(document.activeElement);
+        let nextIndex = 0;
+        if (event.key === "End") nextIndex = items.length - 1;
+        else if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+        else if (event.key === "ArrowUp") nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
+        event.preventDefault();
+        items[nextIndex].focus({ preventScroll: true });
+      }
+
       function closeExportPreviewMenu() {
         if (!exportPreviewMenuEl) return;
         exportPreviewMenuEl.hidden = true;
@@ -9404,6 +9473,7 @@
 
       function toggleExportPreviewMenu() {
         if (!exportPreviewMenuEl || !exportPdfBtn || exportPdfBtn.disabled) return;
+        closeImportFileMenu();
         if (typeof closeStudioUiRefreshMenus === "function") {
           closeStudioUiRefreshMenus();
         }
@@ -11704,12 +11774,10 @@
         const canRefreshFromDisk = hasRefreshableFilePath();
 
         fileInput.disabled = uiBusy;
-        if (importFileBtn) {
-          importFileBtn.disabled = uiBusy;
-          importFileBtn.title = useServerPathFileImport
-            ? "Import a local text file by path as a detached editor copy."
-            : "Choose a text file and import it as a detached editor copy.";
-        }
+        if (importFileBtn) importFileBtn.disabled = uiBusy;
+        if (importFileChooseBtn) importFileChooseBtn.disabled = uiBusy;
+        if (importFilePathBtn) importFilePathBtn.disabled = uiBusy;
+        if (uiBusy) closeImportFileMenu();
         if (sourceBadgeEl) sourceBadgeEl.disabled = uiBusy;
         if (sourceResetOriginBtn) sourceResetOriginBtn.disabled = uiBusy;
         if (sourceOpenCurrentFileTabBtn) {
@@ -21687,12 +21755,14 @@
 
       document.addEventListener("click", (event) => {
         const target = event.target;
-        if (target instanceof Element && target.closest("#exportPreviewControls")) return;
-        closeExportPreviewMenu();
+        const targetEl = target instanceof Element ? target : null;
+        if (!targetEl || !targetEl.closest("#exportPreviewControls")) closeExportPreviewMenu();
+        if (!targetEl || !targetEl.closest("#importFileControls")) closeImportFileMenu();
       });
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
           closeExportPreviewMenu();
+          closeImportFileMenu();
           closePreviewLinkMenu();
           setFooterModelMenuOpen(false);
           setFooterThemeMenuOpen(false);
@@ -22488,21 +22558,57 @@
         }
       }
 
-      if (importFileBtn) {
-        importFileBtn.addEventListener("click", () => {
-          if (useServerPathFileImport) {
-            void importStudioFileCopyByPath();
-            return;
-          }
-          fileInput.value = "";
+      function chooseStudioFileCopyWithBrowser() {
+        fileInput.value = "";
+        setStatus("Choose a text file, or use “Import from Studio host path…” if this browser does not open a chooser.");
+        try {
           fileInput.click();
+        } catch {
+          setStatus("This browser could not open its file chooser. Use “Import from Studio host path…” instead.", "warning");
+        }
+      }
+
+      if (importFileBtn) {
+        importFileBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleImportFileMenu();
         });
       }
+      if (importFileChooseBtn) {
+        importFileChooseBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (importFileChooseBtn.disabled) return;
+          chooseStudioFileCopyWithBrowser();
+        });
+      }
+      if (importFilePathBtn) {
+        importFilePathBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (importFilePathBtn.disabled) return;
+          closeImportFileMenu();
+          void importStudioFileCopyByPath();
+        });
+      }
+      if (importFileMenuEl) {
+        importFileMenuEl.addEventListener("keydown", handleImportFileMenuKeydown);
+      }
+      if (importFileControlsEl) {
+        importFileControlsEl.addEventListener("focusout", () => {
+          window.setTimeout(() => {
+            if (!importFileControlsEl.contains(document.activeElement)) closeImportFileMenu();
+          }, 0);
+        });
+      }
+      window.addEventListener("resize", positionImportFileMenu);
 
       fileInput.addEventListener("change", () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
 
+        closeImportFileMenu();
         // Clear the input immediately so selecting the same file again will
         // still fire a future change event.
         fileInput.value = "";
