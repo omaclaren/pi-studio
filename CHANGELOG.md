@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.46] — 2026-08-20
+
 ### Fixed
 - Re-resolve local Markdown images and refresh active previews when their file or working-directory context changes, preventing stale relative image URLs from rendering as broken links in Muxy and other browser hosts.
 
