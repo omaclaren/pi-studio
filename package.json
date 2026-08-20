@@ -1,6 +1,6 @@
 {
   "name": "pi-studio",
-  "version": "0.9.46",
+  "version": "0.9.47",
   "description": "Two-pane browser workspace for pi with prompt/response editing, annotations, critiques, active quiz, prompt/response history, live previews, and tmux-backed REPL/literate REPL workflows",
   "type": "module",
   "license": "MIT",

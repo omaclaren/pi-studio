@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.47] — 2026-08-20
+
 ### Fixed
 - Fall back to Pandoc’s compatible self-contained resource mode when its capability probe times out, and evict failed probes so one transient delay cannot disable previews for the rest of the Studio process.
 
