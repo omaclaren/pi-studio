@@ -8,7 +8,7 @@ All notable changes to `pi-studio` are documented here.
 - Add explicit browser-tab, system-viewer, and file-manager actions to local PDF preview cards and the focused PDF viewer.
 
 ### Fixed
-- Make **Import file copy…** offer both browser selection and authenticated Studio-host path import, so embedded and remote browser views have a durable fallback without environment or user-agent detection.
+- Make **Import file copy…** open a persistent dialog with browser selection and authenticated import from a path on the computer running Pi, keeping the path fallback visible when embedded or remote browser views cannot open a native chooser and avoiding environment or user-agent detection.
 - Replace native JavaScript confirmation and text-input dialogs with accessible in-page dialogs so comment deletion, overwrite/reset actions, and Save As work in embedded WebKit browsers such as Muxy.
 - Keep Pandoc-based LaTeX previews and right-preview PDF/HTML exports usable when a local legacy style overrides LaTeX document startup, omitting only the incompatible package from the conversion while preserving includes and warning that package-specific layout is absent.
 

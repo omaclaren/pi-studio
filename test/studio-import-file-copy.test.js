@@ -6,40 +6,41 @@ const indexSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8"
 const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 const cssSource = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
 
-test("Import file copy always exposes browser and Studio-host choices", () => {
-  assert.match(indexSource, /<button id="importFileBtn"[^>]*aria-haspopup="menu"[^>]*>Import file copy…<\/button>/);
-  assert.match(indexSource, /<div id="importFileMenu" class="import-file-menu" role="menu" aria-labelledby="importFileBtn" hidden>/);
-  assert.match(indexSource, /id="importFileChooseBtn"[^>]*role="menuitem"/);
-  assert.match(indexSource, /Choose file in browser…/);
-  assert.match(indexSource, /id="importFilePathBtn"[^>]*role="menuitem"/);
-  assert.match(indexSource, /Import from Studio host path…/);
+test("Import file copy opens one persistent host-independent dialog", () => {
+  assert.match(indexSource, /<button id="importFileBtn"[^>]*>Import file copy…<\/button>/);
   assert.match(indexSource, /<input id="fileInput" class="file-input-hidden" type="file"/);
-  assert.match(cssSource, /\.import-file-menu \{/);
   assert.match(cssSource, /\.file-input-hidden \{\s*display: none !important;/);
+  assert.doesNotMatch(indexSource, /importFileMenu|data-muxy-session|initialMuxySession/);
+  assert.doesNotMatch(clientSource, /toggleImportFileMenu|useServerPathFileImport|isEmbeddedWebKitBrowser|studioUserAgent/);
+  assert.match(clientSource, /void openStudioFileCopyDialog\(\)/);
 });
 
-test("file-import correctness does not depend on Muxy detection or user-agent sniffing", () => {
-  assert.doesNotMatch(indexSource, /data-muxy-session|initialMuxySession/);
-  assert.doesNotMatch(clientSource, /useServerPathFileImport|isEmbeddedWebKitBrowser|studioUserAgent/);
-  assert.match(clientSource, /importFileChooseBtn\.addEventListener\("click"/);
-  assert.match(clientSource, /chooseStudioFileCopyWithBrowser\(\)/);
-  assert.match(clientSource, /importFilePathBtn\.addEventListener\("click"/);
-  assert.match(clientSource, /void importStudioFileCopyByPath\(\)/);
+test("the import dialog keeps browser selection secondary to an always-visible path option", () => {
+  assert.match(clientSource, /title: "Import file copy"/);
+  assert.match(clientSource, /Enter the path to a file you want to import, or use Browse to open your browser’s file picker\./);
+  assert.match(clientSource, /confirmLabel: "Import from path"/);
+  assert.match(clientSource, /secondaryLabel: "Browse…"/);
+  assert.match(clientSource, /onSecondary: chooseStudioFileCopyWithBrowser/);
+  assert.match(clientSource, /inputLabel: "File path on computer running Pi"/);
+  assert.match(clientSource, /studioDecisionSecondaryBtn\.hidden = !secondaryLabel/);
+  assert.match(clientSource, /const handler = studioDecisionState && studioDecisionState\.onSecondary/);
+  assert.doesNotMatch(
+    clientSource.slice(
+      clientSource.indexOf('secondaryBtn.addEventListener("click"'),
+      clientSource.indexOf('const confirmBtn = document.createElement("button")'),
+    ),
+    /finishStudioDecision/,
+  );
 });
 
-test("Import file copy menu is dismissible and keyboard navigable", () => {
-  assert.match(clientSource, /function toggleImportFileMenu\(\)/);
-  assert.match(clientSource, /importFileBtn\.setAttribute\("aria-expanded", "true"\)/);
-  assert.match(clientSource, /importFileBtn\.setAttribute\("aria-expanded", "false"\)/);
-  assert.match(clientSource, /\["ArrowDown", "ArrowUp", "Home", "End"\]/);
-  assert.match(clientSource, /function positionImportFileMenu\(\)/);
-  assert.match(clientSource, /const clampedLeft = Math\.max\(viewportMargin, Math\.min\(menuRect\.left, maxLeft\)\)/);
-  assert.match(clientSource, /window\.addEventListener\("resize", positionImportFileMenu\)/);
-  assert.match(clientSource, /closeImportFileMenu\(\{ restoreFocus: true \}\)/);
-  assert.match(clientSource, /if \(!targetEl \|\| !targetEl\.closest\("#importFileControls"\)\) closeImportFileMenu\(\)/);
+test("a missing browser chooser leaves the import dialog usable", () => {
+  assert.match(clientSource, /fileInput\.click\(\)/);
+  assert.match(clientSource, /enter the file path and select Import from path/i);
+  assert.match(clientSource, /studioImportDecisionOpen = true/);
+  assert.match(clientSource, /if \(studioImportDecisionOpen\) finishStudioDecision\(null\)/);
 });
 
-test("Studio-host path import is authenticated, bounded, and rejects binary files", () => {
+test("path import is authenticated, bounded, and rejects binary files", () => {
   assert.match(indexSource, /const STUDIO_IMPORT_FILE_MAX_BYTES = 10_000_000/);
   assert.match(indexSource, /async function handleImportStudioFileCopyRequest\(/);
   assert.match(indexSource, /stats\.size > STUDIO_IMPORT_FILE_MAX_BYTES/);
@@ -50,7 +51,7 @@ test("Studio-host path import is authenticated, bounded, and rejects binary file
   assert.match(clientSource, /body: JSON\.stringify\(\{ path \}\)/);
 });
 
-test("both import choices create the same detached editor copy", () => {
+test("both import actions create the same detached editor copy", () => {
   assert.match(clientSource, /function applyImportedFileCopy\(text, filename\)/);
   assert.match(clientSource, /source: "upload",\s*label: "imported copy: " \+ name,\s*path: null/);
   assert.match(clientSource, /fileInput\.addEventListener\("change", \(\) => \{/);

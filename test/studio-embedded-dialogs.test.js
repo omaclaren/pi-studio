@@ -19,6 +19,8 @@ test("the in-page decision dialog is modal, cancellable, and keyboard accessible
   assert.match(clientSource, /if \(event\.target === overlay\) finishStudioDecision\(null\)/);
   assert.match(clientSource, /if \(event\.key === "Escape"\)[\s\S]*finishStudioDecision\(null\)/);
   assert.match(clientSource, /if \(event\.key !== "Tab"\) return;/);
+  assert.match(clientSource, /\[studioDecisionInputEl, studioDecisionCancelBtn, studioDecisionSecondaryBtn, studioDecisionConfirmBtn\]/);
+  assert.match(clientSource, /studioDecisionSecondaryBtn\.hidden = !secondaryLabel/);
   assert.match(clientSource, /studioDecisionCancelBtn\.focus\(\)/);
   assert.match(clientSource, /studioDecisionInputEl\.select\(\)/);
   assert.match(cssSource, /\.studio-decision-overlay \{[\s\S]*?z-index: 13000;/);

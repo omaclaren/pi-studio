@@ -10752,19 +10752,7 @@ ${cssVarsBlock}
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
-      <span id="importFileControls" class="import-file-controls">
-        <button id="importFileBtn" class="import-file-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose how to import a text file as a detached editor copy.">Import file copy…</button>
-        <div id="importFileMenu" class="import-file-menu" role="menu" aria-labelledby="importFileBtn" hidden>
-          <button id="importFileChooseBtn" type="button" role="menuitem">
-            <span class="import-file-menu-label">Choose file in browser…</span>
-            <span class="import-file-menu-hint">Uses this browser's chooser; use the host-path option below if unavailable.</span>
-          </button>
-          <button id="importFilePathBtn" type="button" role="menuitem">
-            <span class="import-file-menu-label">Import from Studio host path…</span>
-            <span class="import-file-menu-hint">Reads a path on the machine running Pi.</span>
-          </button>
-        </div>
-      </span>
+      <button id="importFileBtn" type="button" title="Import a detached text-file copy through the browser file picker or a path on the computer running Pi.">Import file copy…</button>
       <input id="fileInput" class="file-input-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" />
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>

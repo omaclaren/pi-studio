@@ -85,11 +85,7 @@
       const showMeResponseBtn = document.getElementById("showMeResponseBtn");
       const quizBtn = document.getElementById("quizBtn");
       const lensSelect = document.getElementById("lensSelect");
-      const importFileControlsEl = document.getElementById("importFileControls");
       const importFileBtn = document.getElementById("importFileBtn");
-      const importFileMenuEl = document.getElementById("importFileMenu");
-      const importFileChooseBtn = document.getElementById("importFileChooseBtn");
-      const importFilePathBtn = document.getElementById("importFilePathBtn");
       const fileInput = document.getElementById("fileInput");
       const resourceDirBtn = document.getElementById("resourceDirBtn");
       const resourceDirLabel = document.getElementById("resourceDirLabel");
@@ -303,8 +299,10 @@
       let studioDecisionMessageEl = null;
       let studioDecisionInputEl = null;
       let studioDecisionCancelBtn = null;
+      let studioDecisionSecondaryBtn = null;
       let studioDecisionConfirmBtn = null;
       let studioDecisionState = null;
+      let studioImportDecisionOpen = false;
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
@@ -3657,7 +3655,7 @@
       }
 
       function getStudioDecisionFocusableElements() {
-        return [studioDecisionInputEl, studioDecisionCancelBtn, studioDecisionConfirmBtn]
+        return [studioDecisionInputEl, studioDecisionCancelBtn, studioDecisionSecondaryBtn, studioDecisionConfirmBtn]
           .filter((element) => element && !element.hidden && !element.disabled);
       }
 
@@ -3705,6 +3703,26 @@
         cancelBtn.addEventListener("click", () => finishStudioDecision(null));
         actions.appendChild(cancelBtn);
 
+        const secondaryBtn = document.createElement("button");
+        secondaryBtn.type = "button";
+        secondaryBtn.className = "studio-decision-secondary";
+        secondaryBtn.hidden = true;
+        secondaryBtn.addEventListener("click", () => {
+          const handler = studioDecisionState && studioDecisionState.onSecondary;
+          if (typeof handler !== "function") return;
+          try {
+            const result = handler();
+            if (result && typeof result.catch === "function") {
+              result.catch((error) => {
+                setStatus("Action failed: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+              });
+            }
+          } catch (error) {
+            setStatus("Action failed: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+          }
+        });
+        actions.appendChild(secondaryBtn);
+
         const confirmBtn = document.createElement("button");
         confirmBtn.type = "button";
         confirmBtn.className = "studio-decision-confirm";
@@ -3751,6 +3769,7 @@
         studioDecisionMessageEl = message;
         studioDecisionInputEl = input;
         studioDecisionCancelBtn = cancelBtn;
+        studioDecisionSecondaryBtn = secondaryBtn;
         studioDecisionConfirmBtn = confirmBtn;
         return overlay;
       }
@@ -3762,11 +3781,17 @@
         if (studioDecisionState) finishStudioDecision(null, false);
         const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
+        const secondaryLabel = String(settings.secondaryLabel || "").trim();
         studioDecisionTitleEl.textContent = String(settings.title || (mode === "prompt" ? "Enter a value" : "Confirm action"));
         studioDecisionMessageEl.textContent = String(settings.message || "");
         studioDecisionInputEl.hidden = mode !== "prompt";
         studioDecisionInputEl.value = mode === "prompt" ? String(settings.defaultValue || "") : "";
+        studioDecisionInputEl.placeholder = mode === "prompt" ? String(settings.placeholder || "") : "";
+        studioDecisionInputEl.setAttribute("aria-label", String(settings.inputLabel || "Value"));
         studioDecisionCancelBtn.textContent = String(settings.cancelLabel || "Cancel");
+        studioDecisionSecondaryBtn.hidden = !secondaryLabel;
+        studioDecisionSecondaryBtn.disabled = settings.secondaryDisabled === true;
+        studioDecisionSecondaryBtn.textContent = secondaryLabel;
         studioDecisionConfirmBtn.textContent = String(settings.confirmLabel || (mode === "prompt" ? "Continue" : "Confirm"));
         studioDecisionConfirmBtn.classList.toggle("is-destructive", settings.destructive === true);
         studioDecisionDialogEl.classList.toggle("is-destructive", settings.destructive === true);
@@ -3774,7 +3799,12 @@
         if (document.body) document.body.classList.add("studio-decision-open");
 
         return new Promise((resolve) => {
-          const decisionState = { mode, resolve, returnFocusEl };
+          const decisionState = {
+            mode,
+            resolve,
+            returnFocusEl,
+            onSecondary: typeof settings.onSecondary === "function" ? settings.onSecondary : null,
+          };
           studioDecisionState = decisionState;
           const schedule = typeof window.requestAnimationFrame === "function"
             ? window.requestAnimationFrame.bind(window)
@@ -9388,80 +9418,6 @@
         }
       }
 
-      function getImportFileMenuItems() {
-        if (!importFileMenuEl) return [];
-        return Array.from(importFileMenuEl.querySelectorAll('[role="menuitem"]'))
-          .filter((element) => element instanceof HTMLButtonElement && !element.disabled);
-      }
-
-      function positionImportFileMenu() {
-        if (!importFileControlsEl || !importFileMenuEl || importFileMenuEl.hidden) return;
-        importFileMenuEl.style.left = "";
-        importFileMenuEl.style.right = "0px";
-        const menuRect = importFileMenuEl.getBoundingClientRect();
-        const controlsRect = importFileControlsEl.getBoundingClientRect();
-        const viewportMargin = 12;
-        const maxLeft = Math.max(viewportMargin, window.innerWidth - menuRect.width - viewportMargin);
-        const clampedLeft = Math.max(viewportMargin, Math.min(menuRect.left, maxLeft));
-        importFileMenuEl.style.left = Math.round(clampedLeft - controlsRect.left) + "px";
-        importFileMenuEl.style.right = "auto";
-      }
-
-      function closeImportFileMenu(options) {
-        if (!importFileMenuEl) return;
-        importFileMenuEl.hidden = true;
-        if (importFileBtn) {
-          importFileBtn.classList.remove("is-open");
-          importFileBtn.setAttribute("aria-expanded", "false");
-          if (options && options.restoreFocus && !importFileBtn.disabled) {
-            importFileBtn.focus({ preventScroll: true });
-          }
-        }
-      }
-
-      function toggleImportFileMenu() {
-        if (!importFileMenuEl || !importFileBtn || importFileBtn.disabled) return;
-        const willOpen = importFileMenuEl.hidden;
-        if (!willOpen) {
-          closeImportFileMenu();
-          return;
-        }
-        closeExportPreviewMenu();
-        if (typeof closeStudioUiRefreshMenus === "function") {
-          closeStudioUiRefreshMenus();
-        }
-        importFileMenuEl.hidden = false;
-        importFileBtn.classList.add("is-open");
-        importFileBtn.setAttribute("aria-expanded", "true");
-        positionImportFileMenu();
-        const firstItem = getImportFileMenuItems()[0];
-        if (firstItem) {
-          window.setTimeout(() => {
-            if (!importFileMenuEl.hidden && firstItem.isConnected) firstItem.focus({ preventScroll: true });
-          }, 0);
-        }
-      }
-
-      function handleImportFileMenuKeydown(event) {
-        if (!importFileMenuEl || importFileMenuEl.hidden) return;
-        if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          closeImportFileMenu({ restoreFocus: true });
-          return;
-        }
-        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-        const items = getImportFileMenuItems();
-        if (!items.length) return;
-        const currentIndex = items.indexOf(document.activeElement);
-        let nextIndex = 0;
-        if (event.key === "End") nextIndex = items.length - 1;
-        else if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
-        else if (event.key === "ArrowUp") nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
-        event.preventDefault();
-        items[nextIndex].focus({ preventScroll: true });
-      }
-
       function closeExportPreviewMenu() {
         if (!exportPreviewMenuEl) return;
         exportPreviewMenuEl.hidden = true;
@@ -9473,7 +9429,6 @@
 
       function toggleExportPreviewMenu() {
         if (!exportPreviewMenuEl || !exportPdfBtn || exportPdfBtn.disabled) return;
-        closeImportFileMenu();
         if (typeof closeStudioUiRefreshMenus === "function") {
           closeStudioUiRefreshMenus();
         }
@@ -11775,9 +11730,6 @@
 
         fileInput.disabled = uiBusy;
         if (importFileBtn) importFileBtn.disabled = uiBusy;
-        if (importFileChooseBtn) importFileChooseBtn.disabled = uiBusy;
-        if (importFilePathBtn) importFilePathBtn.disabled = uiBusy;
-        if (uiBusy) closeImportFileMenu();
         if (sourceBadgeEl) sourceBadgeEl.disabled = uiBusy;
         if (sourceResetOriginBtn) sourceResetOriginBtn.disabled = uiBusy;
         if (sourceOpenCurrentFileTabBtn) {
@@ -21755,14 +21707,12 @@
 
       document.addEventListener("click", (event) => {
         const target = event.target;
-        const targetEl = target instanceof Element ? target : null;
-        if (!targetEl || !targetEl.closest("#exportPreviewControls")) closeExportPreviewMenu();
-        if (!targetEl || !targetEl.closest("#importFileControls")) closeImportFileMenu();
+        if (target instanceof Element && target.closest("#exportPreviewControls")) return;
+        closeExportPreviewMenu();
       });
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
           closeExportPreviewMenu();
-          closeImportFileMenu();
           closePreviewLinkMenu();
           setFooterModelMenuOpen(false);
           setFooterThemeMenuOpen(false);
@@ -22537,14 +22487,37 @@
         setStatus("Imported file copy: " + name + ".", "success");
       }
 
-      async function importStudioFileCopyByPath() {
+      function chooseStudioFileCopyWithBrowser() {
+        fileInput.value = "";
+        setStatus("If no file picker appeared, enter the file path and select Import from path.");
+        try {
+          fileInput.click();
+        } catch {
+          setStatus("This browser could not open its file picker. Enter the file path and select Import from path.", "warning");
+        }
+      }
+
+      async function openStudioFileCopyDialog() {
         const resourceDir = getCurrentResourceDirValue();
         const suggestedPath = resourceDir ? resourceDir.replace(/[\\/]$/, "") + "/" : "./";
-        const path = await requestStudioTextInput(
-          "Enter the local path of a text file to import as a detached editor copy:",
-          suggestedPath,
-          { title: "Import file copy", confirmLabel: "Import" },
-        );
+        let path = null;
+        studioImportDecisionOpen = true;
+        try {
+          path = await requestStudioTextInput(
+            "Enter the path to a file you want to import, or use Browse to open your browser’s file picker.",
+            suggestedPath,
+            {
+              title: "Import file copy",
+              confirmLabel: "Import from path",
+              secondaryLabel: "Browse…",
+              onSecondary: chooseStudioFileCopyWithBrowser,
+              inputLabel: "File path on computer running Pi",
+              placeholder: "/path/to/file.md",
+            },
+          );
+        } finally {
+          studioImportDecisionOpen = false;
+        }
         if (!path) return;
         try {
           const payload = await fetchStudioJson("/import-file-copy", {
@@ -22558,57 +22531,18 @@
         }
       }
 
-      function chooseStudioFileCopyWithBrowser() {
-        fileInput.value = "";
-        setStatus("Choose a text file, or use “Import from Studio host path…” if this browser does not open a chooser.");
-        try {
-          fileInput.click();
-        } catch {
-          setStatus("This browser could not open its file chooser. Use “Import from Studio host path…” instead.", "warning");
-        }
-      }
-
       if (importFileBtn) {
         importFileBtn.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          toggleImportFileMenu();
+          void openStudioFileCopyDialog();
         });
       }
-      if (importFileChooseBtn) {
-        importFileChooseBtn.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (importFileChooseBtn.disabled) return;
-          chooseStudioFileCopyWithBrowser();
-        });
-      }
-      if (importFilePathBtn) {
-        importFilePathBtn.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (importFilePathBtn.disabled) return;
-          closeImportFileMenu();
-          void importStudioFileCopyByPath();
-        });
-      }
-      if (importFileMenuEl) {
-        importFileMenuEl.addEventListener("keydown", handleImportFileMenuKeydown);
-      }
-      if (importFileControlsEl) {
-        importFileControlsEl.addEventListener("focusout", () => {
-          window.setTimeout(() => {
-            if (!importFileControlsEl.contains(document.activeElement)) closeImportFileMenu();
-          }, 0);
-        });
-      }
-      window.addEventListener("resize", positionImportFileMenu);
 
       fileInput.addEventListener("change", () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
 
-        closeImportFileMenu();
         // Clear the input immediately so selecting the same file again will
         // still fire a future change event.
         fileInput.value = "";
@@ -22616,10 +22550,11 @@
         const reader = new FileReader();
         reader.onload = () => {
           const text = typeof reader.result === "string" ? reader.result : "";
+          if (studioImportDecisionOpen) finishStudioDecision(null);
           applyImportedFileCopy(text, file.name);
         };
         reader.onerror = () => {
-          setStatus("Failed to read file.", "error");
+          setStatus("Failed to read file. Enter its path in the import dialog or choose another file.", "error");
         };
         reader.readAsText(file);
       });
