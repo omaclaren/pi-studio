@@ -10752,7 +10752,7 @@ ${cssVarsBlock}
       <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
-      <button id="importFileBtn" type="button" title="Import a detached text-file copy through the browser file picker or a path on the computer running Pi.">Import file copy…</button>
+      <button id="importFileBtn" type="button" title="Import a file as an editable copy.">Import file copy…</button>
       <input id="fileInput" class="file-input-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" />
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>

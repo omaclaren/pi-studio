@@ -7,7 +7,7 @@ const clientSource = readFileSync(new URL("../client/studio-client.js", import.m
 const cssSource = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
 
 test("Import file copy opens one persistent host-independent dialog", () => {
-  assert.match(indexSource, /<button id="importFileBtn"[^>]*>Import file copy…<\/button>/);
+  assert.match(indexSource, /<button id="importFileBtn"[^>]*title="Import a file as an editable copy\."[^>]*>Import file copy…<\/button>/);
   assert.match(indexSource, /<input id="fileInput" class="file-input-hidden" type="file"/);
   assert.match(cssSource, /\.file-input-hidden \{\s*display: none !important;/);
   assert.doesNotMatch(indexSource, /importFileMenu|data-muxy-session|initialMuxySession/);
