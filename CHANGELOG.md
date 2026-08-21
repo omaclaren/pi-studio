@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.48] — 2026-08-21
+
 ### Added
 - Add explicit browser-tab, system-viewer, and file-manager actions to local PDF preview cards and the focused PDF viewer.
 
