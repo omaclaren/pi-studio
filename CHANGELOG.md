@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Open local PDFs directly with `/studio <path.pdf>` or `/studio-editor-only <path.pdf>` in a read-only, right-focused companion preview, including optional `#page=N` hints and the existing PDF viewer actions without replacing an open full Studio workspace.
+
 ## [0.9.48] — 2026-08-21
 
 ### Added

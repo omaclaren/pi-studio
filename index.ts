@@ -28,6 +28,7 @@ import {
 	preserveLiteralLatexCommandsInMarkdown,
 } from "./shared/studio-markdown-latex-literals.js";
 import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js";
+import { parseStudioLocalPreviewPage, parseStudioPdfLaunchTarget } from "./shared/studio-local-preview-path.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { createStudioPandocHtmlResourceFlagResolver } from "./shared/studio-pandoc-resource-flag.js";
 import { prepareStudioLatexForPandoc } from "./shared/studio-latex-pandoc-compat.js";
@@ -274,6 +275,21 @@ interface InitialStudioDocument {
 	path?: string;
 	draftId?: string;
 	resourceDir?: string;
+}
+
+interface StudioLaunchSelection {
+	document: InitialStudioDocument;
+	kind: "document" | "pdf-preview";
+	mode?: StudioUiMode;
+	transient?: boolean;
+	skipWorkspaceRestore?: boolean;
+	paneFocus?: "left" | "right";
+	resourcePath?: string;
+}
+
+interface StudioUrlOptions {
+	skipWorkspaceRestore?: boolean;
+	paneFocus?: "left" | "right";
 }
 
 type PersistedStudioReviewNoteAnchorKind = "source" | "html-selection" | "html-element" | "html-page";
@@ -2949,35 +2965,6 @@ function decodeStudioHtmlPreviewResourcePath(resourcePath: string): string {
 	}
 }
 
-function parseStudioLocalPreviewResourcePage(resourcePath: string): number | null {
-	const raw = String(resourcePath || "");
-	const parts: string[] = [];
-	const queryIndex = raw.indexOf("?");
-	if (queryIndex >= 0) {
-		const queryEnd = raw.indexOf("#", queryIndex);
-		parts.push(raw.slice(queryIndex + 1, queryEnd >= 0 ? queryEnd : raw.length));
-	}
-	const hashIndex = raw.indexOf("#");
-	if (hashIndex >= 0) parts.push(raw.slice(hashIndex + 1));
-	for (const part of parts) {
-		try {
-			const params = new URLSearchParams(part);
-			const rawPage = params.get("page") || params.get("p");
-			if (rawPage) {
-				const page = Number.parseInt(rawPage, 10);
-				if (Number.isFinite(page) && page > 0) return page;
-			}
-		} catch {
-			const match = part.match(/(?:^|[&;])page=(\d+)/i) || part.match(/^page=(\d+)$/i);
-			if (match && match[1]) {
-				const page = Number.parseInt(match[1], 10);
-				if (Number.isFinite(page) && page > 0) return page;
-			}
-		}
-	}
-	return null;
-}
-
 function getStudioLocalPreviewResourceKind(extension: string, filePathOrName?: string): StudioLocalPreviewResourceKind {
 	const ext = extension.toLowerCase();
 	const name = basename(String(filePathOrName || "")).toLowerCase();
@@ -3022,7 +3009,7 @@ function resolveStudioLocalPreviewResourcePath(
 		label: rel && rel !== "" ? rel : basename(candidateReal),
 		extension,
 		kind: getStudioLocalPreviewResourceKind(extension, candidateReal),
-		page: parseStudioLocalPreviewResourcePage(rawPath),
+		page: parseStudioLocalPreviewPage(rawPath),
 		resourceDir: boundaryReal,
 	};
 }
@@ -7415,6 +7402,7 @@ function buildStudioLocalResourcePreviewDocument(resource: StudioLocalPreviewRes
 		text = "```studio-pdf\n"
 			+ `path: ${sanitizeStudioPreviewBlockLine(resourcePath)}\n`
 			+ `title: ${title || "PDF preview"}\n`
+			+ (resource.page ? `page: ${resource.page}\n` : "")
 			+ "height: 820\n"
 			+ "```\n";
 	} else if (resource.kind === "image") {
@@ -10283,7 +10271,7 @@ function buildStudioRelativeUrl(
 	mode: StudioUiMode = "full",
 	doc?: InitialStudioDocument | null,
 	docId?: string,
-	options?: { skipWorkspaceRestore?: boolean },
+	options?: StudioUrlOptions,
 ): string {
 	const params = new URLSearchParams({ token });
 	if (mode !== "full") params.set("mode", mode);
@@ -10294,6 +10282,7 @@ function buildStudioRelativeUrl(
 	if (doc?.draftId) params.set("draftId", doc.draftId);
 	if (doc?.resourceDir) params.set("resourceDir", doc.resourceDir);
 	if (options?.skipWorkspaceRestore) params.set("skipWorkspaceRestore", "1");
+	if (options?.paneFocus) params.set("paneFocus", options.paneFocus);
 	return `/?${params.toString()}`;
 }
 
@@ -10303,7 +10292,7 @@ function buildStudioUrl(
 	mode: StudioUiMode = "full",
 	doc?: InitialStudioDocument | null,
 	docId?: string,
-	options?: { skipWorkspaceRestore?: boolean },
+	options?: StudioUrlOptions,
 ): string {
 	return `http://127.0.0.1:${port}${buildStudioRelativeUrl(token, mode, doc, docId, options)}`;
 }
@@ -15744,10 +15733,11 @@ export default function (pi: ExtensionAPI) {
 	const resolveStudioLaunchDocument = (
 		trimmed: string,
 		ctx: ExtensionCommandContext,
-		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string },
-	): InitialStudioDocument | null => {
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; allowPdfPreview?: boolean },
+	): StudioLaunchSelection | null => {
 		const defaultSource = options?.defaultSource === "blank" ? "blank" : "last-response";
 		const commandLabel = options?.commandLabel ?? "/studio";
+		const selectDocument = (document: InitialStudioDocument): StudioLaunchSelection => ({ document, kind: "document" });
 		const latestAssistant =
 			extractLatestAssistantFromEntries(ctx.sessionManager.getBranch())
 				?? extractLatestAssistantFromEntries(ctx.sessionManager.getEntries())
@@ -15756,51 +15746,51 @@ export default function (pi: ExtensionAPI) {
 
 		if (!trimmed) {
 			if (defaultSource === "last-response" && latestAssistant) {
-				return {
+				return selectDocument({
 					text: latestAssistant,
 					label: "last model response",
 					source: "last-response",
 					draftId: createStudioDraftId(),
 					resourceDir: ctx.cwd,
-				};
+				});
 			}
-			return {
+			return selectDocument({
 				text: "",
 				label: "blank",
 				source: "blank",
 				draftId: createStudioDraftId(),
 				resourceDir: ctx.cwd,
-			};
+			});
 		}
 
 		if (trimmed === "--blank" || trimmed === "blank") {
-			return {
+			return selectDocument({
 				text: "",
 				label: "blank",
 				source: "blank",
 				draftId: createStudioDraftId(),
 				resourceDir: ctx.cwd,
-			};
+			});
 		}
 
 		if (trimmed === "--last" || trimmed === "last") {
 			if (!latestAssistant) {
 				ctx.ui.notify("No assistant response found; opening blank studio.", "warning");
-				return {
+				return selectDocument({
 					text: "",
 					label: "blank",
 					source: "blank",
 					draftId: createStudioDraftId(),
 					resourceDir: ctx.cwd,
-				};
+				});
 			}
-			return {
+			return selectDocument({
 				text: latestAssistant,
 				label: "last model response",
 				source: "last-response",
 				draftId: createStudioDraftId(),
 				resourceDir: ctx.cwd,
-			};
+			});
 		}
 
 		if (trimmed.startsWith("-")) {
@@ -15812,6 +15802,36 @@ export default function (pi: ExtensionAPI) {
 		if (!pathArg) {
 			ctx.ui.notify("Invalid file path argument.", "error");
 			return null;
+		}
+
+		const pdfTarget = options?.allowPdfPreview ? parseStudioPdfLaunchTarget(normalizePathInput(pathArg)) : null;
+		if (pdfTarget) {
+			const resolved = resolveStudioPath(pdfTarget.path, ctx.cwd);
+			if (resolved.ok === false) {
+				ctx.ui.notify(resolved.message, "error");
+				return null;
+			}
+			try {
+				const resource = resolveStudioLocalPreviewResourcePath(
+					pdfTarget.page ? `${resolved.resolved}#page=${pdfTarget.page}` : resolved.resolved,
+					resolved.resolved,
+					dirname(resolved.resolved),
+					ctx.cwd,
+				);
+				if (resource.kind !== "pdf") throw new Error("Only local .pdf files can open in the Studio PDF viewer.");
+				return {
+					document: buildStudioLocalResourcePreviewDocument(resource),
+					kind: "pdf-preview",
+					mode: "editor-only",
+					transient: true,
+					skipWorkspaceRestore: true,
+					paneFocus: "right",
+					resourcePath: resource.filePath,
+				};
+			} catch (error) {
+				ctx.ui.notify(`Could not open PDF preview: ${error instanceof Error ? error.message : String(error)}`, "error");
+				return null;
+			}
 		}
 
 		const file = readStudioFile(pathArg, ctx.cwd);
@@ -15827,13 +15847,13 @@ export default function (pi: ExtensionAPI) {
 			);
 		}
 
-		return {
+		return selectDocument({
 			text: file.text,
 			label: file.label,
 			source: "file",
 			path: file.resolvedPath,
 			resourceDir: ctx.cwd,
-		};
+		});
 	};
 
 	const resolveLastModelResponseForExport = (ctx: ExtensionContext): { markdown: string } | null => {
@@ -16090,7 +16110,7 @@ export default function (pi: ExtensionAPI) {
 		trimmed: string,
 		ctx: ExtensionCommandContext,
 		mode: StudioUiMode,
-		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; replaceExistingFull?: boolean },
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; replaceExistingFull?: boolean; allowPdfPreview?: boolean },
 	) => {
 		const launchOpenFlags = parseStudioLaunchOpenFlags(trimmed);
 		if (launchOpenFlags.error) {
@@ -16101,7 +16121,13 @@ export default function (pi: ExtensionAPI) {
 		if (serverState && launchOpenFlags.port && serverState.port !== launchOpenFlags.port) {
 			ctx.ui.notify(`Studio server is already running on port ${serverState.port}; requested port ${launchOpenFlags.port}. Use /studio --stop, then restart Studio with --port ${launchOpenFlags.port} to change it.`, "warning");
 		}
-		if (mode === "full" && hasConnectedFullStudioView()) {
+
+		const parsedLaunchPath = options?.allowPdfPreview ? parsePathArgument(launchArgs) : null;
+		const launchesPdfPreview = parsedLaunchPath
+			? Boolean(parseStudioPdfLaunchTarget(normalizePathInput(parsedLaunchPath)))
+			: false;
+		const requestedLaunchMode: StudioUiMode = launchesPdfPreview ? "editor-only" : mode;
+		if (requestedLaunchMode === "full" && hasConnectedFullStudioView()) {
 			if (options?.replaceExistingFull) {
 				closeStudioClientsByMode("full", 4001, "Full Studio replaced");
 			} else {
@@ -16132,9 +16158,11 @@ export default function (pi: ExtensionAPI) {
 			// ignore theme read errors
 		}
 
-		const selected = resolveStudioLaunchDocument(launchArgs, ctx, options);
-		if (!selected) return;
-		initialStudioDocument = selected;
+		const selection = resolveStudioLaunchDocument(launchArgs, ctx, options);
+		if (!selection) return;
+		const selected = selection.document;
+		const launchMode = selection.mode ?? requestedLaunchMode;
+		if (!selection.transient) initialStudioDocument = selected;
 
 		let state: StudioServerState;
 		try {
@@ -16145,10 +16173,16 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(`Failed to start Studio server${portText}: ${message}`, "error");
 			return;
 		}
-		const url = buildStudioUrl(state.port, state.token, mode, selected);
+		const docId = selection.transient ? storeTransientStudioDocument(selected) : undefined;
+		const url = buildStudioUrl(state.port, state.token, launchMode, selected, docId, {
+			skipWorkspaceRestore: selection.skipWorkspaceRestore,
+			paneFocus: selection.paneFocus,
+		});
 		const tunnelHint = buildStudioSshTunnelHint(state.port, url)
 			?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
-		const openedLabel = mode === "editor-only" ? "pi Studio editor-only view" : "pi Studio";
+		const openedLabel = selection.kind === "pdf-preview"
+			? "pi Studio PDF preview"
+			: (launchMode === "editor-only" ? "pi Studio editor-only view" : "pi Studio");
 
 		const shouldOpenBrowser = shouldAutoOpenStudioBrowser({
 			openRemoteBrowser: launchOpenFlags.openRemoteBrowser,
@@ -16160,7 +16194,9 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`${openedLabel} is ready. Browser auto-open was skipped because ${skipReason}.`, "info");
 			} else {
 				await openStudioUrlInBrowser(url);
-				if (selected.source === "file") {
+				if (selection.kind === "pdf-preview") {
+					ctx.ui.notify(`Opened ${openedLabel}: ${selection.resourcePath ?? selected.label}`, "info");
+				} else if (selected.source === "file") {
 					ctx.ui.notify(`Opened ${openedLabel} with file loaded: ${selected.label}`, "info");
 				} else if (selected.source === "last-response") {
 					ctx.ui.notify(`Opened ${openedLabel} with last model response (${selected.text.length} chars).`, "info");
@@ -16182,7 +16218,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("studio", {
-		description: "Open pi Studio browser UI (/studio, /studio <file>, /studio --blank, /studio --last, /studio --no-browser, /studio --port <port>)",
+		description: "Open pi Studio browser UI or a PDF preview (/studio, /studio <file>, /studio --blank, /studio --last, /studio --no-browser, /studio --port <port>)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 
@@ -16212,7 +16248,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(
 					"Usage: /studio [path|--blank|--last]\n"
 						+ "  /studio           Open studio with last model response (fallback: blank)\n"
-						+ "  /studio <path>    Open studio with file preloaded\n"
+						+ "  /studio <path>    Open a text file in Studio, or a PDF in a read-only companion preview\n"
 						+ "  /studio --blank   Open with blank editor\n"
 						+ "  /studio --last    Open with last model response\n"
 						+ "  /studio --no-browser  Print the Studio URL without opening a browser\n"
@@ -16220,7 +16256,7 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio --open-remote  Over SSH, open the remote browser anyway\n"
 						+ "  /studio --status  Show studio status\n"
 						+ "  /studio --stop    Stop studio server\n"
-						+ "  Note: only one full /studio view is allowed per Pi session.\n"
+						+ "  Note: only one full /studio view is allowed per Pi session; PDF previews open as companions.\n"
 						+ "  /studio-replace [path]  Replace the current full Studio view with a new one\n"
 						+ "  /studio-editor-only [path]  Open another Studio tab in editor-only mode\n"
 						+ "  /studio-current <path>  Load a file into currently open Studio tab(s)\n"
@@ -16231,7 +16267,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			await openStudioView(trimmed, ctx, "full", { defaultSource: "last-response", commandLabel: "/studio" });
+			await openStudioView(trimmed, ctx, "full", { defaultSource: "last-response", commandLabel: "/studio", allowPdfPreview: true });
 		},
 	});
 
@@ -16263,14 +16299,14 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("studio-editor-only", {
-		description: "Open pi Studio in editor-only mode (/studio-editor-only, /studio-editor-only <file>, /studio-editor-only --no-browser)",
+		description: "Open pi Studio in editor-only mode or preview a PDF (/studio-editor-only, /studio-editor-only <file>, /studio-editor-only --no-browser)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
 				ctx.ui.notify(
 					"Usage: /studio-editor-only [path|--blank|--last]\n"
 						+ "  /studio-editor-only         Open an editor-only Studio view (default: blank editor)\n"
-						+ "  /studio-editor-only <path>  Open an editor-only Studio view with file preloaded\n"
+						+ "  /studio-editor-only <path>  Open a text file for editing, or a PDF in a read-only preview\n"
 						+ "  /studio-editor-only --blank Open with blank editor\n"
 						+ "  /studio-editor-only --last  Open with last model response loaded into the editor\n"
 						+ "  /studio-editor-only --no-browser  Print URL without opening a browser\n"
@@ -16281,7 +16317,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			await openStudioView(trimmed, ctx, "editor-only", { defaultSource: "blank", commandLabel: "/studio-editor-only" });
+			await openStudioView(trimmed, ctx, "editor-only", { defaultSource: "blank", commandLabel: "/studio-editor-only", allowPdfPreview: true });
 		},
 	});
 
