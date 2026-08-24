@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.50] — 2026-08-25
+
 ### Added
 - Allow the global Studio header to be hidden independently and restored from a fixed top-edge control without shifting the workspace layout.
 
