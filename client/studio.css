@@ -1822,6 +1822,12 @@
       border-color: var(--control-border);
     }
 
+    .rendered-markdown button.studio-pdf-card-auto-refresh[aria-pressed="true"] {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: var(--accent-soft-strong);
+    }
+
     .rendered-markdown button.studio-pdf-card-focus {
       width: 29px;
       min-width: 29px;
@@ -1981,6 +1987,12 @@
       background: var(--panel);
       border-color: var(--control-border);
       color: var(--text);
+    }
+
+    .studio-pdf-focus-auto-refresh[aria-pressed="true"] {
+      background: var(--accent-soft);
+      border-color: var(--accent-soft-strong);
+      color: var(--accent);
     }
 
     .studio-pdf-focus-btn .studio-refresh-icon {

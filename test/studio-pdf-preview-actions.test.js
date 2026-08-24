@@ -27,6 +27,46 @@ test("local PDF actions use authenticated boundary-checked server routes", () =>
   assert.match(serverSource, /Invalid or expired studio token/);
 });
 
+test("PDF cards and the focus viewer expose synchronized auto-refresh controls", () => {
+  assert.ok((clientSource.match(/textContent = "Auto-refresh: Off"/g) || []).length >= 2);
+  assert.match(clientSource, /studio-pdf-card-auto-refresh/);
+  assert.match(clientSource, /studio-pdf-focus-auto-refresh/);
+  assert.match(clientSource, /setStudioPdfFocusAutoRefreshSource\(sourceCard, studioPdfFocusResourceQuery\)/);
+  assert.match(clientSource, /studioPdfFocusSourceCard === card/);
+  assert.match(clientSource, /PDF changed on disk; refreshed preview\./);
+  assert.match(cssSource, /studio-pdf-card-auto-refresh\[aria-pressed="true"\]/);
+  assert.match(cssSource, /studio-pdf-focus-auto-refresh\[aria-pressed="true"\]/);
+});
+
+test("PDF auto-refresh polls authenticated metadata only while visible and waits for stability", () => {
+  assert.match(clientSource, /method: "HEAD",\s*cache: "no-store"/);
+  assert.match(clientSource, /document\.hidden \|\| document\.visibilityState === "hidden"/);
+  assert.match(clientSource, /STUDIO_PDF_AUTO_REFRESH_STABLE_OBSERVATIONS/);
+  assert.match(clientSource, /previewResourceHelpers\.observeStudioPdfVersion\(/);
+  assert.match(clientSource, /state\.generation !== generation/);
+  assert.match(clientSource, /if \(!options \|\| !options\.silent\) state\.refresh\(\)/);
+
+  const responderStart = serverSource.indexOf("function respondPdfFile(");
+  const responderEnd = serverSource.indexOf("function respondHtmlPreviewResourceJson", responderStart);
+  assert.ok(responderStart >= 0 && responderEnd > responderStart);
+  const responderSource = serverSource.slice(responderStart, responderEnd);
+  assert.match(responderSource, /const stats = statSync\(filePath\)/);
+  assert.match(responderSource, /"ETag": etag/);
+  assert.match(responderSource, /"Last-Modified": stats\.mtime\.toUTCString\(\)/);
+  assert.ok(
+    responderSource.indexOf('if (method === "HEAD")') < responderSource.indexOf("const pdf = readFileSync(filePath)"),
+    "HEAD checks should not read the PDF body",
+  );
+});
+
+test("PDF manual refresh uses a browser-safe Studio shortcut", () => {
+  assert.match(clientSource, /Cmd\/Ctrl\+Alt\+R/);
+  assert.match(clientSource, /function handleStudioPdfRefreshShortcut\(event\)/);
+  assert.match(clientSource, /\(event\.metaKey \|\| event\.ctrlKey\)[\s\S]*?event\.altKey[\s\S]*?!event\.shiftKey/);
+  assert.match(clientSource, /refreshVisibleStudioPdfPreviews\(\)/);
+  assert.match(serverSource, /<dt>Cmd\/Ctrl\+Alt\+R<\/dt><dd>Refresh the focused or visible PDF preview from disk<\/dd>/);
+});
+
 test("PDF action rows wrap instead of overflowing narrow preview panes", () => {
   assert.match(cssSource, /\.rendered-markdown \.studio-pdf-card-header \{[\s\S]*?flex-wrap: wrap;/);
   assert.match(cssSource, /\.rendered-markdown \.studio-pdf-card-actions \{[\s\S]*?flex-wrap: wrap;/);

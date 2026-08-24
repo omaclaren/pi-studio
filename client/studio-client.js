@@ -227,7 +227,10 @@
       if (
         !previewResourceHelpers
         || typeof previewResourceHelpers.areStudioPreviewResourceContextsEqual !== "function"
+        || typeof previewResourceHelpers.buildStudioPdfVersionSignature !== "function"
+        || typeof previewResourceHelpers.createStudioPdfVersionObservationState !== "function"
         || typeof previewResourceHelpers.hydrateStudioPreviewLocalImages !== "function"
+        || typeof previewResourceHelpers.observeStudioPdfVersion !== "function"
       ) {
         throw new Error("Studio preview resource helpers failed to load.");
       }
@@ -271,11 +274,17 @@
       let studioPdfFocusOpenLinkEl = null;
       let studioPdfFocusSystemViewerBtn = null;
       let studioPdfFocusRevealBtn = null;
+      let studioPdfFocusAutoRefreshBtn = null;
       let studioPdfFocusFullscreenBtn = null;
       let studioPdfFocusCloseBtn = null;
       let studioPdfFocusLastFocusedEl = null;
       let studioPdfFocusMovedFrameState = null;
       let studioPdfFocusResourceQuery = null;
+      let studioPdfFocusSourceCard = null;
+      let studioPdfFocusStandaloneAutoRefreshState = null;
+      const studioPdfCardAutoRefreshStates = new WeakMap();
+      const STUDIO_PDF_AUTO_REFRESH_INTERVAL_MS = 1_000;
+      const STUDIO_PDF_AUTO_REFRESH_STABLE_OBSERVATIONS = 2;
       let studioHtmlFocusOverlayEl = null;
       let studioHtmlFocusShellEl = null;
       let studioHtmlFocusFullscreenBtn = null;
@@ -4489,6 +4498,15 @@
 
         if (handleStudioImageFocusShortcut(event)) return;
 
+        const otherModalOwnsEvent = scratchpadOwnsEvent
+          || reviewNotesOwnsEvent
+          || outlineOwnsEvent
+          || shortcutsOwnsEvent
+          || htmlFocusOwnsEvent
+          || imageFocusOwnsEvent
+          || quizOwnsEvent;
+        if (!otherModalOwnsEvent && handleStudioPdfRefreshShortcut(event)) return;
+
         if (isScratchpadOpen() && plainEscape) {
           event.preventDefault();
           closeScratchpad();
@@ -6851,7 +6869,7 @@
       }
 
       function parseStudioPdfBlockOptions(body) {
-        const options = { path: "", title: "", caption: "", page: "", height: "" };
+        const options = { path: "", title: "", caption: "", page: "", height: "", watch: "" };
         String(body || "").split(/\r?\n/).forEach((line) => {
           const raw = String(line || "").trim();
           if (!raw || raw.startsWith("#")) return;
@@ -6864,6 +6882,7 @@
             else if (key === "caption") options.caption = value;
             else if (key === "page") options.page = value;
             else if (key === "height") options.height = value;
+            else if (key === "watch" || key === "auto-refresh" || key === "autorefresh") options.watch = value;
             return;
           }
           if (!options.path) options.path = stripMatchingQuotes(raw);
@@ -6893,6 +6912,10 @@
       function normalizeStudioPdfPage(value) {
         const parsed = Number.parseInt(String(value || ""), 10);
         return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+      }
+
+      function normalizeStudioPdfAutoRefresh(value) {
+        return /^(?:1|true|yes|on|watch)$/i.test(String(value || "").trim());
       }
 
       function isStudioPdfFocusOpen() {
@@ -6969,10 +6992,20 @@
         refreshBtn.type = "button";
         refreshBtn.className = "studio-pdf-focus-btn studio-pdf-focus-refresh";
         refreshBtn.textContent = "Refresh";
-        refreshBtn.title = "Reload this PDF preview from disk.";
+        refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Alt+R.";
         refreshBtn.setAttribute("aria-label", "Refresh PDF preview from disk");
         refreshBtn.addEventListener("click", () => refreshStudioPdfFocusViewer());
         actions.appendChild(refreshBtn);
+
+        const autoRefreshBtn = document.createElement("button");
+        autoRefreshBtn.type = "button";
+        autoRefreshBtn.className = "studio-pdf-focus-btn studio-pdf-focus-auto-refresh";
+        autoRefreshBtn.textContent = "Auto-refresh: Off";
+        autoRefreshBtn.title = "Watch this local PDF and reload it after a changed file is stable on disk.";
+        autoRefreshBtn.setAttribute("aria-label", "Toggle PDF auto-refresh");
+        autoRefreshBtn.setAttribute("aria-pressed", "false");
+        autoRefreshBtn.addEventListener("click", () => toggleStudioPdfFocusAutoRefresh());
+        actions.appendChild(autoRefreshBtn);
 
         const fullscreenBtn = document.createElement("button");
         fullscreenBtn.type = "button";
@@ -7030,6 +7063,7 @@
         studioPdfFocusOpenLinkEl = openLink;
         studioPdfFocusSystemViewerBtn = systemViewerBtn;
         studioPdfFocusRevealBtn = revealBtn;
+        studioPdfFocusAutoRefreshBtn = autoRefreshBtn;
         studioPdfFocusFullscreenBtn = fullscreenBtn;
         studioPdfFocusCloseBtn = closeBtn;
         syncStudioPdfFocusFullscreenButton();
@@ -7037,11 +7071,12 @@
         return overlay;
       }
 
-      function openStudioPdfFocusViewer(viewerUrl, title, sourceFrame, resourceQuery) {
+      function openStudioPdfFocusViewer(viewerUrl, title, sourceFrame, resourceQuery, sourceCard) {
         const src = String(viewerUrl || "").trim();
         if (!src) return;
         ensureStudioPdfFocusViewer();
         studioPdfFocusResourceQuery = normalizeStudioPdfResourceQuery(resourceQuery);
+        setStudioPdfFocusAutoRefreshSource(sourceCard, studioPdfFocusResourceQuery);
         syncStudioPdfFocusResourceActions();
         studioPdfFocusLastFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         if (studioPdfFocusTitleEl) studioPdfFocusTitleEl.textContent = String(title || "PDF preview").trim() || "PDF preview";
@@ -7071,6 +7106,7 @@
         restoreStudioPdfFocusMovedFrame();
         if (studioPdfFocusFrameEl) studioPdfFocusFrameEl.src = "about:blank";
         if (document.body) document.body.classList.remove("studio-pdf-focus-open");
+        clearStudioPdfFocusAutoRefreshSource();
         studioPdfFocusResourceQuery = null;
         syncStudioPdfFocusResourceActions();
         syncStudioPdfFocusFullscreenButton();
@@ -7111,6 +7147,213 @@
         if (typeof value.sourcePath === "string" && value.sourcePath.trim()) query.sourcePath = value.sourcePath.trim();
         if (typeof value.resourceDir === "string" && value.resourceDir.trim()) query.resourceDir = value.resourceDir.trim();
         return query;
+      }
+
+      function syncStudioPdfAutoRefreshButton(button, enabled, available) {
+        if (!button) return;
+        const active = Boolean(enabled && available);
+        button.disabled = !available;
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+        button.textContent = active ? "Auto-refresh: On" : "Auto-refresh: Off";
+        button.title = active
+          ? "Auto-refresh is on. Studio checks this PDF while the tab is visible and reloads it after a changed file is stable on disk."
+          : "Watch this local PDF and reload it after a changed file is stable on disk.";
+      }
+
+      function createStudioPdfAutoRefreshState(resourceQuery, hooks) {
+        return {
+          resourceQuery: normalizeStudioPdfResourceQuery(resourceQuery),
+          enabled: false,
+          timer: null,
+          inFlight: false,
+          generation: 0,
+          observation: previewResourceHelpers.createStudioPdfVersionObservationState(),
+          isAlive: hooks && typeof hooks.isAlive === "function" ? hooks.isAlive : () => false,
+          refresh: hooks && typeof hooks.refresh === "function" ? hooks.refresh : () => false,
+          sync: hooks && typeof hooks.sync === "function" ? hooks.sync : () => {},
+        };
+      }
+
+      function resetStudioPdfAutoRefreshObservation(state) {
+        if (!state) return;
+        state.observation = previewResourceHelpers.createStudioPdfVersionObservationState();
+      }
+
+      function scheduleStudioPdfAutoRefreshPoll(state, delayMs) {
+        if (!state || !state.enabled) return;
+        if (state.timer) window.clearTimeout(state.timer);
+        state.timer = window.setTimeout(() => {
+          state.timer = null;
+          void pollStudioPdfAutoRefreshState(state);
+        }, Math.max(0, Number(delayMs) || 0));
+      }
+
+      function stopStudioPdfAutoRefreshState(state) {
+        if (!state) return;
+        state.enabled = false;
+        state.inFlight = false;
+        state.generation += 1;
+        if (state.timer) window.clearTimeout(state.timer);
+        state.timer = null;
+        resetStudioPdfAutoRefreshObservation(state);
+        state.sync();
+      }
+
+      function setStudioPdfAutoRefreshEnabled(state, enabled, options) {
+        if (!state) return false;
+        const nextEnabled = Boolean(enabled && state.resourceQuery);
+        if (state.enabled === nextEnabled) {
+          state.sync();
+          return nextEnabled;
+        }
+        if (state.timer) window.clearTimeout(state.timer);
+        state.timer = null;
+        state.enabled = nextEnabled;
+        state.inFlight = false;
+        state.generation += 1;
+        resetStudioPdfAutoRefreshObservation(state);
+        state.sync();
+        if (nextEnabled) {
+          if (!options || !options.silent) state.refresh();
+          scheduleStudioPdfAutoRefreshPoll(state, 0);
+        }
+        if (!options || !options.silent) {
+          setStatus(nextEnabled ? "PDF auto-refresh on." : "PDF auto-refresh off.", "success");
+        }
+        return nextEnabled;
+      }
+
+      async function fetchStudioPdfVersionSignature(resourceQuery) {
+        const url = buildStudioPdfResourceUrl(resourceQuery, false);
+        if (!url) throw new Error("Could not resolve this PDF for auto-refresh.");
+        const response = await fetchWithTimeout(url, {
+          method: "HEAD",
+          cache: "no-store",
+        }, 4_000, "PDF auto-refresh check");
+        if (!response.ok) throw new Error("PDF auto-refresh check failed with HTTP " + response.status + ".");
+        return previewResourceHelpers.buildStudioPdfVersionSignature(response.headers);
+      }
+
+      async function pollStudioPdfAutoRefreshState(state) {
+        if (!state || !state.enabled || state.inFlight) return;
+        if (!state.isAlive()) {
+          stopStudioPdfAutoRefreshState(state);
+          return;
+        }
+        if (document.hidden || document.visibilityState === "hidden") {
+          scheduleStudioPdfAutoRefreshPoll(state, STUDIO_PDF_AUTO_REFRESH_INTERVAL_MS);
+          return;
+        }
+        const generation = state.generation;
+        state.inFlight = true;
+        try {
+          const signature = await fetchStudioPdfVersionSignature(state.resourceQuery);
+          if (!state.enabled || state.generation !== generation) return;
+          if (document.hidden || document.visibilityState === "hidden") return;
+          if (!state.isAlive()) {
+            stopStudioPdfAutoRefreshState(state);
+            return;
+          }
+          const observed = previewResourceHelpers.observeStudioPdfVersion(
+            state.observation,
+            signature,
+            STUDIO_PDF_AUTO_REFRESH_STABLE_OBSERVATIONS,
+          );
+          state.observation = observed.state;
+          if (observed.changed) state.refresh();
+        } catch {
+          // LaTeX tools may briefly replace or lock the output PDF. Retry quietly.
+        } finally {
+          if (state.generation !== generation) return;
+          state.inFlight = false;
+          if (state.enabled) scheduleStudioPdfAutoRefreshPoll(state, STUDIO_PDF_AUTO_REFRESH_INTERVAL_MS);
+        }
+      }
+
+      function syncStudioPdfCardAutoRefreshButton(card) {
+        if (!card) return;
+        const state = studioPdfCardAutoRefreshStates.get(card) || null;
+        const button = typeof card.querySelector === "function" ? card.querySelector(".studio-pdf-card-auto-refresh") : null;
+        syncStudioPdfAutoRefreshButton(button, state && state.enabled, Boolean(state && state.resourceQuery));
+      }
+
+      function ensureStudioPdfCardAutoRefreshState(card, resourceQuery) {
+        if (!card) return null;
+        let state = studioPdfCardAutoRefreshStates.get(card) || null;
+        if (state) return state;
+        state = createStudioPdfAutoRefreshState(resourceQuery, {
+          isAlive: () => Boolean(card.isConnected || (isStudioPdfFocusOpen() && studioPdfFocusSourceCard === card)),
+          refresh: () => {
+            if (isStudioPdfFocusOpen() && studioPdfFocusSourceCard === card) {
+              return refreshStudioPdfFocusViewer({ automatic: true });
+            }
+            return refreshStudioPdfCard(card, { automatic: true });
+          },
+          sync: () => {
+            syncStudioPdfCardAutoRefreshButton(card);
+            if (studioPdfFocusSourceCard === card) syncStudioPdfFocusAutoRefreshButton();
+          },
+        });
+        studioPdfCardAutoRefreshStates.set(card, state);
+        syncStudioPdfCardAutoRefreshButton(card);
+        return state;
+      }
+
+      function setStudioPdfCardAutoRefresh(card, enabled, options) {
+        const state = studioPdfCardAutoRefreshStates.get(card) || null;
+        return setStudioPdfAutoRefreshEnabled(state, enabled, options);
+      }
+
+      function getStudioPdfFocusAutoRefreshState() {
+        if (studioPdfFocusSourceCard) return studioPdfCardAutoRefreshStates.get(studioPdfFocusSourceCard) || null;
+        return studioPdfFocusStandaloneAutoRefreshState;
+      }
+
+      function syncStudioPdfFocusAutoRefreshButton() {
+        const state = getStudioPdfFocusAutoRefreshState();
+        syncStudioPdfAutoRefreshButton(
+          studioPdfFocusAutoRefreshBtn,
+          state && state.enabled,
+          Boolean(state && state.resourceQuery),
+        );
+      }
+
+      function clearStudioPdfFocusAutoRefreshSource() {
+        if (studioPdfFocusStandaloneAutoRefreshState) stopStudioPdfAutoRefreshState(studioPdfFocusStandaloneAutoRefreshState);
+        studioPdfFocusStandaloneAutoRefreshState = null;
+        studioPdfFocusSourceCard = null;
+        syncStudioPdfFocusAutoRefreshButton();
+      }
+
+      function setStudioPdfFocusAutoRefreshSource(sourceCard, resourceQuery) {
+        clearStudioPdfFocusAutoRefreshSource();
+        const card = sourceCard instanceof Element ? sourceCard : null;
+        if (card) {
+          studioPdfFocusSourceCard = card;
+          ensureStudioPdfCardAutoRefreshState(card, resourceQuery);
+          syncStudioPdfFocusAutoRefreshButton();
+          return;
+        }
+        const query = normalizeStudioPdfResourceQuery(resourceQuery);
+        if (!query) {
+          syncStudioPdfFocusAutoRefreshButton();
+          return;
+        }
+        studioPdfFocusStandaloneAutoRefreshState = createStudioPdfAutoRefreshState(query, {
+          isAlive: () => Boolean(isStudioPdfFocusOpen() && !studioPdfFocusSourceCard),
+          refresh: () => refreshStudioPdfFocusViewer({ automatic: true }),
+          sync: () => syncStudioPdfFocusAutoRefreshButton(),
+        });
+        syncStudioPdfFocusAutoRefreshButton();
+      }
+
+      function toggleStudioPdfFocusAutoRefresh() {
+        const state = getStudioPdfFocusAutoRefreshState();
+        if (!state) {
+          setStatus("Could not resolve this PDF for auto-refresh.", "warning");
+          return false;
+        }
+        return setStudioPdfAutoRefreshEnabled(state, !state.enabled);
       }
 
       async function runStudioPdfLocalAction(action, resourceQuery) {
@@ -7174,7 +7417,7 @@
         if (focusBtn && focusBtn.dataset) focusBtn.dataset.studioPdfViewerUrl = nextUrl;
       }
 
-      function refreshStudioPdfCard(card) {
+      function refreshStudioPdfCard(card, options) {
         if (!card) return false;
         const frame = typeof card.querySelector === "function" ? card.querySelector("iframe.studio-pdf-frame") : null;
         const currentUrl = String(card.dataset && card.dataset.studioPdfViewerUrl ? card.dataset.studioPdfViewerUrl : "").trim()
@@ -7182,7 +7425,14 @@
         const nextUrl = buildRefreshedStudioPdfViewerUrl(currentUrl);
         if (!nextUrl) return false;
         syncStudioPdfCardViewerUrl(card, nextUrl);
-        setStatus("Refreshed PDF preview from disk.", "success");
+        if (!options || !options.automatic) {
+          resetStudioPdfAutoRefreshObservation(studioPdfCardAutoRefreshStates.get(card) || null);
+        }
+        if (!options || !options.silent) {
+          setStatus(options && options.automatic
+            ? "PDF changed on disk; refreshed preview."
+            : "Refreshed PDF preview from disk.", "success");
+        }
         return true;
       }
 
@@ -7193,7 +7443,7 @@
         return studioPdfFocusFrameEl;
       }
 
-      function refreshStudioPdfFocusViewer() {
+      function refreshStudioPdfFocusViewer(options) {
         const frame = getStudioPdfFocusActiveFrame();
         const currentUrl = String(frame && frame.src ? frame.src : "").trim()
           || String(studioPdfFocusOpenLinkEl && studioPdfFocusOpenLinkEl.href ? studioPdfFocusOpenLinkEl.href : "").trim();
@@ -7204,7 +7454,58 @@
         }
         if (frame) frame.src = nextUrl;
         if (studioPdfFocusOpenLinkEl) studioPdfFocusOpenLinkEl.href = nextUrl;
-        setStatus("Refreshed PDF preview from disk.", "success");
+        if (studioPdfFocusSourceCard) syncStudioPdfCardViewerUrl(studioPdfFocusSourceCard, nextUrl);
+        if (!options || !options.automatic) {
+          resetStudioPdfAutoRefreshObservation(getStudioPdfFocusAutoRefreshState());
+        }
+        if (!options || !options.silent) {
+          setStatus(options && options.automatic
+            ? "PDF changed on disk; refreshed preview."
+            : "Refreshed PDF preview from disk.", "success");
+        }
+        return true;
+      }
+
+      function getVisibleStudioPdfCards() {
+        return Array.from(document.querySelectorAll(".studio-pdf-card")).filter((card) => {
+          if (!card || !card.isConnected || card.hidden) return false;
+          if (typeof card.getClientRects === "function" && card.getClientRects().length === 0) return false;
+          try {
+            const style = window.getComputedStyle(card);
+            return style.display !== "none" && style.visibility !== "hidden";
+          } catch {
+            return true;
+          }
+        });
+      }
+
+      function refreshVisibleStudioPdfPreviews() {
+        if (isStudioPdfFocusOpen()) return refreshStudioPdfFocusViewer();
+        const cards = getVisibleStudioPdfCards();
+        let refreshed = 0;
+        cards.forEach((card) => {
+          if (refreshStudioPdfCard(card, { silent: true })) refreshed += 1;
+        });
+        if (refreshed > 0) {
+          setStatus(refreshed === 1
+            ? "Refreshed PDF preview from disk."
+            : ("Refreshed " + refreshed + " PDF previews from disk."), "success");
+          return true;
+        }
+        return false;
+      }
+
+      function handleStudioPdfRefreshShortcut(event) {
+        if (!event) return false;
+        const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+        const code = typeof event.code === "string" ? event.code : "";
+        const matches = (key === "r" || code === "KeyR")
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey;
+        if (!matches) return false;
+        if (!refreshVisibleStudioPdfPreviews()) return false;
+        event.preventDefault();
         return true;
       }
 
@@ -7285,7 +7586,7 @@
             })
           : null;
         if (!viewerUrl) return false;
-        openStudioPdfFocusViewer(viewerUrl, title, sourceFrame, resourceQuery);
+        openStudioPdfFocusViewer(viewerUrl, title, sourceFrame, resourceQuery, card);
         return true;
       }
 
@@ -7698,6 +7999,7 @@
         const caption = String(options.caption || "").trim();
         const height = normalizeStudioPdfHeight(options.height);
         const page = normalizeStudioPdfPage(options.page);
+        const autoRefreshRequested = normalizeStudioPdfAutoRefresh(options.watch);
         const resourceQuery = buildStudioPdfResourceQuery(options, useEditorResourceContext);
         const resourceUrl = buildStudioPdfResourceUrl(options, useEditorResourceContext);
         const viewerUrl = resourceUrl && page ? resourceUrl + "#page=" + encodeURIComponent(String(page)) : resourceUrl;
@@ -7778,13 +8080,32 @@
           refreshBtn.type = "button";
           refreshBtn.className = "studio-pdf-card-action studio-pdf-card-refresh";
           refreshBtn.textContent = "Refresh";
-          refreshBtn.title = "Reload this PDF preview from disk.";
+          refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Alt+R.";
           refreshBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
             if (!refreshStudioPdfCard(card)) setStatus("Could not refresh this PDF preview.", "warning");
           });
           actions.appendChild(refreshBtn);
+
+          const autoRefreshBtn = document.createElement("button");
+          autoRefreshBtn.type = "button";
+          autoRefreshBtn.className = "studio-pdf-card-action studio-pdf-card-auto-refresh";
+          autoRefreshBtn.textContent = "Auto-refresh: Off";
+          autoRefreshBtn.title = "Watch this local PDF and reload it after a changed file is stable on disk.";
+          autoRefreshBtn.setAttribute("aria-label", "Toggle PDF auto-refresh");
+          autoRefreshBtn.setAttribute("aria-pressed", "false");
+          autoRefreshBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const state = ensureStudioPdfCardAutoRefreshState(card, resourceQuery);
+            if (!state) {
+              setStatus("Could not resolve this PDF for auto-refresh.", "warning");
+              return;
+            }
+            setStudioPdfCardAutoRefresh(card, !state.enabled);
+          });
+          actions.appendChild(autoRefreshBtn);
 
           header.appendChild(actions);
         }
@@ -7812,6 +8133,12 @@
         iframe.loading = "lazy";
         iframe.style.height = height + "px";
         card.appendChild(iframe);
+        const autoRefreshState = ensureStudioPdfCardAutoRefreshState(card, resourceQuery);
+        if (autoRefreshRequested) {
+          setStudioPdfAutoRefreshEnabled(autoRefreshState, true, { silent: true });
+        } else {
+          syncStudioPdfCardAutoRefreshButton(card);
+        }
         return card;
       }
 

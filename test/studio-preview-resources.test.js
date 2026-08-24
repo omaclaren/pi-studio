@@ -96,6 +96,52 @@ test("preview resource contexts compare source and working directory", () => {
   ), false);
 });
 
+test("PDF version observation waits for a changed file to remain stable", () => {
+  const makeHeaders = (values) => ({
+    get(name) {
+      return values[String(name || "").toLowerCase()] || null;
+    },
+  });
+  const versionA = helpers.buildStudioPdfVersionSignature(makeHeaders({
+    etag: 'W/"100-a"',
+    "last-modified": "Fri, 21 Aug 2026 01:00:00 GMT",
+    "content-length": "256",
+  }));
+  const versionB = helpers.buildStudioPdfVersionSignature(makeHeaders({
+    etag: 'W/"110-b"',
+    "last-modified": "Fri, 21 Aug 2026 01:00:01 GMT",
+    "content-length": "272",
+  }));
+  assert.match(versionA, /W\/"100-a"/);
+  assert.equal(helpers.buildStudioPdfVersionSignature({ get: () => null }), "");
+
+  let state = helpers.createStudioPdfVersionObservationState();
+  let observed = helpers.observeStudioPdfVersion(state, versionA, 2);
+  state = observed.state;
+  assert.equal(observed.changed, false, "the first observation establishes a baseline");
+
+  observed = helpers.observeStudioPdfVersion(state, versionB, 2);
+  state = observed.state;
+  assert.equal(observed.changed, false, "one changed observation is not yet stable");
+  assert.equal(state.candidateCount, 1);
+
+  observed = helpers.observeStudioPdfVersion(state, versionA, 2);
+  state = observed.state;
+  assert.equal(observed.changed, false, "returning to the baseline clears a partial change");
+  assert.equal(state.candidateCount, 0);
+
+  observed = helpers.observeStudioPdfVersion(state, versionB, 2);
+  state = observed.state;
+  assert.equal(observed.changed, false);
+  observed = helpers.observeStudioPdfVersion(state, versionB, 2);
+  state = observed.state;
+  assert.equal(observed.changed, true, "two matching changed observations trigger refresh");
+  assert.equal(state.baseline, versionB);
+
+  observed = helpers.observeStudioPdfVersion(state, versionB, 2);
+  assert.equal(observed.changed, false, "the accepted version does not retrigger refresh");
+});
+
 test("Studio hydrates rendered local images and refreshes previews when their resource context changes", () => {
   const indexSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
   const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");

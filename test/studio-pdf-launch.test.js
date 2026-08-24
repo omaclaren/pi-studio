@@ -48,7 +48,7 @@ test("Studio dispatches PDF paths before text decoding into an isolated companio
     resolverSource.indexOf("parseStudioPdfLaunchTarget") < resolverSource.indexOf("readStudioFile(pathArg"),
     "PDF paths should dispatch before binary text-file decoding",
   );
-  assert.match(resolverSource, /document: buildStudioLocalResourcePreviewDocument\(resource\)/);
+  assert.match(resolverSource, /document: buildStudioLocalResourcePreviewDocument\(resource, \{ watchPdf: options\?\.watchPdf \}\)/);
   assert.match(resolverSource, /kind: "pdf-preview",[\s\S]*?mode: "editor-only",[\s\S]*?transient: true,[\s\S]*?skipWorkspaceRestore: true,[\s\S]*?paneFocus: "right"/);
   assert.match(indexSource, /\+ \(resource\.page \? `page: \$\{resource\.page\}\\n` : ""\)/);
 
@@ -70,6 +70,17 @@ test("Studio dispatches PDF paths before text decoding into an isolated companio
   assert.match(launcherSource, /if \(!selection\.transient\) initialStudioDocument = selected;/);
   assert.match(launcherSource, /selection\.transient \? storeTransientStudioDocument\(selected\) : undefined/);
   assert.match(launcherSource, /skipWorkspaceRestore: selection\.skipWorkspaceRestore,[\s\S]*?paneFocus: selection\.paneFocus/);
+});
+
+
+test("--watch is scoped to local PDF previews and encoded in the transient document", () => {
+  assert.match(indexSource, /token === "--watch" \|\| token === "--auto-refresh"/);
+  assert.match(indexSource, /--watch requires a local PDF path, for example: \/studio --watch main\.pdf/);
+  assert.match(indexSource, /watchPdf: launchOpenFlags\.watchPdf/);
+  assert.match(indexSource, /options\?\.watchPdf \? "watch: true\\n" : ""/);
+  assert.match(indexSource, /\/studio --watch <pdf>\s+Open a PDF with auto-refresh enabled/);
+  assert.match(readmeSource, /`\/studio --watch <pdf>`/);
+  assert.match(readmeSource, /waits for two matching file-version observations/);
 });
 
 

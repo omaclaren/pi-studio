@@ -7356,16 +7356,31 @@ function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: str
 		return;
 	}
 
-	const pdf = readFileSync(filePath);
-	res.writeHead(200, {
+	const stats = statSync(filePath);
+	const etag = `W/"${[
+		stats.size,
+		Math.trunc(stats.mtimeMs),
+		Math.trunc(stats.ctimeMs),
+		stats.ino,
+	].map((value) => Number(value).toString(16)).join("-")}"`;
+	const commonHeaders = {
 		"Content-Type": "application/pdf",
-		"Content-Length": String(pdf.length),
 		"Content-Disposition": `inline; filename="${basename(filePath).replace(/["\\]/g, "") || "document.pdf"}"`,
 		"Cache-Control": "no-store",
 		"X-Content-Type-Options": "nosniff",
 		"Cross-Origin-Resource-Policy": "same-origin",
-	});
-	res.end(method === "HEAD" ? undefined : pdf);
+		"ETag": etag,
+		"Last-Modified": stats.mtime.toUTCString(),
+	};
+	if (method === "HEAD") {
+		res.writeHead(200, { ...commonHeaders, "Content-Length": String(stats.size) });
+		res.end();
+		return;
+	}
+
+	const pdf = readFileSync(filePath);
+	res.writeHead(200, { ...commonHeaders, "Content-Length": String(pdf.length) });
+	res.end(pdf);
 }
 
 function respondHtmlPreviewResourceJson(req: IncomingMessage, res: ServerResponse, filePath: string, mimeType: string): void {
@@ -7393,7 +7408,7 @@ function sanitizeStudioPreviewBlockLine(value: string): string {
 	return String(value || "").replace(/[\r\n]+/g, " ").trim();
 }
 
-function buildStudioLocalResourcePreviewDocument(resource: StudioLocalPreviewResource): InitialStudioDocument {
+function buildStudioLocalResourcePreviewDocument(resource: StudioLocalPreviewResource, options?: { watchPdf?: boolean }): InitialStudioDocument {
 	const label = basename(resource.filePath) || resource.label || "local preview";
 	const resourcePath = resource.label || basename(resource.filePath) || resource.filePath;
 	const title = sanitizeStudioPreviewBlockLine(label);
@@ -7403,6 +7418,7 @@ function buildStudioLocalResourcePreviewDocument(resource: StudioLocalPreviewRes
 			+ `path: ${sanitizeStudioPreviewBlockLine(resourcePath)}\n`
 			+ `title: ${title || "PDF preview"}\n`
 			+ (resource.page ? `page: ${resource.page}\n` : "")
+			+ (options?.watchPdf ? "watch: true\n" : "")
 			+ "height: 820\n"
 			+ "```\n";
 	} else if (resource.kind === "image") {
@@ -10301,16 +10317,18 @@ interface StudioLaunchFlags {
 	args: string;
 	openRemoteBrowser: boolean;
 	noBrowser: boolean;
+	watchPdf: boolean;
 	port?: number;
 	error?: string;
 }
 
 function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 	const parsed = tokenizeStudioCommandArgs(rawArgs);
-	if (parsed.error) return { args: rawArgs, openRemoteBrowser: false, noBrowser: false, error: parsed.error };
+	if (parsed.error) return { args: rawArgs, openRemoteBrowser: false, noBrowser: false, watchPdf: false, error: parsed.error };
 	const remaining: string[] = [];
 	let openRemoteBrowser = false;
 	let noBrowser = false;
+	let watchPdf = false;
 	let port: number | undefined;
 	for (let i = 0; i < parsed.tokens.length; i += 1) {
 		const token = parsed.tokens[i]!;
@@ -10322,14 +10340,18 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 			noBrowser = true;
 			continue;
 		}
+		if (token === "--watch" || token === "--auto-refresh") {
+			watchPdf = true;
+			continue;
+		}
 		if (token === "--port" || token.startsWith("--port=")) {
 			const rawPort = token.startsWith("--port=") ? token.slice("--port=".length) : parsed.tokens[++i];
 			if (!rawPort) {
-				return { args: rawArgs, openRemoteBrowser, noBrowser, error: "Missing value for --port." };
+				return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, error: "Missing value for --port." };
 			}
 			const requestedPort = Number(rawPort);
 			if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
-				return { args: rawArgs, openRemoteBrowser, noBrowser, error: `Invalid --port value: ${rawPort}. Use an integer from 1 to 65535.` };
+				return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, error: `Invalid --port value: ${rawPort}. Use an integer from 1 to 65535.` };
 			}
 			port = requestedPort;
 			continue;
@@ -10337,9 +10359,9 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 		remaining.push(token);
 	}
 	if (openRemoteBrowser && noBrowser) {
-		return { args: rawArgs, openRemoteBrowser, noBrowser, port, error: "Use either --no-browser or --open-browser, not both." };
+		return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, port, error: "Use either --no-browser or --open-browser, not both." };
 	}
-	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, port };
+	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, watchPdf, port };
 }
 
 function shouldAutoOpenStudioBrowser(options?: { openRemoteBrowser?: boolean; noBrowser?: boolean }): boolean {
@@ -11071,6 +11093,7 @@ ${cssVarsBlock}
             <div><dt>Alt/Option+=</dt><dd>Increase the active pane's text size when not editing text</dd></div>
             <div><dt>Alt/Option+-</dt><dd>Decrease the active pane's text size when not editing text</dd></div>
             <div><dt>Alt/Option+0</dt><dd>Reset the active pane's text size when not editing text</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+R</dt><dd>Refresh the focused or visible PDF preview from disk</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group">
@@ -15733,7 +15756,7 @@ export default function (pi: ExtensionAPI) {
 	const resolveStudioLaunchDocument = (
 		trimmed: string,
 		ctx: ExtensionCommandContext,
-		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; allowPdfPreview?: boolean },
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; allowPdfPreview?: boolean; watchPdf?: boolean },
 	): StudioLaunchSelection | null => {
 		const defaultSource = options?.defaultSource === "blank" ? "blank" : "last-response";
 		const commandLabel = options?.commandLabel ?? "/studio";
@@ -15820,7 +15843,7 @@ export default function (pi: ExtensionAPI) {
 				);
 				if (resource.kind !== "pdf") throw new Error("Only local .pdf files can open in the Studio PDF viewer.");
 				return {
-					document: buildStudioLocalResourcePreviewDocument(resource),
+					document: buildStudioLocalResourcePreviewDocument(resource, { watchPdf: options?.watchPdf }),
 					kind: "pdf-preview",
 					mode: "editor-only",
 					transient: true,
@@ -16110,7 +16133,7 @@ export default function (pi: ExtensionAPI) {
 		trimmed: string,
 		ctx: ExtensionCommandContext,
 		mode: StudioUiMode,
-		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; replaceExistingFull?: boolean; allowPdfPreview?: boolean },
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; replaceExistingFull?: boolean; allowPdfPreview?: boolean; watchPdf?: boolean },
 	) => {
 		const launchOpenFlags = parseStudioLaunchOpenFlags(trimmed);
 		if (launchOpenFlags.error) {
@@ -16126,6 +16149,10 @@ export default function (pi: ExtensionAPI) {
 		const launchesPdfPreview = parsedLaunchPath
 			? Boolean(parseStudioPdfLaunchTarget(normalizePathInput(parsedLaunchPath)))
 			: false;
+		if (launchOpenFlags.watchPdf && !launchesPdfPreview) {
+			ctx.ui.notify("--watch requires a local PDF path, for example: /studio --watch main.pdf", "error");
+			return;
+		}
 		const requestedLaunchMode: StudioUiMode = launchesPdfPreview ? "editor-only" : mode;
 		if (requestedLaunchMode === "full" && hasConnectedFullStudioView()) {
 			if (options?.replaceExistingFull) {
@@ -16158,7 +16185,10 @@ export default function (pi: ExtensionAPI) {
 			// ignore theme read errors
 		}
 
-		const selection = resolveStudioLaunchDocument(launchArgs, ctx, options);
+		const selection = resolveStudioLaunchDocument(launchArgs, ctx, {
+			...options,
+			watchPdf: launchOpenFlags.watchPdf,
+		});
 		if (!selection) return;
 		const selected = selection.document;
 		const launchMode = selection.mode ?? requestedLaunchMode;
@@ -16195,7 +16225,8 @@ export default function (pi: ExtensionAPI) {
 			} else {
 				await openStudioUrlInBrowser(url);
 				if (selection.kind === "pdf-preview") {
-					ctx.ui.notify(`Opened ${openedLabel}: ${selection.resourcePath ?? selected.label}`, "info");
+					const watchLabel = launchOpenFlags.watchPdf ? " (auto-refresh on)" : "";
+					ctx.ui.notify(`Opened ${openedLabel}${watchLabel}: ${selection.resourcePath ?? selected.label}`, "info");
 				} else if (selected.source === "file") {
 					ctx.ui.notify(`Opened ${openedLabel} with file loaded: ${selected.label}`, "info");
 				} else if (selected.source === "last-response") {
@@ -16218,7 +16249,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("studio", {
-		description: "Open pi Studio browser UI or a PDF preview (/studio, /studio <file>, /studio --blank, /studio --last, /studio --no-browser, /studio --port <port>)",
+		description: "Open pi Studio browser UI or a PDF preview (/studio, /studio <file>, /studio --watch <pdf>, /studio --blank, /studio --last, /studio --no-browser)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 
@@ -16249,6 +16280,7 @@ export default function (pi: ExtensionAPI) {
 					"Usage: /studio [path|--blank|--last]\n"
 						+ "  /studio           Open studio with last model response (fallback: blank)\n"
 						+ "  /studio <path>    Open a text file in Studio, or a PDF in a read-only companion preview\n"
+						+ "  /studio --watch <pdf>  Open a PDF with auto-refresh enabled\n"
 						+ "  /studio --blank   Open with blank editor\n"
 						+ "  /studio --last    Open with last model response\n"
 						+ "  /studio --no-browser  Print the Studio URL without opening a browser\n"
@@ -16299,7 +16331,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("studio-editor-only", {
-		description: "Open pi Studio in editor-only mode or preview a PDF (/studio-editor-only, /studio-editor-only <file>, /studio-editor-only --no-browser)",
+		description: "Open pi Studio in editor-only mode or preview a PDF (/studio-editor-only, /studio-editor-only <file>, /studio-editor-only --watch <pdf>)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
@@ -16307,6 +16339,7 @@ export default function (pi: ExtensionAPI) {
 					"Usage: /studio-editor-only [path|--blank|--last]\n"
 						+ "  /studio-editor-only         Open an editor-only Studio view (default: blank editor)\n"
 						+ "  /studio-editor-only <path>  Open a text file for editing, or a PDF in a read-only preview\n"
+						+ "  /studio-editor-only --watch <pdf>  Open a PDF with auto-refresh enabled\n"
 						+ "  /studio-editor-only --blank Open with blank editor\n"
 						+ "  /studio-editor-only --last  Open with last model response loaded into the editor\n"
 						+ "  /studio-editor-only --no-browser  Print URL without opening a browser\n"

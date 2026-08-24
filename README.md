@@ -54,7 +54,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
 - Renders Markdown/LaTeX/code previews (math + Mermaid) plus lightweight CSV/TSV table previews, theme-synced with pi, with copy buttons for code blocks and blockquotes; Mermaid previews include Lucide/Logos icon nodes and accessible label contrast over custom fills
 - Adds a contextual **Editor (Quarto Preview)** right-pane view for file-backed `.qmd`, `.md`, and `.markdown` documents. Studio checks Quarto and the document/project configuration before showing an explicit start action, launches a single loopback `quarto preview` process with `--no-execute`, embeds Quarto's authoritative saved-file output without restyling it, and provides open-in-browser, restart, stop, logs, and unsaved-editor warnings. If Quarto is missing, the view remains available with an actionable dependency message.
 - Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
-- Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks and opens existing PDFs directly with `/studio <path.pdf>`, with Focus, browser-tab, system-viewer, show-in-folder, and refresh actions
+- Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks and opens existing PDFs directly with `/studio <path.pdf>`, with Focus, browser-tab, system-viewer, show-in-folder, manual refresh, and opt-in stable-file auto-refresh actions
 - Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
 - Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML into the source file directory, Studio working directory, or Pi session directory; PDF export can open in a Studio preview tab or the default PDF viewer, and HTML export can open in the default browser or in a new Studio editor tab for inspection/commenting, while preserving authored HTML previews as HTML and rendering CSV/TSV editor previews as tables
 - Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf` or `/studio-html <path>` to `<name>.studio.html`; without a path, those commands export the last model response to a timestamped file. Agent tools `studio_export_pdf` and `studio_export_html` expose the same export pipeline for remote/Telegram-style sessions.
@@ -66,6 +66,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
 |---|---|
 | `/studio` | Open in Muxy or cmux when available, otherwise the system browser, with the last assistant response (fallback: blank) |
 | `/studio <path>` | Open a text file in the editor, or a PDF in a read-only companion preview tab |
+| `/studio --watch <pdf>` | Open a local PDF with stable-file auto-refresh enabled |
 | `/studio --last` | Force last response |
 | `/studio --blank` | Force blank editor |
 | `/studio --no-browser` | Start/print the Studio URL without opening a browser, useful for forwarded or phone/browser sessions |
@@ -118,13 +119,14 @@ path: attachments/paper.pdf
 title: Optional title
 page: 3
 height: 760
+watch: true
 caption: Optional caption
 ```
 ````
 
-`path` must point to a local `.pdf` within the current Studio resource directory. Relative paths resolve from the opened document's directory, or from Studio's working dir for non-file-backed content. `page` is an initial page hint for the browser PDF viewer, and `height` controls the embedded frame height in pixels. Use normal Markdown links for PDFs when embedding is not useful.
+`path` must point to a local `.pdf` within the current Studio resource directory. Relative paths resolve from the opened document's directory, or from Studio's working dir for non-file-backed content. `page` is an initial page hint for the browser PDF viewer, `height` controls the embedded frame height in pixels, and `watch: true` enables auto-refresh after Studio observes the changed file in a stable state. Use normal Markdown links for PDFs when embedding is not useful.
 
-To view an existing PDF directly, run `/studio report.pdf` (or `/studio "path with spaces/report.pdf"`). The PDF opens read-only in a focused companion preview, even when the full Studio workspace is already open. A `#page=N` suffix selects the initial page. This is distinct from `/studio-pdf`, which exports Markdown, LaTeX, code, or the last response to a new PDF.
+To view an existing PDF directly, run `/studio report.pdf` (or `/studio "path with spaces/report.pdf"`). The PDF opens read-only in a focused companion preview, even when the full Studio workspace is already open. A `#page=N` suffix selects the initial page. Auto-refresh is off by default; use `/studio --watch report.pdf` to start with it on, or toggle **Auto-refresh** in the PDF card or focused viewer. Studio checks only while the tab is visible and waits for two matching file-version observations before reloading, which avoids reading a PDF while LaTeX is still writing it. **Cmd/Ctrl+Alt+R** manually refreshes the focused or visible PDF. This is distinct from `/studio-pdf`, which exports Markdown, LaTeX, code, or the last response to a new PDF.
 
 ### Mermaid icons
 

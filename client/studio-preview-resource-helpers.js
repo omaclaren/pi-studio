@@ -43,10 +43,62 @@
     return { attempted: images.length, resolved };
   }
 
+  function buildStudioPdfVersionSignature(headers) {
+    if (!headers || typeof headers.get !== "function") return "";
+    const etag = String(headers.get("etag") || "").trim();
+    const modified = String(headers.get("last-modified") || "").trim();
+    const length = String(headers.get("content-length") || "").trim();
+    if (!etag && !modified && !length) return "";
+    return [etag, modified, length].join("\n");
+  }
+
+  function createStudioPdfVersionObservationState() {
+    return {
+      baseline: "",
+      candidate: "",
+      candidateCount: 0,
+    };
+  }
+
+  function observeStudioPdfVersion(previousState, signature, stableObservations) {
+    const state = previousState && typeof previousState === "object"
+      ? previousState
+      : createStudioPdfVersionObservationState();
+    const nextSignature = String(signature || "").trim();
+    const required = Math.max(2, Number.parseInt(String(stableObservations || "2"), 10) || 2);
+    if (!nextSignature) return { state, changed: false };
+    if (!state.baseline) {
+      return {
+        state: { baseline: nextSignature, candidate: "", candidateCount: 0 },
+        changed: false,
+      };
+    }
+    if (nextSignature === state.baseline) {
+      return {
+        state: { baseline: state.baseline, candidate: "", candidateCount: 0 },
+        changed: false,
+      };
+    }
+    const candidateCount = nextSignature === state.candidate ? state.candidateCount + 1 : 1;
+    if (candidateCount < required) {
+      return {
+        state: { baseline: state.baseline, candidate: nextSignature, candidateCount },
+        changed: false,
+      };
+    }
+    return {
+      state: { baseline: nextSignature, candidate: "", candidateCount: 0 },
+      changed: true,
+    };
+  }
+
   globalThis.PiStudioPreviewResourceHelpers = Object.freeze({
     STUDIO_PREVIEW_LOCAL_IMAGE_LIMIT,
     areStudioPreviewResourceContextsEqual,
+    buildStudioPdfVersionSignature,
+    createStudioPdfVersionObservationState,
     hydrateStudioPreviewLocalImages,
     isResolvableStudioPreviewImageSource,
+    observeStudioPdfVersion,
   });
 })();

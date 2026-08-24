@@ -6,6 +6,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Added
 - Open local PDFs directly with `/studio <path.pdf>` or `/studio-editor-only <path.pdf>` in a read-only, right-focused companion preview, including optional `#page=N` hints and the existing PDF viewer actions without replacing an open full Studio workspace.
+- Add opt-in PDF auto-refresh through `/studio --watch <path.pdf>`, `watch: true` preview blocks, and synchronized card/focus-viewer toggles; Studio checks only visible tabs, waits for a changed file to stabilize, and retains **Cmd/Ctrl+Alt+R** as a manual refresh shortcut.
 
 ## [0.9.48] — 2026-08-21
 
