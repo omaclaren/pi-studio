@@ -1823,9 +1823,17 @@
     }
 
     .rendered-markdown button.studio-pdf-card-auto-refresh[aria-pressed="true"] {
-      background: var(--accent-soft);
+      background: transparent;
       color: var(--accent);
-      border-color: var(--accent-soft-strong);
+      border-color: transparent;
+      font-weight: 600;
+    }
+
+    .rendered-markdown button.studio-pdf-card-auto-refresh[aria-pressed="true"]:not(:disabled):hover,
+    .rendered-markdown button.studio-pdf-card-auto-refresh[aria-pressed="true"]:focus-visible {
+      background: var(--panel);
+      color: var(--accent);
+      border-color: var(--control-border);
     }
 
     .rendered-markdown button.studio-pdf-card-focus {
@@ -1990,8 +1998,16 @@
     }
 
     .studio-pdf-focus-auto-refresh[aria-pressed="true"] {
-      background: var(--accent-soft);
-      border-color: var(--accent-soft-strong);
+      background: transparent;
+      border-color: transparent;
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .studio-pdf-focus-auto-refresh[aria-pressed="true"]:not(:disabled):hover,
+    .studio-pdf-focus-auto-refresh[aria-pressed="true"]:focus-visible {
+      background: var(--panel);
+      border-color: var(--control-border);
       color: var(--accent);
     }
 

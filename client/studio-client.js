@@ -7000,9 +7000,9 @@
         const autoRefreshBtn = document.createElement("button");
         autoRefreshBtn.type = "button";
         autoRefreshBtn.className = "studio-pdf-focus-btn studio-pdf-focus-auto-refresh";
-        autoRefreshBtn.textContent = "Auto-refresh: Off";
+        autoRefreshBtn.textContent = "Auto-refresh";
         autoRefreshBtn.title = "Watch this local PDF and reload it after a changed file is stable on disk.";
-        autoRefreshBtn.setAttribute("aria-label", "Toggle PDF auto-refresh");
+        autoRefreshBtn.setAttribute("aria-label", "Enable PDF auto-refresh");
         autoRefreshBtn.setAttribute("aria-pressed", "false");
         autoRefreshBtn.addEventListener("click", () => toggleStudioPdfFocusAutoRefresh());
         actions.appendChild(autoRefreshBtn);
@@ -7154,7 +7154,8 @@
         const active = Boolean(enabled && available);
         button.disabled = !available;
         button.setAttribute("aria-pressed", active ? "true" : "false");
-        button.textContent = active ? "Auto-refresh: On" : "Auto-refresh: Off";
+        button.setAttribute("aria-label", active ? "Disable PDF auto-refresh" : "Enable PDF auto-refresh");
+        button.textContent = "Auto-refresh";
         button.title = active
           ? "Auto-refresh is on. Studio checks this PDF while the tab is visible and reloads it after a changed file is stable on disk."
           : "Watch this local PDF and reload it after a changed file is stable on disk.";
@@ -8091,9 +8092,9 @@
           const autoRefreshBtn = document.createElement("button");
           autoRefreshBtn.type = "button";
           autoRefreshBtn.className = "studio-pdf-card-action studio-pdf-card-auto-refresh";
-          autoRefreshBtn.textContent = "Auto-refresh: Off";
+          autoRefreshBtn.textContent = "Auto-refresh";
           autoRefreshBtn.title = "Watch this local PDF and reload it after a changed file is stable on disk.";
-          autoRefreshBtn.setAttribute("aria-label", "Toggle PDF auto-refresh");
+          autoRefreshBtn.setAttribute("aria-label", "Enable PDF auto-refresh");
           autoRefreshBtn.setAttribute("aria-pressed", "false");
           autoRefreshBtn.addEventListener("click", (event) => {
             event.preventDefault();

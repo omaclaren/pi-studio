@@ -28,14 +28,23 @@ test("local PDF actions use authenticated boundary-checked server routes", () =>
 });
 
 test("PDF cards and the focus viewer expose synchronized auto-refresh controls", () => {
-  assert.ok((clientSource.match(/textContent = "Auto-refresh: Off"/g) || []).length >= 2);
+  assert.ok((clientSource.match(/textContent = "Auto-refresh"/g) || []).length >= 3);
+  assert.doesNotMatch(clientSource, /Auto-refresh: (?:On|Off)/);
   assert.match(clientSource, /studio-pdf-card-auto-refresh/);
   assert.match(clientSource, /studio-pdf-focus-auto-refresh/);
   assert.match(clientSource, /setStudioPdfFocusAutoRefreshSource\(sourceCard, studioPdfFocusResourceQuery\)/);
   assert.match(clientSource, /studioPdfFocusSourceCard === card/);
   assert.match(clientSource, /PDF changed on disk; refreshed preview\./);
-  assert.match(cssSource, /studio-pdf-card-auto-refresh\[aria-pressed="true"\]/);
-  assert.match(cssSource, /studio-pdf-focus-auto-refresh\[aria-pressed="true"\]/);
+  assert.match(clientSource, /active \? "Disable PDF auto-refresh" : "Enable PDF auto-refresh"/);
+
+  const cardActiveRule = cssSource.match(/\.rendered-markdown button\.studio-pdf-card-auto-refresh\[aria-pressed="true"\] \{([\s\S]*?)\}/)?.[1] || "";
+  const focusActiveRule = cssSource.match(/\.studio-pdf-focus-auto-refresh\[aria-pressed="true"\] \{([\s\S]*?)\}/)?.[1] || "";
+  for (const activeRule of [cardActiveRule, focusActiveRule]) {
+    assert.match(activeRule, /background: transparent;/);
+    assert.match(activeRule, /color: var\(--accent\);/);
+    assert.match(activeRule, /border-color: transparent;/);
+    assert.doesNotMatch(activeRule, /accent-soft/);
+  }
 });
 
 test("PDF auto-refresh polls authenticated metadata only while visible and waits for stability", () => {
