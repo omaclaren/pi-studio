@@ -59,28 +59,77 @@
       flex-wrap: wrap;
     }
 
-    .zen-mode-btn {
+    .zen-mode-btn,
+    .header-visibility-btn {
       font-weight: inherit;
       white-space: nowrap;
     }
 
-    body.studio-zen-mode > header {
-      padding: 8px 12px;
-    }
-
-    body.studio-zen-mode .app-subtitle {
-      display: none;
-    }
-
-    body.studio-zen-mode > header .controls > :not(#zenModeBtn) {
+    body.studio-header-hidden > #studioHeader,
+    body.studio-zen-mode > #studioHeader {
       display: none !important;
     }
 
-    body.studio-zen-mode #zenModeBtn {
+    .studio-header-reveal {
+      position: fixed;
+      top: 0;
+      right: max(8px, env(safe-area-inset-right));
+      z-index: 60;
+      width: 118px;
+      height: 10px;
+      cursor: pointer;
+    }
+
+    .studio-header-reveal[hidden] {
+      display: none !important;
+    }
+
+    .studio-header-reveal::after {
+      content: "";
+      position: absolute;
+      right: 10px;
+      bottom: 2px;
+      left: 10px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--accent);
+      opacity: 0.62;
+      pointer-events: none;
+    }
+
+    .studio-header-reveal button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      min-width: 100%;
+      min-height: 32px;
+      padding: 5px 10px;
+      border-top: 0;
+      border-radius: 0 0 9px 9px;
       background: var(--panel);
-      border-color: var(--control-border);
       color: var(--text);
-      font-weight: inherit;
+      box-shadow: 0 8px 24px var(--shadow-color);
+      white-space: nowrap;
+      transform: translateY(calc(-100% + 5px));
+      transition: transform 140ms ease;
+    }
+
+    .studio-header-reveal.is-open button,
+    .studio-header-reveal:hover button,
+    .studio-header-reveal:focus-within button {
+      transform: translateY(0);
+    }
+
+    .studio-header-reveal button:not(:disabled):hover,
+    .studio-header-reveal button:focus-visible {
+      background: var(--panel-2);
+      color: var(--accent);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .studio-header-reveal button {
+        transition: none;
+      }
     }
 
     .export-preview-controls {
@@ -5386,10 +5435,6 @@
 
     body.studio-ui-refresh > header .controls {
       gap: 5px;
-    }
-
-    body.studio-ui-refresh.studio-zen-mode > header {
-      padding: 7px 12px;
     }
 
     body.studio-ui-refresh > header button,

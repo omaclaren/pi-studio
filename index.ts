@@ -10756,7 +10756,7 @@ ${cssVarsBlock}
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
 <body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
-  <header>
+  <header id="studioHeader">
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
       <button id="saveAsBtn" type="button" title="Save editor content to a new file path. Cmd/Ctrl+S falls back here when no direct save path is available.">Save editor as…</button>
@@ -10766,9 +10766,13 @@ ${cssVarsBlock}
       <button id="importFileBtn" type="button" title="Import a file as an editable copy.">Import file copy…</button>
       <input id="fileInput" class="file-input-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" />
       <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
-      <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide secondary Studio controls. Shortcut: F9.">Zen</button>
+      <button id="hideStudioHeaderBtn" class="header-visibility-btn" type="button" aria-controls="studioHeader" title="Hide the global Studio header. Restore it from the top-right edge.">Hide header</button>
+      <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide the Studio header and secondary controls. Shortcut: F9.">Zen</button>
     </div>
   </header>
+  <div id="studioHeaderReveal" class="studio-header-reveal" hidden>
+    <button id="studioHeaderRevealBtn" type="button" aria-controls="studioHeader" title="Show the Studio header.">Show header</button>
+  </div>
 
   <main>
     <section id="leftPane">
@@ -11081,7 +11085,7 @@ ${cssVarsBlock}
             <div><dt>Cmd/Ctrl+Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
             <div><dt>F8</dt><dd>Focus editor text</dd></div>
             <div><dt>Shift+F8</dt><dd>Focus right-pane content</dd></div>
-            <div><dt>F9</dt><dd>Toggle Zen mode</dd></div>
+            <div><dt>F9</dt><dd>Toggle Zen mode and hide or restore the Studio header</dd></div>
             <div><dt>F10</dt><dd>Focus or unfocus the active pane</dd></div>
             <div><dt>Esc</dt><dd>Close overlays, exit pane focus, or stop an active request</dd></div>
             <div><dt>?</dt><dd>Show keyboard shortcuts when not editing text</dd></div>

@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Allow the global Studio header to be hidden independently and restored from a fixed top-edge control without shifting the workspace layout.
+
+### Changed
+- Hide the global Studio header by default in Zen mode, while keeping **F9** as an immediate way to exit Zen and restore the full header.
+
 ## [0.9.49] — 2026-08-24
 
 ### Added

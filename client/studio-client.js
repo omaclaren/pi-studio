@@ -116,6 +116,10 @@
       const sendEditorBtn = document.getElementById("sendEditorBtn");
       const openCompanionBtn = document.getElementById("openCompanionBtn");
       const getEditorBtn = document.getElementById("getEditorBtn");
+      const studioHeaderEl = document.getElementById("studioHeader");
+      const hideStudioHeaderBtn = document.getElementById("hideStudioHeaderBtn");
+      const studioHeaderRevealEl = document.getElementById("studioHeaderReveal");
+      const studioHeaderRevealBtn = document.getElementById("studioHeaderRevealBtn");
       const zenModeBtn = document.getElementById("zenModeBtn");
       const sendRunBtn = document.getElementById("sendRunBtn");
       const queueSteerBtn = document.getElementById("queueSteerBtn");
@@ -2187,6 +2191,7 @@
       let lineNumbersRenderRaf = null;
       let annotationsEnabled = true;
       const STUDIO_ZEN_MODE_STORAGE_KEY = "piStudio.zenMode";
+      const STUDIO_HEADER_HIDDEN_STORAGE_KEY = "piStudio.headerHidden";
       const studioUiRefreshEnabled = readStudioUiRefreshEnabled();
       const EDITOR_FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 15, 16, 18];
       const RESPONSE_FONT_SIZE_OPTIONS = [11, 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16, 18, 20];
@@ -2239,11 +2244,16 @@
       let fileBrowserLoadNonce = 0;
       let studioUiRefreshUi = null;
       let studioZenModeEnabled = readStudioZenModeEnabled();
+      let studioHeaderHidden = readStudioHeaderHiddenEnabled();
+      let studioHeaderRevealTimer = null;
       if (studioUiRefreshEnabled && document.body) {
         document.body.classList.add("studio-ui-refresh");
       }
       if (studioZenModeEnabled && document.body) {
         document.body.classList.add("studio-zen-mode");
+      }
+      if ((studioZenModeEnabled || studioHeaderHidden) && document.body) {
+        document.body.classList.add("studio-header-hidden");
       }
       let scratchpadText = "";
       let scratchpadReturnFocusEl = null;
@@ -2308,22 +2318,129 @@
         }
       }
 
-      function syncStudioZenModeUi() {
-        if (document.body) document.body.classList.toggle("studio-zen-mode", studioZenModeEnabled);
-        if (!zenModeBtn) return;
-        zenModeBtn.textContent = studioZenModeEnabled ? "Exit Zen" : "Zen";
-        zenModeBtn.title = studioZenModeEnabled ? "Show full Studio controls. Shortcut: F9." : "Hide secondary Studio controls. Shortcut: F9.";
-        zenModeBtn.setAttribute("aria-pressed", studioZenModeEnabled ? "true" : "false");
+      function readStudioHeaderHiddenEnabled() {
+        const normalize = (value) => String(value == null ? "" : value).trim().toLowerCase();
+        const isTruthy = (value) => ["1", "true", "yes", "on", "hidden"].indexOf(normalize(value)) !== -1;
+        try {
+          const stored = window.localStorage ? window.localStorage.getItem(STUDIO_HEADER_HIDDEN_STORAGE_KEY) : null;
+          if (stored === null) return false;
+          return isTruthy(stored);
+        } catch {
+          return false;
+        }
       }
 
-      function setStudioZenMode(enabled) {
-        studioZenModeEnabled = Boolean(enabled);
+      function persistStudioHeaderHiddenEnabled() {
+        try {
+          window.localStorage && window.localStorage.setItem(STUDIO_HEADER_HIDDEN_STORAGE_KEY, studioHeaderHidden ? "1" : "0");
+        } catch {}
+      }
+
+      function focusStudioChromeControl(control) {
+        if (!control || typeof control.focus !== "function") return;
+        window.setTimeout(() => {
+          try {
+            control.focus({ preventScroll: true });
+          } catch {
+            try { control.focus(); } catch {}
+          }
+        }, 0);
+      }
+
+      function showStudioHeaderRevealControl() {
+        if (!studioHeaderRevealEl || !studioHeaderRevealBtn) return;
+        studioHeaderRevealEl.classList.add("is-open");
+        if (studioHeaderRevealTimer) window.clearTimeout(studioHeaderRevealTimer);
+        studioHeaderRevealTimer = window.setTimeout(() => {
+          studioHeaderRevealTimer = null;
+          studioHeaderRevealEl.classList.remove("is-open");
+        }, 1800);
+        focusStudioChromeControl(studioHeaderRevealBtn);
+      }
+
+      function syncStudioHeaderVisibilityUi() {
+        const hidden = Boolean(studioZenModeEnabled || studioHeaderHidden);
+        if (document.body) document.body.classList.toggle("studio-header-hidden", hidden);
+        if (studioHeaderRevealEl) {
+          studioHeaderRevealEl.hidden = !hidden;
+          studioHeaderRevealEl.dataset.mode = studioZenModeEnabled ? "zen" : "header";
+          if (!hidden) studioHeaderRevealEl.classList.remove("is-open");
+        }
+        if (!hidden && studioHeaderRevealTimer) {
+          window.clearTimeout(studioHeaderRevealTimer);
+          studioHeaderRevealTimer = null;
+        }
+        if (studioHeaderRevealBtn) {
+          const label = studioZenModeEnabled ? "Exit Zen" : "Show header";
+          studioHeaderRevealBtn.textContent = label;
+          studioHeaderRevealBtn.setAttribute("aria-label", label);
+          studioHeaderRevealBtn.title = studioZenModeEnabled
+            ? "Exit Zen and restore the Studio header. Shortcut: F9."
+            : "Restore the Studio header.";
+        }
+      }
+
+      function syncStudioZenModeUi() {
+        if (document.body) document.body.classList.toggle("studio-zen-mode", studioZenModeEnabled);
+        if (zenModeBtn) {
+          zenModeBtn.textContent = studioZenModeEnabled ? "Exit Zen" : "Zen";
+          zenModeBtn.title = studioZenModeEnabled
+            ? "Exit Zen and restore the Studio header. Shortcut: F9."
+            : "Hide the Studio header and secondary controls. Shortcut: F9.";
+          zenModeBtn.setAttribute("aria-pressed", studioZenModeEnabled ? "true" : "false");
+        }
+        syncStudioHeaderVisibilityUi();
+      }
+
+      function setStudioHeaderHidden(enabled, options) {
+        const nextHidden = Boolean(enabled);
+        const moveFocusToReveal = Boolean(
+          nextHidden
+          && (
+            (options && options.focusReveal)
+            || (studioHeaderEl && document.activeElement && studioHeaderEl.contains(document.activeElement))
+          )
+        );
+        studioHeaderHidden = nextHidden;
+        persistStudioHeaderHiddenEnabled();
+        closeStudioUiRefreshMenus();
+        closeExportPreviewMenu();
+        syncStudioHeaderVisibilityUi();
+        if (moveFocusToReveal) showStudioHeaderRevealControl();
+      }
+
+      function setStudioZenMode(enabled, options) {
+        const nextEnabled = Boolean(enabled);
+        const moveFocusToReveal = Boolean(
+          nextEnabled
+          && (
+            (options && options.focusReveal)
+            || (studioHeaderEl && document.activeElement && studioHeaderEl.contains(document.activeElement))
+          )
+        );
+        studioZenModeEnabled = nextEnabled;
+        if (!studioZenModeEnabled) {
+          studioHeaderHidden = false;
+          persistStudioHeaderHiddenEnabled();
+        }
         try {
           window.localStorage && window.localStorage.setItem(STUDIO_ZEN_MODE_STORAGE_KEY, studioZenModeEnabled ? "1" : "0");
         } catch {}
         closeStudioUiRefreshMenus();
         closeExportPreviewMenu();
         syncStudioZenModeUi();
+        if (moveFocusToReveal) showStudioHeaderRevealControl();
+      }
+
+      function restoreStudioHeaderFromReveal() {
+        const wasZenMode = studioZenModeEnabled;
+        if (wasZenMode) {
+          setStudioZenMode(false);
+        } else {
+          setStudioHeaderHidden(false);
+        }
+        focusStudioChromeControl(wasZenMode ? zenModeBtn : hideStudioHeaderBtn);
+        setStatus(wasZenMode ? "Zen mode off. Studio header restored." : "Studio header shown.");
       }
 
       function makeStudioUiRefreshElement(tagName, className, text) {
@@ -4658,8 +4775,17 @@
         const isZenModeShortcut = key === "F9" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
         if (isZenModeShortcut) {
           event.preventDefault();
-          setStudioZenMode(!studioZenModeEnabled);
-          setStatus(studioZenModeEnabled ? "Zen mode on." : "Zen mode off.");
+          const restoringHeaderOnly = Boolean(!studioZenModeEnabled && studioHeaderHidden);
+          if (studioZenModeEnabled) {
+            setStudioZenMode(false);
+          } else if (studioHeaderHidden) {
+            setStudioHeaderHidden(false);
+          } else {
+            setStudioZenMode(true);
+          }
+          setStatus(studioZenModeEnabled
+            ? "Zen mode on. Studio header hidden; press F9 to exit."
+            : (restoringHeaderOnly ? "Studio header restored." : "Zen mode off. Studio header restored."));
           return;
         }
 
@@ -22254,9 +22380,29 @@
         });
       }
 
+      if (hideStudioHeaderBtn) {
+        hideStudioHeaderBtn.addEventListener("click", () => {
+          setStudioHeaderHidden(true, { focusReveal: true });
+          setStatus("Studio header hidden. Move to the top-right edge to restore it.");
+        });
+      }
+
+      if (studioHeaderRevealEl) {
+        studioHeaderRevealEl.addEventListener("click", (event) => {
+          if (event.target === studioHeaderRevealEl) restoreStudioHeaderFromReveal();
+        });
+      }
+
+      if (studioHeaderRevealBtn) {
+        studioHeaderRevealBtn.addEventListener("click", restoreStudioHeaderFromReveal);
+      }
+
       if (zenModeBtn) {
         zenModeBtn.addEventListener("click", () => {
-          setStudioZenMode(!studioZenModeEnabled);
+          setStudioZenMode(!studioZenModeEnabled, { focusReveal: !studioZenModeEnabled });
+          setStatus(studioZenModeEnabled
+            ? "Zen mode on. Studio header hidden; press F9 to exit."
+            : "Zen mode off. Studio header restored.");
         });
       }
 
