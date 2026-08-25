@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.51] — 2026-08-26
+
 ### Added
 - Add a Studio-native **Side questions** right-pane thread that runs independently of the main Pi conversation, supports follow-ups and explicit copy/insert/promote actions, and keeps the side exchange out of main history unless the user chooses **Bring to main conversation**.
 - Separate the starting-text snapshot from progressive file access: side threads can start from an editor selection, Markdown/LaTeX heading block, nearby text, whole editor, displayed response, or no starting text, then selectively map, search, and read a bounded document folder, repository, or chosen folder through root-confined read-only tools.
