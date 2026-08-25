@@ -232,6 +232,8 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /function handleSideQuestionKeydown/);
 	assert.match(clientSource, /event\.key === "Enter"[\s\S]*?\(event\.metaKey \|\| event\.ctrlKey\)[\s\S]*?!event\.shiftKey/);
 	assert.match(clientSource, /aria-keyshortcuts='Meta\+Enter Control\+Enter'/);
+	assert.match(clientSource, /const isSideQuestionsShortcut = [\s\S]*?switchRightPaneToView\("side-questions"\)/);
+	assert.match(indexSource, /Cmd\/Ctrl\+Alt\+Q<\/dt><dd>Switch the right pane directly to Side questions/);
 	assert.match(indexSource, /Ask the initial side question or a follow-up while its question box is focused/);
 	assert.match(clientSource, /attachmentText: attachment/);
 	assert.match(clientSource, /relatedFilesText:/);

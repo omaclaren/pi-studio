@@ -106,7 +106,7 @@ pi -e https://github.com/omaclaren/pi-studio
 
 ## Side questions and research context
 
-Open **Review → Side question** or select **Side questions** in the right pane. A new side thread captures its starting text while keeping related-file access separate:
+Open **Review → Side question**, select **Side questions** in the right pane, or press **Cmd/Ctrl+Alt+Q**. A new side thread captures its starting text while keeping related-file access separate:
 
 - **Starting text** controls what unsaved text begins the thread. The compact **Automatic: selection → heading block at cursor → nearby text** disclosure explains the fallback order; when expanded, it defines the heading boundary. The summary below reports the resolved starting text, editor line range when applicable, and character count separately from the related-file scope.
 - Explicit **Editor selection only** no longer falls back to the whole document when no text is selected; the summary instead reports that no editor text is selected.
