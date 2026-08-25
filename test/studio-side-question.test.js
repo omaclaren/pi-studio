@@ -55,14 +55,43 @@ test("side-question focus chooses selections and bounded Markdown or LaTeX secti
 	assert.equal(selected.focusKind, "selection");
 	assert.equal(selected.focusText, "First idea");
 
+	const headingFocus = clientHelpers.chooseStudioSideQuestionFocus({
+		mode: "section",
+		editorText: markdown,
+		selectionStart: chapterOffset,
+		selectionEnd: chapterOffset,
+		language: "markdown",
+	});
+	assert.equal(headingFocus.focusLabel, "Section “Chapter one” at cursor");
+	assert.equal(headingFocus.start, markdown.indexOf("## Chapter one"));
+
+	const missingSelection = clientHelpers.chooseStudioSideQuestionFocus({
+		mode: "selection",
+		editorText: markdown,
+		selectionStart: chapterOffset,
+		selectionEnd: chapterOffset,
+		language: "markdown",
+	});
+	assert.equal(missingSelection.focusKind, "none");
+	assert.equal(missingSelection.focusLabel, "No editor text selected");
+
 	const latex = "\\chapter{Foundations}\nA.\n\\section{Likelihood}\nImportant.\n\\subsection{Exercise}\nTry this.\n\\section{Inference}\nLater.";
 	const latexSection = clientHelpers.findStudioSideQuestionSection(latex, latex.indexOf("Try this"), "latex");
 	assert.equal(latexSection.label, "Exercise");
 	assert.match(latexSection.text, /Try this/);
 	assert.doesNotMatch(latexSection.text, /Inference/);
 
-	const unstructured = clientHelpers.findStudioSideQuestionSection("First paragraph.\n\nSecond paragraph.", 3, "text");
+	const unstructuredText = "First paragraph.\n\nSecond paragraph.";
+	const unstructured = clientHelpers.findStudioSideQuestionSection(unstructuredText, 3, "text");
 	assert.equal(unstructured.label, "Text around cursor");
+	const unstructuredFocus = clientHelpers.chooseStudioSideQuestionFocus({
+		mode: "auto",
+		editorText: unstructuredText,
+		selectionStart: 3,
+		selectionEnd: 3,
+		language: "text",
+	});
+	assert.equal(unstructuredFocus.focusLabel, "Text around cursor");
 });
 
 test("side-question focus and prompts remain bounded and delimiter-safe", () => {
@@ -192,7 +221,15 @@ test("Studio wires an independent read-only side thread with progressive local a
 
 	assert.match(clientSource, /value="side-questions"|"side-questions": "Side questions"/);
 	assert.match(clientSource, /<h2>Side question<\/h2>/);
-	assert.match(clientSource, /<label>Start with<select data-side-question-field='focusMode'/);
+	assert.match(clientSource, /<label>Starting text<select data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'/);
+	assert.match(clientSource, /\["auto", "Automatic"\]/);
+	assert.match(clientSource, /Automatic chooses, in order/);
+	assert.match(clientSource, /selected editor text, if any/);
+	assert.match(clientSource, /nearest heading above the cursor/);
+	assert.match(clientSource, /getSideQuestionEditorLineRange/);
+	assert.match(clientSource, /function scheduleSideQuestionContextRefresh/);
+	assert.match(clientSource, /sourceTextEl\.addEventListener\("select"[\s\S]*?scheduleSideQuestionContextRefresh\(\)/);
+	assert.match(clientSource, /<strong>Will attach<\/strong>/);
 	assert.match(clientSource, /<label>Also use files from<select data-side-question-field='gatherScope'/);
 	assert.match(clientSource, /Same folder as document/);
 	assert.match(clientSource, /Repository/);
@@ -208,6 +245,7 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.doesNotMatch(indexSource, />Ask aside<\/button>/);
 	assert.match(clientSource, /side_question_promote_request/);
 	assert.match(cssSource, /\.side-question-context-grid/);
+	assert.match(cssSource, /\.side-question-context-rule/);
 	assert.match(cssSource, /\.side-question-tool-picker/);
 	assert.match(cssSource, /\.side-question-actions \.side-question-primary:not\(:disabled\):hover[\s\S]*?background: var\(--accent\)/);
 	assert.match(cssSource, /#critiqueView\.side-question-host/);

@@ -73,7 +73,7 @@
     }
     const start = records[headingIndex].start;
     const end = endIndex < records.length ? records[endIndex].start : String(text || "").length;
-    return { kind: "section", sectionKind: kind, label: heading.label || "current section", text: String(text || "").slice(start, end).trim(), start: start, end: end };
+    return { kind: "section", sectionKind: kind, label: heading.label || "untitled", text: String(text || "").slice(start, end).trim(), start: start, end: end };
   }
 
   function paragraphAroundCursor(text, cursorOffset) {
@@ -115,27 +115,34 @@
     const start = clampOffset(input.selectionStart, editorText.length);
     const end = Math.max(start, clampOffset(input.selectionEnd, editorText.length));
     const selection = editorText.slice(start, end).trim();
-    let mode = String(input.mode || "auto").trim().toLowerCase();
-    if (mode === "auto") mode = selection ? "selection" : "section";
+    const requestedMode = String(input.mode || "auto").trim().toLowerCase();
+    const mode = requestedMode === "auto" ? (selection ? "selection" : "section") : requestedMode;
 
-    if (mode === "none") return { focusKind: "none", focusLabel: "No attached context", focusText: "", truncated: false };
+    if (mode === "none") return { focusKind: "none", focusLabel: "No starting text", focusText: "", truncated: false };
     if (mode === "response") {
+      if (!responseText.trim()) return { focusKind: "none", focusLabel: "No displayed response", focusText: "", truncated: false };
       const bounded = truncateFocus(responseText);
       return { focusKind: "response", focusLabel: "Displayed response", focusText: bounded.text, truncated: bounded.truncated };
     }
-    if (mode === "selection" && selection) {
+    if (mode === "selection") {
+      if (!selection) return { focusKind: "none", focusLabel: "No editor text selected", focusText: "", truncated: false };
       const bounded = truncateFocus(selection);
-      return { focusKind: "selection", focusLabel: "Editor selection", focusText: bounded.text, truncated: bounded.truncated };
+      return { focusKind: "selection", focusLabel: "Editor selection", focusText: bounded.text, truncated: bounded.truncated, start: start, end: end };
     }
     if (mode === "section") {
       const section = findStudioSideQuestionSection(editorText, end || start, input.language);
       if (section && section.text.trim()) {
         const bounded = truncateFocus(section.text);
-        return { focusKind: "section", focusLabel: section.label, focusText: bounded.text, truncated: bounded.truncated, start: section.start, end: section.end };
+        const label = section.sectionKind === "passage"
+          ? "Text around cursor"
+          : "Section “" + String(section.label || "untitled").slice(0, 160) + "” at cursor";
+        return { focusKind: "section", focusLabel: label, focusText: bounded.text, truncated: bounded.truncated, start: section.start, end: section.end };
       }
+      return { focusKind: "none", focusLabel: "No editor text at cursor", focusText: "", truncated: false };
     }
+    if (!editorText.trim()) return { focusKind: "none", focusLabel: "Editor is empty", focusText: "", truncated: false };
     const bounded = truncateFocus(editorText);
-    return { focusKind: "editor", focusLabel: "Whole editor document", focusText: bounded.text, truncated: bounded.truncated };
+    return { focusKind: "editor", focusLabel: "Whole editor document", focusText: bounded.text, truncated: bounded.truncated, start: 0, end: editorText.length };
   }
 
   function getDefaultStudioSideQuestionGatherScope(options) {

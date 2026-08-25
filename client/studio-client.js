@@ -468,6 +468,7 @@
       let sideQuestionWebSearchAvailable = false;
       let sideQuestionAvailablePiTools = [];
       let sideQuestionPreviewRenderNonce = 0;
+      let sideQuestionContextRefreshHandle = null;
       const sideQuestionMarkdownRenderCache = new Map();
       let sideQuestionUi = {
         focusMode: "auto",
@@ -11957,6 +11958,17 @@
         return [...sideQuestionState.messages].reverse().find((entry) => entry.role === "assistant" && entry.status === "complete" && entry.text.trim()) || null;
       }
 
+      function getSideQuestionEditorLineRange(focus) {
+        if (!focus || !Number.isFinite(focus.start) || !Number.isFinite(focus.end)) return "";
+        const source = sourceTextEl.value || "";
+        const start = Math.max(0, Math.min(source.length, Math.floor(focus.start)));
+        const end = Math.max(start, Math.min(source.length, Math.floor(focus.end)));
+        const firstLine = source.slice(0, start).split("\n").length;
+        const lastOffset = end > start ? end - 1 : start;
+        const lastLine = source.slice(0, lastOffset).split("\n").length;
+        return firstLine === lastLine ? "line " + firstLine : "lines " + firstLine + "–" + lastLine;
+      }
+
       function getSideQuestionContextSummary() {
         const focus = getSideQuestionFocus();
         const scope = getSideQuestionGatherScope();
@@ -11967,14 +11979,17 @@
           : (scope === "repo"
             ? (sourcePath || resourceDir || "current Pi working directory")
             : (sourcePath ? dirnameForDisplayPath(sourcePath) : (resourceDir || "current Pi working directory")));
+        const lineRange = getSideQuestionEditorLineRange(focus);
+        const attachment = focus.focusKind === "none"
+          ? focus.focusLabel
+          : focus.focusLabel + (lineRange ? " · " + lineRange : "") + " · " + String(focus.focusText.length).toLocaleString("en-US") + " chars";
         return {
           focus,
           scope,
           rootHint,
           sourcePath,
           resourceDir,
-          text: focus.focusLabel + " · " + String(focus.focusText.length).toLocaleString("en-US") + " chars"
-            + (scope === "none" ? " · no other files" : " · may also use files from " + (rootHint || scope)),
+          text: attachment + (scope === "none" ? " · no other files" : " · may also use files from " + (rootHint || scope)),
         };
       }
 
@@ -12068,10 +12083,10 @@
         const scope = summary.scope;
         const webDisabled = !sideQuestionWebSearchAvailable;
         return "<div class='side-question-empty'>"
-          + "<div class='side-question-intro'><h2>Side question</h2><p>Ask something without adding it to the main Pi conversation. Choose what to start with, then optionally let Studio look through related files.</p></div>"
+          + "<div class='side-question-intro'><h2>Side question</h2><p>Ask something without adding it to the main Pi conversation. Choose the starting text and whether Studio may look through related files.</p></div>"
           + "<div class='side-question-context-grid'>"
-          + "<label>Start with<select data-side-question-field='focusMode'>" + sideQuestionSelectOptions([
-            ["auto", "Selection or current section"], ["selection", "Editor selection"], ["section", "Current section or text around cursor"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No attached context"],
+          + "<label>Starting text<select data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'>" + sideQuestionSelectOptions([
+            ["auto", "Automatic"], ["selection", "Editor selection only"], ["section", "Section or nearby text at cursor"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No starting text"],
           ], sideQuestionUi.focusMode) + "</select></label>"
           + "<label>Also use files from<select data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
             ["none", "No other files"], ["folder", "Same folder as document"], ["repo", "Repository"], ["custom", "Choose a folder"],
@@ -12080,14 +12095,15 @@
             ["off", "Off"], ["minimal", "Minimal"], ["low", "Low"], ["medium", "Medium"], ["high", "High"],
           ], sideQuestionUi.thinking) + "</select></label>"
           + "</div>"
+          + "<div id='sideQuestionContextRule' class='side-question-context-rule'><strong>Automatic chooses, in order:</strong><ol><li>selected editor text, if any;</li><li>otherwise, the Markdown/LaTeX section at the cursor;</li><li>otherwise, a surrounding text block or nearby excerpt.</li></ol><span><strong>Section at cursor</strong> means the nearest heading above the cursor through to just before the next heading of the same or higher level.</span></div>"
           + (scope === "custom" ? "<label class='side-question-path-label'>Folder path<input data-side-question-field='customPath' type='text' value='" + escapeHtml(sideQuestionUi.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
           + "<div class='side-question-checks'>"
           + "<label><input data-side-question-field='includeConversation' type='checkbox'" + (sideQuestionUi.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
           + "<label title='" + (webDisabled ? "Set BRAVE_API_KEY before starting Pi to enable web search." : "Allow this side thread to search the web when useful.") + "'><input data-side-question-field='webSearch' type='checkbox'" + (sideQuestionUi.webSearch ? " checked" : "") + (webDisabled ? " disabled" : "") + "> Allow web search" + (webDisabled ? " (unavailable)" : "") + "</label>"
           + "</div>"
           + renderSideQuestionPiToolPicker()
-          + "<div class='side-question-context-summary'><strong>Starting context</strong><span>" + escapeHtml(summary.text) + "</span><span>Related files are read selectively; Studio does not attach the whole folder or repository.</span></div>"
-          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the starting context or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
+          + "<div class='side-question-context-summary'><strong>Will attach</strong><span>" + escapeHtml(summary.text) + "</span><span>Related files are read selectively; Studio does not attach the whole folder or repository.</span></div>"
+          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the attached text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
           + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask'" + (!isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question") + "</button></div>"
           + "</div>";
@@ -12129,6 +12145,14 @@
             ? "<button type='button' class='side-question-stop' data-side-question-action='stop'>Stop</button>"
             : "<button type='button' class='side-question-primary' data-side-question-action='ask'" + (!isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() ? " disabled" : "") + ">Ask follow-up</button>")
           + "</div></div>";
+      }
+
+      function scheduleSideQuestionContextRefresh() {
+        if (rightView !== "side-questions" || (sideQuestionState && sideQuestionState.threadId) || sideQuestionContextRefreshHandle !== null) return;
+        sideQuestionContextRefreshHandle = window.setTimeout(() => {
+          sideQuestionContextRefreshHandle = null;
+          if (rightView === "side-questions" && (!sideQuestionState || !sideQuestionState.threadId)) renderSideQuestionView();
+        }, 40);
       }
 
       function renderSideQuestionView(options) {
@@ -22511,6 +22535,7 @@
           updateReviewNotesUi();
         }
         scheduleWorkspacePersistence();
+        scheduleSideQuestionContextRefresh();
       });
 
       sourceTextEl.addEventListener("select", () => {
@@ -22524,14 +22549,17 @@
         }
         updateEditorSelectionCommentUi();
         syncShowMeButton();
+        scheduleSideQuestionContextRefresh();
       });
 
       sourceTextEl.addEventListener("keyup", () => {
         updateEditorSelectionCommentUi();
+        scheduleSideQuestionContextRefresh();
       });
 
       sourceTextEl.addEventListener("mouseup", () => {
         updateEditorSelectionCommentUi();
+        scheduleSideQuestionContextRefresh();
       });
 
       sourceTextEl.addEventListener("focus", () => {

@@ -6355,6 +6355,28 @@
       font-weight: 650;
     }
 
+    .side-question-context-rule {
+      display: grid;
+      gap: 4px;
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }
+
+    .side-question-context-rule strong {
+      color: var(--text);
+    }
+
+    .side-question-context-rule ol {
+      margin: 0;
+      padding-left: 22px;
+    }
+
+    .side-question-context-rule li {
+      padding-left: 2px;
+    }
+
     .side-question-context-grid select,
     .side-question-path-label input,
     .side-question-composer-label textarea {
