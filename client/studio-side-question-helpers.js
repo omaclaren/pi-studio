@@ -135,7 +135,7 @@
         const bounded = truncateFocus(section.text);
         const label = section.sectionKind === "passage"
           ? "Text around cursor"
-          : "Section “" + String(section.label || "untitled").slice(0, 160) + "” at cursor";
+          : "Text under “" + String(section.label || "untitled").slice(0, 160) + "”";
         return { focusKind: "section", focusLabel: label, focusText: bounded.text, truncated: bounded.truncated, start: section.start, end: section.end };
       }
       return { focusKind: "none", focusLabel: "No editor text at cursor", focusText: "", truncated: false };

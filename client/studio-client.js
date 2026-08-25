@@ -11977,7 +11977,7 @@
         const rootHint = scope === "custom"
           ? sideQuestionUi.customPath
           : (scope === "repo"
-            ? (sourcePath || resourceDir || "current Pi working directory")
+            ? "Current repository"
             : (sourcePath ? dirnameForDisplayPath(sourcePath) : (resourceDir || "current Pi working directory")));
         const lineRange = getSideQuestionEditorLineRange(focus);
         const attachment = focus.focusKind === "none"
@@ -11989,7 +11989,8 @@
           rootHint,
           sourcePath,
           resourceDir,
-          text: attachment + (scope === "none" ? " · no other files" : " · may also use files from " + (rootHint || scope)),
+          attachmentText: attachment,
+          relatedFilesText: scope === "none" ? "None" : (rootHint || scope) + " · read only as needed",
         };
       }
 
@@ -12086,7 +12087,7 @@
           + "<div class='side-question-intro'><h2>Side question</h2><p>Ask something without adding it to the main Pi conversation. Choose the starting text and whether Studio may look through related files.</p></div>"
           + "<div class='side-question-context-grid'>"
           + "<label>Starting text<select data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'>" + sideQuestionSelectOptions([
-            ["auto", "Automatic"], ["selection", "Editor selection only"], ["section", "Section or nearby text at cursor"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No starting text"],
+            ["auto", "Automatic"], ["selection", "Editor selection only"], ["section", "Heading block or nearby text at cursor"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No starting text"],
           ], sideQuestionUi.focusMode) + "</select></label>"
           + "<label>Also use files from<select data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
             ["none", "No other files"], ["folder", "Same folder as document"], ["repo", "Repository"], ["custom", "Choose a folder"],
@@ -12095,15 +12096,15 @@
             ["off", "Off"], ["minimal", "Minimal"], ["low", "Low"], ["medium", "Medium"], ["high", "High"],
           ], sideQuestionUi.thinking) + "</select></label>"
           + "</div>"
-          + "<div id='sideQuestionContextRule' class='side-question-context-rule'><strong>Automatic chooses, in order:</strong><ol><li>selected editor text, if any;</li><li>otherwise, the Markdown/LaTeX section at the cursor;</li><li>otherwise, a surrounding text block or nearby excerpt.</li></ol><span><strong>Section at cursor</strong> means the nearest heading above the cursor through to just before the next heading of the same or higher level.</span></div>"
+          + "<details class='side-question-context-rule'><summary id='sideQuestionContextRule'>Automatic: selection → heading block at cursor → nearby text</summary><p>A heading block starts at the nearest Markdown/LaTeX heading above the cursor and ends before the next heading of the same or higher level. With no heading, Studio uses the surrounding text block or a nearby excerpt.</p></details>"
           + (scope === "custom" ? "<label class='side-question-path-label'>Folder path<input data-side-question-field='customPath' type='text' value='" + escapeHtml(sideQuestionUi.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
           + "<div class='side-question-checks'>"
           + "<label><input data-side-question-field='includeConversation' type='checkbox'" + (sideQuestionUi.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
           + "<label title='" + (webDisabled ? "Set BRAVE_API_KEY before starting Pi to enable web search." : "Allow this side thread to search the web when useful.") + "'><input data-side-question-field='webSearch' type='checkbox'" + (sideQuestionUi.webSearch ? " checked" : "") + (webDisabled ? " disabled" : "") + "> Allow web search" + (webDisabled ? " (unavailable)" : "") + "</label>"
           + "</div>"
           + renderSideQuestionPiToolPicker()
-          + "<div class='side-question-context-summary'><strong>Will attach</strong><span>" + escapeHtml(summary.text) + "</span><span>Related files are read selectively; Studio does not attach the whole folder or repository.</span></div>"
-          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the attached text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
+          + "<dl class='side-question-context-summary'><div><dt>Starting text</dt><dd>" + escapeHtml(summary.attachmentText) + "</dd></div><div><dt>Related files</dt><dd>" + escapeHtml(summary.relatedFilesText) + "</dd></div></dl>"
+          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the starting text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
           + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask'" + (!isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question") + "</button></div>"
           + "</div>";

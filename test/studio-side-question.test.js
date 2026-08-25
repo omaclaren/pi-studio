@@ -62,7 +62,7 @@ test("side-question focus chooses selections and bounded Markdown or LaTeX secti
 		selectionEnd: chapterOffset,
 		language: "markdown",
 	});
-	assert.equal(headingFocus.focusLabel, "Section “Chapter one” at cursor");
+	assert.equal(headingFocus.focusLabel, "Text under “Chapter one”");
 	assert.equal(headingFocus.start, markdown.indexOf("## Chapter one"));
 
 	const missingSelection = clientHelpers.chooseStudioSideQuestionFocus({
@@ -223,13 +223,15 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /<h2>Side question<\/h2>/);
 	assert.match(clientSource, /<label>Starting text<select data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'/);
 	assert.match(clientSource, /\["auto", "Automatic"\]/);
-	assert.match(clientSource, /Automatic chooses, in order/);
-	assert.match(clientSource, /selected editor text, if any/);
-	assert.match(clientSource, /nearest heading above the cursor/);
+	assert.match(clientSource, /Automatic: selection → heading block at cursor → nearby text/);
+	assert.match(clientSource, /nearest Markdown\/LaTeX heading above the cursor/);
 	assert.match(clientSource, /getSideQuestionEditorLineRange/);
 	assert.match(clientSource, /function scheduleSideQuestionContextRefresh/);
 	assert.match(clientSource, /sourceTextEl\.addEventListener\("select"[\s\S]*?scheduleSideQuestionContextRefresh\(\)/);
-	assert.match(clientSource, /<strong>Will attach<\/strong>/);
+	assert.match(clientSource, /attachmentText: attachment/);
+	assert.match(clientSource, /relatedFilesText:/);
+	assert.match(clientSource, /<dt>Starting text<\/dt>/);
+	assert.match(clientSource, /<dt>Related files<\/dt>/);
 	assert.match(clientSource, /<label>Also use files from<select data-side-question-field='gatherScope'/);
 	assert.match(clientSource, /Same folder as document/);
 	assert.match(clientSource, /Repository/);
@@ -240,7 +242,7 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /data-side-question-tool/);
 	assert.match(clientSource, /loads its owning extension into the isolated side runtime/);
 	assert.match(clientSource, /Allow gateway tool in side questions/);
-	assert.match(clientSource, /Related files are read selectively/);
+	assert.match(clientSource, /read only as needed/);
 	assert.doesNotMatch(clientSource, />Ask aside</);
 	assert.doesNotMatch(indexSource, />Ask aside<\/button>/);
 	assert.match(clientSource, /side_question_promote_request/);

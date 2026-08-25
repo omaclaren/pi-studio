@@ -6,12 +6,12 @@ All notable changes to `pi-studio` are documented here.
 
 ### Added
 - Add a Studio-native **Side questions** right-pane thread that runs independently of the main Pi conversation, supports follow-ups and explicit copy/insert/promote actions, and keeps the side exchange out of main history unless the user chooses **Bring to main conversation**.
-- Separate the starting-context snapshot from progressive file access: side threads can start from an editor selection, current Markdown/LaTeX section, whole editor, displayed response, or no attached context, then selectively map, search, and read a bounded document folder, repository, or chosen folder through root-confined read-only tools.
+- Separate the starting-text snapshot from progressive file access: side threads can start from an editor selection, Markdown/LaTeX heading block, nearby text, whole editor, displayed response, or no starting text, then selectively map, search, and read a bounded document folder, repository, or chosen folder through root-confined read-only tools.
 - Add opt-in Brave web search with cited result URLs, plus read-only text extraction for local PDF, DOCX, ODT, and EPUB context when the corresponding command-line dependency is available.
 - Let side threads use an explicit, remembered selection of eligible tools already registered by installed Pi extensions. Studio resolves each selected tool through Pi's provenance metadata, loads only its owning extension into the isolated side runtime, freezes the allowlist for the thread, labels and separately confirms gateway tools, and has no package-specific dependency on an MCP or research extension.
 
 ### Changed
-- Rename the **Ask aside** action to **Side question**, replace ambiguous current-section wording with an explicit **Automatic** rule and **Will attach** summary, prevent an empty explicit selection from falling back to the whole document, clarify related-file labels, and keep primary side-question buttons readable on hover.
+- Rename the **Ask aside** action to **Side question**, replace ambiguous current-section wording with a compact **Automatic** rule disclosure and separate **Starting text** / **Related files** summary rows, prevent an empty explicit selection from falling back to the whole document, and keep primary side-question buttons readable on hover.
 - Align Studio's Pi SDK development/runtime compatibility dependencies with Pi 0.84.3 and declare that minimum host version for isolated selected-extension lifecycle support.
 - Update the direct `ws` dependency to 8.21.3, which includes the current memory-disclosure and fragment-exhaustion fixes.
 
