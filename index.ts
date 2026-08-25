@@ -494,6 +494,15 @@ interface SideQuestionPromoteRequestMessage {
 	threadId: string;
 }
 
+interface SideQuestionExportMarkdownRequestMessage {
+	type: "side_question_export_markdown_request";
+	requestId: string;
+	threadId: string;
+	path: string;
+	content: string;
+	overwrite: boolean;
+}
+
 interface StudioSideQuestionMessageRecord {
 	id: string;
 	role: "user" | "assistant";
@@ -787,6 +796,7 @@ type IncomingStudioMessage =
 	| SideQuestionCancelRequestMessage
 	| SideQuestionClearRequestMessage
 	| SideQuestionPromoteRequestMessage
+	| SideQuestionExportMarkdownRequestMessage
 	| AnnotationRequestMessage
 	| SendRunRequestMessage
 	| CompletionSuggestionRequestMessage
@@ -827,6 +837,7 @@ const STUDIO_SIDE_QUESTION_MAX_MESSAGES = 24;
 const STUDIO_SIDE_QUESTION_MAX_MESSAGE_CHARS = 60_000;
 const STUDIO_SIDE_QUESTION_MAX_ACTIVITY = 40;
 const STUDIO_SIDE_QUESTION_CONTEXT_MAP_MAX_CHARS = 36_000;
+const STUDIO_SIDE_QUESTION_TRANSCRIPT_MAX_CHARS = 1_600_000;
 const STUDIO_SIDE_QUESTION_EXTRACT_MAX_BYTES = 2_000_000;
 const STUDIO_SIDE_QUESTION_WEB_RESULT_LIMIT = 8;
 const PDF_EXPORT_MAX_CHARS = 400_000;
@@ -2864,6 +2875,42 @@ function writeStudioFile(pathArg: string, cwd: string, content: string):
 		return {
 			ok: false,
 			message: `Failed to write file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
+		};
+	}
+}
+
+function writeStudioSideQuestionMarkdownFile(
+	pathArg: string,
+	cwd: string,
+	content: string,
+	overwrite: boolean,
+):
+	| { ok: true; label: string; resolvedPath: string }
+	| { ok: false; conflict?: boolean; message: string; resolvedPath?: string } {
+	const resolved = resolveStudioPath(pathArg, cwd);
+	if (resolved.ok === false) return { ok: false, message: resolved.message };
+	let resolvedPath = resolved.resolved;
+	if (!extname(resolvedPath)) resolvedPath += ".md";
+	if (!/\.(?:md|markdown)$/i.test(extname(resolvedPath))) {
+		return { ok: false, message: "Side-question transcripts must be saved as a .md or .markdown file." };
+	}
+	try {
+		writeFileSync(resolvedPath, content, { encoding: "utf-8", flag: overwrite ? "w" : "wx" });
+		return { ok: true, label: basename(resolvedPath), resolvedPath };
+	} catch (error) {
+		const fileError = error as NodeJS.ErrnoException;
+		if (!overwrite && fileError.code === "EEXIST") {
+			return {
+				ok: false,
+				conflict: true,
+				resolvedPath,
+				message: `A file already exists at ${resolvedPath}.`,
+			};
+		}
+		return {
+			ok: false,
+			resolvedPath,
+			message: `Failed to write side-question transcript: ${resolvedPath} (${error instanceof Error ? error.message : String(error)})`,
 		};
 	}
 }
@@ -9353,6 +9400,28 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		return { type: "side_question_promote_request", threadId: msg.threadId };
 	}
 
+	if (
+		msg.type === "side_question_export_markdown_request"
+		&& typeof msg.requestId === "string"
+		&& typeof msg.threadId === "string"
+		&& isValidRequestId(msg.threadId)
+		&& typeof msg.path === "string"
+		&& msg.path.trim().length > 0
+		&& msg.path.length <= 16_384
+		&& typeof msg.content === "string"
+		&& msg.content.trim().length > 0
+		&& msg.content.length <= STUDIO_SIDE_QUESTION_TRANSCRIPT_MAX_CHARS
+	) {
+		return {
+			type: "side_question_export_markdown_request",
+			requestId: msg.requestId,
+			threadId: msg.threadId,
+			path: msg.path,
+			content: msg.content,
+			overwrite: msg.overwrite === true,
+		};
+	}
+
 	if (msg.type === "annotation_request" && typeof msg.requestId === "string" && typeof msg.text === "string") {
 		return {
 			type: "annotation_request",
@@ -11619,6 +11688,10 @@ ${cssVarsBlock}
           <span id="exportPreviewControls" class="export-preview-controls">
             <button id="exportPdfBtn" class="export-preview-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose a format and export the current right-pane preview.">Export right preview</button>
             <div id="exportPreviewMenu" class="export-preview-menu" role="menu" hidden>
+              <button id="exportSideThreadMarkdownSaveBtn" type="button" role="menuitem" data-export-preview-format="side-markdown-save" hidden>Save Markdown…</button>
+              <button id="exportSideThreadMarkdownCopyBtn" type="button" role="menuitem" data-export-preview-format="side-markdown-copy" hidden>Copy Markdown</button>
+              <button id="exportSideThreadMarkdownEditorBtn" type="button" role="menuitem" data-export-preview-format="side-markdown-editor" hidden>Open Markdown in editor</button>
+              <div id="exportSideThreadRenderSeparator" class="export-preview-menu-separator" role="separator" hidden></div>
               <button id="exportPreviewPdfStudioBtn" type="button" role="menuitem" data-export-preview-format="pdf-studio">Export PDF and Open in Studio preview tab</button>
               <button id="exportPreviewPdfBtn" type="button" role="menuitem" data-export-preview-format="pdf-default">Export PDF and Open in default PDF viewer</button>
               <button id="exportPreviewHtmlStudioBtn" type="button" role="menuitem" data-export-preview-format="html-studio">Export HTML and Open in Studio editor</button>
@@ -14007,6 +14080,43 @@ export default function (pi: ExtensionAPI) {
 			}
 			studioSideQuestionStartRequestId = null;
 			void disposeStudioSideQuestionRuntime().then(() => sendStudioSideQuestionState());
+			return;
+		}
+
+		if (msg.type === "side_question_export_markdown_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "side_question_markdown_export_error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			const runtime = studioSideQuestionRuntime;
+			if (!runtime || runtime.publicState.threadId !== msg.threadId) {
+				sendToClient(client, { type: "side_question_markdown_export_error", requestId: msg.requestId, message: "That side thread is no longer active." });
+				return;
+			}
+			if (runtime.publicState.status === "running") {
+				sendToClient(client, { type: "side_question_markdown_export_error", requestId: msg.requestId, message: "Wait for the current side answer before saving the thread." });
+				return;
+			}
+			if (!runtime.publicState.messages.length) {
+				sendToClient(client, { type: "side_question_markdown_export_error", requestId: msg.requestId, message: "There is no side discussion to save yet." });
+				return;
+			}
+			const result = writeStudioSideQuestionMarkdownFile(msg.path, studioCwd, msg.content, msg.overwrite);
+			if (result.ok === false) {
+				sendToClient(client, {
+					type: result.conflict ? "side_question_markdown_export_conflict" : "side_question_markdown_export_error",
+					requestId: msg.requestId,
+					path: result.resolvedPath,
+					message: result.message,
+				});
+				return;
+			}
+			sendToClient(client, {
+				type: "side_question_markdown_exported",
+				requestId: msg.requestId,
+				path: result.resolvedPath,
+				message: `Saved side-question transcript to ${result.label}`,
+			});
 			return;
 		}
 

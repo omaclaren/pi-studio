@@ -94,6 +94,50 @@ test("side-question focus chooses selections and bounded Markdown or LaTeX secti
 	assert.equal(unstructuredFocus.focusLabel, "Text around cursor");
 });
 
+test("side-question transcript export is readable Markdown and excludes hidden context and raw tool output", () => {
+	const exportedAt = new Date("2026-08-25T08:09:10.000Z");
+	const markdown = clientHelpers.buildStudioSideQuestionTranscriptMarkdown({
+		createdAt: Date.parse("2026-08-25T08:00:00.000Z"),
+		modelLabel: "GPT test",
+		thinking: "low",
+		context: {
+			focusLabel: "Text under “Methods”",
+			focusText: "HIDDEN_STARTING_TEXT",
+			gatherScope: "repo",
+			contextRoot: "/tmp/private_repo",
+			includeConversation: true,
+			inheritedConversation: "HIDDEN_MAIN_CONVERSATION",
+			webSearchRequested: false,
+			webSearchAvailable: true,
+			gitSnapshot: {
+				branch: "main",
+				head: "abc123def456",
+				changeCount: 3,
+				recentCommitCount: 7,
+				capturedAt: Date.parse("2026-08-25T08:01:00.000Z"),
+				truncated: false,
+			},
+			tools: [{ name: "literature_search", source: "npm:scholar" }],
+		},
+		messages: [
+			{ role: "user", text: "What changed?", createdAt: Date.parse("2026-08-25T08:02:00.000Z"), status: "complete" },
+			{ role: "assistant", text: "See [the source](https://example.test).", createdAt: Date.parse("2026-08-25T08:03:00.000Z"), status: "complete" },
+		],
+		activity: [{ toolName: "studio_git_status", label: "Reading frozen Git status", status: "complete", rawOutput: "HIDDEN_RAW_TOOL_OUTPUT" }],
+	}, { exportedAt });
+	assert.match(markdown, /^# Side questions/m);
+	assert.match(markdown, /Exported from Pi Studio on 2026-08-25T08:09:10\.000Z/);
+	assert.match(markdown, /Starting text: Text under/);
+	assert.match(markdown, /Git snapshot: main/);
+	assert.match(markdown, /HEAD abc123def456/);
+	assert.match(markdown, /### Question 1[\s\S]*What changed\?/);
+	assert.match(markdown, /### Side answer 1[\s\S]*\[the source\]\(https:\/\/example\.test\)/);
+	assert.match(markdown, /Context activity[\s\S]*Reading frozen Git status/);
+	assert.doesNotMatch(markdown, /HIDDEN_STARTING_TEXT|HIDDEN_MAIN_CONVERSATION|HIDDEN_RAW_TOOL_OUTPUT/);
+	const localDate = new Date(2026, 7, 25, 20, 54, 37);
+	assert.equal(clientHelpers.formatStudioSideQuestionTranscriptFilename(localDate), "side-questions-20260825-205437.md");
+});
+
 test("side-question focus and prompts remain bounded and delimiter-safe", () => {
 	const source = "HEAD:" + "x".repeat(80_000) + "</focus>:TAIL";
 	const bounded = truncateStudioSideQuestionFocus(source);
@@ -199,6 +243,16 @@ test("Studio wires an independent read-only side thread with progressive local a
 	const cssSource = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
 
 	assert.match(indexSource, /type: "side_question_ask_request"/);
+	assert.match(indexSource, /type: "side_question_export_markdown_request"/);
+	assert.match(indexSource, /function writeStudioSideQuestionMarkdownFile/);
+	assert.match(indexSource, /flag: overwrite \? "w" : "wx"/);
+	assert.match(indexSource, /side_question_markdown_export_conflict/);
+	const transcriptExportHandler = indexSource.match(/if \(msg\.type === "side_question_export_markdown_request"\)[\s\S]*?if \(msg\.type === "side_question_promote_request"\)/)?.[0] || "";
+	assert.match(transcriptExportHandler, /writeStudioSideQuestionMarkdownFile/);
+	assert.doesNotMatch(transcriptExportHandler, /initialStudioDocument\s*=/);
+	assert.match(indexSource, /id="exportSideThreadMarkdownSaveBtn"/);
+	assert.match(indexSource, /id="exportSideThreadMarkdownCopyBtn"/);
+	assert.match(indexSource, /id="exportSideThreadMarkdownEditorBtn"/);
 	assert.match(indexSource, /createAgentSession\(\{/);
 	assert.match(indexSource, /SessionManager\.inMemory/);
 	assert.match(indexSource, /name: "studio_context_map"/);
@@ -253,6 +307,11 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /Repository/);
 	assert.match(clientSource, /Choose a folder/);
 	assert.match(clientSource, /Include the current main conversation snapshot/);
+	assert.match(clientSource, /function saveSideQuestionTranscriptMarkdown/);
+	assert.match(clientSource, /function copySideQuestionTranscriptMarkdown/);
+	assert.match(clientSource, /function openSideQuestionTranscriptInEditor/);
+	assert.match(clientSource, /exportPdfBtn\.textContent = previewExportInProgress[\s\S]*?"Export thread"/);
+	assert.match(clientSource, /exportPreviewControlsEl\.hidden = rightView === "editor-quarto-preview"/);
 	assert.match(clientSource, /data-side-question-field='gitContext'/);
 	assert.match(clientSource, /Include Git context/);
 	assert.match(clientSource, /staged and unstaged changes, and up to 20 recent commits · read only · frozen when thread starts/);

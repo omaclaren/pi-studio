@@ -182,6 +182,16 @@
       display: none !important;
     }
 
+    .export-preview-menu-separator {
+      height: 1px;
+      margin: 6px 4px;
+      background: var(--panel-border);
+    }
+
+    .export-preview-menu-separator[hidden] {
+      display: none !important;
+    }
+
     .export-preview-menu button {
       display: block;
       width: 100%;

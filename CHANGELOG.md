@@ -10,6 +10,7 @@ All notable changes to `pi-studio` are documented here.
 - Add opt-in Brave web search with cited result URLs, plus read-only text extraction for local PDF, DOCX, ODT, and EPUB context when the corresponding command-line dependency is available.
 - Let side threads use an explicit, remembered selection of eligible tools already registered by installed Pi extensions. Studio resolves each selected tool through Pi's provenance metadata, loads only its owning extension into the isolated side runtime, freezes the allowlist for the thread, labels and separately confirms gateway tools, and has no package-specific dependency on an MCP or research extension.
 - Add opt-in, thread-frozen Git context for repository side questions: bounded status, staged and unstaged tracked-file diffs, and up to 20 recent commit summaries are exposed through fixed read-only tools rather than arbitrary command execution.
+- Add explicit side-thread export with Markdown as the canonical durable format: save or copy the visible transcript, open it as an unsaved editor copy, or render it to PDF or HTML without silently persisting hidden source context or raw tool output.
 
 ### Changed
 - Keep the editor-only header destination labelled **Side questions**, while full Studio continues to group its broader critique, explanation, quiz, and side-question actions under **Review**.

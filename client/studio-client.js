@@ -100,6 +100,10 @@
       const copyResponseBtn = document.getElementById("copyResponseBtn");
       const exportPreviewControlsEl = document.getElementById("exportPreviewControls");
       const exportPreviewMenuEl = document.getElementById("exportPreviewMenu");
+      const exportSideThreadMarkdownSaveBtn = document.getElementById("exportSideThreadMarkdownSaveBtn");
+      const exportSideThreadMarkdownCopyBtn = document.getElementById("exportSideThreadMarkdownCopyBtn");
+      const exportSideThreadMarkdownEditorBtn = document.getElementById("exportSideThreadMarkdownEditorBtn");
+      const exportSideThreadRenderSeparatorEl = document.getElementById("exportSideThreadRenderSeparator");
       const exportPreviewPdfStudioBtn = document.getElementById("exportPreviewPdfStudioBtn");
       const exportPreviewPdfBtn = document.getElementById("exportPreviewPdfBtn");
       const exportPreviewHtmlStudioBtn = document.getElementById("exportPreviewHtmlStudioBtn");
@@ -249,8 +253,10 @@
       const sideQuestionHelpers = globalThis.PiStudioSideQuestionHelpers;
       if (
         !sideQuestionHelpers
+        || typeof sideQuestionHelpers.buildStudioSideQuestionTranscriptMarkdown !== "function"
         || typeof sideQuestionHelpers.chooseStudioSideQuestionFocus !== "function"
         || typeof sideQuestionHelpers.findStudioSideQuestionSection !== "function"
+        || typeof sideQuestionHelpers.formatStudioSideQuestionTranscriptFilename !== "function"
       ) {
         throw new Error("Studio side-question helpers failed to load.");
       }
@@ -458,6 +464,7 @@
       const SIDE_QUESTION_THINKING_STORAGE_KEY = "piStudio.sideQuestionThinking";
       const SIDE_QUESTION_GATHER_STORAGE_KEY = "piStudio.sideQuestionGatherScope";
       const SIDE_QUESTION_TOOLS_STORAGE_KEY = "piStudio.sideQuestionTools";
+      const SIDE_QUESTION_TRANSCRIPT_RENDER_MAX_CHARS = 400_000;
       const COMPLETION_CONTEXT_STORAGE_KEY = "piStudio.completionContextMode";
       const COMPLETION_MODEL_STORAGE_KEY = "piStudio.completionModel";
       const COMPLETION_CONTEXT_MAX_CHARS = 12000;
@@ -469,6 +476,7 @@
       let sideQuestionAvailablePiTools = [];
       let sideQuestionPreviewRenderNonce = 0;
       let sideQuestionContextRefreshHandle = null;
+      let sideQuestionMarkdownExportRequest = null;
       const sideQuestionMarkdownRenderCache = new Map();
       let sideQuestionUi = {
         focusMode: "auto",
@@ -9516,8 +9524,10 @@
       async function exportRightPanePdf(options) {
         const exportOptions = options && typeof options === "object" ? options : {};
         const openTarget = exportOptions.openTarget === "studio" ? "studio" : "default";
+        const exportingSideThread = rightView === "side-questions";
+        const sideThreadExportedAt = exportingSideThread ? new Date() : null;
         let studioLaunch = null;
-        if (uiBusy || previewExportInProgress) {
+        if ((!exportingSideThread && uiBusy) || previewExportInProgress || sideQuestionMarkdownExportRequest) {
           setStatus("Studio is busy.", "warning");
           return;
         }
@@ -9530,8 +9540,8 @@
 
         const exportingReplJournal = rightView === "repl";
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
-        if (!rightPaneShowsPreview && !exportingReplJournal) {
-          setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL to export PDF.", "warning");
+        if (!rightPaneShowsPreview && !exportingReplJournal && !exportingSideThread) {
+          setStatus("Switch right pane to Response (Preview), Editor (Preview), REPL, or Side questions to export PDF.", "warning");
           return;
         }
         const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
@@ -9540,7 +9550,7 @@
           return;
         }
 
-        const htmlArtifactSource = exportingReplJournal ? "" : getRightPaneHtmlArtifactSource();
+        const htmlArtifactSource = exportingReplJournal || exportingSideThread ? "" : getRightPaneHtmlArtifactSource();
         if (htmlArtifactSource) {
           setStatus("PDF export does not support interactive HTML previews yet. Export as HTML or use the browser print dialog inside the preview.", "warning");
           return;
@@ -9548,24 +9558,34 @@
 
         const markdown = exportingReplJournal
           ? buildReplJournalMarkdown(replJournalExportEntries)
-          : (rightView === "editor-preview"
-            ? prepareEditorTextForPdfExport(sourceTextEl.value)
-            : prepareEditorTextForPreview(latestResponseMarkdown));
+          : (exportingSideThread
+            ? buildCurrentSideQuestionTranscriptMarkdown(sideThreadExportedAt)
+            : (rightView === "editor-preview"
+              ? prepareEditorTextForPdfExport(sourceTextEl.value)
+              : prepareEditorTextForPreview(latestResponseMarkdown)));
         if (!markdown || !markdown.trim()) {
           setStatus("Nothing to export yet.", "warning");
           return;
         }
+        if (exportingSideThread && markdown.length > SIDE_QUESTION_TRANSCRIPT_RENDER_MAX_CHARS) {
+          setStatus("This side-thread transcript is too large for PDF export. Save or copy the Markdown instead.", "warning");
+          return;
+        }
 
         const effectivePath = getEffectiveSavePath();
-        const sourcePath = exportingReplJournal ? "" : (effectivePath || sourceState.path || "");
+        const sourcePath = exportingReplJournal || exportingSideThread ? "" : (effectivePath || sourceState.path || "");
         const resourceDir = (!sourcePath && resourceDirInput) ? getCurrentResourceDirValue() : "";
         const isEditorPreview = rightView === "editor-preview";
         const editorIsDelimitedPreview = isEditorPreview && Boolean(getDelimitedTextPreviewConfig(editorLanguage || ""));
         const editorPdfLanguage = isEditorPreview ? (editorIsDelimitedPreview ? "markdown" : normalizeFenceLanguage(editorLanguage || "")) : "";
-        const isLatex = isEditorPreview
-          ? editorPdfLanguage === "latex"
-          : /\\documentclass\b|\\begin\{document\}/.test(markdown);
-        let filenameHint = exportingReplJournal ? "repl-studio.pdf" : (isEditorPreview ? "studio-editor-preview.pdf" : ("studio-response-" + formatStudioExportTimestamp() + ".studio.pdf"));
+        const isLatex = exportingSideThread
+          ? false
+          : (isEditorPreview
+            ? editorPdfLanguage === "latex"
+            : /\\documentclass\b|\\begin\{document\}/.test(markdown));
+        let filenameHint = exportingSideThread
+          ? getSideQuestionTranscriptFilename(sideThreadExportedAt).replace(/\.md$/i, ".pdf")
+          : (exportingReplJournal ? "repl-studio.pdf" : (isEditorPreview ? "studio-editor-preview.pdf" : ("studio-response-" + formatStudioExportTimestamp() + ".studio.pdf")));
         if (sourcePath) {
           const baseName = sourcePath.split(/[\\/]/).pop() || "studio";
           const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
@@ -9582,7 +9602,9 @@
         }
         previewExportInProgress = true;
         updateResultActionButtons();
-        setStatus(openTarget === "studio" ? "Exporting PDF for Studio…" : "Exporting PDF…", "warning");
+        setStatus(exportingSideThread
+          ? (openTarget === "studio" ? "Exporting side thread as PDF for Studio…" : "Exporting side thread as PDF…")
+          : (openTarget === "studio" ? "Exporting PDF for Studio…" : "Exporting PDF…"), "warning");
 
         try {
           const response = await fetchWithTimeout("/export-pdf?token=" + encodeURIComponent(token), {
@@ -9747,8 +9769,10 @@
       async function exportRightPaneHtml(options) {
         const exportOptions = options && typeof options === "object" ? options : {};
         const openTarget = exportOptions.openTarget === "studio" ? "studio" : "browser";
+        const exportingSideThread = rightView === "side-questions";
+        const sideThreadExportedAt = exportingSideThread ? new Date() : null;
         let studioLaunch = null;
-        if (uiBusy || previewExportInProgress) {
+        if ((!exportingSideThread && uiBusy) || previewExportInProgress || sideQuestionMarkdownExportRequest) {
           setStatus("Studio is busy.", "warning");
           return;
         }
@@ -9761,8 +9785,8 @@
 
         const exportingReplJournal = rightView === "repl";
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
-        if (!rightPaneShowsPreview && !exportingReplJournal) {
-          setStatus("Switch right pane to Response (Preview), Editor (Preview), or REPL to export HTML.", "warning");
+        if (!rightPaneShowsPreview && !exportingReplJournal && !exportingSideThread) {
+          setStatus("Switch right pane to Response (Preview), Editor (Preview), REPL, or Side questions to export HTML.", "warning");
           return;
         }
         const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
@@ -9771,26 +9795,36 @@
           return;
         }
 
-        const htmlArtifactSource = exportingReplJournal ? "" : getRightPaneHtmlArtifactSource();
-        const markdown = exportingReplJournal ? buildReplJournalMarkdown(replJournalExportEntries) : (htmlArtifactSource || (rightView === "editor-preview"
-          ? prepareEditorTextForHtmlExport(sourceTextEl.value)
-          : prepareEditorTextForPreview(latestResponseMarkdown)));
+        const htmlArtifactSource = exportingReplJournal || exportingSideThread ? "" : getRightPaneHtmlArtifactSource();
+        const markdown = exportingReplJournal
+          ? buildReplJournalMarkdown(replJournalExportEntries)
+          : (exportingSideThread
+            ? buildCurrentSideQuestionTranscriptMarkdown(sideThreadExportedAt)
+            : (htmlArtifactSource || (rightView === "editor-preview"
+              ? prepareEditorTextForHtmlExport(sourceTextEl.value)
+              : prepareEditorTextForPreview(latestResponseMarkdown))));
         if (!markdown || !markdown.trim()) {
           setStatus("Nothing to export yet.", "warning");
           return;
         }
+        if (exportingSideThread && markdown.length > SIDE_QUESTION_TRANSCRIPT_RENDER_MAX_CHARS) {
+          setStatus("This side-thread transcript is too large for HTML export. Save or copy the Markdown instead.", "warning");
+          return;
+        }
 
         const effectivePath = getEffectiveSavePath();
-        const sourcePath = exportingReplJournal ? "" : (effectivePath || sourceState.path || "");
+        const sourcePath = exportingReplJournal || exportingSideThread ? "" : (effectivePath || sourceState.path || "");
         const resourceDir = (!sourcePath && resourceDirInput) ? getCurrentResourceDirValue() : "";
         const isEditorPreview = rightView === "editor-preview";
         const editorIsDelimitedPreview = isEditorPreview && Boolean(getDelimitedTextPreviewConfig(editorLanguage || ""));
         const editorHtmlLanguage = htmlArtifactSource ? "html" : (isEditorPreview ? (editorIsDelimitedPreview ? "markdown" : normalizeFenceLanguage(editorLanguage || "")) : "");
-        const isLatex = htmlArtifactSource ? false : (isEditorPreview
+        const isLatex = exportingSideThread ? false : (htmlArtifactSource ? false : (isEditorPreview
           ? editorHtmlLanguage === "latex"
-          : /\\documentclass\b|\\begin\{document\}/.test(markdown));
-        let filenameHint = exportingReplJournal ? "repl-studio.html" : (isEditorPreview ? "studio-editor-preview.html" : ("studio-response-" + formatStudioExportTimestamp() + ".studio.html"));
-        let titleHint = exportingReplJournal ? "Studio REPL Record" : (isEditorPreview ? "Studio editor preview" : "Studio response preview");
+          : /\\documentclass\b|\\begin\{document\}/.test(markdown)));
+        let filenameHint = exportingSideThread
+          ? getSideQuestionTranscriptFilename(sideThreadExportedAt).replace(/\.md$/i, ".html")
+          : (exportingReplJournal ? "repl-studio.html" : (isEditorPreview ? "studio-editor-preview.html" : ("studio-response-" + formatStudioExportTimestamp() + ".studio.html")));
+        let titleHint = exportingSideThread ? "Pi Studio side questions" : (exportingReplJournal ? "Studio REPL Record" : (isEditorPreview ? "Studio editor preview" : "Studio response preview"));
         if (sourcePath) {
           const baseName = sourcePath.split(/[\\/]/).pop() || "studio";
           const stem = baseName.replace(/\.[^.]+$/, "") || "studio";
@@ -9808,7 +9842,9 @@
         }
         previewExportInProgress = true;
         updateResultActionButtons();
-        setStatus(openTarget === "studio" ? "Exporting HTML for Studio…" : "Exporting HTML…", "warning");
+        setStatus(exportingSideThread
+          ? (openTarget === "studio" ? "Exporting side thread as HTML for Studio…" : "Exporting side thread as HTML…")
+          : (openTarget === "studio" ? "Exporting HTML for Studio…" : "Exporting HTML…"), "warning");
 
         try {
           const response = await fetchWithTimeout("/export-html?token=" + encodeURIComponent(token), {
@@ -9983,6 +10019,15 @@
 
       function exportRightPaneFormat(format) {
         closeExportPreviewMenu();
+        if (format === "side-markdown-save") {
+          return saveSideQuestionTranscriptMarkdown();
+        }
+        if (format === "side-markdown-copy") {
+          return copySideQuestionTranscriptMarkdown();
+        }
+        if (format === "side-markdown-editor") {
+          return openSideQuestionTranscriptInEditor();
+        }
         if (format === "html-studio") {
           return exportRightPaneHtml({ openTarget: "studio" });
         }
@@ -11967,6 +12012,8 @@
           threadId: typeof state.threadId === "string" && state.threadId ? state.threadId : null,
           status: state.status === "running" || state.status === "error" ? state.status : "idle",
           requestId: typeof state.requestId === "string" ? state.requestId : null,
+          createdAt: Number.isFinite(state.createdAt) ? state.createdAt : null,
+          updatedAt: Number.isFinite(state.updatedAt) ? state.updatedAt : null,
           context,
           modelLabel: String(state.modelLabel || ""),
           thinking: String(state.thinking || "low"),
@@ -11979,6 +12026,34 @@
       function getLatestCompletedSideQuestionAnswer() {
         if (!sideQuestionState || !Array.isArray(sideQuestionState.messages)) return null;
         return [...sideQuestionState.messages].reverse().find((entry) => entry.role === "assistant" && entry.status === "complete" && entry.text.trim()) || null;
+      }
+
+      function canExportSideQuestionTranscript() {
+        return Boolean(
+          sideQuestionState
+          && sideQuestionState.threadId
+          && sideQuestionState.status !== "running"
+          && Array.isArray(sideQuestionState.messages)
+          && sideQuestionState.messages.length > 0
+        );
+      }
+
+      function buildCurrentSideQuestionTranscriptMarkdown(exportedAt) {
+        if (!canExportSideQuestionTranscript()) return "";
+        return sideQuestionHelpers.buildStudioSideQuestionTranscriptMarkdown(sideQuestionState, {
+          exportedAt: exportedAt instanceof Date ? exportedAt : new Date(),
+        });
+      }
+
+      function getSideQuestionTranscriptFilename(date) {
+        return sideQuestionHelpers.formatStudioSideQuestionTranscriptFilename(date instanceof Date ? date : new Date());
+      }
+
+      function getSideQuestionTranscriptSuggestedPath(date) {
+        const filename = getSideQuestionTranscriptFilename(date);
+        const contextRoot = sideQuestionState && sideQuestionState.context ? String(sideQuestionState.context.contextRoot || "") : "";
+        const directory = getCurrentResourceDirValue() || contextRoot || ".";
+        return directory.replace(/[\\/]$/, "") + "/" + filename;
       }
 
       function getSideQuestionEditorLineRange(focus) {
@@ -12239,7 +12314,85 @@
         renderSideQuestionView({ followBottom: true });
         updateReferenceBadge();
         syncAskAsideButton();
+        updateResultActionButtons();
         setStatus("Side question running independently of the main conversation…", "warning");
+      }
+
+      function sendSideQuestionMarkdownExport(path, content, overwrite) {
+        if (sideQuestionMarkdownExportRequest) {
+          setStatus("A side-thread Markdown export is already in progress.", "warning");
+          return false;
+        }
+        if (!isSideQuestionConnectionReady()) {
+          setStatus("Studio is disconnected.", "warning");
+          return false;
+        }
+        const requestId = makeRequestId();
+        sideQuestionMarkdownExportRequest = {
+          requestId,
+          threadId: sideQuestionState && sideQuestionState.threadId ? sideQuestionState.threadId : "",
+          path: String(path || ""),
+          content: String(content || ""),
+        };
+        const sent = sendMessage({
+          type: "side_question_export_markdown_request",
+          requestId,
+          threadId: sideQuestionMarkdownExportRequest.threadId,
+          path: String(path || ""),
+          content: String(content || ""),
+          overwrite: overwrite === true,
+        });
+        if (!sent) sideQuestionMarkdownExportRequest = null;
+        updateResultActionButtons();
+        if (sent) setStatus(overwrite ? "Replacing side-thread Markdown export…" : "Saving side-thread Markdown…", "warning");
+        return sent;
+      }
+
+      async function saveSideQuestionTranscriptMarkdown() {
+        const exportedAt = new Date();
+        const markdown = buildCurrentSideQuestionTranscriptMarkdown(exportedAt);
+        if (!markdown.trim()) {
+          setStatus("No completed side discussion is available to save.", "warning");
+          return;
+        }
+        const path = await requestStudioTextInput(
+          "Save the visible side-thread transcript and context summary as Markdown. Hidden source text and raw tool output are not included.",
+          getSideQuestionTranscriptSuggestedPath(exportedAt),
+          {
+            title: "Save side-question transcript",
+            inputLabel: "Markdown path on computer running Pi",
+            confirmLabel: "Save Markdown",
+          },
+        );
+        if (!path) return;
+        sendSideQuestionMarkdownExport(path, markdown, false);
+      }
+
+      async function copySideQuestionTranscriptMarkdown() {
+        const markdown = buildCurrentSideQuestionTranscriptMarkdown(new Date());
+        if (!markdown.trim()) {
+          setStatus("No completed side discussion is available to copy.", "warning");
+          return;
+        }
+        const copied = await writeTextToClipboard(markdown);
+        setStatus(copied ? "Copied side-thread Markdown." : "Clipboard write failed.", copied ? "success" : "warning");
+      }
+
+      function openSideQuestionTranscriptInEditor() {
+        const exportedAt = new Date();
+        const markdown = buildCurrentSideQuestionTranscriptMarkdown(exportedAt);
+        if (!markdown.trim()) {
+          setStatus("No completed side discussion is available to open.", "warning");
+          return;
+        }
+        if (markdown.length > SIDE_QUESTION_TRANSCRIPT_RENDER_MAX_CHARS) {
+          setStatus("This side-thread transcript is too large for a companion editor. Save or copy the Markdown instead.", "warning");
+          return;
+        }
+        requestOpenEditorOnlyDocument(markdown, {
+          label: getSideQuestionTranscriptFilename(exportedAt),
+          resourceDir: getCurrentResourceDirValue() || (sideQuestionState.context && sideQuestionState.context.contextRoot) || undefined,
+        });
       }
 
       function insertLatestSideQuestionAnswer() {
@@ -12290,6 +12443,7 @@
               draft: "",
             };
             renderSideQuestionView();
+            updateResultActionButtons();
           }
         } else if (action === "copy") {
           const answer = getLatestCompletedSideQuestionAnswer();
@@ -12538,30 +12692,61 @@
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         const exportingReplJournal = rightView === "repl";
+        const exportingSideThread = rightView === "side-questions";
         const replJournalExportEntries = exportingReplJournal ? getVisibleReplJournalEntries() : [];
+        const sideThreadExportText = exportingSideThread && canExportSideQuestionTranscript()
+          ? buildCurrentSideQuestionTranscriptMarkdown(new Date())
+          : "";
         const exportText = exportingReplJournal
           ? (replJournalExportEntries.length ? buildReplJournalMarkdown(replJournalExportEntries) : "")
-          : (rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown);
-        const canExportPreview = (rightPaneShowsPreview || exportingReplJournal) && Boolean(String(exportText || "").trim());
-        const htmlArtifactExportSource = canExportPreview && !exportingReplJournal ? getRightPaneHtmlArtifactSource() : "";
+          : (exportingSideThread
+            ? sideThreadExportText
+            : (rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown));
+        const canExportPreview = (rightPaneShowsPreview || exportingReplJournal || exportingSideThread) && Boolean(String(exportText || "").trim());
+        const htmlArtifactExportSource = canExportPreview && !exportingReplJournal && !exportingSideThread ? getRightPaneHtmlArtifactSource() : "";
         const isHtmlArtifactPreview = Boolean(htmlArtifactExportSource);
+        const sideThreadRenderTooLarge = exportingSideThread && sideThreadExportText.length > SIDE_QUESTION_TRANSCRIPT_RENDER_MAX_CHARS;
+        const exportBusy = previewExportInProgress || Boolean(sideQuestionMarkdownExportRequest) || (!exportingSideThread && uiBusy);
+        if (exportSideThreadMarkdownSaveBtn) {
+          exportSideThreadMarkdownSaveBtn.hidden = !exportingSideThread;
+          exportSideThreadMarkdownSaveBtn.disabled = Boolean(sideQuestionMarkdownExportRequest) || !canExportPreview;
+          exportSideThreadMarkdownSaveBtn.title = "Save the visible discussion and context summary as a Markdown file on the computer running Pi.";
+        }
+        if (exportSideThreadMarkdownCopyBtn) {
+          exportSideThreadMarkdownCopyBtn.hidden = !exportingSideThread;
+          exportSideThreadMarkdownCopyBtn.disabled = Boolean(sideQuestionMarkdownExportRequest) || !canExportPreview;
+          exportSideThreadMarkdownCopyBtn.title = "Copy the visible discussion and context summary as Markdown.";
+        }
+        if (exportSideThreadMarkdownEditorBtn) {
+          exportSideThreadMarkdownEditorBtn.hidden = !exportingSideThread;
+          exportSideThreadMarkdownEditorBtn.disabled = uiBusy || Boolean(sideQuestionMarkdownExportRequest) || !canExportPreview || sideThreadRenderTooLarge;
+          exportSideThreadMarkdownEditorBtn.title = sideThreadRenderTooLarge
+            ? "This transcript is too large for a companion editor; save or copy the Markdown instead."
+            : "Open the Markdown transcript as an unsaved copy in a new Studio editor tab.";
+        }
         if (exportPdfBtn) {
-          exportPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
+          exportPdfBtn.disabled = exportBusy || !canExportPreview;
           exportPdfBtn.textContent = previewExportInProgress
             ? "Exporting…"
-            : (exportingReplJournal ? "Export record" : "Export right preview");
+            : (sideQuestionMarkdownExportRequest
+              ? "Saving…"
+              : (exportingSideThread ? "Export thread" : (exportingReplJournal ? "Export record" : "Export right preview")));
           if (rightView === "trace") {
             exportPdfBtn.title = "Working view does not support preview export.";
           } else if (rightView === "files") {
             exportPdfBtn.title = "Files view does not support preview export.";
           } else if (rightView === "changes") {
             exportPdfBtn.title = "Changes view does not support preview export.";
-          } else if (rightView === "side-questions") {
-            exportPdfBtn.title = "Side questions are ephemeral and do not support preview export.";
+          } else if (exportingSideThread && sideQuestionState && sideQuestionState.status === "running") {
+            exportPdfBtn.title = "Wait for the current side answer before exporting the thread.";
+          } else if (exportingSideThread && !canExportPreview) {
+            exportPdfBtn.title = "No completed side discussion is available to export yet.";
+          } else if (exportingSideThread) {
+            exportPdfBtn.title = "Save or copy Markdown, open it in an editor, or export the visible side discussion as PDF or HTML.";
           } else if (exportingReplJournal && !replJournalExportEntries.length) {
             exportPdfBtn.title = "No Studio REPL record entries to export for this session yet.";
           } else if (rightView === "markdown") {
-            exportPdfBtn.title = "Switch right pane to Response (Preview), Editor (Preview), or REPL to export.";
+            exportPdfBtn.title = "Switch right pane to Response (Preview), Editor (Preview), REPL, or Side questions to export.";
           } else if (!canExportPreview) {
             exportPdfBtn.title = "Nothing to export yet.";
           } else if (isHtmlArtifactPreview) {
@@ -12572,39 +12757,52 @@
             exportPdfBtn.title = "Choose PDF export or an HTML export destination for the current right-pane preview.";
           }
         }
+        if (exportSideThreadRenderSeparatorEl) exportSideThreadRenderSeparatorEl.hidden = !exportingSideThread;
         if (exportPreviewPdfStudioBtn) {
-          exportPreviewPdfStudioBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview || isHtmlArtifactPreview;
-          exportPreviewPdfStudioBtn.title = isHtmlArtifactPreview
-            ? "Interactive HTML preview PDF export is not available yet."
-            : (exportingReplJournal ? "Export the Studio REPL record as PDF and open it in Studio." : "Export the current right-pane preview as PDF and open it in Studio.");
+          exportPreviewPdfStudioBtn.disabled = exportBusy || !canExportPreview || isHtmlArtifactPreview || sideThreadRenderTooLarge;
+          exportPreviewPdfStudioBtn.title = sideThreadRenderTooLarge
+            ? "This transcript is too large for rendered export; save or copy the Markdown instead."
+            : (isHtmlArtifactPreview
+              ? "Interactive HTML preview PDF export is not available yet."
+              : (exportingSideThread ? "Export the side-thread transcript as PDF and open it in Studio." : (exportingReplJournal ? "Export the Studio REPL record as PDF and open it in Studio." : "Export the current right-pane preview as PDF and open it in Studio.")));
         }
         if (exportPreviewPdfBtn) {
-          exportPreviewPdfBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview || isHtmlArtifactPreview;
-          exportPreviewPdfBtn.title = isHtmlArtifactPreview
-            ? "Interactive HTML preview PDF export is not available yet."
-            : (exportingReplJournal ? "Export the Studio REPL record as PDF and open it in the default PDF viewer." : "Export the current right-pane preview as PDF and open it in the default PDF viewer.");
+          exportPreviewPdfBtn.disabled = exportBusy || !canExportPreview || isHtmlArtifactPreview || sideThreadRenderTooLarge;
+          exportPreviewPdfBtn.title = sideThreadRenderTooLarge
+            ? "This transcript is too large for rendered export; save or copy the Markdown instead."
+            : (isHtmlArtifactPreview
+              ? "Interactive HTML preview PDF export is not available yet."
+              : (exportingSideThread ? "Export the side-thread transcript as PDF and open it in the default PDF viewer." : (exportingReplJournal ? "Export the Studio REPL record as PDF and open it in the default PDF viewer." : "Export the current right-pane preview as PDF and open it in the default PDF viewer.")));
         }
         if (exportPreviewHtmlStudioBtn) {
-          exportPreviewHtmlStudioBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
-          exportPreviewHtmlStudioBtn.title = isHtmlArtifactPreview
-            ? "Export the authored HTML preview and open it in a new Studio editor tab."
-            : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML and open it in a new Studio editor tab." : "Export the current right-pane preview as standalone HTML and open it in a new Studio editor tab.");
+          exportPreviewHtmlStudioBtn.disabled = exportBusy || !canExportPreview || sideThreadRenderTooLarge;
+          exportPreviewHtmlStudioBtn.title = sideThreadRenderTooLarge
+            ? "This transcript is too large for rendered export; save or copy the Markdown instead."
+            : (isHtmlArtifactPreview
+              ? "Export the authored HTML preview and open it in a new Studio editor tab."
+              : (exportingSideThread ? "Export the side-thread transcript as standalone HTML and open it in a new Studio editor tab." : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML and open it in a new Studio editor tab." : "Export the current right-pane preview as standalone HTML and open it in a new Studio editor tab.")));
         }
         if (exportPreviewHtmlBtn) {
-          exportPreviewHtmlBtn.disabled = uiBusy || previewExportInProgress || !canExportPreview;
-          exportPreviewHtmlBtn.title = isHtmlArtifactPreview
-            ? "Export the authored HTML preview and open it in the default browser."
-            : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML and open it in the default browser." : "Export the current right-pane preview as standalone HTML and open it in the default browser.");
+          exportPreviewHtmlBtn.disabled = exportBusy || !canExportPreview || sideThreadRenderTooLarge;
+          exportPreviewHtmlBtn.title = sideThreadRenderTooLarge
+            ? "This transcript is too large for rendered export; save or copy the Markdown instead."
+            : (isHtmlArtifactPreview
+              ? "Export the authored HTML preview and open it in the default browser."
+              : (exportingSideThread ? "Export the side-thread transcript as standalone HTML and open it in the default browser." : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML and open it in the default browser." : "Export the current right-pane preview as standalone HTML and open it in the default browser.")));
         }
         if (exportPreviewControlsEl) {
-          exportPreviewControlsEl.hidden = rightView === "editor-quarto-preview" || rightView === "side-questions";
+          exportPreviewControlsEl.hidden = rightView === "editor-quarto-preview";
           exportPreviewControlsEl.title = canExportPreview
-            ? (exportingReplJournal
-              ? "Choose a format and export destination for the Studio REPL record."
-              : (isHtmlArtifactPreview ? "Export this HTML preview to Studio or browser." : "Choose a format and export destination for the current right-pane preview."))
-            : (exportingReplJournal ? "No Studio REPL record entries to export for this session yet." : "Switch right pane to a non-empty preview before exporting.");
+            ? (exportingSideThread
+              ? "Choose a durable export for the visible side discussion."
+              : (exportingReplJournal
+                ? "Choose a format and export destination for the Studio REPL record."
+                : (isHtmlArtifactPreview ? "Export this HTML preview to Studio or browser." : "Choose a format and export destination for the current right-pane preview.")))
+            : (exportingSideThread
+              ? "No completed side discussion is available to export yet."
+              : (exportingReplJournal ? "No Studio REPL record entries to export for this session yet." : "Switch right pane to a non-empty preview before exporting."));
         }
-        if (!canExportPreview || previewExportInProgress) {
+        if (!canExportPreview || previewExportInProgress || sideQuestionMarkdownExportRequest) {
           closeExportPreviewMenu();
         }
 
@@ -21160,11 +21358,53 @@
           if (rightView === "side-questions") renderSideQuestionView();
           updateReferenceBadge();
           syncAskAsideButton();
+          updateResultActionButtons();
           if (rightView === "side-questions" && previousStatus === "running" && sideQuestionState.status === "idle") {
             setStatus(agentBusyFromServer
               ? "Side answer ready; the main Pi turn is still running. Main conversation unchanged."
               : "Side answer ready. Main conversation unchanged.", "success");
           }
+          return;
+        }
+
+        if (message.type === "side_question_markdown_exported") {
+          if (!sideQuestionMarkdownExportRequest || sideQuestionMarkdownExportRequest.requestId !== message.requestId) return;
+          sideQuestionMarkdownExportRequest = null;
+          updateResultActionButtons();
+          setStatus(typeof message.message === "string" ? message.message : "Saved side-question transcript.", "success");
+          return;
+        }
+
+        if (message.type === "side_question_markdown_export_conflict") {
+          if (!sideQuestionMarkdownExportRequest || sideQuestionMarkdownExportRequest.requestId !== message.requestId) return;
+          const pendingExport = sideQuestionMarkdownExportRequest;
+          sideQuestionMarkdownExportRequest = null;
+          updateResultActionButtons();
+          void (async () => {
+            const displayPath = typeof message.path === "string" && message.path ? message.path : pendingExport.path;
+            const confirmed = await requestStudioConfirmation("Replace the existing Markdown transcript at " + displayPath + "?", {
+              title: "Replace transcript file?",
+              confirmLabel: "Replace",
+              destructive: true,
+            });
+            if (!confirmed) {
+              setStatus("Side-thread Markdown export cancelled.", "warning");
+              return;
+            }
+            if (!sideQuestionState || sideQuestionState.threadId !== pendingExport.threadId) {
+              setStatus("That side thread is no longer active; export cancelled.", "warning");
+              return;
+            }
+            sendSideQuestionMarkdownExport(pendingExport.path, pendingExport.content, true);
+          })();
+          return;
+        }
+
+        if (message.type === "side_question_markdown_export_error") {
+          if (!sideQuestionMarkdownExportRequest || sideQuestionMarkdownExportRequest.requestId !== message.requestId) return;
+          sideQuestionMarkdownExportRequest = null;
+          updateResultActionButtons();
+          setStatus(typeof message.message === "string" ? message.message : "Could not save side-question transcript.", "error");
           return;
         }
 
@@ -21176,6 +21416,7 @@
           if (rightView === "side-questions") renderSideQuestionView();
           updateReferenceBadge();
           syncAskAsideButton();
+          updateResultActionButtons();
           setStatus(sideQuestionState.error, "error");
           return;
         }
@@ -22094,6 +22335,7 @@
           quartoPreviewCheckRequestId = null;
           quartoPreviewCheckSourcePath = "";
           quartoPreviewActionRequestId = null;
+          sideQuestionMarkdownExportRequest = null;
           failAllPendingCompanionLaunches("The originating Studio connection was lost before the companion editor was ready.");
           if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
           setBusy(true);

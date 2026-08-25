@@ -151,10 +151,133 @@
     return "none";
   }
 
+  function normalizeTranscriptDate(value, fallback) {
+    const date = value instanceof Date ? value : new Date(value == null ? fallback : value);
+    return Number.isFinite(date.getTime()) ? date : new Date(fallback);
+  }
+
+  function formatTranscriptTimestamp(value) {
+    const date = normalizeTranscriptDate(value, Date.now());
+    try { return date.toISOString(); } catch { return "unknown time"; }
+  }
+
+  function formatTranscriptFilename(value) {
+    const date = normalizeTranscriptDate(value, Date.now());
+    const pad = (part) => String(part).padStart(2, "0");
+    return "side-questions-"
+      + date.getFullYear()
+      + pad(date.getMonth() + 1)
+      + pad(date.getDate())
+      + "-"
+      + pad(date.getHours())
+      + pad(date.getMinutes())
+      + pad(date.getSeconds())
+      + ".md";
+  }
+
+  function escapeTranscriptInline(value) {
+    return String(value == null ? "" : value)
+      .replace(/[\r\n]+/g, " ")
+      .replace(/\\/g, "\\\\")
+      .replace(/([`*_\[\]<>|])/g, "\\$1")
+      .trim();
+  }
+
+  function formatTranscriptContextScope(context) {
+    if (!context || context.gatherScope === "none") return "No related files";
+    return context.contextRoot ? String(context.contextRoot) : String(context.gatherScope || "Local context");
+  }
+
+  function buildStudioSideQuestionTranscriptMarkdown(stateInput, options) {
+    const state = stateInput && typeof stateInput === "object" ? stateInput : {};
+    const context = state.context && typeof state.context === "object" ? state.context : {};
+    const messages = Array.isArray(state.messages) ? state.messages : [];
+    const activity = Array.isArray(state.activity) ? state.activity : [];
+    const settings = options && typeof options === "object" ? options : {};
+    const exportedAt = normalizeTranscriptDate(settings.exportedAt, Date.now());
+    const lines = [
+      "# Side questions",
+      "",
+      "_Exported from Pi Studio on " + formatTranscriptTimestamp(exportedAt) + "._",
+      "",
+      "> This export contains the visible side-thread transcript and context/activity labels. It does not include hidden starting-text contents, inherited main-conversation contents, or raw tool output.",
+      "",
+      "## Context",
+      "",
+    ];
+
+    if (Number.isFinite(state.createdAt)) lines.push("- Thread started: " + formatTranscriptTimestamp(state.createdAt));
+    if (state.modelLabel) lines.push("- Model: " + escapeTranscriptInline(state.modelLabel));
+    if (state.thinking) lines.push("- Thinking: " + escapeTranscriptInline(state.thinking));
+    lines.push("- Starting text: " + escapeTranscriptInline(context.focusLabel || "No starting text"));
+    lines.push("- Related files: " + escapeTranscriptInline(formatTranscriptContextScope(context)));
+    lines.push("- Main conversation snapshot: " + (context.includeConversation === true ? "included" : "not included"));
+
+    const gitSnapshot = context.gitSnapshot && typeof context.gitSnapshot === "object" ? context.gitSnapshot : null;
+    if (gitSnapshot) {
+      const gitParts = [gitSnapshot.branch || "repository"];
+      if (gitSnapshot.head) gitParts.push("HEAD " + gitSnapshot.head);
+      if (Number.isFinite(gitSnapshot.changeCount)) gitParts.push(String(Math.max(0, Math.floor(gitSnapshot.changeCount))) + " changes");
+      if (Number.isFinite(gitSnapshot.recentCommitCount)) gitParts.push(String(Math.max(0, Math.floor(gitSnapshot.recentCommitCount))) + " recent commits");
+      if (gitSnapshot.capturedAt) gitParts.push("captured " + formatTranscriptTimestamp(gitSnapshot.capturedAt));
+      if (gitSnapshot.truncated === true) gitParts.push("bounded output truncated");
+      lines.push("- Git snapshot: " + escapeTranscriptInline(gitParts.join(" · ")));
+    } else {
+      lines.push("- Git snapshot: not included");
+    }
+
+    const webLabel = context.webSearchRequested === true
+      ? (context.webSearchAvailable === true ? "allowed" : "requested but unavailable")
+      : "not allowed";
+    lines.push("- Web search: " + webLabel);
+    const tools = Array.isArray(context.tools) ? context.tools : [];
+    lines.push("- Additional Pi tools: " + (tools.length
+      ? tools.map((tool) => {
+          const name = tool && tool.name ? String(tool.name) : "unnamed tool";
+          const source = tool && tool.source ? String(tool.source) : "";
+          return escapeTranscriptInline(source ? name + " (" + source + ")" : name);
+        }).join(", ")
+      : "none"));
+
+    lines.push("", "## Discussion", "");
+    let questionCount = 0;
+    let answerCount = 0;
+    for (const message of messages) {
+      if (!message || typeof message !== "object") continue;
+      const role = message.role === "assistant" ? "assistant" : "user";
+      if (role === "assistant") answerCount += 1;
+      else questionCount += 1;
+      const number = role === "assistant" ? answerCount : questionCount;
+      const status = message.status === "streaming" || message.status === "error" ? message.status : "complete";
+      const heading = role === "assistant" ? "Side answer " + number : "Question " + number;
+      lines.push("### " + heading + (status === "complete" ? "" : " (" + status + ")"), "");
+      if (Number.isFinite(message.createdAt)) lines.push("_" + formatTranscriptTimestamp(message.createdAt) + "_", "");
+      const text = typeof message.text === "string" ? message.text.trim() : "";
+      lines.push(text || "_[No text captured.]_", "");
+    }
+    if (!messages.length) lines.push("_[No side-thread messages captured.]_", "");
+
+    if (activity.length) {
+      lines.push("## Context activity", "");
+      for (const entry of activity) {
+        if (!entry || typeof entry !== "object") continue;
+        const status = entry.status === "running" || entry.status === "error" ? entry.status : "complete";
+        const label = escapeTranscriptInline(entry.label || "Context action");
+        const toolName = entry.toolName ? " (`" + String(entry.toolName).replace(/`/g, "\\`") + "`)" : "";
+        lines.push("- " + status.charAt(0).toUpperCase() + status.slice(1) + ": " + label + toolName);
+      }
+      lines.push("");
+    }
+
+    return lines.join("\n").replace(/\n{3,}$/g, "\n\n").trimEnd() + "\n";
+  }
+
   globalThis.PiStudioSideQuestionHelpers = Object.freeze({
     FOCUS_MAX_CHARS: FOCUS_MAX_CHARS,
+    buildStudioSideQuestionTranscriptMarkdown: buildStudioSideQuestionTranscriptMarkdown,
     chooseStudioSideQuestionFocus: chooseStudioSideQuestionFocus,
     findStudioSideQuestionSection: findStudioSideQuestionSection,
+    formatStudioSideQuestionTranscriptFilename: formatTranscriptFilename,
     getDefaultStudioSideQuestionGatherScope: getDefaultStudioSideQuestionGatherScope,
     truncateFocus: truncateFocus,
   });
