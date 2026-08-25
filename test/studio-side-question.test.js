@@ -229,6 +229,7 @@ test("Studio wires an independent read-only side thread with progressive local a
 
 	assert.match(clientSource, /value="side-questions"|"side-questions": "Side questions"/);
 	assert.match(clientSource, /<h2>Side question<\/h2>/);
+	assert.match(clientSource, /askAsideBtn\.textContent = isEditorOnlyMode\s*\? "Side questions"/);
 	assert.match(clientSource, /<label>Starting text<select data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'/);
 	assert.match(clientSource, /\["auto", "Automatic"\]/);
 	assert.match(clientSource, /Automatic: selection → heading block at cursor → nearby text/);

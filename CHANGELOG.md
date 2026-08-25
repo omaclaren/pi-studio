@@ -12,6 +12,7 @@ All notable changes to `pi-studio` are documented here.
 - Add opt-in, thread-frozen Git context for repository side questions: bounded status, staged and unstaged tracked-file diffs, and up to 20 recent commit summaries are exposed through fixed read-only tools rather than arbitrary command execution.
 
 ### Changed
+- Keep the editor-only header destination labelled **Side questions**, while full Studio continues to group its broader critique, explanation, quiz, and side-question actions under **Review**.
 - Add **Cmd/Ctrl+Enter** submission for the initial side question and follow-ups while keeping plain **Enter** for multiline text and retaining the submit buttons; add **Cmd/Ctrl+Alt+Q** as a mnemonic direct switch to the Side questions view.
 - Rename the **Ask aside** action to **Side question**, replace ambiguous current-section wording with a compact **Automatic** rule disclosure and separate **Starting text** / **Related files** summary rows, prevent an empty explicit selection from falling back to the whole document, and keep primary side-question buttons readable on hover.
 - Align Studio's Pi SDK development/runtime compatibility dependencies with Pi 0.84.3 and declare that minimum host version for isolated selected-extension lifecycle support.

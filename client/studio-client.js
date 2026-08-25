@@ -5083,7 +5083,9 @@
         if (!askAsideBtn) return;
         const running = Boolean(sideQuestionState && sideQuestionState.status === "running");
         askAsideBtn.disabled = wsState === "Disconnected";
-        askAsideBtn.textContent = running ? "Side question running…" : (sideQuestionState && sideQuestionState.threadId ? "Open side questions" : "Side question");
+        askAsideBtn.textContent = isEditorOnlyMode
+          ? "Side questions"
+          : (running ? "Side question running…" : (sideQuestionState && sideQuestionState.threadId ? "Open side questions" : "Side question"));
         askAsideBtn.classList.toggle("request-active", running);
         askAsideBtn.title = running
           ? "Open the independently running side question."
