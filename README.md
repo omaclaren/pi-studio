@@ -113,8 +113,9 @@ Open **Review → Ask aside** or select **Side questions** in the right pane. A 
 - **Include the current main conversation snapshot** is opt-in. Side questions and answers otherwise never enter the main Pi history; **Bring to main conversation** is the explicit handoff.
 - Local context tools can map filenames, search readable text, and read selected ranges. Symlinks and traversal outside the chosen root are rejected. PDF extraction uses `pdftotext`; DOCX, ODT, and EPUB extraction uses Pandoc.
 - **Allow web search** is opt-in and appears when `BRAVE_API_KEY` is available to the Pi process. Model-chosen search queries are sent to Brave Search; the side agent is instructed not to copy private local passages into queries. Web answers cite result URLs and identify when they rely on search-result snippets rather than full page content.
+- **Additional Pi tools** lists eligible tools already registered by the user's installed Pi extensions. Selection is explicit, remembered locally, and frozen when the thread starts. Studio reloads only the extensions owning the selected tools into the isolated side runtime and activates only those tool names; it does not import or depend on any particular third-party extension. Gateway tools are labelled and require an additional confirmation because selecting one may expose further services configured behind it.
 
-The current side thread is ephemeral but survives Studio browser refreshes while the same Pi Studio server remains running. It has neither file-writing tools nor a shell.
+The current side thread is ephemeral but survives Studio browser refreshes while the same Pi Studio server remains running. Studio never supplies it with shell or file-writing tools, and known execution/mutation surfaces are excluded from the picker. Selected third-party tools retain their own behavior, permissions, and downstream scope, so choose tools you trust for read-only research.
 
 ## Studio Markdown extras
 

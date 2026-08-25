@@ -65,6 +65,9 @@ export function buildStudioSideQuestionPrompt(options = {}) {
 	const gatherScope = normalizeStudioSideQuestionGatherScope(options.gatherScope);
 	const collectionMap = String(options.collectionMap || "").trim().slice(0, 40_000);
 	const webEnabled = options.webEnabled === true;
+	const piToolNames = Array.isArray(options.piToolNames)
+		? [...new Set(options.piToolNames.filter((name) => typeof name === "string").map((name) => name.trim()).filter(Boolean))].slice(0, 12)
+		: [];
 
 	const parts = [
 		"Studio side question. This is an ephemeral aside: answer the question without continuing or changing the main task.",
@@ -87,8 +90,11 @@ export function buildStudioSideQuestionPrompt(options = {}) {
 	}
 
 	parts.push(webEnabled
-		? "Web research is enabled. Search only when it improves the answer or verifies a claim. Cite consulted results as Markdown links and distinguish search snippets from material you directly inspected."
-		: "Web research is disabled for this side thread; do not imply that current external sources were checked.");
+		? "Built-in web research is enabled. Search only when it improves the answer or verifies a claim. Cite consulted results as Markdown links and distinguish search snippets from material you directly inspected."
+		: "Built-in web research is disabled for this side thread; do not imply that it was used.");
+	parts.push(piToolNames.length > 0
+		? `Explicitly selected Pi tools: ${piToolNames.join(", ")}. Use only relevant read/search/fetch behavior. A selected gateway may expose broader downstream capabilities; do not invoke mutating actions.`
+		: "No additional Pi extension tools were selected for this side thread.");
 	parts.push(`Question:\n${sanitizePromptContent(question)}`);
 	return parts.join("\n\n");
 }

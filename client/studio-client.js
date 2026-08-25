@@ -457,6 +457,7 @@
       const QUIZ_DEFAULT_COUNT = 5;
       const SIDE_QUESTION_THINKING_STORAGE_KEY = "piStudio.sideQuestionThinking";
       const SIDE_QUESTION_GATHER_STORAGE_KEY = "piStudio.sideQuestionGatherScope";
+      const SIDE_QUESTION_TOOLS_STORAGE_KEY = "piStudio.sideQuestionTools";
       const COMPLETION_CONTEXT_STORAGE_KEY = "piStudio.completionContextMode";
       const COMPLETION_MODEL_STORAGE_KEY = "piStudio.completionModel";
       const COMPLETION_CONTEXT_MAX_CHARS = 12000;
@@ -465,6 +466,7 @@
       const QUIZ_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
       let sideQuestionState = null;
       let sideQuestionWebSearchAvailable = false;
+      let sideQuestionAvailablePiTools = [];
       let sideQuestionPreviewRenderNonce = 0;
       const sideQuestionMarkdownRenderCache = new Map();
       let sideQuestionUi = {
@@ -478,6 +480,12 @@
         customPath: "",
         includeConversation: false,
         webSearch: false,
+        toolIds: (() => {
+          try {
+            const parsed = JSON.parse((window.localStorage && window.localStorage.getItem(SIDE_QUESTION_TOOLS_STORAGE_KEY)) || "[]");
+            return Array.isArray(parsed) ? [...new Set(parsed.filter((id) => typeof id === "string" && /^[a-f0-9]{24}$/i.test(id)).map((id) => id.toLowerCase()))].slice(0, 12) : [];
+          } catch { return []; }
+        })(),
         thinking: (() => {
           try {
             const value = window.localStorage && window.localStorage.getItem(SIDE_QUESTION_THINKING_STORAGE_KEY);
@@ -11867,6 +11875,36 @@
         });
       }
 
+      function persistSideQuestionToolSelection() {
+        try {
+          if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_TOOLS_STORAGE_KEY, JSON.stringify(sideQuestionUi.toolIds.slice(0, 12)));
+        } catch {}
+      }
+
+      function applySideQuestionToolCatalog(value) {
+        const seen = new Set();
+        sideQuestionAvailablePiTools = (Array.isArray(value) ? value : []).flatMap((entry) => {
+          if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || typeof entry.name !== "string") return [];
+          const id = entry.id.trim().toLowerCase();
+          const name = entry.name.trim();
+          if (!/^[a-f0-9]{24}$/.test(id) || !name || name.length > 200 || seen.has(id)) return [];
+          seen.add(id);
+          return [{
+            id,
+            name,
+            description: typeof entry.description === "string" ? entry.description.trim().slice(0, 1000) : "",
+            source: typeof entry.source === "string" ? entry.source.trim().slice(0, 500) : "Extension tool",
+            gateway: entry.gateway === true,
+          }];
+        }).slice(0, 200);
+        const available = new Set(sideQuestionAvailablePiTools.map((tool) => tool.id));
+        const nextSelection = sideQuestionUi.toolIds.filter((id) => available.has(id)).slice(0, 12);
+        if (nextSelection.length !== sideQuestionUi.toolIds.length || nextSelection.some((id, index) => id !== sideQuestionUi.toolIds[index])) {
+          sideQuestionUi.toolIds = nextSelection;
+          persistSideQuestionToolSelection();
+        }
+      }
+
       function normalizeSideQuestionState(value) {
         const state = value && typeof value === "object" ? value : {};
         const messages = Array.isArray(state.messages) ? state.messages.map((entry) => ({
@@ -11890,6 +11928,16 @@
           includeConversation: state.context.includeConversation === true,
           webSearchRequested: state.context.webSearchRequested === true,
           webSearchAvailable: state.context.webSearchAvailable === true,
+          tools: Array.isArray(state.context.tools) ? state.context.tools.flatMap((tool) => {
+            if (!tool || typeof tool !== "object" || typeof tool.name !== "string") return [];
+            return [{
+              id: typeof tool.id === "string" ? tool.id : "",
+              name: tool.name,
+              description: typeof tool.description === "string" ? tool.description : "",
+              source: typeof tool.source === "string" ? tool.source : "Extension tool",
+              gateway: tool.gateway === true,
+            }];
+          }).slice(0, 12) : [],
         } : null;
         return {
           threadId: typeof state.threadId === "string" && state.threadId ? state.threadId : null,
@@ -11942,6 +11990,7 @@
           contextPath: summary.scope === "custom" ? sideQuestionUi.customPath.trim() : undefined,
           includeConversation: sideQuestionUi.includeConversation,
           webSearch: sideQuestionUi.webSearch && sideQuestionWebSearchAvailable,
+          toolIds: sideQuestionUi.toolIds.slice(0, 12),
           thinking: sideQuestionUi.thinking,
         };
       }
@@ -11985,6 +12034,35 @@
         return values.map(([value, label]) => "<option value='" + escapeHtml(value) + "'" + (value === current ? " selected" : "") + ">" + escapeHtml(label) + "</option>").join("");
       }
 
+      function renderSideQuestionPiToolPicker() {
+        const selected = new Set(sideQuestionUi.toolIds);
+        const selectedCount = sideQuestionUi.toolIds.length;
+        if (!sideQuestionAvailablePiTools.length) {
+          return "<div class='side-question-tool-empty'><strong>Additional Pi tools</strong><span>No eligible extension tools are currently available.</span></div>";
+        }
+        const groups = new Map();
+        for (const tool of sideQuestionAvailablePiTools) {
+          if (!groups.has(tool.source)) groups.set(tool.source, []);
+          groups.get(tool.source).push(tool);
+        }
+        const groupHtml = [...groups.entries()].map(([source, tools]) => {
+          const toolHtml = tools.map((tool) => {
+            const description = tool.description || "No description supplied by this extension.";
+            return "<label class='side-question-tool-option' title='" + escapeHtml(description) + "'>"
+              + "<input type='checkbox' data-side-question-tool='" + escapeHtml(tool.id) + "' data-side-question-tool-name='" + escapeHtml(tool.name) + "'" + (selected.has(tool.id) ? " checked" : "") + ">"
+              + "<span><code>" + escapeHtml(tool.name) + "</code><small>" + escapeHtml(description) + "</small></span>"
+              + (tool.gateway ? "<em>gateway</em>" : "")
+              + "</label>";
+          }).join("");
+          return "<section class='side-question-tool-group'><h3>" + escapeHtml(source) + "</h3>" + toolHtml + "</section>";
+        }).join("");
+        return "<details class='side-question-tool-picker'" + (selectedCount ? " open" : "") + ">"
+          + "<summary>Additional Pi tools · " + selectedCount + " selected</summary>"
+          + "<p>Selecting a tool loads its owning extension into the isolated side runtime. Selection is remembered, then frozen; a gateway may expose further configured services.</p>"
+          + "<div class='side-question-tool-groups'>" + groupHtml + "</div>"
+          + "</details>";
+      }
+
       function renderSideQuestionSetup() {
         const summary = getSideQuestionContextSummary();
         const scope = summary.scope;
@@ -12007,6 +12085,7 @@
           + "<label><input data-side-question-field='includeConversation' type='checkbox'" + (sideQuestionUi.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
           + "<label title='" + (webDisabled ? "Set BRAVE_API_KEY before starting Pi to enable web search." : "Allow this side thread to search the web when useful.") + "'><input data-side-question-field='webSearch' type='checkbox'" + (sideQuestionUi.webSearch ? " checked" : "") + (webDisabled ? " disabled" : "") + "> Allow web search" + (webDisabled ? " (unavailable)" : "") + "</label>"
           + "</div>"
+          + renderSideQuestionPiToolPicker()
           + "<div class='side-question-context-summary'><strong>Context snapshot</strong><span>" + escapeHtml(summary.text) + "</span><span>Files are retrieved selectively through read-only tools; the initial prompt does not dump the whole collection.</span></div>"
           + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the selected passage, current section, wider collection, or something you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
@@ -12033,10 +12112,13 @@
         const webLabel = context.webSearchRequested
           ? (context.webSearchAvailable ? "web allowed" : "web unavailable")
           : "web off";
+        const selectedToolLabel = Array.isArray(context.tools) && context.tools.length
+          ? "Pi tools: " + context.tools.map((tool) => tool.name).join(", ")
+          : "Pi tools off";
         return "<div class='side-question-thread'>"
           + "<div class='side-question-thread-header'><div><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div><button type='button' data-side-question-action='new'" + (state.status === "running" ? " disabled" : "") + ">New thread</button></div>"
           + "<div class='side-question-context-chips'><span>" + escapeHtml(context.focusLabel || "Editor context") + "</span><span>" + escapeHtml(context.gatherScope === "none" ? "focused material only" : (context.contextRoot || context.gatherScope || "local context")) + "</span>"
-          + (context.includeConversation ? "<span>main conversation snapshot</span>" : "") + "<span>" + escapeHtml(webLabel) + "</span><span>" + escapeHtml(state.modelLabel + " · " + state.thinking) + "</span></div>"
+          + (context.includeConversation ? "<span>main conversation snapshot</span>" : "") + "<span>" + escapeHtml(webLabel) + "</span><span>" + escapeHtml(selectedToolLabel) + "</span><span>" + escapeHtml(state.modelLabel + " · " + state.thinking) + "</span></div>"
           + "<div class='side-question-transcript'>" + messageHtml + "</div>"
           + activityHtml
           + (state.error ? "<div class='side-question-error'>" + escapeHtml(state.error) + "</div>" : "")
@@ -12180,10 +12262,41 @@
         if (askButton) askButton.disabled = !isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() || (getSideQuestionGatherScope() === "custom" && !sideQuestionUi.customPath.trim());
       }
 
-      function handleSideQuestionChange(event) {
+      async function handleSideQuestionChange(event) {
         if (rightView !== "side-questions") return;
         const target = event && event.target;
         if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+        const toolId = target.getAttribute("data-side-question-tool");
+        if (toolId) {
+          const tool = sideQuestionAvailablePiTools.find((candidate) => candidate.id === toolId);
+          if (!tool) return;
+          const selected = new Set(sideQuestionUi.toolIds);
+          if (target.checked) {
+            if (tool.gateway && !selected.has(toolId)) {
+              const confirmed = await requestStudioConfirmation(
+                `“${tool.name}” is a gateway tool. Selecting it may expose additional services and actions configured behind that extension, subject to the extension's own permissions.`,
+                { title: "Allow gateway tool in side questions?", confirmLabel: "Allow gateway" },
+              );
+              if (!confirmed) {
+                target.checked = false;
+                renderSideQuestionView();
+                return;
+              }
+            }
+            if (selected.size >= 12 && !selected.has(toolId)) {
+              setStatus("Select at most 12 additional Pi tools.", "warning");
+              renderSideQuestionView();
+              return;
+            }
+            selected.add(toolId);
+          } else {
+            selected.delete(toolId);
+          }
+          sideQuestionUi.toolIds = [...selected];
+          persistSideQuestionToolSelection();
+          renderSideQuestionView();
+          return;
+        }
         const field = target.getAttribute("data-side-question-field");
         if (!field) return;
         if (field === "focusMode") sideQuestionUi.focusMode = target.value;
@@ -20966,6 +21079,7 @@
 
         if (message.type === "side_question_state") {
           sideQuestionWebSearchAvailable = message.webSearchAvailable === true;
+          if (Array.isArray(message.availablePiTools)) applySideQuestionToolCatalog(message.availablePiTools);
           const previousStatus = sideQuestionState && sideQuestionState.status;
           sideQuestionState = normalizeSideQuestionState(message.state);
           if (rightView === "side-questions") renderSideQuestionView();
@@ -21078,6 +21192,7 @@
             modelLabel = message.modelLabel;
           }
           sideQuestionWebSearchAvailable = message.webSearchAvailable === true;
+          if (Array.isArray(message.availablePiTools)) applySideQuestionToolCatalog(message.availablePiTools);
           if (message.sideQuestion && typeof message.sideQuestion === "object") {
             sideQuestionState = normalizeSideQuestionState(message.sideQuestion);
           }

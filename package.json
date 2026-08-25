@@ -42,15 +42,15 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": ">=0.84.3"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.74.0",
+    "@earendil-works/pi-ai": "^0.84.3",
     "@sinclair/typebox": "^0.34.49",
-    "ws": "^8.18.0"
+    "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.84.3",
     "@iconify-json/logos": "1.2.11",
     "@iconify-json/lucide": "1.2.120",
     "@types/node": "^24.3.0",

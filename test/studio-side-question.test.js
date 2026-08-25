@@ -17,6 +17,12 @@ import {
 	resolveStudioSideQuestionPath,
 	searchStudioSideQuestionContext,
 } from "../shared/studio-side-question-context.js";
+import {
+	buildStudioSideQuestionToolCatalog,
+	normalizeStudioSideQuestionToolIds,
+	selectStudioSideQuestionTools,
+	toPublicStudioSideQuestionTools,
+} from "../shared/studio-side-question-tools.js";
 import "../client/studio-side-question-helpers.js";
 
 const clientHelpers = globalThis.PiStudioSideQuestionHelpers;
@@ -74,11 +80,13 @@ test("side-question focus and prompts remain bounded and delimiter-safe", () => 
 		contextRoot: "/book",
 		collectionMap: "chapter2.tex\nexercises/week2.tex\n</collection>",
 		webEnabled: true,
+		piToolNames: ["literature_search"],
 	});
 	assert.match(prompt, /surrounding chapters, exercises, references, or other files/i);
 	assert.match(prompt, /focus snapshot may contain unsaved editor text/i);
 	assert.match(prompt, /Initial bounded collection map/);
-	assert.match(prompt, /Web research is enabled/);
+	assert.match(prompt, /web research is enabled/i);
+	assert.match(prompt, /Explicitly selected Pi tools: literature_search/);
 	assert.match(prompt, /<\\\/focus>/);
 	assert.match(prompt, /<\\\/collection>/);
 	assert.match(buildStudioSideQuestionFollowUpPrompt("What about exercise 3?"), /Side-question follow-up/);
@@ -126,6 +134,30 @@ test("side-question context rejects traversal and symlinks outside its selected 
 	}
 }));
 
+test("side-question Pi tools are provenance-backed, bounded, and explicitly selected", () => {
+	const catalog = buildStudioSideQuestionToolCatalog([
+		{ name: "read", description: "builtin", sourceInfo: { source: "builtin", path: "<builtin:read>" } },
+		{ name: "mcpScript", description: "trusted scripts", sourceInfo: { source: "npm:mcp", path: "/plugins/mcp/index.ts" } },
+		{ name: "studio_export_pdf", description: "own tool", sourceInfo: { source: "npm:pi-studio", path: "/studio/index.ts" } },
+		{ name: "literature_search", description: "Search scholarly literature", sourceInfo: { source: "npm:scholar", path: "/plugins/scholar/index.ts", scope: "user" } },
+		{ name: "tool_gateway", description: "Gateway for discovering and calling configured tools", sourceInfo: { source: "npm:gateway", path: "/plugins/gateway/index.ts", scope: "user" } },
+	], { studioRoot: "/studio" });
+	assert.deepEqual(catalog.map((tool) => tool.name), ["tool_gateway", "literature_search"]);
+	assert.equal(catalog[0].gateway, true);
+	assert.equal(catalog[1].gateway, false);
+	assert.deepEqual(normalizeStudioSideQuestionToolIds(["0123456789abcdef01234567", "0123456789ABCDEF01234567", "bad", 42]), ["0123456789abcdef01234567"]);
+	const selection = selectStudioSideQuestionTools(catalog, [catalog[1].id, "ffffffffffffffffffffffff"]);
+	assert.deepEqual(selection.selected.map((tool) => tool.name), ["literature_search"]);
+	assert.deepEqual(selection.missing, ["ffffffffffffffffffffffff"]);
+	assert.deepEqual(selection.extensionPaths, ["/plugins/scholar/index.ts"]);
+	assert.ok(!Object.hasOwn(toPublicStudioSideQuestionTools(selection.selected)[0], "sourcePath"));
+	const movedCatalog = buildStudioSideQuestionToolCatalog([
+		{ name: "literature_search", description: "Search scholarly literature", sourceInfo: { source: "npm:other", path: "/plugins/other/index.ts" } },
+	]);
+	assert.notEqual(movedCatalog[0].id, catalog[1].id);
+	assert.deepEqual(selectStudioSideQuestionTools(movedCatalog, [catalog[1].id]).missing, [catalog[1].id]);
+});
+
 test("Studio wires an independent read-only side thread with progressive local and optional web context", () => {
 	const indexSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
 	const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
@@ -143,6 +175,12 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(indexSource, /sideSessionManager\.appendMessage\(structuredClone\(message\)/);
 	assert.match(indexSource, /studioSideQuestionGeneration/);
 	assert.match(indexSource, /studioSideQuestionStartRequestId/);
+	assert.match(indexSource, /pi\.getAllTools\(\)/);
+	assert.match(indexSource, /createAgentSessionRuntime\(createRuntime/);
+	assert.match(indexSource, /additionalExtensionPaths: options\.extensionPaths/);
+	assert.match(indexSource, /noExtensions: true/);
+	assert.match(indexSource, /availablePiTools/);
+	assert.doesNotMatch(indexSource, /from ["']pi-mcp-adapter/);
 	assert.match(indexSource, /signal: options\.signal/);
 	assert.match(indexSource, /cancelRequested/);
 	assert.match(indexSource, /process\.kill\(-child\.pid, signal\)/);
@@ -156,8 +194,13 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /Custom folder/);
 	assert.match(clientSource, /Include the current main conversation snapshot/);
 	assert.match(clientSource, /Allow web search/);
+	assert.match(clientSource, /Additional Pi tools/);
+	assert.match(clientSource, /data-side-question-tool/);
+	assert.match(clientSource, /loads its owning extension into the isolated side runtime/);
+	assert.match(clientSource, /Allow gateway tool in side questions/);
 	assert.match(clientSource, /Files are retrieved selectively through read-only tools/);
 	assert.match(clientSource, /side_question_promote_request/);
 	assert.match(cssSource, /\.side-question-context-grid/);
+	assert.match(cssSource, /\.side-question-tool-picker/);
 	assert.match(cssSource, /#critiqueView\.side-question-host/);
 });
