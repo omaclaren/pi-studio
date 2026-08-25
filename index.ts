@@ -11605,6 +11605,12 @@ ${cssVarsBlock}
           </dl>
         </section>
         <section class="shortcuts-group">
+          <h3>Side questions</h3>
+          <dl>
+            <div><dt>Cmd/Ctrl+Enter</dt><dd>Ask the initial side question or a follow-up while its question box is focused; Enter adds a new line</dd></div>
+          </dl>
+        </section>
+        <section class="shortcuts-group">
           <h3>REPL</h3>
           <dl>
             <div><dt>Cmd/Ctrl+Shift+Enter</dt><dd>Send selection, chunks, or editor text to the active REPL when the right pane is REPL</dd></div>

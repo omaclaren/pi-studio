@@ -228,6 +228,11 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /getSideQuestionEditorLineRange/);
 	assert.match(clientSource, /function scheduleSideQuestionContextRefresh/);
 	assert.match(clientSource, /sourceTextEl\.addEventListener\("select"[\s\S]*?scheduleSideQuestionContextRefresh\(\)/);
+	assert.match(clientSource, /critiqueViewEl\.addEventListener\("keydown", handleSideQuestionKeydown\)/);
+	assert.match(clientSource, /function handleSideQuestionKeydown/);
+	assert.match(clientSource, /event\.key === "Enter"[\s\S]*?\(event\.metaKey \|\| event\.ctrlKey\)[\s\S]*?!event\.shiftKey/);
+	assert.match(clientSource, /aria-keyshortcuts='Meta\+Enter Control\+Enter'/);
+	assert.match(indexSource, /Ask the initial side question or a follow-up while its question box is focused/);
 	assert.match(clientSource, /attachmentText: attachment/);
 	assert.match(clientSource, /relatedFilesText:/);
 	assert.match(clientSource, /<dt>Starting text<\/dt>/);

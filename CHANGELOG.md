@@ -11,6 +11,7 @@ All notable changes to `pi-studio` are documented here.
 - Let side threads use an explicit, remembered selection of eligible tools already registered by installed Pi extensions. Studio resolves each selected tool through Pi's provenance metadata, loads only its owning extension into the isolated side runtime, freezes the allowlist for the thread, labels and separately confirms gateway tools, and has no package-specific dependency on an MCP or research extension.
 
 ### Changed
+- Add **Cmd/Ctrl+Enter** submission for the initial side question and follow-ups while keeping plain **Enter** for multiline text and retaining the submit buttons.
 - Rename the **Ask aside** action to **Side question**, replace ambiguous current-section wording with a compact **Automatic** rule disclosure and separate **Starting text** / **Related files** summary rows, prevent an empty explicit selection from falling back to the whole document, and keep primary side-question buttons readable on hover.
 - Align Studio's Pi SDK development/runtime compatibility dependencies with Pi 0.84.3 and declare that minimum host version for isolated selected-extension lifecycle support.
 - Update the direct `ws` dependency to 8.21.3, which includes the current memory-disclosure and fragment-exhaustion fixes.

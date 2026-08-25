@@ -9209,6 +9209,7 @@
         critiqueViewEl.addEventListener("click", handleStudioQuartoPreviewClick);
         critiqueViewEl.addEventListener("click", (event) => { void handleSideQuestionClick(event); });
         critiqueViewEl.addEventListener("input", handleSideQuestionInput);
+        critiqueViewEl.addEventListener("keydown", handleSideQuestionKeydown);
         critiqueViewEl.addEventListener("change", handleSideQuestionChange);
         critiqueViewEl.addEventListener("change", handleReplPaneChange);
         critiqueViewEl.addEventListener("change", (event) => {
@@ -12104,9 +12105,9 @@
           + "</div>"
           + renderSideQuestionPiToolPicker()
           + "<dl class='side-question-context-summary'><div><dt>Starting text</dt><dd>" + escapeHtml(summary.attachmentText) + "</dd></div><div><dt>Related files</dt><dd>" + escapeHtml(summary.relatedFilesText) + "</dd></div></dl>"
-          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the starting text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
+          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' title='Enter adds a new line. Cmd/Ctrl+Enter asks the side question.' placeholder='Ask about the starting text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
-          + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask'" + (!isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question") + "</button></div>"
+          + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask side question (Cmd/Ctrl+Enter)'" + (!isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question") + "</button></div>"
           + "</div>";
       }
 
@@ -12140,11 +12141,11 @@
           + activityHtml
           + (state.error ? "<div class='side-question-error'>" + escapeHtml(state.error) + "</div>" : "")
           + (latestAnswer ? "<div class='side-question-result-actions'><button type='button' data-side-question-action='copy'>Copy latest answer</button><button type='button' data-side-question-action='insert'>Insert at editor cursor</button><button type='button' data-side-question-action='promote'>Bring to main conversation</button></div>" : "")
-          + "<label class='side-question-composer-label'>Follow-up<textarea data-side-question-field='draft' rows='3' placeholder='Ask a follow-up in this side thread…'" + (state.status === "running" ? " disabled" : "") + ">" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
+          + "<label class='side-question-composer-label'>Follow-up<textarea data-side-question-field='draft' rows='3' title='Enter adds a new line. Cmd/Ctrl+Enter asks the follow-up.' placeholder='Ask a follow-up in this side thread…'" + (state.status === "running" ? " disabled" : "") + ">" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + "<div class='side-question-actions'>"
           + (state.status === "running"
             ? "<button type='button' class='side-question-stop' data-side-question-action='stop'>Stop</button>"
-            : "<button type='button' class='side-question-primary' data-side-question-action='ask'" + (!isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() ? " disabled" : "") + ">Ask follow-up</button>")
+            : "<button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask follow-up (Cmd/Ctrl+Enter)'" + (!isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() ? " disabled" : "") + ">Ask follow-up</button>")
           + "</div></div>";
       }
 
@@ -12285,6 +12286,20 @@
         if (field === "customPath") sideQuestionUi.customPath = target.value;
         const askButton = critiqueViewEl.querySelector("[data-side-question-action='ask']");
         if (askButton) askButton.disabled = !isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() || (getSideQuestionGatherScope() === "custom" && !sideQuestionUi.customPath.trim());
+      }
+
+      function handleSideQuestionKeydown(event) {
+        if (rightView !== "side-questions" || !event || event.isComposing) return;
+        const target = event.target;
+        if (!(target instanceof HTMLTextAreaElement) || target.getAttribute("data-side-question-field") !== "draft") return;
+        const submitShortcut = event.key === "Enter"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
+          && !event.shiftKey;
+        if (!submitShortcut) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!sideQuestionState || sideQuestionState.status !== "running") submitSideQuestion();
       }
 
       async function handleSideQuestionChange(event) {

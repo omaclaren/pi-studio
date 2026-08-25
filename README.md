@@ -110,6 +110,7 @@ Open **Review → Side question** or select **Side questions** in the right pane
 
 - **Starting text** controls what unsaved text begins the thread. The compact **Automatic: selection → heading block at cursor → nearby text** disclosure explains the fallback order; when expanded, it defines the heading boundary. The summary below reports the resolved starting text, editor line range when applicable, and character count separately from the related-file scope.
 - Explicit **Editor selection only** no longer falls back to the whole document when no text is selected; the summary instead reports that no editor text is selected.
+- In the initial-question and follow-up boxes, **Cmd/Ctrl+Enter** submits while plain **Enter** adds a new line. The button remains available for pointer and ordinary keyboard activation.
 - **Also use files from** controls the read-only boundary available to the side agent: no other files, the document folder, the current repository, or another chosen folder.
 - **Include the current main conversation snapshot** is opt-in. Side questions and answers otherwise never enter the main Pi history; **Bring to main conversation** is the explicit handoff.
 - Local context tools can map filenames, search readable text, and read selected ranges. Symlinks and traversal outside the chosen root are rejected. PDF extraction uses `pdftotext`; DOCX, ODT, and EPUB extraction uses Pandoc.
