@@ -9,6 +9,7 @@ All notable changes to `pi-studio` are documented here.
 - Separate the starting-text snapshot from progressive file access: side threads can start from an editor selection, Markdown/LaTeX heading block, nearby text, whole editor, displayed response, or no starting text, then selectively map, search, and read a bounded document folder, repository, or chosen folder through root-confined read-only tools.
 - Add opt-in Brave web search with cited result URLs, plus read-only text extraction for local PDF, DOCX, ODT, and EPUB context when the corresponding command-line dependency is available.
 - Let side threads use an explicit, remembered selection of eligible tools already registered by installed Pi extensions. Studio resolves each selected tool through Pi's provenance metadata, loads only its owning extension into the isolated side runtime, freezes the allowlist for the thread, labels and separately confirms gateway tools, and has no package-specific dependency on an MCP or research extension.
+- Add opt-in, thread-frozen Git context for repository side questions: bounded status, staged and unstaged tracked-file diffs, and up to 20 recent commit summaries are exposed through fixed read-only tools rather than arbitrary command execution.
 
 ### Changed
 - Add **Cmd/Ctrl+Enter** submission for the initial side question and follow-ups while keeping plain **Enter** for multiline text and retaining the submit buttons; add **Cmd/Ctrl+Alt+Q** as a mnemonic direct switch to the Side questions view.

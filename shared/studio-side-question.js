@@ -64,6 +64,7 @@ export function buildStudioSideQuestionPrompt(options = {}) {
 	const contextRoot = String(options.contextRoot || "").replace(/[\r\n]+/g, " ").trim().slice(0, 16_384);
 	const gatherScope = normalizeStudioSideQuestionGatherScope(options.gatherScope);
 	const collectionMap = String(options.collectionMap || "").trim().slice(0, 40_000);
+	const gitEnabled = options.gitEnabled === true;
 	const webEnabled = options.webEnabled === true;
 	const piToolNames = Array.isArray(options.piToolNames)
 		? [...new Set(options.piToolNames.filter((name) => typeof name === "string").map((name) => name.trim()).filter(Boolean))].slice(0, 12)
@@ -89,6 +90,9 @@ export function buildStudioSideQuestionPrompt(options = {}) {
 		parts.push("Local context access: starting context only; no related-file access.");
 	}
 
+	parts.push(gitEnabled
+		? "A read-only Git snapshot was captured when this side thread started. Use studio_git_status, studio_git_diff, and studio_git_log selectively to understand current changes and recent intent. The snapshot is frozen for this thread; untracked file contents are not part of the diff and require the bounded local file reader."
+		: "No Git snapshot was captured for this side thread; do not infer repository changes or history.");
 	parts.push(webEnabled
 		? "Built-in web research is enabled. Search only when it improves the answer or verifies a claim. Cite consulted results as Markdown links and distinguish search snippets from material you directly inspected."
 		: "Built-in web research is disabled for this side thread; do not imply that it was used.");

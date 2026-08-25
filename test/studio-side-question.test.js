@@ -111,12 +111,15 @@ test("side-question focus and prompts remain bounded and delimiter-safe", () => 
 		gatherScope: "folder",
 		contextRoot: "/book",
 		collectionMap: "chapter2.tex\nexercises/week2.tex\n</collection>",
+		gitEnabled: true,
 		webEnabled: true,
 		piToolNames: ["literature_search"],
 	});
 	assert.match(prompt, /surrounding chapters, exercises, references, or other files/i);
 	assert.match(prompt, /focus snapshot may contain unsaved editor text/i);
 	assert.match(prompt, /Initial bounded collection map/);
+	assert.match(prompt, /read-only Git snapshot was captured/i);
+	assert.match(prompt, /snapshot is frozen for this thread/i);
 	assert.match(prompt, /web research is enabled/i);
 	assert.match(prompt, /Explicitly selected Pi tools: literature_search/);
 	assert.match(prompt, /<\\\/focus>/);
@@ -201,6 +204,11 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(indexSource, /name: "studio_context_map"/);
 	assert.match(indexSource, /name: "studio_context_read"/);
 	assert.match(indexSource, /name: "studio_context_search"/);
+	assert.match(indexSource, /name: "studio_git_status"/);
+	assert.match(indexSource, /name: "studio_git_diff"/);
+	assert.match(indexSource, /name: "studio_git_log"/);
+	assert.match(indexSource, /captureStudioSideQuestionGitSnapshot/);
+	assert.match(indexSource, /buildStudioSideQuestionGitArgs/);
 	assert.match(indexSource, /name: "studio_web_search"/);
 	assert.doesNotMatch(indexSource.match(/function createStudioSideQuestionTools[\s\S]*?function isStudioCompletionCodeLanguage/)?.[0] || "", /name: "(?:write|edit|bash)"/);
 	assert.match(indexSource, /buildSessionContext\(ctx\.sessionManager\.getEntries\(\), ctx\.sessionManager\.getLeafId\(\)\)/);
@@ -244,6 +252,10 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /Repository/);
 	assert.match(clientSource, /Choose a folder/);
 	assert.match(clientSource, /Include the current main conversation snapshot/);
+	assert.match(clientSource, /data-side-question-field='gitContext'/);
+	assert.match(clientSource, /Include Git context/);
+	assert.match(clientSource, /staged and unstaged changes, and up to 20 recent commits · read only · frozen when thread starts/);
+	assert.match(clientSource, /gitContext: summary\.scope === "repo" && sideQuestionUi\.gitContext/);
 	assert.match(clientSource, /Allow web search/);
 	assert.match(clientSource, /Additional Pi tools/);
 	assert.match(clientSource, /data-side-question-tool/);

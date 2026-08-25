@@ -480,6 +480,7 @@
         })(),
         customPath: "",
         includeConversation: false,
+        gitContext: false,
         webSearch: false,
         toolIds: (() => {
           try {
@@ -11938,6 +11939,15 @@
           gatherScope: String(state.context.gatherScope || "none"),
           contextRoot: String(state.context.contextRoot || ""),
           includeConversation: state.context.includeConversation === true,
+          gitContextRequested: state.context.gitContextRequested === true,
+          gitSnapshot: state.context.gitSnapshot && typeof state.context.gitSnapshot === "object" ? {
+            capturedAt: Number.isFinite(state.context.gitSnapshot.capturedAt) ? state.context.gitSnapshot.capturedAt : null,
+            branch: String(state.context.gitSnapshot.branch || ""),
+            head: String(state.context.gitSnapshot.head || ""),
+            changeCount: Number.isFinite(state.context.gitSnapshot.changeCount) ? Math.max(0, Math.floor(state.context.gitSnapshot.changeCount)) : 0,
+            recentCommitCount: Number.isFinite(state.context.gitSnapshot.recentCommitCount) ? Math.max(0, Math.floor(state.context.gitSnapshot.recentCommitCount)) : 0,
+            truncated: state.context.gitSnapshot.truncated === true,
+          } : null,
           webSearchRequested: state.context.webSearchRequested === true,
           webSearchAvailable: state.context.webSearchAvailable === true,
           tools: Array.isArray(state.context.tools) ? state.context.tools.flatMap((tool) => {
@@ -12002,6 +12012,9 @@
           resourceDir,
           attachmentText: attachment,
           relatedFilesText: scope === "none" ? "None" : (rootHint || scope) + " · read only as needed",
+          gitContextText: scope === "repo" && sideQuestionUi.gitContext
+            ? "Status, staged and unstaged changes, and up to 20 recent commits · read only · frozen when thread starts"
+            : "",
         };
       }
 
@@ -12016,6 +12029,7 @@
           gatherScope: summary.scope,
           contextPath: summary.scope === "custom" ? sideQuestionUi.customPath.trim() : undefined,
           includeConversation: sideQuestionUi.includeConversation,
+          gitContext: summary.scope === "repo" && sideQuestionUi.gitContext,
           webSearch: sideQuestionUi.webSearch && sideQuestionWebSearchAvailable,
           toolIds: sideQuestionUi.toolIds.slice(0, 12),
           thinking: sideQuestionUi.thinking,
@@ -12111,10 +12125,11 @@
           + (scope === "custom" ? "<label class='side-question-path-label'>Folder path<input data-side-question-field='customPath' type='text' value='" + escapeHtml(sideQuestionUi.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
           + "<div class='side-question-checks'>"
           + "<label><input data-side-question-field='includeConversation' type='checkbox'" + (sideQuestionUi.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
+          + (scope === "repo" ? "<label title='Capture Git status, staged and unstaged changes, and up to 20 recent commits when this thread starts.'><input data-side-question-field='gitContext' type='checkbox'" + (sideQuestionUi.gitContext ? " checked" : "") + "> Include Git context</label>" : "")
           + "<label title='" + (webDisabled ? "Set BRAVE_API_KEY before starting Pi to enable web search." : "Allow this side thread to search the web when useful.") + "'><input data-side-question-field='webSearch' type='checkbox'" + (sideQuestionUi.webSearch ? " checked" : "") + (webDisabled ? " disabled" : "") + "> Allow web search" + (webDisabled ? " (unavailable)" : "") + "</label>"
           + "</div>"
           + renderSideQuestionPiToolPicker()
-          + "<dl class='side-question-context-summary'><div><dt>Starting text</dt><dd>" + escapeHtml(summary.attachmentText) + "</dd></div><div><dt>Related files</dt><dd>" + escapeHtml(summary.relatedFilesText) + "</dd></div></dl>"
+          + "<dl class='side-question-context-summary'><div><dt>Starting text</dt><dd>" + escapeHtml(summary.attachmentText) + "</dd></div><div><dt>Related files</dt><dd>" + escapeHtml(summary.relatedFilesText) + "</dd></div>" + (summary.gitContextText ? "<div><dt>Git context</dt><dd>" + escapeHtml(summary.gitContextText) + "</dd></div>" : "") + "</dl>"
           + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' title='Enter adds a new line. Cmd/Ctrl+Enter asks the side question.' placeholder='Ask about the starting text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
           + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask side question (Cmd/Ctrl+Enter)'" + (!isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question") + "</button></div>"
@@ -12141,12 +12156,17 @@
           ? (context.webSearchAvailable ? "web allowed" : "web unavailable")
           : "web off";
         const selectedToolLabel = Array.isArray(context.tools) && context.tools.length
-          ? "Pi tools: " + context.tools.map((tool) => tool.name).join(", ")
-          : "Pi tools off";
+          ? "Additional Pi tools: " + context.tools.map((tool) => tool.name).join(", ")
+          : "Additional Pi tools off";
+        const gitSnapshot = context.gitSnapshot && typeof context.gitSnapshot === "object" ? context.gitSnapshot : null;
+        const gitCapturedLabel = gitSnapshot && gitSnapshot.capturedAt ? formatReferenceTime(gitSnapshot.capturedAt) : "";
+        const gitLabel = gitSnapshot
+          ? "Git snapshot: " + (gitSnapshot.branch || "repository") + " · " + gitSnapshot.changeCount + " change" + (gitSnapshot.changeCount === 1 ? "" : "s") + " · " + gitSnapshot.recentCommitCount + " commit" + (gitSnapshot.recentCommitCount === 1 ? "" : "s") + (gitCapturedLabel ? " · captured " + gitCapturedLabel : "") + (gitSnapshot.truncated ? " · truncated" : "")
+          : "";
         return "<div class='side-question-thread'>"
           + "<div class='side-question-thread-header'><div><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div><button type='button' data-side-question-action='new'" + (state.status === "running" ? " disabled" : "") + ">New thread</button></div>"
           + "<div class='side-question-context-chips'><span>" + escapeHtml(context.focusLabel || "Editor context") + "</span><span>" + escapeHtml(context.gatherScope === "none" ? "no other files" : (context.contextRoot || context.gatherScope || "local context")) + "</span>"
-          + (context.includeConversation ? "<span>main conversation snapshot</span>" : "") + "<span>" + escapeHtml(webLabel) + "</span><span>" + escapeHtml(selectedToolLabel) + "</span><span>" + escapeHtml(state.modelLabel + " · " + state.thinking) + "</span></div>"
+          + (context.includeConversation ? "<span>main conversation snapshot</span>" : "") + (gitLabel ? "<span>" + escapeHtml(gitLabel) + "</span>" : "") + "<span>" + escapeHtml(webLabel) + "</span><span>" + escapeHtml(selectedToolLabel) + "</span><span>" + escapeHtml(state.modelLabel + " · " + state.thinking) + "</span></div>"
           + "<div class='side-question-transcript'>" + messageHtml + "</div>"
           + activityHtml
           + (state.error ? "<div class='side-question-error'>" + escapeHtml(state.error) + "</div>" : "")
@@ -12263,6 +12283,7 @@
               focusMode: "auto",
               customPath: "",
               includeConversation: false,
+              gitContext: false,
               webSearch: false,
               draft: "",
             };
@@ -12352,6 +12373,7 @@
         if (field === "focusMode") sideQuestionUi.focusMode = target.value;
         if (field === "gatherScope") {
           sideQuestionUi.gatherScope = target.value;
+          if (sideQuestionUi.gatherScope !== "repo") sideQuestionUi.gitContext = false;
           try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_GATHER_STORAGE_KEY, sideQuestionUi.gatherScope); } catch {}
         }
         if (field === "thinking") {
@@ -12359,6 +12381,7 @@
           try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_THINKING_STORAGE_KEY, sideQuestionUi.thinking); } catch {}
         }
         if (field === "includeConversation") sideQuestionUi.includeConversation = target.checked;
+        if (field === "gitContext") sideQuestionUi.gitContext = target.checked && getSideQuestionGatherScope() === "repo";
         if (field === "webSearch") sideQuestionUi.webSearch = target.checked;
         renderSideQuestionView();
       }

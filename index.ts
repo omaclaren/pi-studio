@@ -84,6 +84,11 @@ import {
 	sliceStudioSideQuestionExtractedText,
 } from "./shared/studio-side-question-context.js";
 import {
+	buildStudioSideQuestionGitArgs,
+	captureStudioSideQuestionGitSnapshot,
+	STUDIO_SIDE_QUESTION_GIT_RECENT_COMMIT_LIMIT,
+} from "./shared/studio-side-question-git.js";
+import {
 	buildStudioSideQuestionToolCatalog,
 	normalizeStudioSideQuestionToolIds,
 	selectStudioSideQuestionTools,
@@ -455,6 +460,7 @@ interface StudioSideQuestionContextInput {
 	gatherScope: StudioSideQuestionGatherScope;
 	contextPath?: string;
 	includeConversation: boolean;
+	gitContext: boolean;
 	webSearch: boolean;
 	toolIds: string[];
 	thinking: StudioSideQuestionThinking;
@@ -505,6 +511,24 @@ interface StudioSideQuestionActivityRecord {
 	createdAt: number;
 }
 
+interface StudioSideQuestionGitSnapshot {
+	repoRoot: string;
+	capturedAt: number;
+	branch: string;
+	head: string;
+	hasHead: boolean;
+	changeCount: number;
+	recentCommitCount: number;
+	statusText: string;
+	stagedDiff: string;
+	unstagedDiff: string;
+	recentCommits: string;
+	statusTruncated: boolean;
+	stagedDiffTruncated: boolean;
+	unstagedDiffTruncated: boolean;
+	logTruncated: boolean;
+}
+
 interface StudioSideQuestionPublicState {
 	threadId: string | null;
 	status: StudioSideQuestionStatus;
@@ -517,6 +541,15 @@ interface StudioSideQuestionPublicState {
 		gatherScope: StudioSideQuestionGatherScope;
 		contextRoot: string;
 		includeConversation: boolean;
+		gitContextRequested: boolean;
+		gitSnapshot: {
+			capturedAt: number;
+			branch: string;
+			head: string;
+			changeCount: number;
+			recentCommitCount: number;
+			truncated: boolean;
+		} | null;
 		webSearchRequested: boolean;
 		webSearchAvailable: boolean;
 		tools: StudioSideQuestionToolDescriptor[];
@@ -8515,7 +8548,59 @@ async function searchStudioSideQuestionWeb(
 	})).filter((result) => /^https?:\/\//i.test(result.url));
 }
 
-function createStudioSideQuestionTools(contextRoot: string, webEnabled: boolean) {
+function runStudioSideQuestionGitCommand(
+	args: string[],
+	options: { cwd: string; stdoutMaxBytes?: number; label?: string },
+): Promise<StudioSubprocessResult> {
+	return runStudioSubprocess("git", buildStudioSideQuestionGitArgs(args), {
+		cwd: options.cwd,
+		timeoutMs: 10_000,
+		stdoutMaxBytes: options.stdoutMaxBytes,
+		stderrMaxBytes: 40_000,
+		label: options.label || "Git context capture",
+		notFoundMessage: "Git is required to capture repository context for side questions.",
+	});
+}
+
+function sliceStudioSideQuestionGitSnapshot(text: string, options: { offset?: number; limit?: number }) {
+	return sliceStudioSideQuestionExtractedText(text, {
+		offset: options.offset,
+		limit: options.limit,
+		maxChars: STUDIO_SIDE_CONTEXT_MAX_OUTPUT_CHARS,
+	});
+}
+
+function formatStudioSideQuestionGitSnapshotResult(
+	snapshot: StudioSideQuestionGitSnapshot,
+	label: string,
+	text: string,
+	options: { offset?: number; limit?: number },
+) {
+	const content = sliceStudioSideQuestionGitSnapshot(text, options);
+	const marker = content.truncated ? "\n\n[More of this frozen Git snapshot is available; read another line range if needed.]" : "";
+	const captured = new Date(snapshot.capturedAt).toISOString();
+	return {
+		content: [{
+			type: "text" as const,
+			text: formatStudioSideQuestionToolResultHeader(
+				`${label} · branch ${snapshot.branch} · captured ${captured} · lines ${content.startLine}-${content.endLine} of ${content.totalLines}`,
+				`${content.text}${marker}`,
+			),
+		}],
+		details: {
+			repoRoot: snapshot.repoRoot,
+			capturedAt: snapshot.capturedAt,
+			branch: snapshot.branch,
+			head: snapshot.head,
+			startLine: content.startLine,
+			endLine: content.endLine,
+			totalLines: content.totalLines,
+			truncated: content.truncated,
+		},
+	};
+}
+
+function createStudioSideQuestionTools(contextRoot: string, webEnabled: boolean, gitSnapshot: StudioSideQuestionGitSnapshot | null = null) {
 	const mapTool = defineTool({
 		name: "studio_context_map",
 		label: "Map local context",
@@ -8586,6 +8671,59 @@ function createStudioSideQuestionTools(contextRoot: string, webEnabled: boolean)
 		},
 	});
 	const tools = [mapTool, readTool, searchTool];
+	if (gitSnapshot) {
+		tools.push(defineTool({
+			name: "studio_git_status",
+			label: "Read frozen Git status",
+			description: "Read the repository status captured when this side thread started, including changed, added, deleted, and untracked paths. This is a frozen read-only snapshot; it does not include untracked file contents.",
+			parameters: Type.Object({
+				offset: Type.Optional(Type.Integer({ minimum: 1, description: "Optional 1-based snapshot line to start from." })),
+				limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000, description: "Maximum number of snapshot lines to return." })),
+			}),
+			async execute(_toolCallId, params, signal) {
+				if (signal?.aborted) throw new Error("Git status snapshot read was cancelled.");
+				return formatStudioSideQuestionGitSnapshotResult(gitSnapshot, "Frozen Git status", gitSnapshot.statusText, params);
+			},
+		}));
+		tools.push(defineTool({
+			name: "studio_git_diff",
+			label: "Read frozen Git diff",
+			description: "Read staged, unstaged, or all tracked-file changes captured when this side thread started. The snapshot is read-only and paged; untracked contents are excluded and must be read through studio_context_read when allowed.",
+			parameters: Type.Object({
+				scope: Type.Optional(Type.Union([
+					Type.Literal("all"),
+					Type.Literal("staged"),
+					Type.Literal("unstaged"),
+				], { description: "Which frozen changes to read; defaults to all." })),
+				offset: Type.Optional(Type.Integer({ minimum: 1, description: "Optional 1-based snapshot line to start from." })),
+				limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000, description: "Maximum number of snapshot lines to return." })),
+			}),
+			async execute(_toolCallId, params, signal) {
+				if (signal?.aborted) throw new Error("Git diff snapshot read was cancelled.");
+				const scope = params.scope === "staged" || params.scope === "unstaged" ? params.scope : "all";
+				const text = scope === "staged"
+					? gitSnapshot.stagedDiff
+					: (scope === "unstaged"
+						? gitSnapshot.unstagedDiff
+						: `STAGED CHANGES\n\n${gitSnapshot.stagedDiff}\n\nUNSTAGED CHANGES\n\n${gitSnapshot.unstagedDiff}`);
+				const label = scope === "all" ? "Frozen staged and unstaged Git diff" : `Frozen ${scope} Git diff`;
+				return formatStudioSideQuestionGitSnapshotResult(gitSnapshot, label, text, params);
+			},
+		}));
+		tools.push(defineTool({
+			name: "studio_git_log",
+			label: "Read frozen recent Git history",
+			description: `Read up to ${STUDIO_SIDE_QUESTION_GIT_RECENT_COMMIT_LIMIT} recent commit summaries captured when this side thread started. This is a frozen read-only snapshot of the current branch, intended to establish baseline and intent.`,
+			parameters: Type.Object({
+				offset: Type.Optional(Type.Integer({ minimum: 1, description: "Optional 1-based snapshot line to start from." })),
+				limit: Type.Optional(Type.Integer({ minimum: 1, maximum: STUDIO_SIDE_QUESTION_GIT_RECENT_COMMIT_LIMIT, description: "Maximum number of commit-summary lines to return." })),
+			}),
+			async execute(_toolCallId, params, signal) {
+				if (signal?.aborted) throw new Error("Git history snapshot read was cancelled.");
+				return formatStudioSideQuestionGitSnapshotResult(gitSnapshot, "Frozen recent Git history", gitSnapshot.recentCommits, params);
+			},
+		}));
+	}
 	if (webEnabled && String(process.env.BRAVE_API_KEY || "").trim()) {
 		tools.push(defineTool({
 			name: "studio_web_search",
@@ -9181,6 +9319,7 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 			gatherScope: normalizeStudioSideQuestionGatherScope(rawContext.gatherScope) as StudioSideQuestionGatherScope,
 			contextPath: typeof rawContext.contextPath === "string" ? rawContext.contextPath.slice(0, 16_384) : undefined,
 			includeConversation: rawContext.includeConversation === true,
+			gitContext: rawContext.gitContext === true,
 			webSearch: rawContext.webSearch === true,
 			toolIds: normalizeStudioSideQuestionToolIds(rawContext.toolIds),
 			thinking: normalizeStudioSideQuestionThinking(rawContext.thinking) as StudioSideQuestionThinking,
@@ -13420,6 +13559,9 @@ export default function (pi: ExtensionAPI) {
 		if (toolName === "studio_context_read") return `Reading ${String(value.path || "local context")}`;
 		if (toolName === "studio_context_search") return `Searching local context for “${String(value.query || "").slice(0, 120)}”`;
 		if (toolName === "studio_context_map") return `Mapping ${String(value.path || "the context collection")}`;
+		if (toolName === "studio_git_status") return "Reading frozen Git status";
+		if (toolName === "studio_git_diff") return `Reading frozen ${String(value.scope || "staged and unstaged")} Git changes`;
+		if (toolName === "studio_git_log") return "Reading frozen recent Git history";
 		if (toolName === "studio_web_search") return `Searching the web for “${String(value.query || "").slice(0, 120)}”`;
 		return `Using ${toolName}`;
 	};
@@ -13518,9 +13660,15 @@ export default function (pi: ExtensionAPI) {
 		if (!model) throw new Error("No active Pi model is available for side questions.");
 		await resolveStudioModelRequestAuth({ model, modelRegistry: ctx.modelRegistry }, model);
 		const contextRoot = resolveStudioSideQuestionContextRoot(context);
+		if (context.gitContext && context.gatherScope !== "repo") {
+			throw new Error("Git context requires Related files to be set to Repository.");
+		}
+		const gitSnapshot = context.gitContext
+			? await captureStudioSideQuestionGitSnapshot(contextRoot, { runGit: runStudioSideQuestionGitCommand }) as StudioSideQuestionGitSnapshot
+			: null;
 		const webAvailable = Boolean(String(process.env.BRAVE_API_KEY || "").trim());
 		const webEnabled = context.webSearch && webAvailable;
-		const { tools, toolNames } = createStudioSideQuestionTools(contextRoot || studioCwd, webEnabled);
+		const { tools, toolNames } = createStudioSideQuestionTools(contextRoot || studioCwd, webEnabled, gitSnapshot);
 		const localActiveToolNames = context.gatherScope === "none" ? (webEnabled ? ["studio_web_search"] : []) : toolNames;
 		const toolSelection = selectStudioSideQuestionTools(getStudioSideQuestionToolCatalog(), context.toolIds);
 		if (toolSelection.missing.length > 0) {
@@ -13580,6 +13728,15 @@ export default function (pi: ExtensionAPI) {
 				gatherScope: context.gatherScope,
 				contextRoot,
 				includeConversation: context.includeConversation,
+				gitContextRequested: context.gitContext,
+				gitSnapshot: gitSnapshot ? {
+					capturedAt: gitSnapshot.capturedAt,
+					branch: gitSnapshot.branch,
+					head: gitSnapshot.head,
+					changeCount: gitSnapshot.changeCount,
+					recentCommitCount: gitSnapshot.recentCommitCount,
+					truncated: gitSnapshot.statusTruncated || gitSnapshot.stagedDiffTruncated || gitSnapshot.unstagedDiffTruncated || gitSnapshot.logTruncated,
+				} : null,
 				webSearchRequested: context.webSearch,
 				webSearchAvailable: webAvailable,
 				tools: selectedPiTools,
@@ -13710,6 +13867,7 @@ export default function (pi: ExtensionAPI) {
 					gatherScope: context!.gatherScope,
 					contextRoot: runtime.contextRoot,
 					collectionMap: listing ? formatStudioSideQuestionContextMap(listing, STUDIO_SIDE_QUESTION_CONTEXT_MAP_MAX_CHARS) : "",
+					gitEnabled: Boolean(state.context?.gitSnapshot),
 					webEnabled: Boolean(context!.webSearch && state.context?.webSearchAvailable),
 					piToolNames: state.context?.tools.map((tool) => tool.name) ?? [],
 				});
