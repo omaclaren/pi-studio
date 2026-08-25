@@ -86,7 +86,7 @@ export function buildStudioSideQuestionPrompt(options = {}) {
 			parts.push(`Initial bounded collection map:\n\n<collection>\n${sanitizePromptContent(collectionMap)}\n</collection>`);
 		}
 	} else {
-		parts.push("Local context access: focused material only.");
+		parts.push("Local context access: starting context only; no related-file access.");
 	}
 
 	parts.push(webEnabled

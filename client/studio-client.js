@@ -3089,7 +3089,7 @@
 
       function getIdleStatus() {
         if (isEditorOnlyMode) {
-          return "Editor-only mode: edit, browse files, annotate, preview, save, suggest, ask aside, refresh file-backed text, or send to a REPL.";
+          return "Editor-only mode: edit, browse files, annotate, preview, save, suggest, ask a side question, refresh file-backed text, or send to a REPL.";
         }
         return "Edit, load, or annotate text, then run, save, review, explain, or ask a side question.";
       }
@@ -5071,11 +5071,11 @@
         if (!askAsideBtn) return;
         const running = Boolean(sideQuestionState && sideQuestionState.status === "running");
         askAsideBtn.disabled = wsState === "Disconnected";
-        askAsideBtn.textContent = running ? "Side question running…" : (sideQuestionState && sideQuestionState.threadId ? "Open side thread" : "Ask aside");
+        askAsideBtn.textContent = running ? "Side question running…" : (sideQuestionState && sideQuestionState.threadId ? "Open side questions" : "Side question");
         askAsideBtn.classList.toggle("request-active", running);
         askAsideBtn.title = running
           ? "Open the independently running side question."
-          : "Ask a contextual side question without adding it to the main Pi conversation.";
+          : "Open side questions without adding them to the main Pi conversation.";
       }
 
       function syncTraceForSelectedHistoryItem() {
@@ -11974,7 +11974,7 @@
           sourcePath,
           resourceDir,
           text: focus.focusLabel + " · " + String(focus.focusText.length).toLocaleString("en-US") + " chars"
-            + (scope === "none" ? " · focused material only" : " · can gather from " + (rootHint || scope)),
+            + (scope === "none" ? " · no other files" : " · may also use files from " + (rootHint || scope)),
         };
       }
 
@@ -12068,26 +12068,26 @@
         const scope = summary.scope;
         const webDisabled = !sideQuestionWebSearchAvailable;
         return "<div class='side-question-empty'>"
-          + "<div class='side-question-intro'><h2>Ask aside</h2><p>Ask a quick question without adding it to the main Pi conversation. Studio can start from the focused passage and retrieve related chapters, exercises, or other files as needed.</p></div>"
+          + "<div class='side-question-intro'><h2>Side question</h2><p>Ask something without adding it to the main Pi conversation. Choose what to start with, then optionally let Studio look through related files.</p></div>"
           + "<div class='side-question-context-grid'>"
-          + "<label>Focused material<select data-side-question-field='focusMode'>" + sideQuestionSelectOptions([
-            ["auto", "Automatic: selection or current section"], ["selection", "Editor selection"], ["section", "Current section or passage"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No attached passage"],
+          + "<label>Start with<select data-side-question-field='focusMode'>" + sideQuestionSelectOptions([
+            ["auto", "Selection or current section"], ["selection", "Editor selection"], ["section", "Current section or text around cursor"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No attached context"],
           ], sideQuestionUi.focusMode) + "</select></label>"
-          + "<label>May gather from<select data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
-            ["none", "Focused material only"], ["folder", "Related folder"], ["repo", "Repository"], ["custom", "Custom folder"],
+          + "<label>Also use files from<select data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
+            ["none", "No other files"], ["folder", "Same folder as document"], ["repo", "Repository"], ["custom", "Choose a folder"],
           ], scope) + "</select></label>"
           + "<label>Thinking<select data-side-question-field='thinking'>" + sideQuestionSelectOptions([
             ["off", "Off"], ["minimal", "Minimal"], ["low", "Low"], ["medium", "Medium"], ["high", "High"],
           ], sideQuestionUi.thinking) + "</select></label>"
           + "</div>"
-          + (scope === "custom" ? "<label class='side-question-path-label'>Context path<input data-side-question-field='customPath' type='text' value='" + escapeHtml(sideQuestionUi.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
+          + (scope === "custom" ? "<label class='side-question-path-label'>Folder path<input data-side-question-field='customPath' type='text' value='" + escapeHtml(sideQuestionUi.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
           + "<div class='side-question-checks'>"
           + "<label><input data-side-question-field='includeConversation' type='checkbox'" + (sideQuestionUi.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
           + "<label title='" + (webDisabled ? "Set BRAVE_API_KEY before starting Pi to enable web search." : "Allow this side thread to search the web when useful.") + "'><input data-side-question-field='webSearch' type='checkbox'" + (sideQuestionUi.webSearch ? " checked" : "") + (webDisabled ? " disabled" : "") + "> Allow web search" + (webDisabled ? " (unavailable)" : "") + "</label>"
           + "</div>"
           + renderSideQuestionPiToolPicker()
-          + "<div class='side-question-context-summary'><strong>Context snapshot</strong><span>" + escapeHtml(summary.text) + "</span><span>Files are retrieved selectively through read-only tools; the initial prompt does not dump the whole collection.</span></div>"
-          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the selected passage, current section, wider collection, or something you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
+          + "<div class='side-question-context-summary'><strong>Starting context</strong><span>" + escapeHtml(summary.text) + "</span><span>Related files are read selectively; Studio does not attach the whole folder or repository.</span></div>"
+          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the starting context or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
           + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask'" + (!isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question") + "</button></div>"
           + "</div>";
@@ -12117,7 +12117,7 @@
           : "Pi tools off";
         return "<div class='side-question-thread'>"
           + "<div class='side-question-thread-header'><div><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div><button type='button' data-side-question-action='new'" + (state.status === "running" ? " disabled" : "") + ">New thread</button></div>"
-          + "<div class='side-question-context-chips'><span>" + escapeHtml(context.focusLabel || "Editor context") + "</span><span>" + escapeHtml(context.gatherScope === "none" ? "focused material only" : (context.contextRoot || context.gatherScope || "local context")) + "</span>"
+          + "<div class='side-question-context-chips'><span>" + escapeHtml(context.focusLabel || "Editor context") + "</span><span>" + escapeHtml(context.gatherScope === "none" ? "no other files" : (context.contextRoot || context.gatherScope || "local context")) + "</span>"
           + (context.includeConversation ? "<span>main conversation snapshot</span>" : "") + "<span>" + escapeHtml(webLabel) + "</span><span>" + escapeHtml(selectedToolLabel) + "</span><span>" + escapeHtml(state.modelLabel + " · " + state.thinking) + "</span></div>"
           + "<div class='side-question-transcript'>" + messageHtml + "</div>"
           + activityHtml

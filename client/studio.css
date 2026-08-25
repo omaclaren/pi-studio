@@ -6569,6 +6569,13 @@
       font-weight: 680;
     }
 
+    .side-question-actions .side-question-primary:not(:disabled):hover {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: var(--accent-contrast);
+      filter: brightness(0.95);
+    }
+
     .side-question-actions .side-question-stop {
       border-color: var(--warn-border);
       color: var(--warn);

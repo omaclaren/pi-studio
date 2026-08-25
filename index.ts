@@ -11329,7 +11329,7 @@ ${cssVarsBlock}
               <button id="critiqueBtn" type="button">Critique text</button>
               <button id="showMeBtn" type="button" title="Explain the editor selection, editor document, or current topic using the smallest useful visual or structural representation.">Explain editor document</button>
               <button id="showMeResponseBtn" type="button" hidden title="Explain the response displayed in the right pane using the smallest useful visual or structural representation.">Explain displayed response</button>
-              <button id="askAsideBtn" type="button" title="Ask a contextual side question without adding it to the main Pi conversation.">Ask aside</button>
+              <button id="askAsideBtn" type="button" title="Open a separate side-question thread without adding it to the main Pi conversation.">Side question</button>
               <button id="quizBtn" type="button" title="Open an active quiz for the current editor selection or document.">Quiz me</button>
               <select id="highlightSelect" aria-label="Editor syntax highlighting">
                 <option value="off">Syntax highlight: Off</option>

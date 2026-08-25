@@ -92,7 +92,7 @@
       end = Math.min(source.length, cursorOffset + 4_000);
       excerpt = source.slice(start, end).trim();
     }
-    return { kind: "section", sectionKind: "passage", label: "current passage", text: excerpt, start: start, end: end };
+    return { kind: "section", sectionKind: "passage", label: "Text around cursor", text: excerpt, start: start, end: end };
   }
 
   function findStudioSideQuestionSection(text, cursorOffset, language) {
@@ -118,14 +118,14 @@
     let mode = String(input.mode || "auto").trim().toLowerCase();
     if (mode === "auto") mode = selection ? "selection" : "section";
 
-    if (mode === "none") return { focusKind: "none", focusLabel: "No attached editor context", focusText: "", truncated: false };
+    if (mode === "none") return { focusKind: "none", focusLabel: "No attached context", focusText: "", truncated: false };
     if (mode === "response") {
       const bounded = truncateFocus(responseText);
-      return { focusKind: "response", focusLabel: "Displayed Studio response", focusText: bounded.text, truncated: bounded.truncated };
+      return { focusKind: "response", focusLabel: "Displayed response", focusText: bounded.text, truncated: bounded.truncated };
     }
     if (mode === "selection" && selection) {
       const bounded = truncateFocus(selection);
-      return { focusKind: "selection", focusLabel: "Studio editor selection", focusText: bounded.text, truncated: bounded.truncated };
+      return { focusKind: "selection", focusLabel: "Editor selection", focusText: bounded.text, truncated: bounded.truncated };
     }
     if (mode === "section") {
       const section = findStudioSideQuestionSection(editorText, end || start, input.language);
@@ -135,7 +135,7 @@
       }
     }
     const bounded = truncateFocus(editorText);
-    return { focusKind: "editor", focusLabel: "Studio editor document", focusText: bounded.text, truncated: bounded.truncated };
+    return { focusKind: "editor", focusLabel: "Whole editor document", focusText: bounded.text, truncated: bounded.truncated };
   }
 
   function getDefaultStudioSideQuestionGatherScope(options) {

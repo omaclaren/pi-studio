@@ -60,6 +60,9 @@ test("side-question focus chooses selections and bounded Markdown or LaTeX secti
 	assert.equal(latexSection.label, "Exercise");
 	assert.match(latexSection.text, /Try this/);
 	assert.doesNotMatch(latexSection.text, /Inference/);
+
+	const unstructured = clientHelpers.findStudioSideQuestionSection("First paragraph.\n\nSecond paragraph.", 3, "text");
+	assert.equal(unstructured.label, "Text around cursor");
 });
 
 test("side-question focus and prompts remain bounded and delimiter-safe", () => {
@@ -188,19 +191,24 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(indexSource, /studio-side-question-helpers\.js/);
 
 	assert.match(clientSource, /value="side-questions"|"side-questions": "Side questions"/);
-	assert.match(clientSource, /data-side-question-field='gatherScope'/);
-	assert.match(clientSource, /Related folder/);
+	assert.match(clientSource, /<h2>Side question<\/h2>/);
+	assert.match(clientSource, /<label>Start with<select data-side-question-field='focusMode'/);
+	assert.match(clientSource, /<label>Also use files from<select data-side-question-field='gatherScope'/);
+	assert.match(clientSource, /Same folder as document/);
 	assert.match(clientSource, /Repository/);
-	assert.match(clientSource, /Custom folder/);
+	assert.match(clientSource, /Choose a folder/);
 	assert.match(clientSource, /Include the current main conversation snapshot/);
 	assert.match(clientSource, /Allow web search/);
 	assert.match(clientSource, /Additional Pi tools/);
 	assert.match(clientSource, /data-side-question-tool/);
 	assert.match(clientSource, /loads its owning extension into the isolated side runtime/);
 	assert.match(clientSource, /Allow gateway tool in side questions/);
-	assert.match(clientSource, /Files are retrieved selectively through read-only tools/);
+	assert.match(clientSource, /Related files are read selectively/);
+	assert.doesNotMatch(clientSource, />Ask aside</);
+	assert.doesNotMatch(indexSource, />Ask aside<\/button>/);
 	assert.match(clientSource, /side_question_promote_request/);
 	assert.match(cssSource, /\.side-question-context-grid/);
 	assert.match(cssSource, /\.side-question-tool-picker/);
+	assert.match(cssSource, /\.side-question-actions \.side-question-primary:not\(:disabled\):hover[\s\S]*?background: var\(--accent\)/);
 	assert.match(cssSource, /#critiqueView\.side-question-host/);
 });
