@@ -28,11 +28,12 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
 
 ## What it does
 
-- Opens a two-pane browser workspace: **Editor** (left) + **Response/Working/Editor Preview/Quarto Preview** (right)
+- Opens a two-pane browser workspace: **Editor** (left) + **Response/Working/Editor Preview/Quarto Preview/Side questions** (right)
 - Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you want extra editing/preview surfaces; editor-only views can also browse files and use the Studio REPL send controls without taking over the full Studio session view
 - Includes a global **Zen** mode that hides the Studio header and secondary chrome without changing the current left/right pane layout; the header can also be hidden independently and restored from the top-right edge
 - Runs editor text directly, asks for structured critique (auto/writing/code focus), offers explicit **Show me** actions for a one-turn compact visual or structural explanation of the editor selection/document, displayed response, or current conversation topic, provides a manual **Suggest completion** action for short cursor-aware continuations (`Option/Alt+Tab` where available or `Cmd/Ctrl+Shift+Space` from the editor, `Tab` to insert a visible suggestion) with an optional editor-plus-latest-response context mode, or opens **Quiz me** for a Studio-native active-recall loop over the current editor text, selection, current file, folder, or repo, with optional focus guidance for shaping question selection
-- Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available, and `Cmd/Ctrl+Alt+1–7` switches directly between right-pane views while `Cmd/Ctrl+Alt+P` / `Cmd/Ctrl+Alt+E` / `Cmd/Ctrl+Alt+W` keep quick mnemonic shortcuts for Response Preview, Editor Preview, and Working
+- Adds a right-pane **Side questions** thread for contextual questions that stay outside the main Pi conversation unless explicitly promoted. It can focus the editor selection, current Markdown/LaTeX section, whole editor, displayed response, or no passage; independently, it can use read-only tools to map, search, and read a related folder, repository, or chosen folder—including extracted PDF, DOCX, ODT, and EPUB text—and can optionally search the web through Brave Search.
+- Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; when cycling response history, Working follows saved working details for the selected response when available, and `Cmd/Ctrl+Alt+1–8` switches directly between right-pane views while `Cmd/Ctrl+Alt+P` / `Cmd/Ctrl+Alt+E` / `Cmd/Ctrl+Alt+W` keep quick mnemonic shortcuts for Response Preview, Editor Preview, and Working
 - Includes a right-pane **Changes** view for browsing the current git diff by file, previewing per-file diffs, opening changed files, loading the full diff into the editor, and copying the diff
 - Includes a right-pane **Files** view for browsing the current Pi session/resource directory, sorting by name/modified time/size, opening folders, opening the Files root in Finder/the system file manager, loading text/code/CSV/TSV documents into the editor, previewing PDFs/images, opening PDF/image previews in a new Studio tab, converting DOCX/ODT documents to editable Markdown when Pandoc is available after confirmation, copying paths, setting the current folder as the Studio working directory, and revealing files in the file manager
 - Imports detached text-file copies either through the browser's file picker or from a path on the computer running Pi, keeping the path option available in embedded and remote browser views; imported copies remain detached until saved or opened as file-backed documents
@@ -103,6 +104,18 @@ Run once without installing:
 pi -e https://github.com/omaclaren/pi-studio
 ```
 
+## Side questions and research context
+
+Open **Review → Ask aside** or select **Side questions** in the right pane. A new side thread captures an explicit focus snapshot while keeping local retrieval separate:
+
+- **Focused material** controls what unsaved text is attached initially: selection/current section, whole editor, displayed response, or none.
+- **May gather from** controls the read-only boundary available to the side agent: focused material only, the document folder, the current repository, or a chosen folder.
+- **Include the current main conversation snapshot** is opt-in. Side questions and answers otherwise never enter the main Pi history; **Bring to main conversation** is the explicit handoff.
+- Local context tools can map filenames, search readable text, and read selected ranges. Symlinks and traversal outside the chosen root are rejected. PDF extraction uses `pdftotext`; DOCX, ODT, and EPUB extraction uses Pandoc.
+- **Allow web search** is opt-in and appears when `BRAVE_API_KEY` is available to the Pi process. Model-chosen search queries are sent to Brave Search; the side agent is instructed not to copy private local passages into queries. Web answers cite result URLs and identify when they rely on search-result snippets rather than full page content.
+
+The current side thread is ephemeral but survives Studio browser refreshes while the same Pi Studio server remains running. It has neither file-writing tools nor a shell.
+
 ## Studio Markdown extras
 
 Studio previews standard Markdown, code fences, display math, Mermaid, and local images. When adding companion files such as generated plots or PDFs, prefer the project's existing folder convention. If there is no convention, `attachments/` is a reasonable default for newly generated assets. Use relative paths from the opened Markdown file or Studio working/resource directory, and wrap paths in angle brackets when spaces are possible:
@@ -162,6 +175,7 @@ Studio only passes icon-pack arguments when a diagram actually references `lucid
 - Installing pi-studio makes the optional `pi-studio-dark` and `pi-studio-light` themes available in pi's theme selector; it does not change your active theme.
 - Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack. Use `PI_STUDIO_FONT_UI` or `PI_STUDIO_FONT_PROSE` to override the Studio UI or rendered-preview font stacks.
 - The optional REPL view requires `tmux`. Studio can start and stop Studio-owned `pi-studio-repl-*` sessions and can mirror detected `pi-repl-*` sessions, but it will not stop external `pi-repl-*` sessions.
+- Side-question web search requires `BRAVE_API_KEY`; without it, local and conversation context still work, and the web option is shown as unavailable. Side sub-sessions are deliberately read-only and can run independently while the main Pi agent is busy.
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
   - `brew install pandoc`
   - install TeX Live/MacTeX for PDF export

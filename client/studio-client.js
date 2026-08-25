@@ -83,6 +83,7 @@
       const critiqueBtn = document.getElementById("critiqueBtn");
       const showMeBtn = document.getElementById("showMeBtn");
       const showMeResponseBtn = document.getElementById("showMeResponseBtn");
+      const askAsideBtn = document.getElementById("askAsideBtn");
       const quizBtn = document.getElementById("quizBtn");
       const lensSelect = document.getElementById("lensSelect");
       const importFileBtn = document.getElementById("importFileBtn");
@@ -188,7 +189,7 @@
         : "full";
       const isEditorOnlyMode = studioMode === "editor-only";
       const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
-      const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "editor-quarto-preview", "files", "changes", "repl"]);
+      const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "editor-quarto-preview", "files", "changes", "repl", "side-questions"]);
       const RIGHT_VIEW_LABELS = {
         markdown: "Response (Raw)",
         preview: "Response (Preview)",
@@ -198,6 +199,7 @@
         changes: "Changes",
         files: "Files",
         repl: "REPL",
+        "side-questions": "Side questions",
       };
       const RIGHT_VIEW_NUMERIC_SHORTCUTS = {
         Digit1: "markdown",
@@ -207,6 +209,7 @@
         Digit5: "changes",
         Digit6: "files",
         Digit7: "repl",
+        Digit8: "side-questions",
         Numpad1: "markdown",
         Numpad2: "preview",
         Numpad3: "editor-preview",
@@ -214,6 +217,7 @@
         Numpad5: "changes",
         Numpad6: "files",
         Numpad7: "repl",
+        Numpad8: "side-questions",
       };
 
       const navigationHelpers = globalThis.PiStudioNavigationHelpers;
@@ -241,6 +245,14 @@
       const showMeHelpers = globalThis.PiStudioShowMeHelpers;
       if (!showMeHelpers || typeof showMeHelpers.chooseStudioShowMeFocus !== "function") {
         throw new Error("Studio Show me helpers failed to load.");
+      }
+      const sideQuestionHelpers = globalThis.PiStudioSideQuestionHelpers;
+      if (
+        !sideQuestionHelpers
+        || typeof sideQuestionHelpers.chooseStudioSideQuestionFocus !== "function"
+        || typeof sideQuestionHelpers.findStudioSideQuestionSection !== "function"
+      ) {
+        throw new Error("Studio side-question helpers failed to load.");
       }
       const studioTabStateId = navigationHelpers.ensureStudioTabStateId(window);
       const initialQueryParams = new URLSearchParams(window.location.search || "");
@@ -335,13 +347,15 @@
             ? "editor-preview"
             : (raw === "editor-quarto-preview"
               ? "editor-quarto-preview"
-              : (raw === "repl"
-                ? "repl"
-                : (raw === "files"
+              : (raw === "side-questions"
+                ? "side-questions"
+                : (raw === "repl"
+                  ? "repl"
+                  : (raw === "files"
                   ? "files"
                   : (raw === "changes"
                     ? "changes"
-                    : ((raw === "trace" || raw === "thinking") ? "trace" : "markdown"))))));
+                    : ((raw === "trace" || raw === "thinking") ? "trace" : "markdown")))))));
       }
 
       function normalizeRightViewValue(nextView) {
@@ -380,8 +394,8 @@
           option.disabled = (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value)) || (isQuartoOption && !quartoRelevant);
         });
         rightViewSelect.title = isEditorOnlyMode
-          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, or REPL. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7 switch directly to numbered right-pane views."
-          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–7 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W keep their mnemonic Preview/Editor Preview/Working shortcuts.";
+          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7/8 switch directly to numbered right-pane views."
+          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W keep their mnemonic Preview/Editor Preview/Working shortcuts.";
       }
 
       function getInitialRightView(source) {
@@ -441,12 +455,37 @@
       const RENDERED_PREVIEW_IMAGE_FETCH_TIMEOUT_MS = 8_000;
       const EDITOR_TAB_TEXT = "  ";
       const QUIZ_DEFAULT_COUNT = 5;
+      const SIDE_QUESTION_THINKING_STORAGE_KEY = "piStudio.sideQuestionThinking";
+      const SIDE_QUESTION_GATHER_STORAGE_KEY = "piStudio.sideQuestionGatherScope";
       const COMPLETION_CONTEXT_STORAGE_KEY = "piStudio.completionContextMode";
       const COMPLETION_MODEL_STORAGE_KEY = "piStudio.completionModel";
       const COMPLETION_CONTEXT_MAX_CHARS = 12000;
       const QUIZ_SCOPES = ["editor", "selection", "file", "folder", "repo"];
       const QUIZ_ANGLES = ["general", "scientist", "mathematician", "statistician", "developer", "reviewer"];
       const QUIZ_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
+      let sideQuestionState = null;
+      let sideQuestionWebSearchAvailable = false;
+      let sideQuestionPreviewRenderNonce = 0;
+      const sideQuestionMarkdownRenderCache = new Map();
+      let sideQuestionUi = {
+        focusMode: "auto",
+        gatherScope: (() => {
+          try {
+            const value = window.localStorage && window.localStorage.getItem(SIDE_QUESTION_GATHER_STORAGE_KEY);
+            return value === "none" || value === "folder" || value === "repo" || value === "custom" ? value : "";
+          } catch { return ""; }
+        })(),
+        customPath: "",
+        includeConversation: false,
+        webSearch: false,
+        thinking: (() => {
+          try {
+            const value = window.localStorage && window.localStorage.getItem(SIDE_QUESTION_THINKING_STORAGE_KEY);
+            return ["off", "minimal", "low", "medium", "high"].includes(value) ? value : "low";
+          } catch { return "low"; }
+        })(),
+        draft: "",
+      };
       let quizOverlayEl = null;
       let quizDialogEl = null;
       let quizPreviewRenderNonce = 0;
@@ -2717,7 +2756,7 @@
         if (!isEditorOnlyMode && critiqueBtn && lensSelect) {
           const reviewButton = makeStudioUiRefreshElement("button", "studio-refresh-tool-tab studio-refresh-review-btn", "Review");
           reviewMenu = makeStudioUiRefreshMenu(reviewButton, "review", "studio-refresh-review-anchor");
-          appendStudioUiRefreshMenuSection(reviewMenu.menu, "Action", [critiqueBtn, showMeBtn, showMeResponseBtn, quizBtn]);
+          appendStudioUiRefreshMenuSection(reviewMenu.menu, "Action", [critiqueBtn, showMeBtn, showMeResponseBtn, askAsideBtn, quizBtn]);
           appendStudioUiRefreshMenuSection(reviewMenu.menu, "Setting", [lensSelect]);
         }
 
@@ -2841,6 +2880,7 @@
         if (reviewNotesBtn) headerToolsEl.appendChild(reviewNotesBtn);
         if (outlineBtn) headerToolsEl.appendChild(outlineBtn);
         if (scratchpadBtn) headerToolsEl.appendChild(scratchpadBtn);
+        if (isEditorOnlyMode && askAsideBtn) headerToolsEl.appendChild(askAsideBtn);
         if (reviewMenu) headerToolsEl.appendChild(reviewMenu.anchor);
         headerTopEl.appendChild(headerToolsEl);
 
@@ -3041,9 +3081,9 @@
 
       function getIdleStatus() {
         if (isEditorOnlyMode) {
-          return "Editor-only mode: edit, browse files, annotate, preview, save, suggest, refresh file-backed text, or send to a REPL.";
+          return "Editor-only mode: edit, browse files, annotate, preview, save, suggest, ask aside, refresh file-backed text, or send to a REPL.";
         }
-        return "Edit, load, or annotate text, then run, save, review, or ask Studio to show the current structure.";
+        return "Edit, load, or annotate text, then run, save, review, explain, or ask a side question.";
       }
 
       function normalizeTerminalPhase(phase) {
@@ -5019,6 +5059,17 @@
         }
       }
 
+      function syncAskAsideButton() {
+        if (!askAsideBtn) return;
+        const running = Boolean(sideQuestionState && sideQuestionState.status === "running");
+        askAsideBtn.disabled = wsState === "Disconnected";
+        askAsideBtn.textContent = running ? "Side question running…" : (sideQuestionState && sideQuestionState.threadId ? "Open side thread" : "Ask aside");
+        askAsideBtn.classList.toggle("request-active", running);
+        askAsideBtn.title = running
+          ? "Open the independently running side question."
+          : "Ask a contextual side question without adding it to the main Pi conversation.";
+      }
+
       function syncTraceForSelectedHistoryItem() {
         const item = getSelectedHistoryItem();
         const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
@@ -5219,6 +5270,18 @@
           referenceBadgeEl.textContent = gitChangesState.status === "loading"
             ? "Changes: loading"
             : (count ? ("Changes: " + count + " file" + (count === 1 ? "" : "s")) : "Changes: none");
+          return;
+        }
+
+        if (rightView === "side-questions") {
+          if (sideQuestionState && sideQuestionState.threadId) {
+            const count = sideQuestionState.messages.filter((entry) => entry.role === "assistant" && entry.status === "complete").length;
+            referenceBadgeEl.textContent = "Side thread: " + (sideQuestionState.status === "running" ? "answering" : "ready")
+              + " · " + count + " answer" + (count === 1 ? "" : "s")
+              + " · outside main context";
+          } else {
+            referenceBadgeEl.textContent = "Side questions: no active thread · outside main context";
+          }
           return;
         }
 
@@ -9135,6 +9198,9 @@
         critiqueViewEl.addEventListener("click", handleFilesPaneClick);
         critiqueViewEl.addEventListener("click", handleGitChangesPaneClick);
         critiqueViewEl.addEventListener("click", handleStudioQuartoPreviewClick);
+        critiqueViewEl.addEventListener("click", (event) => { void handleSideQuestionClick(event); });
+        critiqueViewEl.addEventListener("input", handleSideQuestionInput);
+        critiqueViewEl.addEventListener("change", handleSideQuestionChange);
         critiqueViewEl.addEventListener("change", handleReplPaneChange);
         critiqueViewEl.addEventListener("change", (event) => {
           void handleFilesPaneChange(event);
@@ -9160,7 +9226,7 @@
 
       function applyPendingResponseScrollReset() {
         if (!pendingResponseScrollReset || !critiqueViewEl) return false;
-        if (rightView === "editor-preview" || rightView === "editor-quarto-preview") return false;
+        if (rightView === "editor-preview" || rightView === "editor-quarto-preview" || rightView === "side-questions") return false;
 
         pendingResponseScrollReset = false;
         let targetEl = replaceResponsePaneWithClone();
@@ -9169,7 +9235,7 @@
           : (cb) => window.setTimeout(cb, 16);
         const resetScroll = () => {
           if (!targetEl || !targetEl.isConnected) return;
-          if (rightView === "editor-preview" || rightView === "editor-quarto-preview") return;
+          if (rightView === "editor-preview" || rightView === "editor-quarto-preview" || rightView === "side-questions") return;
           targetEl.scrollTop = 0;
           targetEl.scrollLeft = 0;
         };
@@ -11773,10 +11839,376 @@
         }
       }
 
+      function isSideQuestionConnectionReady() {
+        return Boolean(ws && ws.readyState === WebSocket.OPEN);
+      }
+
+      function getSideQuestionSelectedResponseText() {
+        const selected = getSelectedHistoryItem();
+        return selected && typeof selected.markdown === "string" ? selected.markdown : latestResponseMarkdown;
+      }
+
+      function getSideQuestionGatherScope() {
+        if (sideQuestionUi.gatherScope) return sideQuestionUi.gatherScope;
+        return sideQuestionHelpers.getDefaultStudioSideQuestionGatherScope({
+          sourcePath: getEffectiveSavePath() || sourceState.path || "",
+          resourceDir: getCurrentResourceDirValue(),
+        });
+      }
+
+      function getSideQuestionFocus() {
+        return sideQuestionHelpers.chooseStudioSideQuestionFocus({
+          mode: sideQuestionUi.focusMode,
+          editorText: sourceTextEl.value || "",
+          responseText: getSideQuestionSelectedResponseText(),
+          selectionStart: sourceTextEl.selectionStart,
+          selectionEnd: sourceTextEl.selectionEnd,
+          language: editorLanguage,
+        });
+      }
+
+      function normalizeSideQuestionState(value) {
+        const state = value && typeof value === "object" ? value : {};
+        const messages = Array.isArray(state.messages) ? state.messages.map((entry) => ({
+          id: typeof entry.id === "string" ? entry.id : makeRequestId(),
+          role: entry.role === "assistant" ? "assistant" : "user",
+          text: typeof entry.text === "string" ? entry.text : "",
+          createdAt: typeof entry.createdAt === "number" ? entry.createdAt : Date.now(),
+          status: entry.status === "streaming" || entry.status === "error" ? entry.status : "complete",
+        })).slice(-24) : [];
+        const activity = Array.isArray(state.activity) ? state.activity.map((entry) => ({
+          id: typeof entry.id === "string" ? entry.id : makeRequestId(),
+          toolName: typeof entry.toolName === "string" ? entry.toolName : "tool",
+          label: typeof entry.label === "string" ? entry.label : "Gathering context",
+          status: entry.status === "running" || entry.status === "error" ? entry.status : "complete",
+        })).slice(-40) : [];
+        const context = state.context && typeof state.context === "object" ? {
+          focusKind: String(state.context.focusKind || "editor"),
+          focusLabel: String(state.context.focusLabel || "Studio editor context"),
+          gatherScope: String(state.context.gatherScope || "none"),
+          contextRoot: String(state.context.contextRoot || ""),
+          includeConversation: state.context.includeConversation === true,
+          webSearchRequested: state.context.webSearchRequested === true,
+          webSearchAvailable: state.context.webSearchAvailable === true,
+        } : null;
+        return {
+          threadId: typeof state.threadId === "string" && state.threadId ? state.threadId : null,
+          status: state.status === "running" || state.status === "error" ? state.status : "idle",
+          requestId: typeof state.requestId === "string" ? state.requestId : null,
+          context,
+          modelLabel: String(state.modelLabel || ""),
+          thinking: String(state.thinking || "low"),
+          messages,
+          activity,
+          error: String(state.error || ""),
+        };
+      }
+
+      function getLatestCompletedSideQuestionAnswer() {
+        if (!sideQuestionState || !Array.isArray(sideQuestionState.messages)) return null;
+        return [...sideQuestionState.messages].reverse().find((entry) => entry.role === "assistant" && entry.status === "complete" && entry.text.trim()) || null;
+      }
+
+      function getSideQuestionContextSummary() {
+        const focus = getSideQuestionFocus();
+        const scope = getSideQuestionGatherScope();
+        const sourcePath = getEffectiveSavePath() || sourceState.path || "";
+        const resourceDir = getCurrentResourceDirValue();
+        const rootHint = scope === "custom"
+          ? sideQuestionUi.customPath
+          : (scope === "repo"
+            ? (sourcePath || resourceDir || "current Pi working directory")
+            : (sourcePath ? dirnameForDisplayPath(sourcePath) : (resourceDir || "current Pi working directory")));
+        return {
+          focus,
+          scope,
+          rootHint,
+          sourcePath,
+          resourceDir,
+          text: focus.focusLabel + " · " + String(focus.focusText.length).toLocaleString("en-US") + " chars"
+            + (scope === "none" ? " · focused material only" : " · can gather from " + (rootHint || scope)),
+        };
+      }
+
+      function buildSideQuestionContextPayload() {
+        const summary = getSideQuestionContextSummary();
+        return {
+          focusKind: summary.focus.focusKind,
+          focusLabel: summary.focus.focusLabel,
+          focusText: summary.focus.focusText,
+          sourcePath: summary.sourcePath || undefined,
+          resourceDir: summary.resourceDir || undefined,
+          gatherScope: summary.scope,
+          contextPath: summary.scope === "custom" ? sideQuestionUi.customPath.trim() : undefined,
+          includeConversation: sideQuestionUi.includeConversation,
+          webSearch: sideQuestionUi.webSearch && sideQuestionWebSearchAvailable,
+          thinking: sideQuestionUi.thinking,
+        };
+      }
+
+      async function renderSideQuestionMarkdownToHtml(markdown) {
+        const source = String(markdown || "");
+        if (sideQuestionMarkdownRenderCache.has(source)) return sideQuestionMarkdownRenderCache.get(source);
+        const renderedHtml = await renderMarkdownWithPandoc(source, { includeEditorLanguage: false });
+        const sanitized = sanitizeRenderedHtml(renderedHtml, source, { stripMarkdownHtmlComments: true });
+        sideQuestionMarkdownRenderCache.set(source, sanitized);
+        while (sideQuestionMarkdownRenderCache.size > 60) {
+          const firstKey = sideQuestionMarkdownRenderCache.keys().next().value;
+          if (!firstKey) break;
+          sideQuestionMarkdownRenderCache.delete(firstKey);
+        }
+        return sanitized;
+      }
+
+      async function renderSideQuestionMarkdownFields(nonce) {
+        if (!critiqueViewEl || rightView !== "side-questions") return;
+        const targets = Array.from(critiqueViewEl.querySelectorAll("[data-side-question-markdown]")).filter((target) => target instanceof HTMLElement);
+        for (const target of targets) {
+          const markdown = target.getAttribute("data-side-question-markdown") || "";
+          if (!markdown.trim()) continue;
+          try {
+            const html = await renderSideQuestionMarkdownToHtml(markdown);
+            if (nonce !== sideQuestionPreviewRenderNonce || rightView !== "side-questions" || !critiqueViewEl.contains(target)) return;
+            target.innerHTML = html;
+            await renderAnnotationMathInElement(target);
+            await renderMermaidInElement(target);
+            await renderMathFallbackInElement(target);
+            decorateCopyablePreviewBlocks(target);
+          } catch (error) {
+            console.error("Side-question markdown preview failed:", error);
+            target.classList.add("side-question-markdown-failed");
+          }
+        }
+      }
+
+      function sideQuestionSelectOptions(values, current) {
+        return values.map(([value, label]) => "<option value='" + escapeHtml(value) + "'" + (value === current ? " selected" : "") + ">" + escapeHtml(label) + "</option>").join("");
+      }
+
+      function renderSideQuestionSetup() {
+        const summary = getSideQuestionContextSummary();
+        const scope = summary.scope;
+        const webDisabled = !sideQuestionWebSearchAvailable;
+        return "<div class='side-question-empty'>"
+          + "<div class='side-question-intro'><h2>Ask aside</h2><p>Ask a quick question without adding it to the main Pi conversation. Studio can start from the focused passage and retrieve related chapters, exercises, or other files as needed.</p></div>"
+          + "<div class='side-question-context-grid'>"
+          + "<label>Focused material<select data-side-question-field='focusMode'>" + sideQuestionSelectOptions([
+            ["auto", "Automatic: selection or current section"], ["selection", "Editor selection"], ["section", "Current section or passage"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No attached passage"],
+          ], sideQuestionUi.focusMode) + "</select></label>"
+          + "<label>May gather from<select data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
+            ["none", "Focused material only"], ["folder", "Related folder"], ["repo", "Repository"], ["custom", "Custom folder"],
+          ], scope) + "</select></label>"
+          + "<label>Thinking<select data-side-question-field='thinking'>" + sideQuestionSelectOptions([
+            ["off", "Off"], ["minimal", "Minimal"], ["low", "Low"], ["medium", "Medium"], ["high", "High"],
+          ], sideQuestionUi.thinking) + "</select></label>"
+          + "</div>"
+          + (scope === "custom" ? "<label class='side-question-path-label'>Context path<input data-side-question-field='customPath' type='text' value='" + escapeHtml(sideQuestionUi.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
+          + "<div class='side-question-checks'>"
+          + "<label><input data-side-question-field='includeConversation' type='checkbox'" + (sideQuestionUi.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
+          + "<label title='" + (webDisabled ? "Set BRAVE_API_KEY before starting Pi to enable web search." : "Allow this side thread to search the web when useful.") + "'><input data-side-question-field='webSearch' type='checkbox'" + (sideQuestionUi.webSearch ? " checked" : "") + (webDisabled ? " disabled" : "") + "> Allow web search" + (webDisabled ? " (unavailable)" : "") + "</label>"
+          + "</div>"
+          + "<div class='side-question-context-summary'><strong>Context snapshot</strong><span>" + escapeHtml(summary.text) + "</span><span>Files are retrieved selectively through read-only tools; the initial prompt does not dump the whole collection.</span></div>"
+          + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' placeholder='Ask about the selected passage, current section, wider collection, or something you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
+          + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
+          + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask'" + (!isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question") + "</button></div>"
+          + "</div>";
+      }
+
+      function renderSideQuestionThread() {
+        const state = sideQuestionState;
+        const context = state.context || {};
+        const latestAnswer = getLatestCompletedSideQuestionAnswer();
+        const messageHtml = state.messages.map((message) => {
+          const roleLabel = message.role === "user" ? "You" : "Side answer";
+          const body = message.role === "assistant" && message.status === "complete"
+            ? "<div class='side-question-message-body rendered-markdown' data-side-question-markdown='" + escapeHtml(message.text) + "'><div class='side-question-markdown-fallback'>" + escapeHtml(message.text) + "</div></div>"
+            : "<div class='side-question-message-body side-question-plain'>" + escapeHtml(message.text || (message.status === "streaming" ? "Thinking…" : "")) + "</div>";
+          return "<article class='side-question-message side-question-message-" + message.role + " side-question-status-" + message.status + "'>"
+            + "<div class='side-question-message-label'>" + roleLabel + (message.status === "streaming" ? " <span class='side-question-live'>●</span>" : "") + "</div>" + body + "</article>";
+        }).join("");
+        const activityHtml = state.activity.length
+          ? "<details class='side-question-activity'" + (state.status === "running" ? " open" : "") + "><summary>Gathered context · " + state.activity.length + " action" + (state.activity.length === 1 ? "" : "s") + "</summary><ul>"
+            + state.activity.map((entry) => "<li class='side-question-activity-" + entry.status + "'><span>" + (entry.status === "running" ? "●" : (entry.status === "error" ? "!" : "✓")) + "</span>" + escapeHtml(entry.label) + "</li>").join("") + "</ul></details>"
+          : "";
+        const webLabel = context.webSearchRequested
+          ? (context.webSearchAvailable ? "web allowed" : "web unavailable")
+          : "web off";
+        return "<div class='side-question-thread'>"
+          + "<div class='side-question-thread-header'><div><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div><button type='button' data-side-question-action='new'" + (state.status === "running" ? " disabled" : "") + ">New thread</button></div>"
+          + "<div class='side-question-context-chips'><span>" + escapeHtml(context.focusLabel || "Editor context") + "</span><span>" + escapeHtml(context.gatherScope === "none" ? "focused material only" : (context.contextRoot || context.gatherScope || "local context")) + "</span>"
+          + (context.includeConversation ? "<span>main conversation snapshot</span>" : "") + "<span>" + escapeHtml(webLabel) + "</span><span>" + escapeHtml(state.modelLabel + " · " + state.thinking) + "</span></div>"
+          + "<div class='side-question-transcript'>" + messageHtml + "</div>"
+          + activityHtml
+          + (state.error ? "<div class='side-question-error'>" + escapeHtml(state.error) + "</div>" : "")
+          + (latestAnswer ? "<div class='side-question-result-actions'><button type='button' data-side-question-action='copy'>Copy latest answer</button><button type='button' data-side-question-action='insert'>Insert at editor cursor</button><button type='button' data-side-question-action='promote'>Bring to main conversation</button></div>" : "")
+          + "<label class='side-question-composer-label'>Follow-up<textarea data-side-question-field='draft' rows='3' placeholder='Ask a follow-up in this side thread…'" + (state.status === "running" ? " disabled" : "") + ">" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
+          + "<div class='side-question-actions'>"
+          + (state.status === "running"
+            ? "<button type='button' class='side-question-stop' data-side-question-action='stop'>Stop</button>"
+            : "<button type='button' class='side-question-primary' data-side-question-action='ask'" + (!isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() ? " disabled" : "") + ">Ask follow-up</button>")
+          + "</div></div>";
+      }
+
+      function renderSideQuestionView(options) {
+        if (!critiqueViewEl || rightView !== "side-questions") return;
+        finishPreviewRender(critiqueViewEl);
+        const scrollTop = critiqueViewEl.scrollTop;
+        const nearBottom = critiqueViewEl.scrollHeight - critiqueViewEl.clientHeight - critiqueViewEl.scrollTop < 100;
+        critiqueViewEl.innerHTML = sideQuestionState && sideQuestionState.threadId ? renderSideQuestionThread() : renderSideQuestionSetup();
+        const nonce = ++sideQuestionPreviewRenderNonce;
+        void renderSideQuestionMarkdownFields(nonce);
+        if ((options && options.followBottom) || nearBottom) {
+          critiqueViewEl.scrollTop = critiqueViewEl.scrollHeight;
+          window.requestAnimationFrame(() => { if (rightView === "side-questions") critiqueViewEl.scrollTop = critiqueViewEl.scrollHeight; });
+        } else {
+          critiqueViewEl.scrollTop = scrollTop;
+        }
+      }
+
+      function submitSideQuestion() {
+        const question = String(sideQuestionUi.draft || "").trim();
+        if (!question) {
+          setStatus("Enter a side question first.", "warning");
+          return;
+        }
+        if (!isSideQuestionConnectionReady()) {
+          setStatus("Studio is disconnected.", "warning");
+          return;
+        }
+        const requestId = makeRequestId();
+        const message = {
+          type: "side_question_ask_request",
+          requestId,
+          question,
+        };
+        if (sideQuestionState && sideQuestionState.threadId) {
+          message.threadId = sideQuestionState.threadId;
+        } else {
+          message.context = buildSideQuestionContextPayload();
+          if (message.context.gatherScope === "custom" && !String(message.context.contextPath || "").trim()) {
+            setStatus("Choose a custom context path first.", "warning");
+            return;
+          }
+        }
+        if (!sendMessage(message)) return;
+        sideQuestionUi.draft = "";
+        if (!sideQuestionState) sideQuestionState = normalizeSideQuestionState(null);
+        sideQuestionState.status = "running";
+        sideQuestionState.requestId = requestId;
+        sideQuestionState.error = "";
+        renderSideQuestionView({ followBottom: true });
+        updateReferenceBadge();
+        syncAskAsideButton();
+        setStatus("Side question running independently of the main conversation…", "warning");
+      }
+
+      function insertLatestSideQuestionAnswer() {
+        const answer = getLatestCompletedSideQuestionAnswer();
+        if (!answer) return;
+        const current = sourceTextEl.value || "";
+        const start = typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : current.length;
+        const end = typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : start;
+        const safeStart = Math.max(0, Math.min(start, current.length));
+        const safeEnd = Math.max(safeStart, Math.min(end, current.length));
+        const next = current.slice(0, safeStart) + answer.text + current.slice(safeEnd);
+        setEditorText(next, { preserveScroll: false, preserveSelection: false });
+        const caret = safeStart + answer.text.length;
+        sourceTextEl.setSelectionRange(caret, caret);
+        setActivePane("left");
+        focusSourceTextNoScroll();
+        setStatus("Inserted the latest side answer at the editor cursor.", "success");
+      }
+
+      async function handleSideQuestionClick(event) {
+        if (rightView !== "side-questions") return;
+        const target = event && event.target instanceof Element ? event.target.closest("[data-side-question-action]") : null;
+        if (!target || !critiqueViewEl.contains(target)) return;
+        event.preventDefault();
+        const action = target.getAttribute("data-side-question-action");
+        if (action === "ask") {
+          submitSideQuestion();
+        } else if (action === "stop") {
+          if (sideQuestionState && sideQuestionState.threadId && sideQuestionState.requestId) {
+            sendMessage({ type: "side_question_cancel_request", threadId: sideQuestionState.threadId, requestId: sideQuestionState.requestId });
+            setStatus("Stopping side question…", "warning");
+          }
+        } else if (action === "new") {
+          const confirmed = !sideQuestionState || !sideQuestionState.messages.length || await requestStudioConfirmation(
+            "Clear this ephemeral side thread and choose fresh context? Nothing has been added to the main conversation.",
+            { title: "Start a new side thread?", confirmLabel: "New thread", destructive: true },
+          );
+          if (confirmed) {
+            sendMessage({ type: "side_question_clear_request", threadId: sideQuestionState && sideQuestionState.threadId ? sideQuestionState.threadId : undefined });
+            sideQuestionState = null;
+            sideQuestionUi = {
+              ...sideQuestionUi,
+              focusMode: "auto",
+              customPath: "",
+              includeConversation: false,
+              webSearch: false,
+              draft: "",
+            };
+            renderSideQuestionView();
+          }
+        } else if (action === "copy") {
+          const answer = getLatestCompletedSideQuestionAnswer();
+          if (answer) {
+            const copied = await writeTextToClipboard(answer.text);
+            setStatus(copied ? "Copied latest side answer." : "Could not copy side answer.", copied ? "success" : "error");
+          }
+        } else if (action === "insert") {
+          insertLatestSideQuestionAnswer();
+        } else if (action === "promote") {
+          if (sideQuestionState && sideQuestionState.threadId) {
+            const confirmed = await requestStudioConfirmation(
+              "Send the latest side question and answer into the main Pi conversation? This is the only action that adds the side thread to main context.",
+              { title: "Bring side answer to main?", confirmLabel: "Bring to main" },
+            );
+            if (confirmed) sendMessage({ type: "side_question_promote_request", threadId: sideQuestionState.threadId });
+          }
+        }
+      }
+
+      function handleSideQuestionInput(event) {
+        if (rightView !== "side-questions") return;
+        const target = event && event.target;
+        if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) return;
+        const field = target.getAttribute("data-side-question-field");
+        if (field === "draft") sideQuestionUi.draft = target.value;
+        if (field === "customPath") sideQuestionUi.customPath = target.value;
+        const askButton = critiqueViewEl.querySelector("[data-side-question-action='ask']");
+        if (askButton) askButton.disabled = !isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() || (getSideQuestionGatherScope() === "custom" && !sideQuestionUi.customPath.trim());
+      }
+
+      function handleSideQuestionChange(event) {
+        if (rightView !== "side-questions") return;
+        const target = event && event.target;
+        if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+        const field = target.getAttribute("data-side-question-field");
+        if (!field) return;
+        if (field === "focusMode") sideQuestionUi.focusMode = target.value;
+        if (field === "gatherScope") {
+          sideQuestionUi.gatherScope = target.value;
+          try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_GATHER_STORAGE_KEY, sideQuestionUi.gatherScope); } catch {}
+        }
+        if (field === "thinking") {
+          sideQuestionUi.thinking = target.value;
+          try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_THINKING_STORAGE_KEY, sideQuestionUi.thinking); } catch {}
+        }
+        if (field === "includeConversation") sideQuestionUi.includeConversation = target.checked;
+        if (field === "webSearch") sideQuestionUi.webSearch = target.checked;
+        renderSideQuestionView();
+      }
+
       function renderActiveResult() {
         if (critiqueViewEl) {
           critiqueViewEl.classList.toggle("git-changes-host", rightView === "changes");
           critiqueViewEl.classList.toggle("quarto-preview-host", rightView === "editor-quarto-preview");
+          critiqueViewEl.classList.toggle("side-question-host", rightView === "side-questions");
+        }
+        if (rightView === "side-questions") {
+          renderSideQuestionView();
+          return;
         }
         if (rightView === "editor-quarto-preview") {
           renderQuartoPreviewView();
@@ -11880,7 +12312,7 @@
           : normalizeForCompare(sourceTextEl.value);
         const responseLoaded = hasResponse && normalizedEditor === latestResponseNormalized;
         const isCritiqueResponse = hasResponse && latestResponseIsStructuredCritique;
-        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl" || rightView === "files" || rightView === "changes" || rightView === "editor-quarto-preview";
+        const showingAuxiliaryRightPane = rightView === "trace" || rightView === "repl" || rightView === "files" || rightView === "changes" || rightView === "editor-quarto-preview" || rightView === "side-questions";
 
         if (responseWrapEl) {
           responseWrapEl.hidden = showingAuxiliaryRightPane;
@@ -11936,6 +12368,8 @@
             exportPdfBtn.title = "Files view does not support preview export.";
           } else if (rightView === "changes") {
             exportPdfBtn.title = "Changes view does not support preview export.";
+          } else if (rightView === "side-questions") {
+            exportPdfBtn.title = "Side questions are ephemeral and do not support preview export.";
           } else if (exportingReplJournal && !replJournalExportEntries.length) {
             exportPdfBtn.title = "No Studio REPL record entries to export for this session yet.";
           } else if (rightView === "markdown") {
@@ -11975,7 +12409,7 @@
             : (exportingReplJournal ? "Export the Studio REPL record as standalone HTML and open it in the default browser." : "Export the current right-pane preview as standalone HTML and open it in the default browser.");
         }
         if (exportPreviewControlsEl) {
-          exportPreviewControlsEl.hidden = rightView === "editor-quarto-preview";
+          exportPreviewControlsEl.hidden = rightView === "editor-quarto-preview" || rightView === "side-questions";
           exportPreviewControlsEl.title = canExportPreview
             ? (exportingReplJournal
               ? "Choose a format and export destination for the Studio REPL record."
@@ -11992,6 +12426,7 @@
         updateSyncBadge(normalizedEditor);
         syncStudioQuartoDirtyUi();
         syncShowMeButton();
+        syncAskAsideButton();
       }
 
       function refreshResponseUi() {
@@ -13160,9 +13595,19 @@
         if (rightView === "editor-quarto-preview") {
           requestStudioQuartoPreviewCheck(false);
         }
+        if (rightView === "side-questions" && previousView !== "side-questions") {
+          if (!sideQuestionUi.gatherScope) sideQuestionUi.gatherScope = getSideQuestionGatherScope();
+          sendMessage({ type: "side_question_get_state" });
+        }
 
         refreshResponseUi();
         syncActionButtons();
+        if (rightView === "side-questions" && previousView !== "side-questions") {
+          window.setTimeout(() => {
+            const composer = critiqueViewEl && critiqueViewEl.querySelector("[data-side-question-field='draft']");
+            if (composer instanceof HTMLTextAreaElement) composer.focus({ preventScroll: true });
+          }, 0);
+        }
         scheduleWorkspacePersistence();
       }
 
@@ -20283,6 +20728,7 @@
             quizBtn.disabled = true;
             quizBtn.title = "Quiz is unavailable in editor-only mode.";
           }
+          syncAskAsideButton();
           syncStudioUiRefreshReviewTrigger();
           return;
         }
@@ -20357,6 +20803,7 @@
               : "Open an active quiz for the current editor selection or document.");
         }
         syncShowMeButton();
+        syncAskAsideButton();
         syncStudioUiRefreshReviewTrigger();
       }
 
@@ -20517,6 +20964,38 @@
           return;
         }
 
+        if (message.type === "side_question_state") {
+          sideQuestionWebSearchAvailable = message.webSearchAvailable === true;
+          const previousStatus = sideQuestionState && sideQuestionState.status;
+          sideQuestionState = normalizeSideQuestionState(message.state);
+          if (rightView === "side-questions") renderSideQuestionView();
+          updateReferenceBadge();
+          syncAskAsideButton();
+          if (rightView === "side-questions" && previousStatus === "running" && sideQuestionState.status === "idle") {
+            setStatus(agentBusyFromServer
+              ? "Side answer ready; the main Pi turn is still running. Main conversation unchanged."
+              : "Side answer ready. Main conversation unchanged.", "success");
+          }
+          return;
+        }
+
+        if (message.type === "side_question_error") {
+          if (!sideQuestionState) sideQuestionState = normalizeSideQuestionState(null);
+          sideQuestionState.status = "error";
+          sideQuestionState.requestId = null;
+          sideQuestionState.error = typeof message.message === "string" ? message.message : "Side question failed.";
+          if (rightView === "side-questions") renderSideQuestionView();
+          updateReferenceBadge();
+          syncAskAsideButton();
+          setStatus(sideQuestionState.error, "error");
+          return;
+        }
+
+        if (message.type === "side_question_promoted") {
+          setStatus(typeof message.message === "string" ? message.message : "Side answer sent to the main conversation.", "success");
+          return;
+        }
+
         if (message.type === "quarto_preview_context") {
           const requestId = typeof message.requestId === "string" ? message.requestId : "";
           const context = normalizeStudioQuartoContext(message.context);
@@ -20597,6 +21076,10 @@
           updateTerminalActivityState(message.terminalPhase, message.terminalToolName, message.terminalActivityLabel);
           if (typeof message.modelLabel === "string") {
             modelLabel = message.modelLabel;
+          }
+          sideQuestionWebSearchAvailable = message.webSearchAvailable === true;
+          if (message.sideQuestion && typeof message.sideQuestion === "object") {
+            sideQuestionState = normalizeSideQuestionState(message.sideQuestion);
           }
           if (Array.isArray(message.suggestionModels)) {
             updateCompletionSuggestionModelOptions(message.suggestionModels);
@@ -20696,6 +21179,8 @@
             requestStudioQuartoPreviewCheck(false);
             renderQuartoPreviewView();
           }
+          if (rightView === "side-questions") renderSideQuestionView();
+          syncAskAsideButton();
 
           if (pendingRequestId) {
             if (busy) {
@@ -22042,6 +22527,13 @@
         showMeResponseBtn.addEventListener("click", () => {
           if (getAbortablePendingKind() === "show-me") return;
           submitStudioShowMe("response");
+        });
+      }
+
+      if (askAsideBtn) {
+        askAsideBtn.addEventListener("click", () => {
+          setRightView("side-questions");
+          setActivePane("right");
         });
       }
 
