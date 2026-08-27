@@ -202,6 +202,10 @@
       font-weight: 450;
     }
 
+    .export-preview-menu button[hidden] {
+      display: none !important;
+    }
+
     .export-preview-menu button:not(:disabled):hover,
     .export-preview-menu button:not(:disabled):focus-visible {
       background: var(--panel-2);
@@ -1933,6 +1937,19 @@
       background: var(--panel);
       color: var(--text);
       border-color: var(--control-border);
+    }
+
+    .rendered-markdown button.studio-pdf-card-action[data-studio-action-feedback="success"],
+    .studio-pdf-focus-btn[data-studio-action-feedback="success"] {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--control-border));
+    }
+
+    .rendered-markdown button.studio-pdf-card-action[data-studio-action-feedback="warning"],
+    .studio-pdf-focus-btn[data-studio-action-feedback="warning"] {
+      color: var(--warn);
+      border-color: color-mix(in srgb, var(--warn) 45%, var(--control-border));
     }
 
     .rendered-markdown button.studio-pdf-card-auto-refresh[aria-pressed="true"] {

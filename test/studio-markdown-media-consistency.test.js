@@ -53,6 +53,16 @@ test("Studio-owned Markdown surfaces consistently decorate images and rendered P
   assert.match(clientSource, /textContent = "Enlarge"/);
   assert.match(clientSource, /openPreviewPdfFigureInFocus\(previewEl\)/);
   assert.match(cssSource, /\.studio-pdf-preview-focus-target\s*\{[\s\S]*?cursor:\s*zoom-in;/);
+
+  const delegatedMedia = functionBlock("handleStudioPreviewMediaActivation", "isStudioImageFocusOpen");
+  assert.match(delegatedMedia, /img\.studio-image-focus-target/);
+  assert.match(delegatedMedia, /\.studio-pdf-preview-enlarge/);
+  assert.match(delegatedMedia, /\.studio-pdf-card-system-viewer/);
+  assert.match(delegatedMedia, /\.studio-pdf-card-copy-path/);
+  assert.match(clientSource, /document\.addEventListener\("click", handleStudioPreviewMediaActivation, true\)/);
+  assert.match(clientSource, /document\.addEventListener\("keydown", handleStudioPreviewMediaKeydown, true\)/);
+  assert.match(clientSource, /function replaceResponsePaneWithClone\([\s\S]*?cloneNode\(true\)/);
+  assert.match(clientSource, /flashStudioPdfActionFeedback\(actionButton, "Copied ✓", "success"\)/);
 });
 
 test("fullscreen controls use browser capabilities rather than host detection", () => {

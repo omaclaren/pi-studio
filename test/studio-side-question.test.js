@@ -312,6 +312,8 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /function openSideQuestionTranscriptInEditor/);
 	assert.match(clientSource, /exportPdfBtn\.textContent = previewExportInProgress[\s\S]*?"Export thread"/);
 	assert.match(clientSource, /exportPreviewControlsEl\.hidden = rightView === "editor-quarto-preview"/);
+	assert.match(clientSource, /startsWith\("side-markdown-"\) && rightView !== "side-questions"/);
+	assert.match(cssSource, /\.export-preview-menu button\[hidden\]\s*\{[\s\S]*?display:\s*none !important;/);
 	assert.match(clientSource, /data-side-question-field='gitContext'/);
 	assert.match(clientSource, /Include Git context/);
 	assert.match(clientSource, /staged and unstaged changes, and up to 20 recent commits · read only · frozen when thread starts/);

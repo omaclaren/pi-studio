@@ -306,6 +306,7 @@
       let studioPdfFocusSourceCard = null;
       let studioPdfFocusStandaloneAutoRefreshState = null;
       const studioPdfCardAutoRefreshStates = new WeakMap();
+      const studioPdfActionFeedbackStates = new WeakMap();
       const STUDIO_PDF_AUTO_REFRESH_INTERVAL_MS = 1_000;
       const STUDIO_PDF_AUTO_REFRESH_STABLE_OBSERVATIONS = 2;
       let studioHtmlFocusOverlayEl = null;
@@ -7206,7 +7207,7 @@
         systemViewerBtn.textContent = "System viewer";
         systemViewerBtn.title = "Open the local PDF in the default viewer on the computer running Pi.";
         systemViewerBtn.addEventListener("click", () => {
-          void runStudioPdfLocalAction("system-viewer", studioPdfFocusResourceQuery);
+          void runStudioPdfLocalAction("system-viewer", studioPdfFocusResourceQuery, systemViewerBtn);
         });
         actions.appendChild(systemViewerBtn);
 
@@ -7216,7 +7217,7 @@
         revealBtn.textContent = "Show in folder";
         revealBtn.title = "Reveal the local PDF in the file manager on the computer running Pi.";
         revealBtn.addEventListener("click", () => {
-          void runStudioPdfLocalAction("reveal", studioPdfFocusResourceQuery);
+          void runStudioPdfLocalAction("reveal", studioPdfFocusResourceQuery, revealBtn);
         });
         actions.appendChild(revealBtn);
 
@@ -7226,7 +7227,7 @@
         copyPathBtn.textContent = "Copy path";
         copyPathBtn.title = "Copy the PDF path on the computer running Pi.";
         copyPathBtn.addEventListener("click", () => {
-          void copyStudioPdfResourcePath(studioPdfFocusResourceQuery);
+          void copyStudioPdfResourcePath(studioPdfFocusResourceQuery, copyPathBtn);
         });
         actions.appendChild(copyPathBtn);
 
@@ -7600,9 +7601,33 @@
         return setStudioPdfAutoRefreshEnabled(state, !state.enabled);
       }
 
-      async function runStudioPdfLocalAction(action, resourceQuery) {
+      function flashStudioPdfActionFeedback(buttonEl, label, level) {
+        if (!(buttonEl instanceof HTMLButtonElement)) return;
+        const existing = studioPdfActionFeedbackStates.get(buttonEl) || null;
+        if (existing && existing.timer) window.clearTimeout(existing.timer);
+        const state = {
+          baselineText: existing ? existing.baselineText : buttonEl.textContent,
+          baselineAriaLabel: existing ? existing.baselineAriaLabel : buttonEl.getAttribute("aria-label"),
+          timer: null,
+        };
+        studioPdfActionFeedbackStates.set(buttonEl, state);
+        buttonEl.textContent = String(label || "Done");
+        buttonEl.dataset.studioActionFeedback = level === "warning" ? "warning" : "success";
+        buttonEl.setAttribute("aria-label", String(label || "Done"));
+        state.timer = window.setTimeout(() => {
+          if (studioPdfActionFeedbackStates.get(buttonEl) !== state) return;
+          buttonEl.textContent = state.baselineText;
+          if (state.baselineAriaLabel === null) buttonEl.removeAttribute("aria-label");
+          else buttonEl.setAttribute("aria-label", state.baselineAriaLabel);
+          delete buttonEl.dataset.studioActionFeedback;
+          studioPdfActionFeedbackStates.delete(buttonEl);
+        }, 2_200);
+      }
+
+      async function runStudioPdfLocalAction(action, resourceQuery, actionButton) {
         const query = normalizeStudioPdfResourceQuery(resourceQuery);
         if (!query) {
+          flashStudioPdfActionFeedback(actionButton, "Unavailable", "warning");
           setStatus("Could not resolve this PDF's local path.", "warning");
           return false;
         }
@@ -7613,11 +7638,13 @@
             method: "POST",
             body: JSON.stringify(query),
           });
+          flashStudioPdfActionFeedback(actionButton, openInSystemViewer ? "Opened ✓" : "Shown ✓", "success");
           setStatus(payload && payload.message
             ? payload.message
             : (openInSystemViewer ? "Opened PDF in the system viewer." : "Revealed PDF in the file manager."), "success");
           return true;
         } catch (error) {
+          flashStudioPdfActionFeedback(actionButton, "Failed", "warning");
           setStatus((error && error.message)
             ? error.message
             : (openInSystemViewer ? "Could not open PDF in the system viewer." : "Could not reveal PDF in the file manager."), "warning");
@@ -7632,9 +7659,10 @@
         if (studioPdfFocusCopyPathBtn) studioPdfFocusCopyPathBtn.disabled = !available;
       }
 
-      async function copyStudioPdfResourcePath(resourceQuery) {
+      async function copyStudioPdfResourcePath(resourceQuery, actionButton) {
         const query = normalizeStudioPdfResourceQuery(resourceQuery);
         if (!query) {
+          flashStudioPdfActionFeedback(actionButton, "Unavailable", "warning");
           setStatus("Could not resolve this PDF's local path.", "warning");
           return false;
         }
@@ -7645,9 +7673,11 @@
           const path = payload && typeof payload.path === "string" ? payload.path : "";
           if (!path) throw new Error("Studio did not return a PDF path.");
           if (!(await writeTextToClipboard(path))) throw new Error("Clipboard write failed.");
+          flashStudioPdfActionFeedback(actionButton, "Copied ✓", "success");
           setStatus("Copied PDF path from the computer running Pi.", "success");
           return true;
         } catch (error) {
+          flashStudioPdfActionFeedback(actionButton, "Failed", "warning");
           setStatus((error && error.message) ? error.message : "Could not copy this PDF's local path.", "warning");
           return false;
         }
@@ -7839,6 +7869,16 @@
         studioPdfFocusFrameEl.title = String(title || "PDF focus viewer").trim() || "PDF focus viewer";
       }
 
+      function getStudioPdfCardResourceQuery(card) {
+        return card && card.dataset
+          ? normalizeStudioPdfResourceQuery({
+              path: card.dataset.studioPdfPath || "",
+              sourcePath: card.dataset.studioPdfSourcePath || "",
+              resourceDir: card.dataset.studioPdfResourceDir || "",
+            })
+          : null;
+      }
+
       function openStudioPdfFocusFromButton(buttonEl) {
         if (!buttonEl) return false;
         const card = buttonEl.closest && buttonEl.closest(".studio-pdf-card");
@@ -7848,13 +7888,7 @@
           || String(card && card.dataset ? (card.dataset.studioPdfTitle || "") : "").trim()
           || "PDF preview";
         const sourceFrame = card && typeof card.querySelector === "function" ? card.querySelector("iframe.studio-pdf-frame") : null;
-        const resourceQuery = card && card.dataset
-          ? normalizeStudioPdfResourceQuery({
-              path: card.dataset.studioPdfPath || "",
-              sourcePath: card.dataset.studioPdfSourcePath || "",
-              resourceDir: card.dataset.studioPdfResourceDir || "",
-            })
-          : null;
+        const resourceQuery = getStudioPdfCardResourceQuery(card);
         if (!viewerUrl) return false;
         openStudioPdfFocusViewer(viewerUrl, title, sourceFrame, resourceQuery, card);
         return true;
@@ -7872,6 +7906,76 @@
         if (!openStudioPdfFocusFromButton(buttonEl)) {
           setStatus("Could not open PDF focus view for this card.", "warning");
         }
+      }
+
+      function consumeStudioPreviewMediaEvent(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      }
+
+      function handleStudioPreviewMediaKeydown(event) {
+        if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+        const target = event.target;
+        const imageEl = target instanceof Element ? target.closest("img.studio-image-focus-target") : null;
+        if (!imageEl) return;
+        consumeStudioPreviewMediaEvent(event);
+        if (!openPreviewImageElementInFocus(imageEl)) setStatus("Could not open image focus view.", "warning");
+      }
+
+      function handleStudioPreviewMediaActivation(event) {
+        const target = event && event.target;
+        if (!(target instanceof Element)) return;
+
+        const imageEl = target.closest("img.studio-image-focus-target");
+        if (imageEl) {
+          consumeStudioPreviewMediaEvent(event);
+          if (!openPreviewImageElementInFocus(imageEl)) setStatus("Could not open image focus view.", "warning");
+          return;
+        }
+
+        const figureEnlargeBtn = target.closest(".studio-pdf-preview-enlarge");
+        const pdfFigureEl = figureEnlargeBtn
+          ? figureEnlargeBtn.closest(".studio-pdf-preview-focus-target")
+          : target.closest(".studio-pdf-preview-focus-target");
+        if (pdfFigureEl && (figureEnlargeBtn || !target.closest("button, a"))) {
+          consumeStudioPreviewMediaEvent(event);
+          if (!openPreviewPdfFigureInFocus(pdfFigureEl)) setStatus("Could not enlarge this PDF figure preview.", "warning");
+          return;
+        }
+
+        const actionBtn = target.closest(
+          ".studio-pdf-card-system-viewer, .studio-pdf-card-reveal, .studio-pdf-card-copy-path, .studio-pdf-card-refresh, .studio-pdf-card-auto-refresh"
+        );
+        if (!actionBtn) return;
+        const card = actionBtn.closest(".studio-pdf-card");
+        if (!card) return;
+        consumeStudioPreviewMediaEvent(event);
+        const resourceQuery = getStudioPdfCardResourceQuery(card);
+        if (actionBtn.classList.contains("studio-pdf-card-system-viewer")) {
+          void runStudioPdfLocalAction("system-viewer", resourceQuery, actionBtn);
+          return;
+        }
+        if (actionBtn.classList.contains("studio-pdf-card-reveal")) {
+          void runStudioPdfLocalAction("reveal", resourceQuery, actionBtn);
+          return;
+        }
+        if (actionBtn.classList.contains("studio-pdf-card-copy-path")) {
+          void copyStudioPdfResourcePath(resourceQuery, actionBtn);
+          return;
+        }
+        if (actionBtn.classList.contains("studio-pdf-card-refresh")) {
+          const refreshed = refreshStudioPdfCard(card);
+          flashStudioPdfActionFeedback(actionBtn, refreshed ? "Refreshed ✓" : "Failed", refreshed ? "success" : "warning");
+          if (!refreshed) setStatus("Could not refresh this PDF preview.", "warning");
+          return;
+        }
+        const state = ensureStudioPdfCardAutoRefreshState(card, resourceQuery);
+        if (!state) {
+          setStatus("Could not resolve this PDF for auto-refresh.", "warning");
+          return;
+        }
+        setStudioPdfCardAutoRefresh(card, !state.enabled);
       }
 
       function isStudioImageFocusOpen() {
@@ -8379,7 +8483,7 @@
           systemViewerBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            void runStudioPdfLocalAction("system-viewer", resourceQuery);
+            void runStudioPdfLocalAction("system-viewer", resourceQuery, systemViewerBtn);
           });
           actions.appendChild(systemViewerBtn);
 
@@ -8391,7 +8495,7 @@
           revealBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            void runStudioPdfLocalAction("reveal", resourceQuery);
+            void runStudioPdfLocalAction("reveal", resourceQuery, revealBtn);
           });
           actions.appendChild(revealBtn);
 
@@ -8403,7 +8507,7 @@
           copyPathBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            void copyStudioPdfResourcePath(resourceQuery);
+            void copyStudioPdfResourcePath(resourceQuery, copyPathBtn);
           });
           actions.appendChild(copyPathBtn);
 
@@ -10130,6 +10234,10 @@
 
       function exportRightPaneFormat(format) {
         closeExportPreviewMenu();
+        if (String(format || "").startsWith("side-markdown-") && rightView !== "side-questions") {
+          setStatus("Side-thread Markdown export is available only in Side questions.", "warning");
+          return false;
+        }
         if (format === "side-markdown-save") {
           return saveSideQuestionTranscriptMarkdown();
         }
@@ -23666,6 +23774,9 @@
           focusReviewNoteInPanel(noteId);
         });
       }
+
+      document.addEventListener("click", handleStudioPreviewMediaActivation, true);
+      document.addEventListener("keydown", handleStudioPreviewMediaKeydown, true);
 
       document.addEventListener("click", (event) => {
         const target = event.target;
