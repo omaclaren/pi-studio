@@ -5,7 +5,7 @@ All notable changes to `pi-studio` are documented here.
 ## [Unreleased]
 
 ### Added
-- Add visible **Enlarge** controls for embedded PDF cards and rendered PDF figures, plus **Copy path** alongside PDF actions that operate on the computer running Pi.
+- Add visible image-zoom and **Enlarge** controls for ordinary images, embedded PDF cards, and rendered PDF figures, plus **Copy path** alongside PDF actions that operate on the computer running Pi.
 
 ### Changed
 - Offer true browser fullscreen only when the current browser exposes the Fullscreen API, while retaining Studio's in-page image, PDF, and HTML focus viewers everywhere.
@@ -13,7 +13,7 @@ All notable changes to `pi-studio` are documented here.
 ### Fixed
 - Restore a clear, explicitly sized H1–H6 hierarchy in rendered Markdown without allowing application-header styles to override document headings.
 - Apply click-to-focus image behavior consistently to Side-question and Quiz Markdown as well as the main Editor, Response, and Working surfaces.
-- Keep image, rendered-PDF, and PDF-card actions interactive after the response pane resets its scroll position by adding clone-safe delegated handling; show contextual success/failure feedback for host PDF actions.
+- Keep image, rendered-PDF, and PDF-card actions interactive after the response pane resets its scroll position by adding clone-safe delegated handling; preserve rendered PDF canvas pixels across the reset so inline and enlarged figures do not become blank; show contextual success/failure feedback for host PDF actions.
 - Hide side-thread-only Markdown save, copy, and editor actions from ordinary Response, Editor Preview, and REPL export menus, with a runtime guard against stale menu activation.
 
 ## [0.9.51] — 2026-08-26

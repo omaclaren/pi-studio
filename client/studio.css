@@ -2246,6 +2246,40 @@
       margin: auto;
     }
 
+    .rendered-markdown .studio-image-focus-shell,
+    .trace-image-card.studio-image-focus-shell {
+      position: relative;
+    }
+
+    .rendered-markdown .studio-image-focus-enlarge,
+    .trace-image-card .studio-image-focus-enlarge {
+      position: absolute;
+      z-index: 2;
+      top: 8px;
+      right: 8px;
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 1px solid color-mix(in srgb, var(--control-border) 80%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      color: var(--text);
+      box-shadow: 0 2px 8px var(--shadow-color);
+      cursor: pointer;
+    }
+
+    .rendered-markdown .studio-image-focus-enlarge:hover,
+    .rendered-markdown .studio-image-focus-enlarge:focus-visible,
+    .trace-image-card .studio-image-focus-enlarge:hover,
+    .trace-image-card .studio-image-focus-enlarge:focus-visible {
+      border-color: var(--accent);
+      color: var(--accent);
+      outline: none;
+    }
+
     .rendered-markdown img.studio-image-focus-target,
     .trace-image-card img.studio-image-focus-target {
       cursor: zoom-in;

@@ -48,6 +48,11 @@ test("Studio-owned Markdown surfaces consistently decorate images and rendered P
   assert.match(quizRender, /decoratePreviewPdfFigures\(target\)/);
   assert.match(quizRender, /decoratePreviewImages\(target\)/);
 
+  assert.match(clientSource, /function addPreviewImageFocusControl\(/);
+  assert.match(clientSource, /className = "studio-image-focus-enlarge"/);
+  assert.match(clientSource, /makeStudioUiRefreshIcon\("zoom-in"\)/);
+  assert.match(cssSource, /\.studio-image-focus-enlarge[\s\S]*?position:\s*absolute;/);
+
   assert.match(clientSource, /function decoratePreviewPdfFigures\(/);
   assert.match(clientSource, /className = "studio-pdf-preview-enlarge"/);
   assert.match(clientSource, /textContent = "Enlarge"/);
@@ -55,13 +60,18 @@ test("Studio-owned Markdown surfaces consistently decorate images and rendered P
   assert.match(cssSource, /\.studio-pdf-preview-focus-target\s*\{[\s\S]*?cursor:\s*zoom-in;/);
 
   const delegatedMedia = functionBlock("handleStudioPreviewMediaActivation", "isStudioImageFocusOpen");
+  assert.match(delegatedMedia, /\.studio-image-focus-enlarge/);
   assert.match(delegatedMedia, /img\.studio-image-focus-target/);
   assert.match(delegatedMedia, /\.studio-pdf-preview-enlarge/);
   assert.match(delegatedMedia, /\.studio-pdf-card-system-viewer/);
   assert.match(delegatedMedia, /\.studio-pdf-card-copy-path/);
   assert.match(clientSource, /document\.addEventListener\("click", handleStudioPreviewMediaActivation, true\)/);
   assert.match(clientSource, /document\.addEventListener\("keydown", handleStudioPreviewMediaKeydown, true\)/);
-  assert.match(clientSource, /function replaceResponsePaneWithClone\([\s\S]*?cloneNode\(true\)/);
+  const cloneReset = functionBlock("copyResponsePaneCanvasState", "applyPendingResponseScrollReset");
+  assert.match(cloneReset, /cloneNode\(true\)/);
+  assert.match(cloneReset, /querySelectorAll\("canvas"\)/);
+  assert.match(cloneReset, /context\.drawImage\(sourceCanvas, 0, 0\)/);
+  assert.match(cloneReset, /!copyResponsePaneCanvasState\(currentEl, replacement\)/);
   assert.match(clientSource, /flashStudioPdfActionFeedback\(actionButton, "Copied ✓", "success"\)/);
 });
 
