@@ -2525,8 +2525,6 @@
           paths = ["M8 4H4v4", "M16 4h4v4", "M20 16v4h-4", "M4 16v4h4"];
         } else if (kind === "fullscreen-exit") {
           paths = ["M9 5v4H5", "M15 5v4h4", "M19 15h-4v4", "M5 15h4v4"];
-        } else if (kind === "zoom-in") {
-          paths = ["M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13", "M15.25 15.25 20 20", "M10.5 8v5", "M8 10.5h5"];
         } else {
           paths = ["M14 4h6v6", "M20 4l-6 6", "M10 20H4v-6", "M4 20l6-6"];
         }
@@ -7929,21 +7927,15 @@
         const target = event && event.target;
         if (!(target instanceof Element)) return;
 
-        const imageEnlargeBtn = target.closest(".studio-image-focus-enlarge");
-        const imageEl = imageEnlargeBtn
-          ? imageEnlargeBtn.closest(".studio-image-focus-shell")?.querySelector("img.studio-image-focus-target")
-          : target.closest("img.studio-image-focus-target");
+        const imageEl = target.closest("img.studio-image-focus-target");
         if (imageEl) {
           consumeStudioPreviewMediaEvent(event);
           if (!openPreviewImageElementInFocus(imageEl)) setStatus("Could not open image focus view.", "warning");
           return;
         }
 
-        const figureEnlargeBtn = target.closest(".studio-pdf-preview-enlarge");
-        const pdfFigureEl = figureEnlargeBtn
-          ? figureEnlargeBtn.closest(".studio-pdf-preview-focus-target")
-          : target.closest(".studio-pdf-preview-focus-target");
-        if (pdfFigureEl && (figureEnlargeBtn || !target.closest("button, a"))) {
+        const pdfFigureEl = target.closest(".studio-pdf-preview-focus-target");
+        if (pdfFigureEl && !target.closest("button, a")) {
           consumeStudioPreviewMediaEvent(event);
           if (!openPreviewPdfFigureInFocus(pdfFigureEl)) setStatus("Could not enlarge this PDF figure preview.", "warning");
           return;
@@ -8349,23 +8341,6 @@
         return openStudioImageFocusViewer(src, getPreviewImageElementTitle(imageEl));
       }
 
-      function addPreviewImageFocusControl(imageEl) {
-        const shell = imageEl && imageEl.parentElement;
-        if (!shell || !shell.matches("figure, p, div")) return;
-        if (shell.closest("a[href], button, .studio-html-artifact-shell, .studio-pdf-card")) return;
-        if (shell.querySelectorAll("img[src]").length !== 1) return;
-        if (shell.querySelector(":scope > .studio-image-focus-enlarge")) return;
-
-        shell.classList.add("studio-image-focus-shell");
-        const enlargeBtn = document.createElement("button");
-        enlargeBtn.type = "button";
-        enlargeBtn.className = "studio-image-focus-enlarge";
-        enlargeBtn.title = "Enlarge image";
-        enlargeBtn.setAttribute("aria-label", "Enlarge image");
-        enlargeBtn.appendChild(makeStudioUiRefreshIcon("zoom-in"));
-        shell.appendChild(enlargeBtn);
-      }
-
       function decoratePreviewImages(targetEl) {
         if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
         const images = Array.from(targetEl.querySelectorAll("img[src]"));
@@ -8379,7 +8354,6 @@
           imageEl.setAttribute("role", "button");
           imageEl.setAttribute("aria-label", "Open image focus viewer");
           if (imageEl.dataset) imageEl.dataset.studioImageFocusDecorated = "1";
-          addPreviewImageFocusControl(imageEl);
           imageEl.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -8418,17 +8392,6 @@
           previewEl.title = "PDF figure preview (page 1). Click to enlarge.";
           if (previewEl.dataset) previewEl.dataset.studioPdfFigureFocusDecorated = "1";
 
-          const enlargeBtn = document.createElement("button");
-          enlargeBtn.type = "button";
-          enlargeBtn.className = "studio-pdf-preview-enlarge";
-          enlargeBtn.textContent = "Enlarge";
-          enlargeBtn.setAttribute("aria-label", "Enlarge PDF figure preview");
-          enlargeBtn.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (!openPreviewPdfFigureInFocus(previewEl)) setStatus("Could not enlarge this PDF figure preview.", "warning");
-          });
-          previewEl.appendChild(enlargeBtn);
           previewEl.addEventListener("click", (event) => {
             if (event.target instanceof Element && event.target.closest("button, a")) return;
             event.preventDefault();

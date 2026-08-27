@@ -5,10 +5,11 @@ All notable changes to `pi-studio` are documented here.
 ## [Unreleased]
 
 ### Added
-- Add visible image-zoom and **Enlarge** controls for ordinary images, embedded PDF cards, and rendered PDF figures, plus **Copy path** alongside PDF actions that operate on the computer running Pi.
+- Add a visible **Enlarge** control for embedded PDF cards, plus **Copy path** alongside PDF actions that operate on the computer running Pi.
 
 ### Changed
 - Offer true browser fullscreen only when the current browser exposes the Fullscreen API, while retaining Studio's in-page image, PDF, and HTML focus viewers everywhere.
+- Keep ordinary images and rendered PDF figures unobscured by using their hover zoom cursor and whole-media click target instead of overlay buttons.
 
 ### Fixed
 - Restore a clear, explicitly sized H1–H6 hierarchy in rendered Markdown without allowing application-header styles to override document headings.
