@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.52] — 2026-08-28
+
 ### Added
 - Add a visible **Enlarge** control for embedded PDF cards, plus **Copy path** alongside PDF actions that operate on the computer running Pi.
 
