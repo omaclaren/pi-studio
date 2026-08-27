@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add visible **Enlarge** controls for embedded PDF cards and rendered PDF figures, plus **Copy path** alongside PDF actions that operate on the computer running Pi.
+
+### Changed
+- Offer true browser fullscreen only when the current browser exposes the Fullscreen API, while retaining Studio's in-page image, PDF, and HTML focus viewers everywhere.
+
+### Fixed
+- Restore a clear, explicitly sized H1–H6 hierarchy in rendered Markdown without allowing application-header styles to override document headings.
+- Apply click-to-focus image behavior consistently to Side-question and Quiz Markdown as well as the main Editor, Response, and Working surfaces.
+
 ## [0.9.51] — 2026-08-26
 
 ### Added

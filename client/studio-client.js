@@ -296,6 +296,7 @@
       let studioPdfFocusOpenLinkEl = null;
       let studioPdfFocusSystemViewerBtn = null;
       let studioPdfFocusRevealBtn = null;
+      let studioPdfFocusCopyPathBtn = null;
       let studioPdfFocusAutoRefreshBtn = null;
       let studioPdfFocusFullscreenBtn = null;
       let studioPdfFocusCloseBtn = null;
@@ -6715,10 +6716,22 @@
         button.setAttribute("aria-pressed", focused ? "true" : "false");
       }
 
+      function isStudioFullscreenAvailable(element) {
+        return Boolean(
+          element
+          && typeof element.requestFullscreen === "function"
+          && typeof document.exitFullscreen === "function"
+        );
+      }
+
       function syncStudioHtmlFocusFullscreenButton() {
         const button = studioHtmlFocusFullscreenBtn;
         if (!button) return;
         const shell = studioHtmlFocusShellEl;
+        const available = isStudioFullscreenAvailable(shell);
+        button.hidden = !available;
+        button.setAttribute("aria-hidden", available ? "false" : "true");
+        if (!available) return;
         const isFullscreen = Boolean(shell && document.fullscreenElement && document.fullscreenElement === shell);
         button.replaceChildren(makeStudioUiRefreshIcon(isFullscreen ? "fullscreen-exit" : "fullscreen"));
         const label = isFullscreen ? "Exit fullscreen" : "Fullscreen";
@@ -7191,7 +7204,7 @@
         systemViewerBtn.type = "button";
         systemViewerBtn.className = "studio-pdf-focus-btn studio-pdf-focus-system-viewer";
         systemViewerBtn.textContent = "System viewer";
-        systemViewerBtn.title = "Open the local PDF in the operating system's default PDF viewer.";
+        systemViewerBtn.title = "Open the local PDF in the default viewer on the computer running Pi.";
         systemViewerBtn.addEventListener("click", () => {
           void runStudioPdfLocalAction("system-viewer", studioPdfFocusResourceQuery);
         });
@@ -7201,11 +7214,21 @@
         revealBtn.type = "button";
         revealBtn.className = "studio-pdf-focus-btn studio-pdf-focus-reveal";
         revealBtn.textContent = "Show in folder";
-        revealBtn.title = "Reveal the local PDF in Finder or the system file manager.";
+        revealBtn.title = "Reveal the local PDF in the file manager on the computer running Pi.";
         revealBtn.addEventListener("click", () => {
           void runStudioPdfLocalAction("reveal", studioPdfFocusResourceQuery);
         });
         actions.appendChild(revealBtn);
+
+        const copyPathBtn = document.createElement("button");
+        copyPathBtn.type = "button";
+        copyPathBtn.className = "studio-pdf-focus-btn studio-pdf-focus-copy-path";
+        copyPathBtn.textContent = "Copy path";
+        copyPathBtn.title = "Copy the PDF path on the computer running Pi.";
+        copyPathBtn.addEventListener("click", () => {
+          void copyStudioPdfResourcePath(studioPdfFocusResourceQuery);
+        });
+        actions.appendChild(copyPathBtn);
 
         const refreshBtn = document.createElement("button");
         refreshBtn.type = "button";
@@ -7282,6 +7305,7 @@
         studioPdfFocusOpenLinkEl = openLink;
         studioPdfFocusSystemViewerBtn = systemViewerBtn;
         studioPdfFocusRevealBtn = revealBtn;
+        studioPdfFocusCopyPathBtn = copyPathBtn;
         studioPdfFocusAutoRefreshBtn = autoRefreshBtn;
         studioPdfFocusFullscreenBtn = fullscreenBtn;
         studioPdfFocusCloseBtn = closeBtn;
@@ -7605,6 +7629,28 @@
         const available = Boolean(normalizeStudioPdfResourceQuery(studioPdfFocusResourceQuery));
         if (studioPdfFocusSystemViewerBtn) studioPdfFocusSystemViewerBtn.disabled = !available;
         if (studioPdfFocusRevealBtn) studioPdfFocusRevealBtn.disabled = !available;
+        if (studioPdfFocusCopyPathBtn) studioPdfFocusCopyPathBtn.disabled = !available;
+      }
+
+      async function copyStudioPdfResourcePath(resourceQuery) {
+        const query = normalizeStudioPdfResourceQuery(resourceQuery);
+        if (!query) {
+          setStatus("Could not resolve this PDF's local path.", "warning");
+          return false;
+        }
+        try {
+          const payload = await fetchStudioJson("/local-preview-link", {
+            query: { ...query, action: "resolve" },
+          });
+          const path = payload && typeof payload.path === "string" ? payload.path : "";
+          if (!path) throw new Error("Studio did not return a PDF path.");
+          if (!(await writeTextToClipboard(path))) throw new Error("Clipboard write failed.");
+          setStatus("Copied PDF path from the computer running Pi.", "success");
+          return true;
+        } catch (error) {
+          setStatus((error && error.message) ? error.message : "Could not copy this PDF's local path.", "warning");
+          return false;
+        }
       }
 
       function buildRefreshedStudioPdfViewerUrl(value) {
@@ -7731,6 +7777,10 @@
 
       function syncStudioPdfFocusFullscreenButton() {
         if (!studioPdfFocusFullscreenBtn) return;
+        const available = isStudioFullscreenAvailable(studioPdfFocusDialogEl);
+        studioPdfFocusFullscreenBtn.hidden = !available;
+        studioPdfFocusFullscreenBtn.setAttribute("aria-hidden", available ? "false" : "true");
+        if (!available) return;
         const isFullscreen = Boolean(document.fullscreenElement && studioPdfFocusDialogEl && document.fullscreenElement === studioPdfFocusDialogEl);
         studioPdfFocusFullscreenBtn.replaceChildren(makeStudioUiRefreshIcon(isFullscreen ? "fullscreen-exit" : "fullscreen"));
         const label = isFullscreen ? "Exit fullscreen" : "Fullscreen";
@@ -7976,6 +8026,10 @@
 
       function syncStudioImageFocusFullscreenButton() {
         if (!studioImageFocusFullscreenBtn) return;
+        const available = isStudioFullscreenAvailable(studioImageFocusDialogEl);
+        studioImageFocusFullscreenBtn.hidden = !available;
+        studioImageFocusFullscreenBtn.setAttribute("aria-hidden", available ? "false" : "true");
+        if (!available) return;
         const isFullscreen = Boolean(document.fullscreenElement && studioImageFocusDialogEl && document.fullscreenElement === studioImageFocusDialogEl);
         studioImageFocusFullscreenBtn.replaceChildren(makeStudioUiRefreshIcon(isFullscreen ? "fullscreen-exit" : "fullscreen"));
         const label = isFullscreen ? "Exit fullscreen" : "Fullscreen";
@@ -8212,6 +8266,50 @@
         });
       }
 
+      function openPreviewPdfFigureInFocus(previewEl) {
+        const canvas = previewEl && typeof previewEl.querySelector === "function"
+          ? previewEl.querySelector("canvas")
+          : null;
+        if (!(canvas instanceof HTMLCanvasElement)) return false;
+        try {
+          const dataUrl = canvas.toDataURL("image/png");
+          const title = String(previewEl.getAttribute("title") || "PDF figure preview").trim() || "PDF figure preview";
+          return openStudioImageFocusViewer(dataUrl, title);
+        } catch {
+          return false;
+        }
+      }
+
+      function decoratePreviewPdfFigures(targetEl) {
+        if (!targetEl || typeof targetEl.querySelectorAll !== "function") return;
+        const previews = Array.from(targetEl.querySelectorAll(".studio-pdf-preview"));
+        previews.forEach((previewEl) => {
+          if (!(previewEl instanceof HTMLElement)) return;
+          if (previewEl.dataset && previewEl.dataset.studioPdfFigureFocusDecorated === "1") return;
+          if (!previewEl.querySelector("canvas")) return;
+          previewEl.classList.add("studio-pdf-preview-focus-target");
+          previewEl.title = "PDF figure preview (page 1). Click to enlarge.";
+          if (previewEl.dataset) previewEl.dataset.studioPdfFigureFocusDecorated = "1";
+
+          const enlargeBtn = document.createElement("button");
+          enlargeBtn.type = "button";
+          enlargeBtn.className = "studio-pdf-preview-enlarge";
+          enlargeBtn.textContent = "Enlarge";
+          enlargeBtn.setAttribute("aria-label", "Enlarge PDF figure preview");
+          enlargeBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!openPreviewPdfFigureInFocus(previewEl)) setStatus("Could not enlarge this PDF figure preview.", "warning");
+          });
+          previewEl.appendChild(enlargeBtn);
+          previewEl.addEventListener("click", (event) => {
+            if (event.target instanceof Element && event.target.closest("button, a")) return;
+            event.preventDefault();
+            if (!openPreviewPdfFigureInFocus(previewEl)) setStatus("Could not enlarge this PDF figure preview.", "warning");
+          });
+        });
+      }
+
       function createStudioPdfCard(block, useEditorResourceContext) {
         const options = block && block.options ? block.options : {};
         const path = String(options.path || "").trim();
@@ -8244,12 +8342,13 @@
           focusBtn.type = "button";
           focusBtn.className = "studio-pdf-card-action studio-pdf-card-focus";
           focusBtn.title = "Open this PDF in a larger Studio overlay.";
-          focusBtn.setAttribute("aria-label", "Focus PDF");
+          focusBtn.setAttribute("aria-label", "Enlarge PDF");
           if (focusBtn.dataset) {
             focusBtn.dataset.studioPdfViewerUrl = viewerUrl;
             focusBtn.dataset.studioPdfTitle = title;
           }
           focusBtn.appendChild(makeStudioUiRefreshIcon("focus"));
+          focusBtn.appendChild(document.createTextNode("Enlarge"));
           focusBtn.addEventListener("click", handleStudioPdfFocusButtonClick);
           titleGroup.appendChild(focusBtn);
         }
@@ -8276,7 +8375,7 @@
           systemViewerBtn.type = "button";
           systemViewerBtn.className = "studio-pdf-card-action studio-pdf-card-system-viewer";
           systemViewerBtn.textContent = "System viewer";
-          systemViewerBtn.title = "Open the local PDF in the operating system's default PDF viewer.";
+          systemViewerBtn.title = "Open the local PDF in the default viewer on the computer running Pi.";
           systemViewerBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -8288,13 +8387,25 @@
           revealBtn.type = "button";
           revealBtn.className = "studio-pdf-card-action studio-pdf-card-reveal";
           revealBtn.textContent = "Show in folder";
-          revealBtn.title = "Reveal the local PDF in Finder or the system file manager.";
+          revealBtn.title = "Reveal the local PDF in the file manager on the computer running Pi.";
           revealBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
             void runStudioPdfLocalAction("reveal", resourceQuery);
           });
           actions.appendChild(revealBtn);
+
+          const copyPathBtn = document.createElement("button");
+          copyPathBtn.type = "button";
+          copyPathBtn.className = "studio-pdf-card-action studio-pdf-card-copy-path";
+          copyPathBtn.textContent = "Copy path";
+          copyPathBtn.title = "Copy the PDF path on the computer running Pi.";
+          copyPathBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void copyStudioPdfResourcePath(resourceQuery);
+          });
+          actions.appendChild(copyPathBtn);
 
           const refreshBtn = document.createElement("button");
           refreshBtn.type = "button";
@@ -10259,6 +10370,7 @@
           await renderAnnotationMathInElement(targetEl);
           decoratePdfEmbeds(targetEl);
           await renderPdfPreviewsInElement(targetEl);
+          decoratePreviewPdfFigures(targetEl);
           const annotationMode = (pane === "source" || pane === "response")
             ? (annotationsEnabled ? "highlight" : "hide")
             : "none";
@@ -12141,6 +12253,7 @@
             await renderMermaidInElement(target);
             await renderMathFallbackInElement(target);
             decorateCopyablePreviewBlocks(target);
+            decoratePreviewImages(target);
           } catch (error) {
             console.error("Side-question markdown preview failed:", error);
             target.classList.add("side-question-markdown-failed");
@@ -15015,9 +15128,11 @@
             await renderAnnotationMathInElement(target);
             decoratePdfEmbeds(target);
             await renderPdfPreviewsInElement(target);
+            decoratePreviewPdfFigures(target);
             await renderMermaidInElement(target);
             await renderMathFallbackInElement(target);
             decorateCopyablePreviewBlocks(target);
+            decoratePreviewImages(target);
             if (preserveScroll) restoreQuizScrollTopSoon(scrollTop);
           } catch (error) {
             console.error("Quiz markdown preview render failed:", error);

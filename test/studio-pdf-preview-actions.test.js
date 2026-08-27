@@ -10,8 +10,13 @@ test("PDF cards and the focus viewer expose browser, system, and folder actions"
   assert.ok((clientSource.match(/textContent = "Browser tab"/g) || []).length >= 2);
   assert.ok((clientSource.match(/textContent = "System viewer"/g) || []).length >= 2);
   assert.ok((clientSource.match(/textContent = "Show in folder"/g) || []).length >= 2);
+  assert.ok((clientSource.match(/textContent = "Copy path"/g) || []).length >= 2);
+  assert.match(clientSource, /setAttribute\("aria-label", "Enlarge PDF"\)/);
+  assert.match(clientSource, /createTextNode\("Enlarge"\)/);
   assert.match(clientSource, /runStudioPdfLocalAction\("system-viewer", resourceQuery\)/);
   assert.match(clientSource, /runStudioPdfLocalAction\("reveal", resourceQuery\)/);
+  assert.match(clientSource, /copyStudioPdfResourcePath\(resourceQuery\)/);
+  assert.match(clientSource, /computer running Pi/);
   assert.match(clientSource, /studioPdfFocusResourceQuery = normalizeStudioPdfResourceQuery\(resourceQuery\)/);
   assert.match(clientSource, /openStudioPdfFocusViewer\(viewerUrl, downloadName, null, resourceQuery\)/);
 });
