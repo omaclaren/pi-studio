@@ -21,7 +21,7 @@ Each release should finish with:
 
 Publishing, pushing, and tagging remain explicit release actions rather than automatic consequences of merging work.
 
-## 0.9.52 — Rendering and media consistency
+## 0.9.52 — Rendering and media consistency (shipped 2026-08-28)
 
 A focused portability and affordance pass:
 
@@ -35,6 +35,8 @@ A focused portability and affordance pass:
 This release must not add Muxy-specific branches or attempt to instrument opaque Quarto/authored-HTML iframe contents.
 
 ## 0.9.53 — Resource locations
+
+Status: in progress. The first internal slice establishes the bounded, canonical, workspace-level session registry without changing the current single-root UI or authorization behavior.
 
 Replace the single-root assumption with explicit resource grants:
 

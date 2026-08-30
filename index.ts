@@ -32,6 +32,7 @@ import { escapeStudioPdfLatexTextFragment } from "./shared/studio-pdf-escape.js"
 import { parseStudioLocalPreviewPage, parseStudioPdfLaunchTarget } from "./shared/studio-local-preview-path.js";
 import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { createStudioPandocHtmlResourceFlagResolver } from "./shared/studio-pandoc-resource-flag.js";
+import { createStudioResourceGrantRegistry } from "./shared/studio-resource-grants.js";
 import { prepareStudioLatexForPandoc } from "./shared/studio-latex-pandoc-compat.js";
 import { isStudioCmuxSession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
 import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
@@ -11876,6 +11877,7 @@ ${cssVarsBlock}
 export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
 	const studioWorkspaceStateStore = createStudioWorkspaceStateStore();
+	const studioResourceGrantRegistry = createStudioResourceGrantRegistry();
 	let activeRequest: ActiveStudioRequest | null = null;
 	let studioDirectRunChain: StudioDirectRunChain | null = null;
 	let queuedStudioDirectRequests: QueuedStudioDirectRequest[] = [];
@@ -11934,6 +11936,23 @@ export default function (pi: ExtensionAPI) {
 		startedAt: null,
 		updatedAt: Date.now(),
 		actionRequestId: null,
+	};
+
+	const recordStudioDocumentResourceGrants = (document: InitialStudioDocument, cwd = studioCwd) => {
+		if (document.path) {
+			try {
+				studioResourceGrantRegistry.grantDocument(document.path, { cwd, source: "document" });
+			} catch {
+				// A failed grant must not broaden access or prevent an otherwise valid launch.
+			}
+		}
+		if (document.resourceDir) {
+			try {
+				studioResourceGrantRegistry.grantDirectory(document.resourceDir, { cwd, source: "workspace" });
+			} catch {
+				// Keep legacy resource-directory handling unchanged until grant enforcement lands.
+			}
+		}
 	};
 
 	const selectStudioReplSessionForTool = (params: { sessionName?: string; target?: string }): { session: StudioReplSessionInfo | null; error?: string; sessions: StudioReplSessionInfo[] } => {
@@ -14040,6 +14059,7 @@ export default function (pi: ExtensionAPI) {
 				responseHistory: studioResponseHistory,
 				traceState: studioTraceState,
 				initialDocument: initialStudioDocument,
+				resourceGrants: studioResourceGrantRegistry.snapshot(),
 				quartoPreview: getStudioQuartoPreviewSnapshot(),
 				sideQuestion: getStudioSideQuestionPublicState(),
 				webSearchAvailable: Boolean(String(process.env.BRAVE_API_KEY || "").trim()),
@@ -14996,6 +15016,7 @@ export default function (pi: ExtensionAPI) {
 				path: result.resolvedPath,
 				resourceDir: dirname(result.resolvedPath),
 			};
+			recordStudioDocumentResourceGrants(initialStudioDocument);
 
 			sendToClient(client, {
 				type: "saved",
@@ -15088,6 +15109,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			if (!requestedPath || initialStudioDocument?.path === refreshed.resolvedPath) {
 				initialStudioDocument = refreshedDocument;
+				recordStudioDocumentResourceGrants(refreshedDocument);
 			}
 
 			sendToClient(client, {
@@ -16675,6 +16697,7 @@ export default function (pi: ExtensionAPI) {
 			state.server.close(() => resolve());
 		});
 		studioWorkspaceStateStore.clear();
+		studioResourceGrantRegistry.clear();
 	};
 
 	const hydrateLatestAssistant = (entries: SessionEntry[]) => {
@@ -17489,6 +17512,7 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(`Failed to start Studio server${portText}: ${message}`, "error");
 			return;
 		}
+		recordStudioDocumentResourceGrants(selected, ctx.cwd);
 		const docId = selection.transient ? storeTransientStudioDocument(selected) : undefined;
 		const url = buildStudioUrl(state.port, state.token, launchMode, selected, docId, {
 			skipWorkspaceRestore: selection.skipWorkspaceRestore,
@@ -17983,6 +18007,7 @@ export default function (pi: ExtensionAPI) {
 				path: file.resolvedPath,
 			};
 			initialStudioDocument = nextDoc;
+			recordStudioDocumentResourceGrants(nextDoc, ctx.cwd);
 
 			broadcastState();
 			broadcastResponseHistory();

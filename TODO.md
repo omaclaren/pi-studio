@@ -1,6 +1,6 @@
 # TODO
 
-See `ROADMAP.md` for the active `0.9.52`, `0.9.53`, and `0.10.0` release plan. This file retains smaller or unassigned backlog items.
+See `ROADMAP.md` for the active `0.9.53` and `0.10.0` release plan. This file retains smaller or unassigned backlog items.
 
 ## Near term
 - [x] Add a simple **Text | Rendered** toggle for the editor/source panel (`View: Markdown | Preview`).

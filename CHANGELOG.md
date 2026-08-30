@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Begin the `0.9.53` resource-location work with a bounded, session-scoped workspace grant registry that canonicalizes exact-file and directory grants, rejects symlink escapes, automatically records trusted document/workspace locations, and stays separate from the current editor document.
+
 ## [0.9.52] — 2026-08-28
 
 ### Added
