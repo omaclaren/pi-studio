@@ -36,7 +36,7 @@ This release must not add Muxy-specific branches or attempt to instrument opaque
 
 ## 0.9.53 — Resource locations
 
-Status: implementation complete; release-candidate validation in progress. The bounded canonical workspace registry now governs explicit local links, the Files view, passive images/PDFs, and Side questions' related-file roots.
+Status: implementation and release-candidate validation complete; push, tag, and npm publication await explicit approval. The bounded canonical workspace registry now governs explicit local links, the Files view, passive images/PDFs, and Side questions' related-file roots.
 
 Replace the single-root assumption with explicit resource grants:
 
