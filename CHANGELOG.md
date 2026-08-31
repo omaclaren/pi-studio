@@ -19,6 +19,9 @@ All notable changes to `pi-studio` are documented here.
 - Resolve interactive preview media only through authenticated Studio endpoints rather than allowing Pandoc to embed files from a client-supplied resource directory; authored-HTML image blocks are surfaced in trusted outer Studio UI.
 - Revalidate Side questions' selected context root before prompting and before each built-in local context tool call; exact-file grants cannot authorize parent-folder access, and replacement symlinks cannot redirect an active context root.
 
+### Fixed
+- Keep confirmation-button text legible on hover in the light theme by retaining an accent background instead of inheriting the generic pale button hover state.
+
 ## [0.9.52] — 2026-08-28
 
 ### Added

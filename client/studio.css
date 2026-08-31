@@ -6430,6 +6430,13 @@
       font-weight: 650;
     }
 
+    .studio-decision-confirm:not(.is-destructive):not(:disabled):hover,
+    .studio-decision-confirm:not(.is-destructive):focus-visible {
+      border-color: color-mix(in srgb, var(--accent) 84%, var(--text));
+      background: color-mix(in srgb, var(--accent) 84%, var(--text));
+      color: var(--accent-contrast);
+    }
+
     .studio-decision-confirm.is-destructive {
       border-color: var(--warn-border);
       background: color-mix(in srgb, var(--warn) 15%, var(--panel));

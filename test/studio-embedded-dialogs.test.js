@@ -29,6 +29,12 @@ test("the in-page decision dialog is modal, cancellable, and keyboard accessible
   assert.match(cssSource, /\.studio-decision-overlay\[hidden\] \{[\s\S]*?display: none !important;/);
 });
 
+test("confirmation buttons retain their accent contrast on hover", () => {
+  assert.match(cssSource, /\.studio-decision-confirm:not\(\.is-destructive\):not\(:disabled\):hover,/);
+  assert.match(cssSource, /background: color-mix\(in srgb, var\(--accent\) 84%, var\(--text\)\);/);
+  assert.match(cssSource, /color: var\(--accent-contrast\);/);
+});
+
 test("comment deletion and save paths use the in-page dialogs", () => {
   assert.match(clientSource, /async function deleteReviewNote\([\s\S]*?await requestStudioConfirmation\("Delete this local comment\?"/);
   assert.match(clientSource, /async function deleteAllReviewNotes\([\s\S]*?await requestStudioConfirmation\(/);
