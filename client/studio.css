@@ -3701,18 +3701,40 @@
 
     .files-toolbar-actions button,
     .files-actions button,
-    .files-sort-select {
+    .files-sort-select,
+    .files-location-select {
       padding: 4px 7px;
       font-size: 11px;
     }
 
-    .files-sort-select {
-      max-width: 150px;
+    .files-sort-select,
+    .files-location-select {
+      max-width: 240px;
       border: 1px solid var(--control-border);
       border-radius: 7px;
       background: var(--panel);
       color: var(--text);
       font-family: var(--font-ui);
+    }
+
+    .files-sort-select {
+      max-width: 150px;
+    }
+
+    .files-no-locations,
+    .files-section-title {
+      color: var(--studio-info-text, var(--muted));
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .files-exact-section {
+      display: grid;
+      gap: 6px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border-subtle);
     }
 
     .files-subtitle,

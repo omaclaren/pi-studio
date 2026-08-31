@@ -36,7 +36,7 @@ This release must not add Muxy-specific branches or attempt to instrument opaque
 
 ## 0.9.53 — Resource locations
 
-Status: in progress. The bounded canonical workspace registry and the first explicit cross-boundary local-link decision flow are implemented. Files view, embedded resources, and Side questions still need to move onto the shared grant model.
+Status: in progress. The bounded canonical workspace registry, explicit cross-boundary local-link decisions, and grant-rooted Files view are implemented. Embedded resources and Side questions still need to move onto the shared grant model.
 
 Replace the single-root assumption with explicit resource grants:
 
@@ -49,6 +49,16 @@ Replace the single-root assumption with explicit resource grants:
 - offer **Allow this file**, **Allow this folder for this Studio session**, and **Cancel** when an explicit local link crosses the current boundary.
 
 The resource-location registry should be workspace-level rather than tied to the current editor document so it remains compatible with multiple buffers. Remembering grants per project can follow after the session-only model is proven.
+
+## 0.9.54 — Disk-backed preview and safe save
+
+Planned after resource locations stabilize:
+
+- distinguish editable buffers, whose in-memory text drives Editor Preview, from read-only watched previews, whose file on disk is authoritative;
+- add a read-only **Preview file (follow changes)** workflow using the proven debounce, content-hash, atomic-save, preserved-scroll, and last-good-render behaviour from `pandoc-glance` / `pi-markdown-preview` without making Studio depend on another extension;
+- retain a canonical disk revision for file-backed editing, save directly with **Cmd/Ctrl+S** only while that revision still matches, and offer an explicit conflict decision when the file changed externally;
+- add **Cmd/Ctrl+Shift+S** for Save As and keep autosave opt-in rather than default;
+- carry the resulting disk identity and revision model forward into `StudioBufferStore`.
 
 ## 0.10.0 — Buffer-first editing
 

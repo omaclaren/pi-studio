@@ -3151,6 +3151,17 @@ class StudioResourceGrantRequiredError extends Error {
 	}
 }
 
+class StudioDirectoryGrantRequiredError extends Error {
+	readonly code = "studio-resource-directory-grant-required";
+	readonly directoryPath: string;
+
+	constructor(directoryPath: string) {
+		super("This folder is not available to the current Studio session.");
+		this.name = "StudioDirectoryGrantRequiredError";
+		this.directoryPath = directoryPath;
+	}
+}
+
 interface StudioLocalPreviewResource {
 	filePath: string;
 	referencePath: string;
@@ -3170,6 +3181,11 @@ interface StudioFileBrowserEntry {
 	size: number;
 	mtimeMs: number;
 	hidden: boolean;
+}
+
+interface StudioFileBrowserLocation {
+	path: string;
+	label: string;
 }
 
 function normalizeStudioFileBrowserSortMode(sort: string | null | undefined): StudioFileBrowserSortMode {
@@ -3299,26 +3315,82 @@ function resolveStudioLocalPreviewResourcePath(
 	};
 }
 
+function getStudioFileBrowserGrantLocations(resourceGrants: StudioResourceGrantRegistry): {
+	locations: StudioFileBrowserLocation[];
+	exactFiles: StudioFileBrowserEntry[];
+} {
+	const grants = resourceGrants.snapshot();
+	const directoryPaths: string[] = [];
+	for (const grant of grants) {
+		if (grant.kind !== "directory") continue;
+		try {
+			const currentReal = realpathSync(grant.path);
+			if (currentReal === grant.path && statSync(currentReal).isDirectory()) directoryPaths.push(currentReal);
+		} catch {
+			// Missing or replaced directory grants are omitted rather than followed.
+		}
+	}
+	const locations = directoryPaths
+		.map((path) => ({ path, label: basename(path) || path }))
+		.sort((a, b) => a.path.localeCompare(b.path));
+	const exactFiles: StudioFileBrowserEntry[] = [];
+	for (const grant of grants) {
+		if (grant.kind !== "file") continue;
+		if (directoryPaths.some((directoryPath) => isPathInsideOrEqualDirectory(grant.path, directoryPath))) continue;
+		try {
+			const currentReal = realpathSync(grant.path);
+			if (currentReal !== grant.path) continue;
+			const stat = statSync(currentReal);
+			if (!stat.isFile()) continue;
+			const name = basename(currentReal);
+			const extension = extname(currentReal).toLowerCase();
+			exactFiles.push({
+				name,
+				path: currentReal,
+				type: "file",
+				extension,
+				kind: getStudioLocalPreviewResourceKind(extension, currentReal),
+				size: stat.size,
+				mtimeMs: stat.mtimeMs,
+				hidden: name.startsWith("."),
+			});
+		} catch {
+			// Missing exact-file grants remain bounded but are omitted from the Files view.
+		}
+	}
+	exactFiles.sort((a, b) => compareStudioFileBrowserEntries(a, b, "name"));
+	return { locations, exactFiles };
+}
+
 function resolveStudioFileBrowserDirectory(
 	dirPath: string | undefined,
+	rootPath: string | undefined,
 	sourcePath: string | undefined,
 	resourceDir: string | undefined,
 	fallbackCwd: string,
+	resourceGrants: StudioResourceGrantRegistry,
 ): { rootDir: string; currentDir: string; relativeDir: string; parentDir: string | null } {
 	const context = resolveStudioPreviewResourceContext(sourcePath, resourceDir, fallbackCwd);
-	const rootReal = realpathSync(context.boundaryDir);
+	const rawRoot = typeof rootPath === "string" ? rootPath.trim() : "";
+	const expandedRoot = recoverLikelyDroppedLeadingSlashPath(expandHome(rawRoot || context.boundaryDir));
+	const requestedRoot = isAbsolute(expandedRoot) ? expandedRoot : resolve(fallbackCwd, expandedRoot);
+	const requestedRootReal = realpathSync(requestedRoot);
+	if (!statSync(requestedRootReal).isDirectory()) throw new Error("File browser root does not refer to a directory.");
+	const matchingRootGrant = resourceGrants.findGrant(requestedRootReal, { cwd: fallbackCwd });
+	if (!matchingRootGrant || matchingRootGrant.kind !== "directory") {
+		throw new StudioDirectoryGrantRequiredError(requestedRootReal);
+	}
+	const rootReal = matchingRootGrant.path;
 	const rawDir = typeof dirPath === "string" ? dirPath.trim() : "";
-	const baseDir = context.baseDir;
+	const expandedDir = recoverLikelyDroppedLeadingSlashPath(expandHome(rawDir));
 	const requested = rawDir
-		? (isAbsolute(recoverLikelyDroppedLeadingSlashPath(expandHome(rawDir)))
-			? recoverLikelyDroppedLeadingSlashPath(expandHome(rawDir))
-			: resolve(baseDir, recoverLikelyDroppedLeadingSlashPath(expandHome(rawDir))))
-		: baseDir;
+		? (isAbsolute(expandedDir) ? expandedDir : resolve(rootReal, expandedDir))
+		: rootReal;
 	const currentReal = realpathSync(requested);
 	const currentStat = statSync(currentReal);
 	if (!currentStat.isDirectory()) throw new Error("File browser path does not refer to a directory.");
 	if (!isPathInsideOrEqualDirectory(currentReal, rootReal)) {
-		throw new Error("File browser path must stay within the current Studio resource directory.");
+		throw new Error("File browser path must stay within an allowed Studio folder.");
 	}
 	const parent = dirname(currentReal);
 	const parentDir = parent !== currentReal && isPathInsideOrEqualDirectory(parent, rootReal) ? parent : null;
@@ -3328,12 +3400,14 @@ function resolveStudioFileBrowserDirectory(
 
 function listStudioFileBrowserDirectory(
 	dirPath: string | undefined,
+	rootPath: string | undefined,
 	sourcePath: string | undefined,
 	resourceDir: string | undefined,
 	fallbackCwd: string,
+	resourceGrants: StudioResourceGrantRegistry,
 	sortMode?: string | null,
-): { rootDir: string; currentDir: string; relativeDir: string; parentDir: string | null; entries: StudioFileBrowserEntry[]; omitted: number; omittedIgnored: number; sort: StudioFileBrowserSortMode } {
-	const context = resolveStudioFileBrowserDirectory(dirPath, sourcePath, resourceDir, fallbackCwd);
+): { rootDir: string; currentDir: string; relativeDir: string; parentDir: string | null; entries: StudioFileBrowserEntry[]; exactFiles: StudioFileBrowserEntry[]; locations: StudioFileBrowserLocation[]; omitted: number; omittedIgnored: number; sort: StudioFileBrowserSortMode } {
+	const context = resolveStudioFileBrowserDirectory(dirPath, rootPath, sourcePath, resourceDir, fallbackCwd, resourceGrants);
 	const sort = normalizeStudioFileBrowserSortMode(sortMode);
 	const entries: StudioFileBrowserEntry[] = [];
 	let omitted = 0;
@@ -3376,7 +3450,7 @@ function listStudioFileBrowserDirectory(
 	entries.sort((a, b) => compareStudioFileBrowserEntries(a, b, sort));
 	const limitedEntries = entries.slice(0, STUDIO_FILE_BROWSER_MAX_ENTRIES);
 	omitted += Math.max(0, entries.length - limitedEntries.length);
-	return { ...context, entries: limitedEntries, omitted, omittedIgnored, sort };
+	return { ...context, ...getStudioFileBrowserGrantLocations(resourceGrants), entries: limitedEntries, omitted, omittedIgnored, sort };
 }
 
 function resolveStudioHtmlPreviewResourcePath(
@@ -7959,6 +8033,7 @@ async function handleStudioResourceGrantRequest(
 	req: IncomingMessage,
 	res: ServerResponse,
 	resourceGrants: StudioResourceGrantRegistry,
+	studioCwd: string,
 ): Promise<void> {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "POST") {
@@ -7985,8 +8060,8 @@ async function handleStudioResourceGrantRequest(
 
 	try {
 		const grant = grantKind === "directory"
-			? resourceGrants.grantDirectory(path, { source: "explicit-directory" })
-			: resourceGrants.grantFile(path, { source: "explicit-file" });
+			? resourceGrants.grantDirectory(path, { cwd: studioCwd, source: "explicit-directory" })
+			: resourceGrants.grantFile(path, { cwd: studioCwd, source: "explicit-file" });
 		respondJson(res, 200, {
 			ok: true,
 			grant,
@@ -8115,7 +8190,12 @@ function openPathInDefaultViewer(path: string): Promise<void> {
 	});
 }
 
-async function handleOpenStudioFileBrowserDirectoryRequest(req: IncomingMessage, res: ServerResponse, studioCwd: string): Promise<void> {
+async function handleOpenStudioFileBrowserDirectoryRequest(
+	req: IncomingMessage,
+	res: ServerResponse,
+	studioCwd: string,
+	resourceGrants: StudioResourceGrantRegistry,
+): Promise<void> {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "POST") {
 		res.setHeader("Allow", "POST");
@@ -8139,13 +8219,25 @@ async function handleOpenStudioFileBrowserDirectoryRequest(req: IncomingMessage,
 	try {
 		const directory = resolveStudioFileBrowserDirectory(
 			typeof payload.dir === "string" ? payload.dir : undefined,
+			typeof payload.root === "string" ? payload.root : undefined,
 			typeof payload.sourcePath === "string" ? payload.sourcePath : undefined,
 			typeof payload.resourceDir === "string" ? payload.resourceDir : undefined,
 			studioCwd,
+			resourceGrants,
 		);
 		await openPathInDefaultViewer(directory.currentDir);
 		respondJson(res, 200, { ok: true, message: "Opened folder in file manager.", path: directory.currentDir, rootDir: directory.rootDir });
 	} catch (error) {
+		if (error instanceof StudioDirectoryGrantRequiredError) {
+			respondJson(res, 403, {
+				ok: false,
+				code: error.code,
+				error: error.message,
+				path: error.directoryPath,
+				directoryPath: error.directoryPath,
+			});
+			return;
+		}
 		respondJson(res, 404, { ok: false, error: `Could not open file-browser folder: ${error instanceof Error ? error.message : String(error)}` });
 	}
 }
@@ -12058,7 +12150,7 @@ export default function (pi: ExtensionAPI) {
 			try {
 				studioResourceGrantRegistry.grantDirectory(document.resourceDir, { cwd, source: "workspace" });
 			} catch {
-				// Keep legacy resource-directory handling unchanged until grant enforcement lands.
+				// A failed workspace grant must not broaden access or prevent an otherwise valid launch.
 			}
 		}
 	};
@@ -16472,13 +16564,31 @@ export default function (pi: ExtensionAPI) {
 			try {
 				const listing = listStudioFileBrowserDirectory(
 					requestUrl.searchParams.get("dir") ?? undefined,
+					requestUrl.searchParams.get("root") ?? undefined,
 					requestUrl.searchParams.get("sourcePath") ?? undefined,
 					requestUrl.searchParams.get("resourceDir") ?? undefined,
 					studioCwd,
+					studioResourceGrantRegistry,
 					requestUrl.searchParams.get("sort") ?? undefined,
 				);
-				respondJson(res, 200, { ok: true, ...listing, entries: method === "HEAD" ? [] : listing.entries });
+				respondJson(res, 200, {
+					ok: true,
+					...listing,
+					entries: method === "HEAD" ? [] : listing.entries,
+					exactFiles: method === "HEAD" ? [] : listing.exactFiles,
+				});
 			} catch (error) {
+				if (error instanceof StudioDirectoryGrantRequiredError) {
+					respondJson(res, 403, {
+						ok: false,
+						code: error.code,
+						error: error.message,
+						path: error.directoryPath,
+						directoryPath: error.directoryPath,
+						...getStudioFileBrowserGrantLocations(studioResourceGrantRegistry),
+					});
+					return;
+				}
 				respondJson(res, 404, { ok: false, error: `File browser unavailable: ${error instanceof Error ? error.message : String(error)}` });
 			}
 			return;
@@ -16491,7 +16601,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			void handleOpenStudioFileBrowserDirectoryRequest(req, res, studioCwd).catch((error) => {
+			void handleOpenStudioFileBrowserDirectoryRequest(req, res, studioCwd, studioResourceGrantRegistry).catch((error) => {
 				respondJson(res, 500, { ok: false, error: `Open folder failed: ${error instanceof Error ? error.message : String(error)}` });
 			});
 			return;
@@ -16517,7 +16627,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			void handleStudioResourceGrantRequest(req, res, studioResourceGrantRegistry).catch((error) => {
+			void handleStudioResourceGrantRequest(req, res, studioResourceGrantRegistry, studioCwd).catch((error) => {
 				respondJson(res, 500, { ok: false, error: `Resource grant failed: ${error instanceof Error ? error.message : String(error)}` });
 			});
 			return;

@@ -2293,6 +2293,9 @@
         relativeDir: "",
         parentDir: null,
         entries: [],
+        exactFiles: [],
+        locations: [],
+        grantRequiredPath: "",
         omitted: 0,
         omittedIgnored: 0,
         sort: fileBrowserSortMode,
@@ -11362,71 +11365,92 @@
         return "<select class='files-sort-select' data-files-sort aria-label='Files sort order' title='Sort file browser entries. Folders remain grouped first.'>" + options + "</select>";
       }
 
+      function buildFileBrowserEntryRowHtml(entry) {
+        const type = entry && entry.type === "directory" ? "directory" : "file";
+        const kind = (entry && entry.kind) || (type === "directory" ? "directory" : "other");
+        const path = String((entry && entry.path) || "");
+        const name = String((entry && entry.name) || basenameForStudioPath(path));
+        const icon = type === "directory" ? "📁" : (kind === "pdf" ? "📄" : (kind === "image" ? "🖼️" : (kind === "text" || kind === "office" ? "📝" : "📦")));
+        const metaParts = [getFileBrowserKindLabel(entry)];
+        if (type === "file") metaParts.push(formatFileBrowserSize(entry && entry.size));
+        const time = formatFileBrowserTime(entry && entry.mtimeMs);
+        if (time) metaParts.push(time);
+        const newTabAction = kind === "text" || kind === "office"
+          ? "open-new"
+          : ((kind === "pdf" || kind === "image") ? "open-preview-new" : "");
+        const newTabLabel = kind === "text"
+          ? "Open file-backed tab"
+          : (kind === "office" ? "Convert tab" : ((kind === "pdf" || kind === "image") ? "Preview tab" : "New tab"));
+        const newTabTitle = kind === "text"
+          ? "Open this file-backed document in a new refreshable editor tab. Save editor and Refresh from disk will use this file."
+          : (kind === "office" ? "Convert this document to Markdown in a new editor tab." : ((kind === "pdf" || kind === "image") ? "Open this preview in a new Studio tab." : "Open in a new Studio tab."));
+        const newTabButton = newTabAction
+          ? "<button type='button' data-files-action='" + escapeHtml(newTabAction) + "' data-files-path='" + escapeHtml(path) + "' data-files-kind='" + escapeHtml(kind) + "' title='" + escapeHtml(newTabTitle) + "'>" + escapeHtml(newTabLabel) + "</button>"
+          : "";
+        const openTitle = type === "directory"
+          ? "Open folder"
+          : (kind === "text" ? "Open file-backed document in the current editor. Save editor and Refresh from disk will use this file." : (kind === "office" ? "Convert to Markdown in the current editor" : (kind === "pdf" ? "Open PDF preview" : (kind === "image" ? "Open image preview" : "Copy or reveal this file"))));
+        return "<div class='files-row files-row-" + escapeHtml(type) + " files-kind-" + escapeHtml(kind) + "'>"
+          + "<button type='button' class='files-open-btn' data-files-action='" + (type === "directory" ? "open-dir" : "open") + "' data-files-path='" + escapeHtml(path) + "' data-files-kind='" + escapeHtml(kind) + "' title='" + escapeHtml(openTitle) + "'>"
+          + "<span class='files-icon' aria-hidden='true'>" + icon + "</span>"
+          + "<span class='files-name'>" + escapeHtml(name) + "</span>"
+          + "<span class='files-meta'>" + escapeHtml(metaParts.filter(Boolean).join(" · ")) + "</span>"
+          + "</button>"
+          + "<span class='files-actions'>"
+          + newTabButton
+          + "<button type='button' data-files-action='copy-path' data-files-path='" + escapeHtml(path) + "'>Copy path</button>"
+          + (type === "file" ? "<button type='button' data-files-action='reveal' data-files-path='" + escapeHtml(path) + "'>Reveal</button>" : "")
+          + "</span>"
+          + "</div>";
+      }
+
+      function buildFileBrowserLocationSelectHtml(state) {
+        const locations = Array.isArray(state && state.locations) ? state.locations : [];
+        if (!locations.length) return "<span class='files-no-locations'>No allowed folders</span>";
+        const rootDir = String((state && state.rootDir) || "");
+        const options = locations.map((location) => {
+          const path = String((location && location.path) || "");
+          const label = String((location && location.label) || basenameForStudioPath(path) || path);
+          return "<option value='" + escapeHtml(path) + "'" + (path === rootDir ? " selected" : "") + ">" + escapeHtml(label + " — " + path) + "</option>";
+        }).join("");
+        return "<select class='files-location-select' data-files-location aria-label='Allowed Files location' title='Choose a folder allowed for this Studio session on the computer running Pi.'>" + options + "</select>";
+      }
+
       function buildFileBrowserPanelHtml() {
         const state = fileBrowserState || {};
         const entries = Array.isArray(state.entries) ? state.entries : [];
+        const exactFiles = Array.isArray(state.exactFiles) ? state.exactFiles : [];
         const currentDir = state.currentDir || "";
         const rootDir = state.rootDir || "";
         const relativeDir = state.relativeDir || ".";
         const parentDisabled = state.parentDir ? "" : " disabled";
         const rows = entries.length
-          ? entries.map((entry) => {
-            const type = entry.type === "directory" ? "directory" : "file";
-            const kind = entry.kind || (type === "directory" ? "directory" : "other");
-            const icon = type === "directory" ? "📁" : (kind === "pdf" ? "📄" : (kind === "image" ? "🖼️" : (kind === "text" || kind === "office" ? "📝" : "📦")));
-            const metaParts = [];
-            metaParts.push(getFileBrowserKindLabel(entry));
-            if (type === "file") metaParts.push(formatFileBrowserSize(entry.size));
-            const time = formatFileBrowserTime(entry.mtimeMs);
-            if (time) metaParts.push(time);
-            const newTabAction = kind === "text" || kind === "office"
-              ? "open-new"
-              : ((kind === "pdf" || kind === "image") ? "open-preview-new" : "");
-            const newTabLabel = kind === "text"
-              ? "Open file-backed tab"
-              : (kind === "office" ? "Convert tab" : ((kind === "pdf" || kind === "image") ? "Preview tab" : "New tab"));
-            const newTabTitle = kind === "text"
-              ? "Open this file-backed document in a new refreshable editor tab. Save editor and Refresh from disk will use this file."
-              : (kind === "office" ? "Convert this document to Markdown in a new editor tab." : ((kind === "pdf" || kind === "image") ? "Open this preview in a new Studio tab." : "Open in a new Studio tab."));
-            const textActions = newTabAction
-              ? "<button type='button' data-files-action='" + escapeHtml(newTabAction) + "' data-files-path='" + escapeHtml(entry.path) + "' title='" + escapeHtml(newTabTitle) + "'>" + escapeHtml(newTabLabel) + "</button>"
-              : "";
-            const openTitle = type === "directory"
-              ? "Open folder"
-              : (kind === "text" ? "Open file-backed document in the current editor. Save editor and Refresh from disk will use this file." : (kind === "office" ? "Convert to Markdown in the current editor" : (kind === "pdf" ? "Open PDF preview" : (kind === "image" ? "Open image preview" : "Copy or reveal this file"))));
-            return "<div class='files-row files-row-" + escapeHtml(type) + " files-kind-" + escapeHtml(kind) + "'>"
-              + "<button type='button' class='files-open-btn' data-files-action='" + (type === "directory" ? "open-dir" : "open") + "' data-files-path='" + escapeHtml(entry.path) + "' data-files-kind='" + escapeHtml(kind) + "' title='" + escapeHtml(openTitle) + "'>"
-              + "<span class='files-icon' aria-hidden='true'>" + icon + "</span>"
-              + "<span class='files-name'>" + escapeHtml(entry.name) + "</span>"
-              + "<span class='files-meta'>" + escapeHtml(metaParts.filter(Boolean).join(" · ")) + "</span>"
-              + "</button>"
-              + "<span class='files-actions'>"
-              + textActions
-              + "<button type='button' data-files-action='copy-path' data-files-path='" + escapeHtml(entry.path) + "'>Copy path</button>"
-              + (type === "file" ? "<button type='button' data-files-action='reveal' data-files-path='" + escapeHtml(entry.path) + "'>Reveal</button>" : "")
-              + "</span>"
-              + "</div>";
-          }).join("")
+          ? entries.map(buildFileBrowserEntryRowHtml).join("")
           : "<div class='files-empty'>" + (state.loading ? "Loading files…" : "This folder is empty.") + "</div>";
+        const exactRows = exactFiles.map(buildFileBrowserEntryRowHtml).join("");
         const notices = [];
         if (state.error) notices.push("<div class='files-notice files-notice-error'>" + escapeHtml(state.error) + "</div>");
+        if (state.grantRequiredPath) notices.push("<div class='files-notice'>Allow that folder to browse it in Files. Exact-file grants do not expose their parent folders.</div>");
         if (state.omitted) notices.push("<div class='files-notice'>" + escapeHtml(String(state.omitted)) + " item" + (state.omitted === 1 ? "" : "s") + " omitted.</div>");
         if (state.omittedIgnored) notices.push("<div class='files-notice'>" + escapeHtml(String(state.omittedIgnored)) + " heavy/cache folder" + (state.omittedIgnored === 1 ? "" : "s") + " hidden.</div>");
         return "<div class='files-panel'>"
           + "<div class='files-toolbar'>"
           + "<div class='files-path-group'><span class='files-label'>Files</span><span class='files-path' title='" + escapeHtml(currentDir) + "'>" + escapeHtml(relativeDir || ".") + "</span></div>"
           + "<div class='files-toolbar-actions'>"
+          + buildFileBrowserLocationSelectHtml(state)
           + buildFileBrowserSortSelectHtml()
+          + "<button type='button' data-files-action='allow-folder'>Allow folder…</button>"
           + "<button type='button' data-files-action='parent'" + parentDisabled + ">Parent</button>"
           + "<button type='button' data-files-action='refresh'>Refresh</button>"
           + (currentDir ? "<button type='button' data-files-action='copy-current' data-files-path='" + escapeHtml(currentDir) + "'>Copy path</button>" : "")
           + (currentDir ? "<button type='button' data-files-action='use-working-dir' data-files-path='" + escapeHtml(currentDir) + "'>Use as working dir</button>" : "")
-          + (rootDir ? "<button type='button' data-files-action='open-root' data-files-path='" + escapeHtml(rootDir) + "' title='Open the Files root folder in Finder or the system file manager.'>Open root</button>" : "")
+          + (rootDir ? "<button type='button' data-files-action='open-root' data-files-path='" + escapeHtml(rootDir) + "' title='Open the Files root folder in Finder or the system file manager on the computer running Pi.'>Open root</button>" : "")
           + (rootDir ? "<button type='button' data-files-action='copy-root' data-files-path='" + escapeHtml(rootDir) + "'>Copy root</button>" : "")
           + "</div>"
           + "</div>"
-          + "<div class='files-subtitle'>Root: <span title='" + escapeHtml(rootDir) + "'>" + escapeHtml(rootDir || "current Studio directory") + "</span></div>"
+          + "<div class='files-subtitle'>Allowed root on the computer running Pi: <span title='" + escapeHtml(rootDir) + "'>" + escapeHtml(rootDir || "none selected") + "</span></div>"
           + notices.join("")
+          + (exactRows ? "<section class='files-exact-section'><div class='files-section-title'>Allowed exact files</div><div class='files-list' role='list'>" + exactRows + "</div></section>" : "")
           + "<div class='files-list' role='list'>" + rows + "</div>"
           + "</div>";
       }
@@ -11441,6 +11465,9 @@
             relativeDir: "",
             parentDir: null,
             entries: [],
+            exactFiles: [],
+            locations: [],
+            grantRequiredPath: "",
             omitted: 0,
             omittedIgnored: 0,
             sort: fileBrowserSortMode,
@@ -11462,12 +11489,17 @@
       async function loadFileBrowserDirectory(dir, options) {
         const context = getHtmlPreviewResourceContextOptions();
         const contextKey = getFileBrowserContextKey();
+        const config = options && typeof options === "object" ? options : {};
+        const requestedRoot = Object.prototype.hasOwnProperty.call(config, "root")
+          ? normalizeStudioResourceDirValue(config.root || "")
+          : normalizeStudioResourceDirValue(fileBrowserState.rootDir || "");
         const nonce = ++fileBrowserLoadNonce;
         fileBrowserState = {
           ...fileBrowserState,
           contextKey,
           loading: true,
           error: "",
+          grantRequiredPath: "",
         };
         if (rightView === "files") {
           finishPreviewRender(critiqueViewEl);
@@ -11476,6 +11508,7 @@
         try {
           const query = {};
           if (dir) query.dir = String(dir);
+          if (requestedRoot) query.root = requestedRoot;
           if (context.sourcePath) query.sourcePath = context.sourcePath;
           if (context.resourceDir) query.resourceDir = context.resourceDir;
           query.sort = normalizeFileBrowserSortMode(fileBrowserSortMode);
@@ -11488,6 +11521,9 @@
             relativeDir: typeof payload.relativeDir === "string" ? payload.relativeDir : ".",
             parentDir: typeof payload.parentDir === "string" ? payload.parentDir : null,
             entries: Array.isArray(payload.entries) ? payload.entries : [],
+            exactFiles: Array.isArray(payload.exactFiles) ? payload.exactFiles : [],
+            locations: Array.isArray(payload.locations) ? payload.locations : [],
+            grantRequiredPath: "",
             omitted: Number(payload.omitted) || 0,
             omittedIgnored: Number(payload.omittedIgnored) || 0,
             sort: normalizeFileBrowserSortMode(payload.sort || fileBrowserSortMode),
@@ -11501,11 +11537,18 @@
             critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
             scheduleResponsePaneRepaintNudge();
           }
-          if (options && options.user) setStatus("Loaded file list.", "success");
+          if (config.user) setStatus("Loaded file list.", "success");
         } catch (error) {
           if (nonce !== fileBrowserLoadNonce) return;
+          const errorPayload = error && error.studioPayload && typeof error.studioPayload === "object" ? error.studioPayload : null;
+          const grantRequiredPath = errorPayload && errorPayload.code === "studio-resource-directory-grant-required" && typeof errorPayload.directoryPath === "string"
+            ? normalizeStudioResourceDirValue(errorPayload.directoryPath)
+            : "";
           fileBrowserState = {
             ...fileBrowserState,
+            exactFiles: errorPayload && Array.isArray(errorPayload.exactFiles) ? errorPayload.exactFiles : fileBrowserState.exactFiles,
+            locations: errorPayload && Array.isArray(errorPayload.locations) ? errorPayload.locations : fileBrowserState.locations,
+            grantRequiredPath,
             loading: false,
             error: (error && error.message) ? error.message : String(error || "Could not load files."),
             loaded: true,
@@ -11563,6 +11606,34 @@
         setStatus("No Studio preview for this file type. Use Copy path or Reveal.", "warning");
       }
 
+      async function allowFileBrowserFolder() {
+        const context = getHtmlPreviewResourceContextOptions();
+        const suggested = normalizeStudioResourceDirValue(
+          fileBrowserState.grantRequiredPath
+          || fileBrowserState.currentDir
+          || fileBrowserState.rootDir
+          || context.resourceDir
+          || (context.sourcePath ? dirnameForDisplayPath(context.sourcePath) : "")
+          || "./",
+        );
+        const path = await requestStudioTextInput(
+          "Allow a folder on the computer running Pi for this Studio session:",
+          suggested,
+          { title: "Allow folder", confirmLabel: "Allow folder", inputLabel: "Folder path" },
+        );
+        if (!path) return;
+        const payload = await fetchStudioJson("/resource-grants", {
+          method: "POST",
+          body: JSON.stringify({ grantKind: "directory", path }),
+        });
+        const grantedPath = payload && payload.grant && payload.grant.kind === "directory" && typeof payload.grant.path === "string"
+          ? payload.grant.path
+          : "";
+        if (!grantedPath) throw new Error("Studio did not return the allowed folder.");
+        await loadFileBrowserDirectory("", { root: grantedPath });
+        setStatus(typeof payload.message === "string" ? payload.message : "Allowed folder for this Studio session.", "success");
+      }
+
       function setFileBrowserCurrentDirectoryAsWorkingDir(path) {
         const nextDir = normalizeStudioResourceDirValue(path || fileBrowserState.currentDir || "");
         if (!nextDir) {
@@ -11584,6 +11655,7 @@
         }
         const context = getHtmlPreviewResourceContextOptions();
         const body = { dir: targetDir };
+        if (fileBrowserState.rootDir) body.root = fileBrowserState.rootDir;
         if (context.sourcePath) body.sourcePath = context.sourcePath;
         if (context.resourceDir) body.resourceDir = context.resourceDir;
         const payload = await fetchStudioJson("/file-browser-open", {
@@ -11596,6 +11668,14 @@
       async function handleFilesPaneChange(event) {
         if (rightView !== "files") return;
         const target = event.target;
+        const locationSelect = target instanceof Element ? target.closest("[data-files-location]") : null;
+        if (locationSelect && "value" in locationSelect) {
+          const nextRoot = normalizeStudioResourceDirValue(locationSelect.value || "");
+          if (nextRoot && nextRoot !== fileBrowserState.rootDir) {
+            await loadFileBrowserDirectory("", { root: nextRoot, user: true });
+          }
+          return;
+        }
         const sortSelect = target instanceof Element ? target.closest("[data-files-sort]") : null;
         if (!sortSelect || !("value" in sortSelect)) return;
         const nextSort = writeFileBrowserSortMode(sortSelect.value);
@@ -11614,6 +11694,10 @@
         const path = actionEl.getAttribute("data-files-path") || "";
         const kind = actionEl.getAttribute("data-files-kind") || getPreviewLocalLinkKind(path);
         try {
+          if (action === "allow-folder") {
+            await allowFileBrowserFolder();
+            return;
+          }
           if (action === "parent") {
             if (fileBrowserState.parentDir) await loadFileBrowserDirectory(fileBrowserState.parentDir, { user: true });
             return;
@@ -11631,14 +11715,6 @@
             return;
           }
           if (action === "open-new") {
-            if (kind === "text" && isLikelyAbsoluteStudioPath(path)) {
-              openFileBackedStudioEditorTab(path, {
-                label: basenameForStudioPath(path),
-                resourceDir: fileBrowserState.rootDir || getCurrentResourceDirValue() || dirnameForDisplayPath(path),
-              });
-              setStatus("Opening file-backed document in a new editor.");
-              return;
-            }
             await openPreviewDocumentInNewEditor(path, getFileBrowserLocalLinkContext());
             return;
           }
@@ -14892,6 +14968,7 @@
           method: "POST",
           body: JSON.stringify({ grantKind, path: grantPath }),
         });
+        fileBrowserState = { ...fileBrowserState, contextKey: "", loaded: false };
         setStatus(typeof payload.message === "string" ? payload.message : "Allowed local resource for this Studio session.", "success");
         return true;
       }

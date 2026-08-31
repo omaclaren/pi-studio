@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -61,6 +61,28 @@ test("Studio resource grants distinguish exact files from folders", () => {
 		assert.equal(registry.findGrant(nestedFile).kind, "directory");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("Studio exact-file grants do not follow a replacement symlink", () => {
+	const root = makeTempDir();
+	const outside = makeTempDir();
+	try {
+		const grantedFile = join(root, "granted.txt");
+		const outsideFile = join(outside, "secret.txt");
+		writeFileSync(grantedFile, "original");
+		writeFileSync(outsideFile, "secret");
+
+		const registry = createStudioResourceGrantRegistry();
+		registry.grantFile(grantedFile);
+		unlinkSync(grantedFile);
+		symlinkSync(outsideFile, grantedFile);
+
+		assert.equal(registry.allows(grantedFile), false);
+		assert.equal(registry.allows(outsideFile), false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(outside, { recursive: true, force: true });
 	}
 });
 
@@ -171,9 +193,9 @@ test("cross-boundary local links require an explicit file or folder grant", () =
 	assert.ok(grantRouteStart >= 0 && localLinkRouteStart > grantRouteStart, "The authenticated grant route must precede local-link resolution and the root catch-all.");
 	const grantRouteSource = indexSource.slice(grantRouteStart, localLinkRouteStart);
 	assert.match(grantRouteSource, /token !== serverState\.token/);
-	assert.match(grantRouteSource, /handleStudioResourceGrantRequest\(req, res, studioResourceGrantRegistry\)/);
-	assert.match(indexSource, /resourceGrants\.grantDirectory\(path, \{ source: "explicit-directory" \}\)/);
-	assert.match(indexSource, /resourceGrants\.grantFile\(path, \{ source: "explicit-file" \}\)/);
+	assert.match(grantRouteSource, /handleStudioResourceGrantRequest\(req, res, studioResourceGrantRegistry, studioCwd\)/);
+	assert.match(indexSource, /resourceGrants\.grantDirectory\(path, \{ cwd: studioCwd, source: "explicit-directory" \}\)/);
+	assert.match(indexSource, /resourceGrants\.grantFile\(path, \{ cwd: studioCwd, source: "explicit-file" \}\)/);
 	assert.match(indexSource, /resolveStudioPdfResourcePath\([\s\S]*studioResourceGrantRegistry/);
 	assert.match(indexSource, /resolveStudioHtmlPreviewResourcePath\([\s\S]*studioResourceGrantRegistry/);
 
