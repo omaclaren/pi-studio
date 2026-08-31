@@ -402,8 +402,8 @@
           option.disabled = (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value)) || (isQuartoOption && !quartoRelevant);
         });
         rightViewSelect.title = isEditorOnlyMode
-          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7/8 switch directly to numbered right-pane views, and Cmd/Ctrl+Alt+Q opens Side questions."
-          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W keep their mnemonic Preview/Editor Preview/Working shortcuts.";
+          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7/8 switch directly to numbered right-pane views, and Cmd/Ctrl+Alt+F/Q open Files/Side questions."
+          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W/F/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, and Side questions.";
       }
 
       function getInitialRightView(source) {
@@ -4827,6 +4827,16 @@
         if (isEditorPreviewShortcut) {
           event.preventDefault();
           switchRightPaneToEditorPreview();
+          return;
+        }
+
+        const isFilesShortcut = (key.toLowerCase() === "f" || code === "KeyF")
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey;
+        if (isFilesShortcut) {
+          event.preventDefault();
+          switchRightPaneToView("files");
           return;
         }
 

@@ -55,6 +55,19 @@ test("Files exposes allowed folders and exact files without promoting exact file
 	assert.match(cssSource, /\.files-exact-section/);
 });
 
+test("Files has numeric and mnemonic direct-switch shortcuts", () => {
+	assert.match(clientSource, /Digit6: "files"/);
+	const filesShortcutStart = clientSource.indexOf("const isFilesShortcut");
+	const sideQuestionsShortcutStart = clientSource.indexOf("const isSideQuestionsShortcut", filesShortcutStart);
+	assert.ok(filesShortcutStart >= 0 && sideQuestionsShortcutStart > filesShortcutStart);
+	const shortcutSource = clientSource.slice(filesShortcutStart, sideQuestionsShortcutStart);
+	assert.match(shortcutSource, /code === "KeyF"/);
+	assert.match(shortcutSource, /\(event\.metaKey \|\| event\.ctrlKey\)/);
+	assert.match(shortcutSource, /event\.altKey/);
+	assert.match(shortcutSource, /switchRightPaneToView\("files"\)/);
+	assert.match(indexSource, /Cmd\/Ctrl\+Alt\+F<\/dt><dd>Switch the right pane directly to Files/);
+});
+
 test("Files new-tab actions authorize through the local-resource protocol", () => {
 	const clickStart = clientSource.indexOf("async function handleFilesPaneClick");
 	const gitContextStart = clientSource.indexOf("function getGitChangesContext", clickStart);

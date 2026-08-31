@@ -8,6 +8,7 @@ All notable changes to `pi-studio` are documented here.
 - Begin the `0.9.53` resource-location work with a bounded, session-scoped workspace grant registry that canonicalizes exact-file and directory grants, rejects symlink escapes, automatically records trusted document/workspace locations, and stays separate from the current editor document.
 - When an explicit local preview link crosses the current resource boundary, show an in-page **Allow this file** / **Allow this folder for this Studio session** / **Cancel** decision, identify the path as belonging to the computer running Pi, and retry the original PDF, image, document, copy, reveal, or system-viewer action only after a grant is confirmed.
 - Root the Files view in session directory grants, add an explicit **Allow folder…** action and allowed-location selector, and show exact-file grants without exposing or making their parent folders browsable.
+- Add `Cmd/Ctrl+Alt+F` as a mnemonic shortcut for switching the right pane directly to Files (`Ctrl+Option+F` is accepted on macOS).
 
 ### Changed
 - Check local-link access before presenting its action menu, and route text/office links through that menu, so permission decisions remain visible in the originating Studio page instead of being hidden behind a preliminary waiting tab.

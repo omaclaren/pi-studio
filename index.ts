@@ -11872,7 +11872,7 @@ ${cssVarsBlock}
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+1–8 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W/Q keep their mnemonic Preview/Editor Preview/Working/Side questions shortcuts.">
+          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+1–8 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W/F/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, and Side questions.">
             <option value="markdown">Response (Raw)</option>
             <option value="preview" selected>Response (Preview)</option>
             <option value="editor-preview">Editor (Preview)</option>
@@ -11981,6 +11981,7 @@ ${cssVarsBlock}
             <div><dt>Cmd/Ctrl+Alt+P</dt><dd>Switch the right pane directly to Response Preview; in editor-only views, Editor Preview</dd></div>
             <div><dt>Cmd/Ctrl+Alt+E</dt><dd>Switch the right pane directly to Editor Preview</dd></div>
             <div><dt>Cmd/Ctrl+Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+F</dt><dd>Switch the right pane directly to Files</dd></div>
             <div><dt>Cmd/Ctrl+Alt+Q</dt><dd>Switch the right pane directly to Side questions</dd></div>
             <div><dt>F8</dt><dd>Focus editor text</dd></div>
             <div><dt>Shift+F8</dt><dd>Focus right-pane content</dd></div>
