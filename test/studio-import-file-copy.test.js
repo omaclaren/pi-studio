@@ -23,14 +23,9 @@ test("the import dialog keeps browser selection secondary to an always-visible p
   assert.match(clientSource, /onSecondary: chooseStudioFileCopyWithBrowser/);
   assert.match(clientSource, /inputLabel: "File path on computer running Pi"/);
   assert.match(clientSource, /studioDecisionSecondaryBtn\.hidden = !secondaryLabel/);
-  assert.match(clientSource, /const handler = studioDecisionState && studioDecisionState\.onSecondary/);
-  assert.doesNotMatch(
-    clientSource.slice(
-      clientSource.indexOf('secondaryBtn.addEventListener("click"'),
-      clientSource.indexOf('const confirmBtn = document.createElement("button")'),
-    ),
-    /finishStudioDecision/,
-  );
+  assert.match(clientSource, /const state = studioDecisionState;\s*const handler = state && state\.onSecondary/);
+  assert.match(clientSource, /if \(typeof handler !== "function"\) \{\s*if \(state && state\.hasSecondaryValue\) finishStudioDecision\(state\.secondaryValue\);\s*return;\s*\}/);
+  assert.match(clientSource, /const result = handler\(\)/);
 });
 
 test("a missing browser chooser leaves the import dialog usable", () => {

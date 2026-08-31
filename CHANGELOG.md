@@ -6,6 +6,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Added
 - Begin the `0.9.53` resource-location work with a bounded, session-scoped workspace grant registry that canonicalizes exact-file and directory grants, rejects symlink escapes, automatically records trusted document/workspace locations, and stays separate from the current editor document.
+- When an explicit local preview link crosses the current resource boundary, show an in-page **Allow this file** / **Allow this folder for this Studio session** / **Cancel** decision, identify the path as belonging to the computer running Pi, and retry the original PDF, image, document, copy, reveal, or system-viewer action only after a grant is confirmed.
 
 ## [0.9.52] — 2026-08-28
 

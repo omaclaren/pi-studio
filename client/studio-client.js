@@ -3894,8 +3894,12 @@
         secondaryBtn.className = "studio-decision-secondary";
         secondaryBtn.hidden = true;
         secondaryBtn.addEventListener("click", () => {
-          const handler = studioDecisionState && studioDecisionState.onSecondary;
-          if (typeof handler !== "function") return;
+          const state = studioDecisionState;
+          const handler = state && state.onSecondary;
+          if (typeof handler !== "function") {
+            if (state && state.hasSecondaryValue) finishStudioDecision(state.secondaryValue);
+            return;
+          }
           try {
             const result = handler();
             if (result && typeof result.catch === "function") {
@@ -3990,6 +3994,8 @@
             resolve,
             returnFocusEl,
             onSecondary: typeof settings.onSecondary === "function" ? settings.onSecondary : null,
+            hasSecondaryValue: Object.prototype.hasOwnProperty.call(settings, "secondaryValue"),
+            secondaryValue: settings.secondaryValue,
           };
           studioDecisionState = decisionState;
           const schedule = typeof window.requestAnimationFrame === "function"
@@ -6625,7 +6631,9 @@
         }
         const kind = getPreviewLocalLinkKind(context.href);
         if (kind === "pdf") {
-          openPreviewPdfLink(context.href, context.title, context);
+          void openPreviewPdfLink(context.href, context.title, context).catch((error) => {
+            setStatus((error && error.message) ? error.message : String(error || "Could not open linked PDF."), "warning");
+          });
           return;
         }
         if (kind === "image") {
@@ -11546,7 +11554,7 @@
           return;
         }
         if (kind === "pdf") {
-          openPreviewPdfLink(path, path, context);
+          await openPreviewPdfLink(path, path, context);
           return;
         }
         if (kind === "image") {
@@ -14538,6 +14546,11 @@
         return launch.fail(message || "Studio could not prepare this tab. Return to the originating Studio page for details.");
       }
 
+      function cancelPendingStudioTab(launch, message) {
+        if (!launch || typeof launch.cancel !== "function") return false;
+        return launch.cancel(message || "Studio tab launch was cancelled.");
+      }
+
       function abandonAllStudioTabLaunches(message) {
         const launches = Array.from(activeStudioTabLaunches);
         activeStudioTabLaunches.clear();
@@ -14616,7 +14629,10 @@
           const message = payload && typeof payload.error === "string"
             ? payload.error
             : (response.status + " " + response.statusText).trim();
-          throw new Error(message || (method + " " + pathname + " failed."));
+          const requestError = new Error(message || (method + " " + pathname + " failed."));
+          requestError.studioPayload = payload && typeof payload === "object" ? payload : null;
+          requestError.studioStatus = response.status;
+          throw requestError;
         }
         return payload;
       }
@@ -14715,7 +14731,7 @@
         if (!raw || raw.charAt(0) === "#") return false;
         if (/^\/\//.test(raw)) return false;
         if (/^(?:https?|mailto|tel|data|blob|javascript|about):/i.test(raw)) return false;
-        if (/^\/(?:pdf-resource|html-preview-resource|export-pdf|export-html|render-preview|render-math|import-file-copy|local-preview-link|reveal-local-resource|open-local-resource)(?:[?#/]|$)/i.test(raw)) return false;
+        if (/^\/(?:pdf-resource|html-preview-resource|export-pdf|export-html|render-preview|render-math|import-file-copy|resource-grants|local-preview-link|reveal-local-resource|open-local-resource)(?:[?#/]|$)/i.test(raw)) return false;
         return true;
       }
 
@@ -14822,10 +14838,64 @@
         return true;
       }
 
-      async function fetchPreviewLocalLink(action, href, contextOverride) {
-        return fetchStudioJson("/local-preview-link", {
+      function getStudioResourceGrantRequest(error) {
+        const payload = error && error.studioPayload && typeof error.studioPayload === "object"
+          ? error.studioPayload
+          : null;
+        if (!payload || payload.code !== "studio-resource-grant-required") return null;
+        const path = typeof payload.path === "string" ? payload.path.trim() : "";
+        const directoryPath = typeof payload.directoryPath === "string" ? payload.directoryPath.trim() : "";
+        if (!path || !directoryPath) return null;
+        return {
+          path,
+          directoryPath,
+          label: typeof payload.label === "string" && payload.label.trim() ? payload.label.trim() : basenameForStudioPath(path),
+        };
+      }
+
+      async function requestStudioResourceGrant(request) {
+        if (!request) return false;
+        const choice = await openStudioDecision({
+          mode: "confirm",
+          title: "Allow " + request.label + "?",
+          message: "This link points outside the locations currently available to Studio.\n\n"
+            + "File on the computer running Pi:\n" + request.path + "\n\n"
+            + "Allow only this file, or allow its containing folder for this Studio session?",
+          cancelLabel: "Cancel",
+          secondaryLabel: "Allow this folder for this Studio session",
+          secondaryValue: "directory",
+          confirmLabel: "Allow this file",
+        });
+        const grantKind = choice === true ? "file" : choice === "directory" ? "directory" : "";
+        if (!grantKind) {
+          setStatus("Local resource access cancelled.", "warning");
+          return false;
+        }
+        const grantPath = grantKind === "directory" ? request.directoryPath : request.path;
+        const payload = await fetchStudioJson("/resource-grants", {
+          method: "POST",
+          body: JSON.stringify({ grantKind, path: grantPath }),
+        });
+        setStatus(typeof payload.message === "string" ? payload.message : "Allowed local resource for this Studio session.", "success");
+        return true;
+      }
+
+      async function fetchPreviewLocalLink(action, href, contextOverride, options) {
+        const request = () => fetchStudioJson("/local-preview-link", {
           query: { ...getPreviewLinkResourceQuery(href, contextOverride), action },
         });
+        try {
+          return await request();
+        } catch (error) {
+          const grantRequest = getStudioResourceGrantRequest(error);
+          if (!grantRequest || (options && options.skipGrantPrompt === true)) throw error;
+          if (!(await requestStudioResourceGrant(grantRequest))) {
+            const cancelled = new Error("Local resource access cancelled.");
+            cancelled.studioCancelled = true;
+            throw cancelled;
+          }
+          return request();
+        }
       }
 
       function getPreviewPdfViewerUrl(href, contextOverride) {
@@ -14836,16 +14906,16 @@
         return resourceUrl && page ? resourceUrl + "#page=" + encodeURIComponent(String(page)) : resourceUrl;
       }
 
-      function openPreviewPdfLink(href, title, contextOverride) {
+      async function openPreviewPdfLink(href, title, contextOverride) {
+        await fetchPreviewLocalLink("resolve", href, contextOverride);
         const viewerUrl = getPreviewPdfViewerUrl(href, contextOverride);
         if (!viewerUrl) {
           setStatus("Could not resolve this PDF link. Open the source file or set a working directory first.", "warning");
           return false;
         }
-        const cleanPath = stripPreviewLocalLinkUrlSuffix(href);
         const context = contextOverride && typeof contextOverride === "object" ? contextOverride : {};
         const resourceQuery = buildStudioPdfResourceQuery({
-          path: cleanPath,
+          path: stripPreviewLocalLinkUrlSuffix(href),
           sourcePath: context.sourcePath || "",
           resourceDir: context.resourceDir || "",
         }, true);
@@ -14854,6 +14924,7 @@
       }
 
       async function openPreviewImageLink(href, title, contextOverride) {
+        await fetchPreviewLocalLink("resolve", href, contextOverride);
         const payload = await fetchStudioJson("/html-preview-resource", {
           query: getPreviewLinkResourceQuery(href, contextOverride),
         });
@@ -14955,7 +15026,11 @@
           navigatePendingStudioTab(launch, relativeUrl);
           setStatus(payload && payload.converted ? "Opening converted document in a new editor." : "Opening file-backed document in a new editor.");
         } catch (error) {
-          failPendingStudioTab(launch, "Studio could not prepare this document tab. Return to the originating Studio page for details.");
+          if (error && error.studioCancelled) {
+            cancelPendingStudioTab(launch, "Local resource access was cancelled.");
+          } else {
+            failPendingStudioTab(launch, "Studio could not prepare this document tab. Return to the originating Studio page for details.");
+          }
           throw error;
         }
       }
@@ -14970,7 +15045,11 @@
           navigatePendingStudioTab(launch, relativeUrl);
           setStatus("Opening preview in a new Studio tab.");
         } catch (error) {
-          failPendingStudioTab(launch, "Studio could not prepare this preview tab. Return to the originating Studio page for details.");
+          if (error && error.studioCancelled) {
+            cancelPendingStudioTab(launch, "Local resource access was cancelled.");
+          } else {
+            failPendingStudioTab(launch, "Studio could not prepare this preview tab. Return to the originating Studio page for details.");
+          }
           throw error;
         }
       }
@@ -14985,6 +15064,7 @@
       }
 
       async function revealPreviewLocalLink(href, contextOverride) {
+        await fetchPreviewLocalLink("resolve", href, contextOverride);
         const query = getPreviewLinkResourceQuery(href, contextOverride);
         const payload = await fetchStudioJson("/reveal-local-resource", {
           method: "POST",
@@ -14998,10 +15078,11 @@
         if (!href) return;
         try {
           if (action === "open-pdf") {
-            openPreviewPdfLink(href, context.title || href, context);
+            await openPreviewPdfLink(href, context.title || href, context);
             return;
           }
           if (action === "open-system") {
+            await fetchPreviewLocalLink("resolve", href, context);
             await runStudioPdfLocalAction("system-viewer", getPreviewLinkResourceQuery(href, context));
             return;
           }
@@ -15043,7 +15124,9 @@
         closePreviewLinkMenu();
         const title = String(anchor.textContent || href).trim() || href;
         if (kind === "pdf") {
-          openPreviewPdfLink(href, title);
+          void openPreviewPdfLink(href, title).catch((error) => {
+            setStatus((error && error.message) ? error.message : String(error || "Could not open linked PDF."), "warning");
+          });
           return;
         }
         if (kind === "image") {

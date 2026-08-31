@@ -156,3 +156,42 @@ test("Studio exposes session resource grants and clears them with the server", (
 	const grantsClear = indexSource.indexOf("studioResourceGrantRegistry.clear()", stopServerStart);
 	assert.ok(stopServerStart >= 0 && serverClose > stopServerStart && grantsClear > serverClose);
 });
+
+test("cross-boundary local links require an explicit file or folder grant", () => {
+	const indexSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+	const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
+
+	assert.match(indexSource, /class StudioResourceGrantRequiredError extends Error/);
+	assert.match(indexSource, /readonly code = "studio-resource-grant-required"/);
+	assert.match(indexSource, /resourceGrants\?\.findGrant\(candidateReal\)/);
+	assert.match(indexSource, /error instanceof StudioResourceGrantRequiredError/);
+	assert.match(indexSource, /code: error\.code[\s\S]*directoryPath: error\.directoryPath/);
+	const grantRouteStart = indexSource.indexOf('requestUrl.pathname === "/resource-grants"');
+	const localLinkRouteStart = indexSource.indexOf('requestUrl.pathname === "/local-preview-link"');
+	assert.ok(grantRouteStart >= 0 && localLinkRouteStart > grantRouteStart, "The authenticated grant route must precede local-link resolution and the root catch-all.");
+	const grantRouteSource = indexSource.slice(grantRouteStart, localLinkRouteStart);
+	assert.match(grantRouteSource, /token !== serverState\.token/);
+	assert.match(grantRouteSource, /handleStudioResourceGrantRequest\(req, res, studioResourceGrantRegistry\)/);
+	assert.match(indexSource, /resourceGrants\.grantDirectory\(path, \{ source: "explicit-directory" \}\)/);
+	assert.match(indexSource, /resourceGrants\.grantFile\(path, \{ source: "explicit-file" \}\)/);
+	assert.match(indexSource, /resolveStudioPdfResourcePath\([\s\S]*studioResourceGrantRegistry/);
+	assert.match(indexSource, /resolveStudioHtmlPreviewResourcePath\([\s\S]*studioResourceGrantRegistry/);
+
+	assert.match(clientSource, /requestError\.studioPayload = payload/);
+	assert.match(clientSource, /payload\.code !== "studio-resource-grant-required"/);
+	assert.match(clientSource, /confirmLabel: "Allow this file"/);
+	assert.match(clientSource, /secondaryLabel: "Allow this folder for this Studio session"/);
+	assert.match(clientSource, /secondaryValue: "directory"/);
+	assert.match(clientSource, /fetchStudioJson\("\/resource-grants"/);
+	assert.match(clientSource, /if \(!\(await requestStudioResourceGrant\(grantRequest\)\)\)/);
+	assert.match(clientSource, /if \(error && error\.studioCancelled\) \{\s*cancelPendingStudioTab\(launch, "Local resource access was cancelled\."\)/);
+	const pdfOpenStart = clientSource.indexOf("async function openPreviewPdfLink");
+	const imageOpenStart = clientSource.indexOf("async function openPreviewImageLink", pdfOpenStart);
+	const editorContentCheckStart = clientSource.indexOf("function editorHasPotentialUnsavedContent", imageOpenStart);
+	const pdfOpenSource = clientSource.slice(pdfOpenStart, imageOpenStart);
+	const imageOpenSource = clientSource.slice(imageOpenStart, editorContentCheckStart);
+	assert.match(pdfOpenSource, /await fetchPreviewLocalLink\("resolve", href, contextOverride\)/);
+	assert.match(pdfOpenSource, /getPreviewPdfViewerUrl\(href, contextOverride\)/, "PDF actions should retry the original encoded href after granting it.");
+	assert.match(imageOpenSource, /await fetchPreviewLocalLink\("resolve", href, contextOverride\)/);
+	assert.match(imageOpenSource, /getPreviewLinkResourceQuery\(href, contextOverride\)/, "Image actions should retry the original encoded href after granting it.");
+});

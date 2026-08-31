@@ -36,7 +36,7 @@ This release must not add Muxy-specific branches or attempt to instrument opaque
 
 ## 0.9.53 — Resource locations
 
-Status: in progress. The first internal slice establishes the bounded, canonical, workspace-level session registry without changing the current single-root UI or authorization behavior.
+Status: in progress. The bounded canonical workspace registry and the first explicit cross-boundary local-link decision flow are implemented. Files view, embedded resources, and Side questions still need to move onto the shared grant model.
 
 Replace the single-root assumption with explicit resource grants:
 

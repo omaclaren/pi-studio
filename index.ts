@@ -3134,9 +3134,26 @@ const STUDIO_FILE_BROWSER_IGNORED_DIRS = new Set([
 
 type StudioLocalPreviewResourceKind = "pdf" | "text" | "image" | "office" | "other";
 type StudioFileBrowserSortMode = "name" | "mtime-desc" | "mtime-asc" | "size-desc" | "size-asc";
+type StudioResourceGrantRegistry = ReturnType<typeof createStudioResourceGrantRegistry>;
+
+class StudioResourceGrantRequiredError extends Error {
+	readonly code = "studio-resource-grant-required";
+	readonly filePath: string;
+	readonly directoryPath: string;
+	readonly resourceKind: StudioLocalPreviewResourceKind;
+
+	constructor(filePath: string, resourceKind: StudioLocalPreviewResourceKind) {
+		super("This local resource is outside the locations currently available to Studio.");
+		this.name = "StudioResourceGrantRequiredError";
+		this.filePath = filePath;
+		this.directoryPath = dirname(filePath);
+		this.resourceKind = resourceKind;
+	}
+}
 
 interface StudioLocalPreviewResource {
 	filePath: string;
+	referencePath: string;
 	label: string;
 	extension: string;
 	kind: StudioLocalPreviewResourceKind;
@@ -3178,7 +3195,13 @@ function compareStudioFileBrowserEntries(a: StudioFileBrowserEntry, b: StudioFil
 	return compareStudioFileBrowserEntryNames(a, b);
 }
 
-function resolveStudioPdfResourcePath(pdfPath: string | undefined, sourcePath: string | undefined, resourceDir: string | undefined, fallbackCwd: string): string {
+function resolveStudioPdfResourcePath(
+	pdfPath: string | undefined,
+	sourcePath: string | undefined,
+	resourceDir: string | undefined,
+	fallbackCwd: string,
+	resourceGrants?: StudioResourceGrantRegistry,
+): string {
 	const rawPath = typeof pdfPath === "string" ? pdfPath.trim() : "";
 	if (!rawPath) throw new Error("Missing PDF path.");
 	if (/\0/.test(rawPath)) throw new Error("Invalid PDF path.");
@@ -3194,9 +3217,8 @@ function resolveStudioPdfResourcePath(pdfPath: string | undefined, sourcePath: s
 
 	const boundaryReal = realpathSync(context.boundaryDir);
 	const candidateReal = realpathSync(candidate);
-	const rel = relative(boundaryReal, candidateReal);
-	if (rel.startsWith("..") || isAbsolute(rel)) {
-		throw new Error("PDF path must stay within the current Studio resource directory.");
+	if (!isPathInsideOrEqualDirectory(candidateReal, boundaryReal) && !resourceGrants?.allows(candidateReal)) {
+		throw new Error("PDF path must stay within a location allowed for this Studio session.");
 	}
 
 	const stat = statSync(candidateReal);
@@ -3232,6 +3254,7 @@ function resolveStudioLocalPreviewResourcePath(
 	sourcePath: string | undefined,
 	resourceDir: string | undefined,
 	fallbackCwd: string,
+	resourceGrants?: StudioResourceGrantRegistry,
 ): StudioLocalPreviewResource {
 	const rawPath = typeof resourcePath === "string" ? resourcePath.trim() : "";
 	if (!rawPath) throw new Error("Missing local resource path.");
@@ -3249,20 +3272,30 @@ function resolveStudioLocalPreviewResourcePath(
 	const extension = extname(candidate).toLowerCase();
 	const boundaryReal = realpathSync(context.boundaryDir);
 	const candidateReal = realpathSync(candidate);
-	const rel = relative(boundaryReal, candidateReal);
-	if (rel.startsWith("..") || isAbsolute(rel)) {
+	const stat = statSync(candidateReal);
+	if (!stat.isFile()) throw new Error("Local resource path does not refer to a file.");
+
+	const kind = getStudioLocalPreviewResourceKind(extension, candidateReal);
+	const insideBoundary = isPathInsideOrEqualDirectory(candidateReal, boundaryReal);
+	const matchingGrant = insideBoundary ? null : resourceGrants?.findGrant(candidateReal);
+	if (!insideBoundary && !matchingGrant) {
+		if (resourceGrants) throw new StudioResourceGrantRequiredError(candidateReal, kind);
 		throw new Error("Local resource path must stay within the current Studio resource directory.");
 	}
 
-	const stat = statSync(candidateReal);
-	if (!stat.isFile()) throw new Error("Local resource path does not refer to a file.");
+	const effectiveDirectory = insideBoundary
+		? boundaryReal
+		: (matchingGrant?.kind === "directory" ? matchingGrant.path : boundaryReal);
+	const relativePath = relative(effectiveDirectory, candidateReal);
+	const useRelativeReference = isPathInsideOrEqualDirectory(candidateReal, effectiveDirectory);
 	return {
 		filePath: candidateReal,
-		label: rel && rel !== "" ? rel : basename(candidateReal),
+		referencePath: useRelativeReference ? (relativePath || basename(candidateReal)) : candidateReal,
+		label: useRelativeReference ? (relativePath || basename(candidateReal)) : basename(candidateReal),
 		extension,
-		kind: getStudioLocalPreviewResourceKind(extension, candidateReal),
+		kind,
 		page: parseStudioLocalPreviewPage(rawPath),
-		resourceDir: boundaryReal,
+		resourceDir: effectiveDirectory,
 	};
 }
 
@@ -3351,6 +3384,7 @@ function resolveStudioHtmlPreviewResourcePath(
 	sourcePath: string | undefined,
 	resourceDir: string | undefined,
 	fallbackCwd: string,
+	resourceGrants?: StudioResourceGrantRegistry,
 ): { filePath: string; mimeType: string } {
 	const rawPath = typeof resourcePath === "string" ? resourcePath.trim() : "";
 	if (!rawPath) throw new Error("Missing HTML preview resource path.");
@@ -3369,9 +3403,8 @@ function resolveStudioHtmlPreviewResourcePath(
 
 	const boundaryReal = realpathSync(context.boundaryDir);
 	const candidateReal = realpathSync(candidate);
-	const rel = relative(boundaryReal, candidateReal);
-	if (rel.startsWith("..") || isAbsolute(rel)) {
-		throw new Error("HTML preview resource path must stay within the current Studio resource directory.");
+	if (!isPathInsideOrEqualDirectory(candidateReal, boundaryReal) && !resourceGrants?.allows(candidateReal)) {
+		throw new Error("HTML preview resource path must stay within a location allowed for this Studio session.");
 	}
 
 	const stat = statSync(candidateReal);
@@ -7662,7 +7695,7 @@ function sanitizeStudioPreviewBlockLine(value: string): string {
 
 function buildStudioLocalResourcePreviewDocument(resource: StudioLocalPreviewResource, options?: { watchPdf?: boolean }): InitialStudioDocument {
 	const label = basename(resource.filePath) || resource.label || "local preview";
-	const resourcePath = resource.label || basename(resource.filePath) || resource.filePath;
+	const resourcePath = resource.referencePath || resource.label || basename(resource.filePath) || resource.filePath;
 	const title = sanitizeStudioPreviewBlockLine(label);
 	let text = "";
 	if (resource.kind === "pdf") {
@@ -7721,7 +7754,14 @@ async function convertStudioOfficeDocumentToMarkdown(resource: StudioLocalPrevie
 	return { text: `${note}\n\n${body}\n`, label };
 }
 
-async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResponse, requestUrl: URL, resource: StudioLocalPreviewResource, serverState: StudioServerState): Promise<void> {
+async function respondLocalPreviewLinkJson(
+	req: IncomingMessage,
+	res: ServerResponse,
+	requestUrl: URL,
+	resource: StudioLocalPreviewResource,
+	serverState: StudioServerState,
+	resourceGrants?: StudioResourceGrantRegistry,
+): Promise<void> {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "GET" && method !== "HEAD") {
 		res.setHeader("Allow", "GET, HEAD");
@@ -7771,6 +7811,7 @@ async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResp
 	let document: InitialStudioDocument;
 	let responseText = "";
 	let converted = false;
+	let documentResourceDir = resource.resourceDir;
 	if (resource.kind === "office") {
 		let conversion: { text: string; label: string };
 		try {
@@ -7794,12 +7835,18 @@ async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResp
 			return;
 		}
 		responseText = file.text;
+		try {
+			const documentGrant = resourceGrants?.grantDocument(file.resolvedPath, { source: "document" });
+			if (documentGrant?.path) documentResourceDir = documentGrant.path;
+		} catch {
+			// The exact-file grant remains usable if the bounded registry cannot add the document directory.
+		}
 		document = {
 			text: file.text,
 			label: resource.label || file.label,
 			source: "file",
 			path: file.resolvedPath,
-			resourceDir: resource.resourceDir,
+			resourceDir: documentResourceDir,
 		};
 	}
 	if (action === "document") {
@@ -7808,7 +7855,7 @@ async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResp
 			text: responseText,
 			label: document.label,
 			converted,
-			resourceDir: resource.resourceDir,
+			resourceDir: documentResourceDir,
 		});
 		return;
 	}
@@ -7817,6 +7864,7 @@ async function respondLocalPreviewLinkJson(req: IncomingMessage, res: ServerResp
 	respondJson(res, 200, {
 		...basePayload,
 		converted,
+		resourceDir: documentResourceDir,
 		relativeUrl: buildStudioRelativeUrl(serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true }),
 	});
 }
@@ -7907,7 +7955,60 @@ async function handleImportStudioFileCopyRequest(req: IncomingMessage, res: Serv
 	});
 }
 
-async function handleRevealLocalPreviewResourceRequest(req: IncomingMessage, res: ServerResponse, studioCwd: string): Promise<void> {
+async function handleStudioResourceGrantRequest(
+	req: IncomingMessage,
+	res: ServerResponse,
+	resourceGrants: StudioResourceGrantRegistry,
+): Promise<void> {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "POST") {
+		res.setHeader("Allow", "POST");
+		respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+		return;
+	}
+
+	const rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+	let payload: Record<string, unknown> = {};
+	try {
+		payload = rawBody ? JSON.parse(rawBody) : {};
+	} catch {
+		respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+		return;
+	}
+
+	const grantKind = payload.grantKind === "directory" ? "directory" : payload.grantKind === "file" ? "file" : "";
+	const path = typeof payload.path === "string" ? payload.path.trim() : "";
+	if (!grantKind || !path) {
+		respondJson(res, 400, { ok: false, error: "Choose an exact file or folder to allow." });
+		return;
+	}
+
+	try {
+		const grant = grantKind === "directory"
+			? resourceGrants.grantDirectory(path, { source: "explicit-directory" })
+			: resourceGrants.grantFile(path, { source: "explicit-file" });
+		respondJson(res, 200, {
+			ok: true,
+			grant,
+			resourceGrants: resourceGrants.snapshot(),
+			message: grantKind === "directory"
+				? `Allowed this folder for the current Studio session: ${grant.path}`
+				: `Allowed this file for the current Studio session: ${grant.path}`,
+		});
+	} catch (error) {
+		respondJson(res, 400, {
+			ok: false,
+			error: `Could not allow this ${grantKind}: ${error instanceof Error ? error.message : String(error)}`,
+		});
+	}
+}
+
+async function handleRevealLocalPreviewResourceRequest(
+	req: IncomingMessage,
+	res: ServerResponse,
+	studioCwd: string,
+	resourceGrants?: StudioResourceGrantRegistry,
+): Promise<void> {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "POST") {
 		res.setHeader("Allow", "POST");
@@ -7930,6 +8031,7 @@ async function handleRevealLocalPreviewResourceRequest(req: IncomingMessage, res
 			typeof payload.sourcePath === "string" ? payload.sourcePath : undefined,
 			typeof payload.resourceDir === "string" ? payload.resourceDir : undefined,
 			studioCwd,
+			resourceGrants,
 		);
 		const result = revealStudioLocalFile(resource.filePath);
 		if (!result.ok) {
@@ -7942,7 +8044,12 @@ async function handleRevealLocalPreviewResourceRequest(req: IncomingMessage, res
 	}
 }
 
-async function handleOpenLocalPreviewResourceRequest(req: IncomingMessage, res: ServerResponse, studioCwd: string): Promise<void> {
+async function handleOpenLocalPreviewResourceRequest(
+	req: IncomingMessage,
+	res: ServerResponse,
+	studioCwd: string,
+	resourceGrants?: StudioResourceGrantRegistry,
+): Promise<void> {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "POST") {
 		res.setHeader("Allow", "POST");
@@ -7969,6 +8076,7 @@ async function handleOpenLocalPreviewResourceRequest(req: IncomingMessage, res: 
 			typeof payload.sourcePath === "string" ? payload.sourcePath : undefined,
 			typeof payload.resourceDir === "string" ? payload.resourceDir : undefined,
 			studioCwd,
+			resourceGrants,
 		);
 		if (resource.kind !== "pdf") {
 			respondJson(res, 400, { ok: false, error: "Only local PDF previews can be opened in the system PDF viewer." });
@@ -16402,6 +16510,19 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/resource-grants") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			void handleStudioResourceGrantRequest(req, res, studioResourceGrantRegistry).catch((error) => {
+				respondJson(res, 500, { ok: false, error: `Resource grant failed: ${error instanceof Error ? error.message : String(error)}` });
+			});
+			return;
+		}
+
 		if (requestUrl.pathname === "/local-preview-link") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
@@ -16416,9 +16537,22 @@ export default function (pi: ExtensionAPI) {
 						requestUrl.searchParams.get("sourcePath") ?? undefined,
 						requestUrl.searchParams.get("resourceDir") ?? undefined,
 						studioCwd,
+						studioResourceGrantRegistry,
 					);
-					await respondLocalPreviewLinkJson(req, res, requestUrl, resource, serverState);
+					await respondLocalPreviewLinkJson(req, res, requestUrl, resource, serverState, studioResourceGrantRegistry);
 				} catch (error) {
+					if (error instanceof StudioResourceGrantRequiredError) {
+						respondJson(res, 403, {
+							ok: false,
+							code: error.code,
+							error: error.message,
+							path: error.filePath,
+							directoryPath: error.directoryPath,
+							label: basename(error.filePath),
+							resourceKind: error.resourceKind,
+						});
+						return;
+					}
 					respondJson(res, 404, { ok: false, error: `Local resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
 				}
 			})();
@@ -16432,7 +16566,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			void handleRevealLocalPreviewResourceRequest(req, res, studioCwd).catch((error) => {
+			void handleRevealLocalPreviewResourceRequest(req, res, studioCwd, studioResourceGrantRegistry).catch((error) => {
 				respondJson(res, 500, { ok: false, error: `Reveal failed: ${error instanceof Error ? error.message : String(error)}` });
 			});
 			return;
@@ -16445,7 +16579,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			void handleOpenLocalPreviewResourceRequest(req, res, studioCwd).catch((error) => {
+			void handleOpenLocalPreviewResourceRequest(req, res, studioCwd, studioResourceGrantRegistry).catch((error) => {
 				respondJson(res, 500, { ok: false, error: `Open in system viewer failed: ${error instanceof Error ? error.message : String(error)}` });
 			});
 			return;
@@ -16464,6 +16598,7 @@ export default function (pi: ExtensionAPI) {
 					requestUrl.searchParams.get("sourcePath") ?? undefined,
 					requestUrl.searchParams.get("resourceDir") ?? undefined,
 					studioCwd,
+					studioResourceGrantRegistry,
 				);
 				respondPdfFile(req, res, filePath);
 			} catch (error) {
@@ -16485,6 +16620,7 @@ export default function (pi: ExtensionAPI) {
 					requestUrl.searchParams.get("sourcePath") ?? undefined,
 					requestUrl.searchParams.get("resourceDir") ?? undefined,
 					studioCwd,
+					studioResourceGrantRegistry,
 				);
 				respondHtmlPreviewResourceJson(req, res, resource.filePath, resource.mimeType);
 			} catch (error) {
