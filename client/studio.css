@@ -3032,6 +3032,97 @@
       overflow-anchor: none;
     }
 
+    .rendered-markdown .studio-blocked-media {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      margin: 10px 0;
+      padding: 10px 12px;
+      border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--panel-border));
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--warn) 7%, var(--panel));
+      color: var(--text);
+      font-family: var(--font-ui);
+      font-size: 12px;
+      font-style: normal;
+      line-height: 1.35;
+      box-sizing: border-box;
+    }
+
+    .rendered-markdown .studio-blocked-media-text {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .rendered-markdown .studio-blocked-media-text strong {
+      color: var(--warn);
+      font-weight: 650;
+    }
+
+    .rendered-markdown .studio-blocked-media-text code {
+      display: block;
+      max-width: min(72vw, 760px);
+      overflow: hidden;
+      color: var(--studio-info-text, var(--muted));
+      font-family: var(--font-mono);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .rendered-markdown button.studio-blocked-media-allow {
+      flex: 0 0 auto;
+      min-height: 30px;
+      padding: 5px 10px;
+      border: 1px solid color-mix(in srgb, var(--warn) 48%, var(--control-border));
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .rendered-markdown button.studio-blocked-media-allow:not(:disabled):hover,
+    .rendered-markdown button.studio-blocked-media-allow:focus-visible {
+      border-color: var(--warn);
+      background: var(--control-hover-bg, var(--panel-2));
+      outline: none;
+    }
+
+    .rendered-markdown button.studio-blocked-media-allow:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+
+    .rendered-markdown .studio-html-artifact-blocked-media {
+      display: grid;
+      gap: 6px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--panel);
+    }
+
+    .rendered-markdown .studio-html-artifact-blocked-media .studio-blocked-media {
+      margin: 8px 0;
+    }
+
+    @media (max-width: 680px) {
+      .rendered-markdown .studio-blocked-media {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .rendered-markdown button.studio-blocked-media-allow {
+        align-self: flex-start;
+      }
+    }
+
     .preview-error {
       color: var(--warn);
       margin-bottom: 0.75em;

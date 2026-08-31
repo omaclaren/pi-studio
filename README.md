@@ -54,7 +54,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
   - shows/hides annotation markers in preview
   - strips markers before send (optional)
   - saves `.annotated.md`
-- Renders Markdown/LaTeX/code previews (math + Mermaid) plus lightweight CSV/TSV table previews, theme-synced with pi, with an explicit H1–H6 hierarchy, zoomable images across Studio-owned Markdown surfaces, and copy buttons for code blocks and blockquotes; Mermaid previews include Lucide/Logos icon nodes and accessible label contrast over custom fills
+- Renders Markdown/LaTeX/code previews (math + Mermaid) plus lightweight CSV/TSV table previews, theme-synced with pi, with an explicit H1–H6 hierarchy, zoomable images across Studio-owned Markdown surfaces, and copy buttons for code blocks and blockquotes; already allowed local media loads silently, while blocked images and embedded PDFs remain unloaded behind an explicit per-file or containing-folder allow action; Mermaid previews include Lucide/Logos icon nodes and accessible label contrast over custom fills
 - Adds a contextual **Editor (Quarto Preview)** right-pane view for file-backed `.qmd`, `.md`, and `.markdown` documents. Studio checks Quarto and the document/project configuration before showing an explicit start action, launches a single loopback `quarto preview` process with `--no-execute`, embeds Quarto's authoritative saved-file output without restyling it, and provides open-in-browser, restart, stop, logs, and unsaved-editor warnings. If Quarto is missing, the view remains available with an actionable dependency message.
 - Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
 - Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks and opens existing PDFs directly with `/studio <path.pdf>`, with visible enlarge, browser-tab, system-viewer, show-in-folder, copy-path, manual refresh, and opt-in stable-file auto-refresh actions; true browser fullscreen is offered only when the browser supports it
@@ -124,7 +124,9 @@ The current side thread is ephemeral but survives Studio browser refreshes while
 
 ## Studio Markdown extras
 
-Studio previews standard Markdown, code fences, display math, Mermaid, and local images. When adding companion files such as generated plots or PDFs, prefer the project's existing folder convention. If there is no convention, `attachments/` is a reasonable default for newly generated assets. Use relative paths from the opened Markdown file or Studio working/resource directory, and wrap paths in angle brackets when spaces are possible:
+Studio previews standard Markdown, code fences, display math, Mermaid, and local images. The opened document directory and other explicitly allowed folders are available for local preview resources during the current Studio session. Media already inside those locations loads without interruption. An image or embedded PDF outside them stays unloaded and shows **Allow local image/PDF…**; activating that control offers an exact-file grant, a containing-folder grant for the session, or cancellation. Passive rendering itself never opens the permission decision.
+
+When adding companion files such as generated plots or PDFs, prefer the project's existing folder convention. If there is no convention, `attachments/` is a reasonable default for newly generated assets. Use relative paths from the opened Markdown file or a folder allowed for the current Studio session, and wrap paths in angle brackets when spaces are possible:
 
 ```md
 ![Short descriptive caption](<attachments/plot.png>)
@@ -143,7 +145,7 @@ caption: Optional caption
 ```
 ````
 
-`path` must point to a local `.pdf` within the current Studio resource directory. Relative paths resolve from the opened document's directory, or from Studio's working dir for non-file-backed content. `page` is an initial page hint for the browser PDF viewer, `height` controls the embedded frame height in pixels, and `watch: true` enables auto-refresh after Studio observes the changed file in a stable state. Use normal Markdown links for PDFs when embedding is not useful.
+`path` must point to a local `.pdf`. Relative paths resolve from the opened document's directory, or from Studio's working directory for non-file-backed content; the resolved file must be inside a location allowed for the current Studio session before it loads. `page` is an initial page hint for the browser PDF viewer, `height` controls the embedded frame height in pixels, and `watch: true` enables auto-refresh after Studio observes the changed file in a stable state. Use normal Markdown links for PDFs when embedding is not useful.
 
 To view an existing PDF directly, run `/studio report.pdf` (or `/studio "path with spaces/report.pdf"`). The PDF opens read-only in a focused companion preview, even when the full Studio workspace is already open. A `#page=N` suffix selects the initial page. Auto-refresh is off by default; use `/studio --watch report.pdf` to start with it on, or toggle **Auto-refresh** in the PDF card or focused viewer. Studio checks only while the tab is visible and waits for two matching file-version observations before reloading, which avoids reading a PDF while LaTeX is still writing it. **Cmd/Ctrl+Alt+R** manually refreshes the focused or visible PDF. This is distinct from `/studio-pdf`, which exports Markdown, LaTeX, code, or the last response to a new PDF.
 

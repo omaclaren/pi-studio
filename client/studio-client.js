@@ -242,6 +242,7 @@
         || typeof previewResourceHelpers.buildStudioPdfVersionSignature !== "function"
         || typeof previewResourceHelpers.createStudioPdfVersionObservationState !== "function"
         || typeof previewResourceHelpers.hydrateStudioPreviewLocalImages !== "function"
+        || typeof previewResourceHelpers.hydrateStudioPreviewLocalPdfEmbeds !== "function"
         || typeof previewResourceHelpers.observeStudioPdfVersion !== "function"
       ) {
         throw new Error("Studio preview resource helpers failed to load.");
@@ -6060,7 +6061,8 @@
           + "    const images = Array.prototype.slice.call(document.querySelectorAll('img[src]'));\n"
           + "    images.forEach((image) => {\n"
           + "      if (!image || !image.getAttribute) return;\n"
-          + "      if (image.getAttribute('data-pi-studio-html-resource-resolved') === 'true') return;\n"
+          + "      const resourceState = image.getAttribute('data-pi-studio-html-resource-resolved') || '';\n"
+          + "      if (resourceState === 'true' || resourceState === 'blocked' || resourceState === 'failed') return;\n"
           + "      const raw = String(image.getAttribute('src') || '').trim();\n"
           + "      if (!shouldResolveHtmlPreviewResourceUrl(raw)) return;\n"
           + "      let resourceId = image.getAttribute('data-pi-studio-html-resource-id') || '';\n"
@@ -6092,6 +6094,7 @@
           + "        image.setAttribute('data-pi-studio-html-resource-resolved', 'true');\n"
           + "      } else if (typeof result.error === 'string' && result.error) {\n"
           + "        image.setAttribute('title', result.error);\n"
+          + "        image.setAttribute('data-pi-studio-html-resource-resolved', result.blocked === true ? 'blocked' : 'failed');\n"
           + "      }\n"
           + "      htmlResourcePlaceholders.delete(resourceId);\n"
           + "    });\n"
@@ -6542,18 +6545,28 @@
           const message = payload && typeof payload.error === "string"
             ? payload.error
             : (timeoutLabel || "Local preview resource load") + " failed with HTTP " + response.status + ".";
-          throw new Error(message);
+          const requestError = new Error(message);
+          requestError.studioPayload = payload && typeof payload === "object" ? payload : null;
+          requestError.studioStatus = response.status;
+          throw requestError;
         }
         return payload.dataUrl;
       }
 
       function postHtmlArtifactResourceResults(record, results) {
         if (!record || !record.iframe || !record.iframe.isConnected || !record.iframe.contentWindow) return;
+        const publicResults = Array.isArray(results) ? results.map((result) => ({
+          resourceId: result && result.resourceId ? result.resourceId : "",
+          ok: Boolean(result && result.ok === true),
+          dataUrl: result && typeof result.dataUrl === "string" ? result.dataUrl : undefined,
+          error: result && typeof result.error === "string" ? result.error : undefined,
+          blocked: Boolean(result && result.blocked === true),
+        })) : [];
         try {
           record.iframe.contentWindow.postMessage({
             type: "pi-studio-html-artifact-resources-resolved",
             id: record.id || "",
-            results: Array.isArray(results) ? results : [],
+            results: publicResults,
           }, "*");
         } catch {
           // Ignore iframe postMessage failures.
@@ -6571,14 +6584,58 @@
           );
           return { resourceId, ok: true, dataUrl };
         } catch (error) {
-          return { resourceId, ok: false, error: error && error.message ? error.message : String(error || "HTML preview resource load failed.") };
+          const grantRequest = getStudioResourceGrantRequest(error);
+          return {
+            resourceId,
+            ok: false,
+            error: error && error.message ? error.message : String(error || "HTML preview resource load failed."),
+            blocked: Boolean(grantRequest),
+            grantRequest,
+            sourceUrl: item && item.url ? String(item.url) : "",
+          };
         }
+      }
+
+      function renderHtmlArtifactBlockedResources(record) {
+        if (!record || !record.shell) return;
+        const existing = record.shell.querySelector(".studio-html-artifact-blocked-media");
+        if (existing) existing.remove();
+        const blocked = record.blockedResources instanceof Map ? Array.from(record.blockedResources.values()) : [];
+        if (!blocked.length) return;
+        const container = document.createElement("div");
+        container.className = "studio-html-artifact-blocked-media";
+        blocked.forEach((entry) => {
+          const notice = createStudioBlockedMediaNoticeForRequest(entry.grantRequest, "image", entry.sourceUrl);
+          if (notice) container.appendChild(notice);
+        });
+        if (!container.childNodes.length) return;
+        const frame = record.iframe && record.iframe.parentNode === record.shell ? record.iframe : null;
+        record.shell.insertBefore(container, frame);
+      }
+
+      function syncHtmlArtifactBlockedResources(record, results) {
+        if (!record) return;
+        if (!(record.blockedResources instanceof Map)) record.blockedResources = new Map();
+        (Array.isArray(results) ? results : []).forEach((result) => {
+          const resourceId = result && result.resourceId ? String(result.resourceId) : "";
+          if (!resourceId) return;
+          if (result.blocked === true && result.grantRequest) {
+            record.blockedResources.set(resourceId, {
+              grantRequest: result.grantRequest,
+              sourceUrl: result.sourceUrl || "local image",
+            });
+          } else {
+            record.blockedResources.delete(resourceId);
+          }
+        });
+        renderHtmlArtifactBlockedResources(record);
       }
 
       async function resolveHtmlArtifactResources(record, items) {
         if (!record || !Array.isArray(items) || items.length === 0) return;
         if (record.detail) record.detail.textContent = "HTML preview · loading local images";
         const results = await Promise.all(items.map((item) => fetchHtmlArtifactResource(record, item)));
+        syncHtmlArtifactBlockedResources(record, results);
         postHtmlArtifactResourceResults(record, results);
         setHtmlArtifactDetailText(record, "HTML preview");
       }
@@ -7061,6 +7118,7 @@
           mathRenderItemCount: 0,
           resourceResolveBatchCount: 0,
           resourceResolveItemCount: 0,
+          blockedResources: new Map(),
         });
 
         targetEl.appendChild(shell);
@@ -7947,6 +8005,13 @@
         const target = event && event.target;
         if (!(target instanceof Element)) return;
 
+        const blockedMediaButton = target.closest("button.studio-blocked-media-allow");
+        if (blockedMediaButton) {
+          consumeStudioPreviewMediaEvent(event);
+          void handleStudioBlockedMediaAllowButton(blockedMediaButton);
+          return;
+        }
+
         const imageEl = target.closest("img.studio-image-focus-target");
         if (imageEl) {
           consumeStudioPreviewMediaEvent(event);
@@ -8420,7 +8485,53 @@
         });
       }
 
-      function createStudioPdfCard(block, useEditorResourceContext) {
+      function createStudioPdfStatusCard(block, content) {
+        const options = block && block.options ? block.options : {};
+        const path = String(options.path || "").trim();
+        const title = String(options.title || path || "Embedded PDF").trim();
+        const caption = String(options.caption || "").trim();
+        const card = document.createElement("figure");
+        card.className = "studio-pdf-card studio-pdf-card-status";
+        const header = document.createElement("figcaption");
+        header.className = "studio-pdf-card-header";
+        const titleEl = document.createElement("div");
+        titleEl.className = "studio-pdf-card-title";
+        titleEl.textContent = title;
+        header.appendChild(titleEl);
+        card.appendChild(header);
+        if (caption) {
+          const captionEl = document.createElement("div");
+          captionEl.className = "studio-pdf-card-caption";
+          captionEl.textContent = caption;
+          card.appendChild(captionEl);
+        }
+        if (content instanceof Element) {
+          card.appendChild(content);
+        } else {
+          const errorEl = document.createElement("div");
+          errorEl.className = "studio-pdf-card-error";
+          errorEl.textContent = String(content || "PDF resource unavailable.");
+          card.appendChild(errorEl);
+        }
+        return card;
+      }
+
+      async function createStudioPdfCard(block, useEditorResourceContext) {
+        const options = block && block.options ? block.options : {};
+        const path = String(options.path || "").trim();
+        if (!path) return createAuthorizedStudioPdfCard(block, useEditorResourceContext);
+        const resourceQuery = buildStudioPdfResourceQuery(options, useEditorResourceContext);
+        try {
+          await fetchPreviewLocalLink("resolve", path, resourceQuery, { skipGrantPrompt: true });
+          return createAuthorizedStudioPdfCard(block, useEditorResourceContext);
+        } catch (error) {
+          const notice = createStudioBlockedMediaNotice(error, "pdf", path);
+          if (notice) return createStudioPdfStatusCard(block, notice);
+          return createStudioPdfStatusCard(block, error && error.message ? error.message : "PDF resource unavailable.");
+        }
+      }
+
+      function createAuthorizedStudioPdfCard(block, useEditorResourceContext) {
         const options = block && block.options ? block.options : {};
         const path = String(options.path || "").trim();
         const title = String(options.title || path || "Embedded PDF").trim();
@@ -8583,17 +8694,17 @@
         return card;
       }
 
-      function renderStudioPdfBlocksInElement(targetEl, blocks, useEditorResourceContext) {
+      async function renderStudioPdfBlocksInElement(targetEl, blocks, useEditorResourceContext) {
         if (!targetEl || !Array.isArray(blocks) || blocks.length === 0) return;
         const candidates = Array.from(targetEl.querySelectorAll("p, pre, div"));
-        blocks.forEach((block) => {
+        for (const block of blocks) {
           const placeholder = block && block.placeholder ? block.placeholder : "";
-          if (!placeholder) return;
+          if (!placeholder) continue;
           const match = candidates.find((el) => String(el.textContent || "").trim() === placeholder);
-          if (match && match.parentNode) {
-            match.replaceWith(createStudioPdfCard(block, useEditorResourceContext));
-          }
-        });
+          if (!match || !match.parentNode) continue;
+          const card = await createStudioPdfCard(block, useEditorResourceContext);
+          if (match.isConnected && match.parentNode) match.replaceWith(card);
+        }
       }
 
       function sanitizeRenderedHtml(html, markdown, options) {
@@ -9163,6 +9274,91 @@
         el.className = "preview-warning preview-image-warning";
         el.textContent = String(message || "");
         targetEl.appendChild(el);
+      }
+
+      function createStudioBlockedMediaNotice(error, mediaKind, sourceLabel) {
+        return createStudioBlockedMediaNoticeForRequest(getStudioResourceGrantRequest(error), mediaKind, sourceLabel);
+      }
+
+      function createStudioBlockedMediaNoticeForRequest(grantRequest, mediaKind, sourceLabel) {
+        if (!grantRequest) return null;
+        const kind = mediaKind === "pdf" ? "PDF" : "image";
+        const notice = document.createElement("span");
+        notice.className = "studio-blocked-media studio-blocked-media-" + (mediaKind === "pdf" ? "pdf" : "image");
+        notice.setAttribute("role", "note");
+
+        const text = document.createElement("span");
+        text.className = "studio-blocked-media-text";
+        const title = document.createElement("strong");
+        title.textContent = "Local " + kind + " blocked";
+        const detail = document.createElement("span");
+        detail.textContent = "This media is outside the locations allowed for the current Studio session.";
+        const path = document.createElement("code");
+        path.textContent = grantRequest.path || String(sourceLabel || "local media");
+        path.title = "Path on the computer running Pi";
+        text.appendChild(title);
+        text.appendChild(detail);
+        text.appendChild(path);
+        notice.appendChild(text);
+
+        const allowButton = document.createElement("button");
+        allowButton.type = "button";
+        allowButton.className = "studio-blocked-media-allow";
+        allowButton.textContent = "Allow local " + kind + "…";
+        allowButton.title = "Choose whether to allow only this file or its containing folder for the current Studio session.";
+        allowButton.dataset.studioBlockedMediaPath = grantRequest.path;
+        allowButton.dataset.studioBlockedMediaDirectory = grantRequest.directoryPath;
+        allowButton.dataset.studioBlockedMediaLabel = grantRequest.label;
+        allowButton.dataset.studioBlockedMediaKind = mediaKind === "pdf" ? "pdf" : "image";
+        notice.appendChild(allowButton);
+        return notice;
+      }
+
+      function replaceStudioBlockedMediaElement(element, source, error, mediaKind) {
+        if (!element || !element.parentNode) return false;
+        const notice = createStudioBlockedMediaNotice(error, mediaKind, source);
+        if (!notice) return false;
+        element.replaceWith(notice);
+        return true;
+      }
+
+      function refreshStudioPassiveMediaAfterGrant() {
+        renderSourcePreview({ previewDelayMs: 0 });
+        if (rightView === "preview" || rightView === "editor-preview" || rightView === "side-questions") {
+          renderActiveResult();
+        }
+        if (isQuizOpen()) renderQuizOverlay({ preserveScroll: true });
+      }
+
+      async function handleStudioBlockedMediaAllowButton(button) {
+        if (!(button instanceof HTMLButtonElement) || button.dataset.studioBlockedMediaBusy === "1") return false;
+        const request = {
+          path: String(button.dataset.studioBlockedMediaPath || "").trim(),
+          directoryPath: String(button.dataset.studioBlockedMediaDirectory || "").trim(),
+          label: String(button.dataset.studioBlockedMediaLabel || "local media").trim() || "local media",
+        };
+        if (!request.path || !request.directoryPath) {
+          setStatus("Could not resolve this blocked media path.", "warning");
+          return false;
+        }
+        button.dataset.studioBlockedMediaBusy = "1";
+        button.disabled = true;
+        const baselineText = button.textContent;
+        button.textContent = "Choosing…";
+        try {
+          if (!(await requestStudioResourceGrant(request))) return false;
+          refreshStudioPassiveMediaAfterGrant();
+          return true;
+        } catch (error) {
+          setStatus("Could not allow local media: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+          return false;
+        } finally {
+          if (button.isConnected) {
+            delete button.dataset.studioBlockedMediaBusy;
+            button.disabled = false;
+            button.textContent = baselineText;
+          }
+        }
       }
 
       function hasMeaningfulPreviewContent(targetEl) {
@@ -10471,6 +10667,33 @@
         });
       }
 
+      async function hydrateStudioPreviewLocalMedia(targetEl, resourceContext) {
+        const fetchResource = (resourceUrl, timeoutLabel) => fetchLocalPreviewResourceDataUrl(
+          resourceContext,
+          resourceUrl,
+          RENDERED_PREVIEW_IMAGE_FETCH_TIMEOUT_MS,
+          timeoutLabel,
+        );
+        await previewResourceHelpers.hydrateStudioPreviewLocalImages(
+          targetEl,
+          (resourceUrl) => fetchResource(resourceUrl, "Preview image load"),
+          {
+            onError: (imageEl, resourceUrl, error) => {
+              replaceStudioBlockedMediaElement(imageEl, resourceUrl, error, "image");
+            },
+          },
+        );
+        await previewResourceHelpers.hydrateStudioPreviewLocalPdfEmbeds(
+          targetEl,
+          (resourceUrl) => fetchResource(resourceUrl, "Preview PDF load"),
+          {
+            onError: (embedEl, resourceUrl, error) => {
+              replaceStudioBlockedMediaElement(embedEl, resourceUrl, error, "pdf");
+            },
+          },
+        );
+      }
+
       async function applyRenderedMarkdown(targetEl, markdown, pane, nonce) {
         const previewPrepared = annotationsEnabled
           ? prepareMarkdownForPandocPreview(markdown)
@@ -10497,15 +10720,8 @@
           clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
           targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown, previewFallbackOptions);
-          await previewResourceHelpers.hydrateStudioPreviewLocalImages(targetEl, (resourceUrl) => (
-            fetchLocalPreviewResourceDataUrl(
-              previewResourceContext,
-              resourceUrl,
-              RENDERED_PREVIEW_IMAGE_FETCH_TIMEOUT_MS,
-              "Preview image load",
-            )
-          ));
-          renderStudioPdfBlocksInElement(targetEl, pdfPrepared.blocks, previewingEditorText);
+          await hydrateStudioPreviewLocalMedia(targetEl, previewResourceContext);
+          await renderStudioPdfBlocksInElement(targetEl, pdfPrepared.blocks, previewingEditorText);
           applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
           await renderAnnotationMathInElement(targetEl);
           decoratePdfEmbeds(targetEl);
@@ -12462,7 +12678,11 @@
             const html = await renderSideQuestionMarkdownToHtml(markdown);
             if (nonce !== sideQuestionPreviewRenderNonce || rightView !== "side-questions" || !critiqueViewEl.contains(target)) return;
             target.innerHTML = html;
+            await hydrateStudioPreviewLocalMedia(target, getHtmlPreviewResourceContextOptions());
             await renderAnnotationMathInElement(target);
+            decoratePdfEmbeds(target);
+            await renderPdfPreviewsInElement(target);
+            decoratePreviewPdfFigures(target);
             await renderMermaidInElement(target);
             await renderMathFallbackInElement(target);
             decorateCopyablePreviewBlocks(target);
@@ -14960,7 +15180,7 @@
         const choice = await openStudioDecision({
           mode: "confirm",
           title: "Allow " + request.label + "?",
-          message: "This link points outside the locations currently available to Studio.\n\n"
+          message: "This local resource is outside the locations currently available to Studio.\n\n"
             + "File on the computer running Pi:\n" + request.path + "\n\n"
             + "Allow only this file, or allow its containing folder for this Studio session?",
           cancelLabel: "Cancel",
@@ -15429,6 +15649,7 @@
             const html = await renderQuizMarkdownToHtml(markdown);
             if (nonce !== quizPreviewRenderNonce || !quizDialogEl || !quizDialogEl.contains(target)) return;
             target.innerHTML = html;
+            await hydrateStudioPreviewLocalMedia(target, getHtmlPreviewResourceContextOptions());
             await renderAnnotationMathInElement(target);
             decoratePdfEmbeds(target);
             await renderPdfPreviewsInElement(target);

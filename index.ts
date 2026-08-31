@@ -3104,12 +3104,13 @@ function buildStudioCompanionLabel(_label: string | undefined): string {
 }
 
 const STUDIO_HTML_PREVIEW_RESOURCE_MAX_BYTES = 25 * 1024 * 1024;
-const STUDIO_HTML_PREVIEW_IMAGE_MIME_BY_EXT = new Map<string, string>([
+const STUDIO_HTML_PREVIEW_MEDIA_MIME_BY_EXT = new Map<string, string>([
 	[".png", "image/png"],
 	[".jpg", "image/jpeg"],
 	[".jpeg", "image/jpeg"],
 	[".gif", "image/gif"],
 	[".webp", "image/webp"],
+	[".pdf", "application/pdf"],
 ]);
 const STUDIO_LOCAL_LINK_TEXT_EXTENSIONS = new Set([
 	".md", ".markdown", ".mdx", ".qmd", ".txt", ".tex", ".latex", ".rst", ".adoc",
@@ -3221,20 +3222,24 @@ function resolveStudioPdfResourcePath(
 	const rawPath = typeof pdfPath === "string" ? pdfPath.trim() : "";
 	if (!rawPath) throw new Error("Missing PDF path.");
 	if (/\0/.test(rawPath)) throw new Error("Invalid PDF path.");
-	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
+	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^file:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
 		throw new Error("Only local PDF paths are supported.");
 	}
 
 	const context = resolveStudioPreviewResourceContext(sourcePath, resourceDir, fallbackCwd);
-	const cleanedPath = decodeStudioHtmlPreviewResourcePath(stripStudioHtmlPreviewResourceUrlSuffix(rawPath));
+	const cleanedPath = decodeStudioLocalPreviewResourceReference(rawPath);
 	const expandedPath = recoverLikelyDroppedLeadingSlashPath(expandHome(cleanedPath));
 	const candidate = isAbsolute(expandedPath) ? expandedPath : resolve(context.baseDir, expandedPath);
 	if (extname(candidate).toLowerCase() !== ".pdf") throw new Error("Only .pdf files can be embedded.");
 
-	const boundaryReal = realpathSync(context.boundaryDir);
 	const candidateReal = realpathSync(candidate);
-	if (!isPathInsideOrEqualDirectory(candidateReal, boundaryReal) && !resourceGrants?.allows(candidateReal)) {
-		throw new Error("PDF path must stay within a location allowed for this Studio session.");
+	if (resourceGrants) {
+		if (!resourceGrants.allows(candidateReal)) throw new StudioResourceGrantRequiredError(candidateReal, "pdf");
+	} else {
+		const boundaryReal = realpathSync(context.boundaryDir);
+		if (!isPathInsideOrEqualDirectory(candidateReal, boundaryReal)) {
+			throw new Error("PDF path must stay within the current Studio resource directory.");
+		}
 	}
 
 	const stat = statSync(candidateReal);
@@ -3252,6 +3257,22 @@ function decodeStudioHtmlPreviewResourcePath(resourcePath: string): string {
 		return decodeURIComponent(resourcePath);
 	} catch {
 		return resourcePath;
+	}
+}
+
+function decodeStudioLocalPreviewResourceReference(resourcePath: string): string {
+	const raw = String(resourcePath ?? "").trim();
+	if (!/^file:/i.test(raw)) {
+		return decodeStudioHtmlPreviewResourcePath(stripStudioHtmlPreviewResourceUrlSuffix(raw));
+	}
+	try {
+		const url = new URL(raw);
+		if (url.protocol !== "file:") throw new Error("Not a file URL.");
+		url.hash = "";
+		url.search = "";
+		return fileURLToPath(url);
+	} catch {
+		throw new Error("Invalid local file URL.");
 	}
 }
 
@@ -3276,32 +3297,33 @@ function resolveStudioLocalPreviewResourcePath(
 	if (!rawPath) throw new Error("Missing local resource path.");
 	if (/\0/.test(rawPath)) throw new Error("Invalid local resource path.");
 	if (/^\/\//.test(rawPath)) throw new Error("Network resources are not local Studio resources.");
-	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
-		throw new Error("Only local relative resources are supported.");
+	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^file:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
+		throw new Error("Only local file paths and file URLs are supported.");
 	}
 
 	const context = resolveStudioPreviewResourceContext(sourcePath, resourceDir, fallbackCwd);
-	const cleanedPath = decodeStudioHtmlPreviewResourcePath(stripStudioHtmlPreviewResourceUrlSuffix(rawPath));
+	const cleanedPath = decodeStudioLocalPreviewResourceReference(rawPath);
 	if (!cleanedPath || cleanedPath.startsWith("#")) throw new Error("Missing local resource path.");
 	const expandedPath = recoverLikelyDroppedLeadingSlashPath(expandHome(cleanedPath));
 	const candidate = isAbsolute(expandedPath) ? expandedPath : resolve(context.baseDir, expandedPath);
 	const extension = extname(candidate).toLowerCase();
-	const boundaryReal = realpathSync(context.boundaryDir);
 	const candidateReal = realpathSync(candidate);
 	const stat = statSync(candidateReal);
 	if (!stat.isFile()) throw new Error("Local resource path does not refer to a file.");
 
 	const kind = getStudioLocalPreviewResourceKind(extension, candidateReal);
-	const insideBoundary = isPathInsideOrEqualDirectory(candidateReal, boundaryReal);
-	const matchingGrant = insideBoundary ? null : resourceGrants?.findGrant(candidateReal);
-	if (!insideBoundary && !matchingGrant) {
-		if (resourceGrants) throw new StudioResourceGrantRequiredError(candidateReal, kind);
-		throw new Error("Local resource path must stay within the current Studio resource directory.");
+	const matchingGrant = resourceGrants?.findGrant(candidateReal);
+	let effectiveDirectory: string;
+	if (resourceGrants) {
+		if (!matchingGrant) throw new StudioResourceGrantRequiredError(candidateReal, kind);
+		effectiveDirectory = matchingGrant.kind === "directory" ? matchingGrant.path : dirname(candidateReal);
+	} else {
+		const boundaryReal = realpathSync(context.boundaryDir);
+		if (!isPathInsideOrEqualDirectory(candidateReal, boundaryReal)) {
+			throw new Error("Local resource path must stay within the current Studio resource directory.");
+		}
+		effectiveDirectory = boundaryReal;
 	}
-
-	const effectiveDirectory = insideBoundary
-		? boundaryReal
-		: (matchingGrant?.kind === "directory" ? matchingGrant.path : boundaryReal);
 	const relativePath = relative(effectiveDirectory, candidateReal);
 	const useRelativeReference = isPathInsideOrEqualDirectory(candidateReal, effectiveDirectory);
 	return {
@@ -3463,22 +3485,27 @@ function resolveStudioHtmlPreviewResourcePath(
 	const rawPath = typeof resourcePath === "string" ? resourcePath.trim() : "";
 	if (!rawPath) throw new Error("Missing HTML preview resource path.");
 	if (/\0/.test(rawPath)) throw new Error("Invalid HTML preview resource path.");
-	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
+	if (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^file:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath)) {
 		throw new Error("Only local HTML preview resources are supported.");
 	}
 
 	const context = resolveStudioPreviewResourceContext(sourcePath, resourceDir, fallbackCwd);
-	const cleanedPath = decodeStudioHtmlPreviewResourcePath(stripStudioHtmlPreviewResourceUrlSuffix(rawPath));
+	const cleanedPath = decodeStudioLocalPreviewResourceReference(rawPath);
 	const expandedPath = recoverLikelyDroppedLeadingSlashPath(expandHome(cleanedPath));
 	const candidate = isAbsolute(expandedPath) ? expandedPath : resolve(context.baseDir, expandedPath);
 	const ext = extname(candidate).toLowerCase();
-	const mimeType = STUDIO_HTML_PREVIEW_IMAGE_MIME_BY_EXT.get(ext);
-	if (!mimeType) throw new Error("Only local PNG, JPEG, GIF, and WebP images can be embedded in HTML previews.");
+	const mimeType = STUDIO_HTML_PREVIEW_MEDIA_MIME_BY_EXT.get(ext);
+	if (!mimeType) throw new Error("Only local PNG, JPEG, GIF, WebP, and PDF media can be embedded in Studio previews.");
 
-	const boundaryReal = realpathSync(context.boundaryDir);
 	const candidateReal = realpathSync(candidate);
-	if (!isPathInsideOrEqualDirectory(candidateReal, boundaryReal) && !resourceGrants?.allows(candidateReal)) {
-		throw new Error("HTML preview resource path must stay within a location allowed for this Studio session.");
+	const kind: StudioLocalPreviewResourceKind = ext === ".pdf" ? "pdf" : "image";
+	if (resourceGrants) {
+		if (!resourceGrants.allows(candidateReal)) throw new StudioResourceGrantRequiredError(candidateReal, kind);
+	} else {
+		const boundaryReal = realpathSync(context.boundaryDir);
+		if (!isPathInsideOrEqualDirectory(candidateReal, boundaryReal)) {
+			throw new Error("HTML preview resource path must stay within the current Studio resource directory.");
+		}
 	}
 
 	const stat = statSync(candidateReal);
@@ -3487,6 +3514,39 @@ function resolveStudioHtmlPreviewResourcePath(
 		throw new Error("HTML preview resource is too large to embed.");
 	}
 	return { filePath: candidateReal, mimeType };
+}
+
+function resolveStudioAuthorizedPreviewRenderContext(
+	sourcePath: string | undefined,
+	resourceDir: string | undefined,
+	fallbackCwd: string,
+	resourceGrants: StudioResourceGrantRegistry,
+): { resourcePath?: string; sourcePath?: string } {
+	const context = resolveStudioPreviewResourceContext(sourcePath, resourceDir, fallbackCwd);
+	let resourcePath: string;
+	try {
+		resourcePath = realpathSync(context.baseDir);
+		if (!statSync(resourcePath).isDirectory()) return {};
+	} catch {
+		return {};
+	}
+	const directoryGrant = resourceGrants.findGrant(resourcePath, { cwd: fallbackCwd });
+	if (!directoryGrant || directoryGrant.kind !== "directory") return {};
+
+	const rawSource = typeof sourcePath === "string" ? sourcePath.trim() : "";
+	if (!rawSource) return { resourcePath };
+	try {
+		const expandedSource = recoverLikelyDroppedLeadingSlashPath(expandHome(rawSource));
+		const requestedSource = isAbsolute(expandedSource) ? expandedSource : resolve(fallbackCwd, expandedSource);
+		const canonicalSource = realpathSync(requestedSource);
+		const sourceGrant = resourceGrants.findGrant(dirname(canonicalSource), { cwd: fallbackCwd });
+		if (statSync(canonicalSource).isFile() && sourceGrant?.kind === "directory") {
+			return { resourcePath, sourcePath: canonicalSource };
+		}
+	} catch {
+		// The submitted Markdown can still render without file-adjacent metadata.
+	}
+	return { resourcePath };
 }
 
 function resolveStudioPandocWorkingDir(baseDir: string | undefined): string | undefined {
@@ -5299,11 +5359,34 @@ function hasStudioYamlHeaderIncludes(markdown: string): boolean {
 	return /^\s*header-includes\s*:/im.test(split.frontMatter);
 }
 
+function encodeStudioLocalFileUrlForPandoc(resourceUrl: string): string {
+	try {
+		const url = new URL(resourceUrl);
+		if (url.protocol !== "file:" || (url.hostname && url.hostname !== "localhost")) return resourceUrl;
+		const suffix = `${url.search}${url.hash}`;
+		url.search = "";
+		url.hash = "";
+		const localPath = fileURLToPath(url);
+		return encodeURI(localPath).replace(/\?/g, "%3F").replace(/#/g, "%23") + suffix;
+	} catch {
+		return resourceUrl;
+	}
+}
+
+function normalizeStudioMarkdownFileUrlDestinationsForPandoc(markdown: string): string {
+	return transformStudioMarkdownOutsideFences(markdown, (segment: string) => (
+		segment.replace(/(\]\(\s*<?)(file:\/\/(?:localhost)?\/[^<>\s)]+)/gi, (_match, prefix: string, resourceUrl: string) => (
+			`${prefix}${encodeStudioLocalFileUrlForPandoc(resourceUrl)}`
+		))
+	));
+}
+
 function prepareStudioMarkdownForPandoc(markdown: string, options?: { preserveLiteralLatexCommands?: boolean }): string {
 	const shouldPreserveLiteralLatexCommands = options?.preserveLiteralLatexCommands !== false;
 	return mapStudioMarkdownBodyPreservingYamlFrontMatter(markdown, (body) => {
 		const normalizedFences = normalizeStudioMarkdownSmartFences(body);
-		const normalizedMath = normalizeMathDelimiters(normalizedFences);
+		const normalizedFileUrls = normalizeStudioMarkdownFileUrlDestinationsForPandoc(normalizedFences);
+		const normalizedMath = normalizeMathDelimiters(normalizedFileUrls);
 		const latexReady = shouldPreserveLiteralLatexCommands
 			? preserveLiteralLatexCommandsInMarkdown(normalizedMath)
 			: normalizedMath;
@@ -6521,7 +6604,13 @@ function preprocessStudioLatexFootnotemarksForPreview(latex: string): string {
 	});
 }
 
-async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolean, resourcePath?: string, sourcePath?: string): Promise<string> {
+async function renderStudioMarkdownWithPandoc(
+	markdown: string,
+	isLatex?: boolean,
+	resourcePath?: string,
+	sourcePath?: string,
+	options?: { embedResources?: boolean },
+): Promise<string> {
 	const pandocCommand = process.env.PANDOC_PATH?.trim() || "pandoc";
 	const pandocWorkingDir = resolveStudioPandocWorkingDir(resourcePath)
 		?? resolveStudioPandocWorkingDir(sourcePath ? dirname(sourcePath) : undefined);
@@ -6559,7 +6648,9 @@ async function renderStudioMarkdownWithPandoc(markdown: string, isLatex?: boolea
 		await mkdir(htmlTemplateDir, { recursive: true });
 		const htmlTemplatePath = join(htmlTemplateDir, "template.html");
 		await writeFile(htmlTemplatePath, STUDIO_PANDOC_HTML_FRAGMENT_TEMPLATE, "utf-8");
-		if (resourcePath) args.push(await resolveStudioPandocHtmlResourceFlag(pandocCommand));
+		if (resourcePath && options?.embedResources !== false) {
+			args.push(await resolveStudioPandocHtmlResourceFlag(pandocCommand));
+		}
 		args.push("--standalone", `--template=${htmlTemplatePath}`);
 	}
 	const normalizedMarkdown = isLatex
@@ -7707,6 +7798,18 @@ function respondStudioPendingError(res: ServerResponse, status: number, text: st
 	res.end(text);
 }
 
+function respondStudioResourceGrantRequiredJson(res: ServerResponse, error: StudioResourceGrantRequiredError): void {
+	respondJson(res, 403, {
+		ok: false,
+		code: error.code,
+		error: error.message,
+		path: error.filePath,
+		directoryPath: error.directoryPath,
+		label: basename(error.filePath),
+		resourceKind: error.resourceKind,
+	});
+}
+
 function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: string): void {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "GET" && method !== "HEAD") {
@@ -8115,6 +8218,10 @@ async function handleRevealLocalPreviewResourceRequest(
 		}
 		respondJson(res, 200, { ok: true, message: result.message, path: resource.filePath, label: resource.label });
 	} catch (error) {
+		if (error instanceof StudioResourceGrantRequiredError) {
+			respondStudioResourceGrantRequiredJson(res, error);
+			return;
+		}
 		respondJson(res, 404, { ok: false, error: `Local resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
 	}
 }
@@ -8165,6 +8272,10 @@ async function handleOpenLocalPreviewResourceRequest(
 			label: resource.label,
 		});
 	} catch (error) {
+		if (error instanceof StudioResourceGrantRequiredError) {
+			respondStudioResourceGrantRequiredJson(res, error);
+			return;
+		}
 		respondJson(res, 404, { ok: false, error: `Local PDF unavailable: ${error instanceof Error ? error.message : String(error)}` });
 	}
 }
@@ -15815,14 +15926,25 @@ export default function (pi: ExtensionAPI) {
 				parsedBody && typeof parsedBody === "object" && typeof (parsedBody as { editorLanguage?: unknown }).editorLanguage === "string"
 					? (parsedBody as { editorLanguage: string }).editorLanguage
 					: "";
-			const resourcePath = resolveStudioBaseDir(sourcePath || undefined, userResourceDir || undefined, studioCwd);
+			const authorizedContext = resolveStudioAuthorizedPreviewRenderContext(
+				sourcePath || undefined,
+				userResourceDir || undefined,
+				studioCwd,
+				studioResourceGrantRegistry,
+			);
 			const editorPreviewLanguage = normalizeStudioEditorLanguage(requestedEditorLanguage);
 			const isLatex = editorPreviewLanguage === "latex"
 				|| (
 					(editorPreviewLanguage === undefined || editorPreviewLanguage === "markdown")
 					&& isLikelyStandaloneLatexPreview(markdown)
 				);
-			const html = await renderStudioMarkdownWithPandoc(markdown, isLatex, resourcePath, sourcePath || undefined);
+			const html = await renderStudioMarkdownWithPandoc(
+				markdown,
+				isLatex,
+				authorizedContext.resourcePath,
+				authorizedContext.sourcePath,
+				{ embedResources: false },
+			);
 			respondJson(res, 200, { ok: true, html, renderer: "pandoc" });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -16653,15 +16775,7 @@ export default function (pi: ExtensionAPI) {
 					await respondLocalPreviewLinkJson(req, res, requestUrl, resource, serverState, studioResourceGrantRegistry);
 				} catch (error) {
 					if (error instanceof StudioResourceGrantRequiredError) {
-						respondJson(res, 403, {
-							ok: false,
-							code: error.code,
-							error: error.message,
-							path: error.filePath,
-							directoryPath: error.directoryPath,
-							label: basename(error.filePath),
-							resourceKind: error.resourceKind,
-						});
+						respondStudioResourceGrantRequiredJson(res, error);
 						return;
 					}
 					respondJson(res, 404, { ok: false, error: `Local resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
@@ -16713,6 +16827,10 @@ export default function (pi: ExtensionAPI) {
 				);
 				respondPdfFile(req, res, filePath);
 			} catch (error) {
+				if (error instanceof StudioResourceGrantRequiredError) {
+					respondStudioResourceGrantRequiredJson(res, error);
+					return;
+				}
 				respondText(res, 404, `PDF resource unavailable: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
@@ -16735,7 +16853,11 @@ export default function (pi: ExtensionAPI) {
 				);
 				respondHtmlPreviewResourceJson(req, res, resource.filePath, resource.mimeType);
 			} catch (error) {
-				respondJson(res, 404, { ok: false, error: `HTML preview resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
+				if (error instanceof StudioResourceGrantRequiredError) {
+					respondStudioResourceGrantRequiredJson(res, error);
+					return;
+				}
+				respondJson(res, 404, { ok: false, error: `Studio preview resource unavailable: ${error instanceof Error ? error.message : String(error)}` });
 			}
 			return;
 		}

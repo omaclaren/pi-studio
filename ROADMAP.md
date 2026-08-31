@@ -36,7 +36,7 @@ This release must not add Muxy-specific branches or attempt to instrument opaque
 
 ## 0.9.53 — Resource locations
 
-Status: in progress. The bounded canonical workspace registry, explicit cross-boundary local-link decisions, and grant-rooted Files view are implemented. Embedded resources and Side questions still need to move onto the shared grant model.
+Status: in progress. The bounded canonical workspace registry, explicit cross-boundary local-link decisions, grant-rooted Files view, and passive image/PDF authorization are implemented. Side questions still need to move onto the shared grant model.
 
 Replace the single-root assumption with explicit resource grants:
 
@@ -45,6 +45,7 @@ Replace the single-root assumption with explicit resource grants:
 - keep grants session-scoped by default;
 - store canonical server-side paths and retain traversal and symlink-escape checks;
 - use the same grants for Markdown resources, local links, PDFs, Files view, and Side questions;
+- keep passive local media unloaded without opening a permission decision, then offer the exact-file/folder choice only through an explicit blocked-media action;
 - explain that paths, Finder/file-manager actions, and system viewers belong to the computer running Pi;
 - offer **Allow this file**, **Allow this folder for this Studio session**, and **Cancel** when an explicit local link crosses the current boundary.
 

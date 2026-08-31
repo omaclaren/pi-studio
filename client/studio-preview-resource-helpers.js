@@ -1,11 +1,21 @@
 (() => {
   const STUDIO_PREVIEW_LOCAL_IMAGE_LIMIT = 100;
+  const STUDIO_PREVIEW_LOCAL_PDF_LIMIT = 40;
   const STUDIO_PREVIEW_IMAGE_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|gif|webp);base64,/i;
+  const STUDIO_PREVIEW_PDF_DATA_URL_PATTERN = /^data:application\/pdf;base64,/i;
 
   function isResolvableStudioPreviewImageSource(value) {
     const source = String(value || "").trim();
     if (!source || source.startsWith("#") || source.startsWith("//")) return false;
     if (/^(?:data|blob|https?|about|javascript):/i.test(source)) return false;
+    if (/^file:/i.test(source)) {
+      try {
+        const fileUrl = new URL(source);
+        return fileUrl.protocol === "file:" && (!fileUrl.hostname || fileUrl.hostname === "localhost");
+      } catch {
+        return false;
+      }
+    }
     if (/^[a-z][a-z0-9+.-]*:/i.test(source) && !/^[a-z]:[\\/]/i.test(source)) return false;
     return true;
   }
@@ -17,30 +27,66 @@
       && String(a.resourceDir || "") === String(b.resourceDir || "");
   }
 
-  async function hydrateStudioPreviewLocalImages(target, resolveResource) {
+  function isResolvableStudioPreviewPdfSource(value) {
+    const source = String(value || "").trim();
+    return isResolvableStudioPreviewImageSource(source) && /\.pdf(?:[?#].*)?$/i.test(source);
+  }
+
+  async function hydrateStudioPreviewLocalMediaElements(target, options) {
+    const selector = options && options.selector;
+    const sourceAllowed = options && options.sourceAllowed;
+    const dataUrlAllowed = options && options.dataUrlAllowed;
+    const resolveResource = options && options.resolveResource;
+    const onError = options && options.onError;
+    const limit = Math.max(1, Number(options && options.limit) || 1);
     if (!target || typeof target.querySelectorAll !== "function" || typeof resolveResource !== "function") {
       return { attempted: 0, resolved: 0 };
     }
 
-    const images = Array.from(target.querySelectorAll("img[src]"))
-      .filter((image) => image && typeof image.getAttribute === "function" && isResolvableStudioPreviewImageSource(image.getAttribute("src")))
-      .slice(0, STUDIO_PREVIEW_LOCAL_IMAGE_LIMIT);
+    const elements = Array.from(target.querySelectorAll(selector))
+      .filter((element) => element && typeof element.getAttribute === "function" && sourceAllowed(element.getAttribute("src")))
+      .slice(0, limit);
 
     let resolved = 0;
-    await Promise.all(images.map(async (image) => {
-      const originalSource = String(image.getAttribute("src") || "").trim();
+    await Promise.all(elements.map(async (element) => {
+      const originalSource = String(element.getAttribute("src") || "").trim();
       try {
         const dataUrl = await resolveResource(originalSource);
-        if (!STUDIO_PREVIEW_IMAGE_DATA_URL_PATTERN.test(String(dataUrl || ""))) return;
-        if (image.isConnected === false || String(image.getAttribute("src") || "").trim() !== originalSource) return;
-        image.setAttribute("src", dataUrl);
+        if (!dataUrlAllowed.test(String(dataUrl || ""))) throw new Error("Studio returned an unsupported local media payload.");
+        if (element.isConnected === false || String(element.getAttribute("src") || "").trim() !== originalSource) return;
+        element.setAttribute("src", dataUrl);
         resolved += 1;
-      } catch {
-        // Leave unresolved images unchanged so authored browser URLs retain their normal behavior.
+      } catch (error) {
+        if (element.isConnected === false || String(element.getAttribute("src") || "").trim() !== originalSource) return;
+        if (typeof onError === "function") {
+          try { await onError(element, originalSource, error); } catch {}
+        }
       }
     }));
 
-    return { attempted: images.length, resolved };
+    return { attempted: elements.length, resolved };
+  }
+
+  async function hydrateStudioPreviewLocalImages(target, resolveResource, options) {
+    return hydrateStudioPreviewLocalMediaElements(target, {
+      selector: "img[src]",
+      sourceAllowed: isResolvableStudioPreviewImageSource,
+      dataUrlAllowed: STUDIO_PREVIEW_IMAGE_DATA_URL_PATTERN,
+      resolveResource,
+      onError: options && options.onError,
+      limit: STUDIO_PREVIEW_LOCAL_IMAGE_LIMIT,
+    });
+  }
+
+  async function hydrateStudioPreviewLocalPdfEmbeds(target, resolveResource, options) {
+    return hydrateStudioPreviewLocalMediaElements(target, {
+      selector: "embed[src]",
+      sourceAllowed: isResolvableStudioPreviewPdfSource,
+      dataUrlAllowed: STUDIO_PREVIEW_PDF_DATA_URL_PATTERN,
+      resolveResource,
+      onError: options && options.onError,
+      limit: STUDIO_PREVIEW_LOCAL_PDF_LIMIT,
+    });
   }
 
   function buildStudioPdfVersionSignature(headers) {
@@ -94,11 +140,14 @@
 
   globalThis.PiStudioPreviewResourceHelpers = Object.freeze({
     STUDIO_PREVIEW_LOCAL_IMAGE_LIMIT,
+    STUDIO_PREVIEW_LOCAL_PDF_LIMIT,
     areStudioPreviewResourceContextsEqual,
     buildStudioPdfVersionSignature,
     createStudioPdfVersionObservationState,
     hydrateStudioPreviewLocalImages,
+    hydrateStudioPreviewLocalPdfEmbeds,
     isResolvableStudioPreviewImageSource,
+    isResolvableStudioPreviewPdfSource,
     observeStudioPdfVersion,
   });
 })();

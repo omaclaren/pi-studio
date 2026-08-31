@@ -26,6 +26,8 @@ test("preview resource helpers distinguish local image paths from browser URLs",
     "../figures/result.webp?rev=2",
     "/Users/example/project/result.jpg",
     "C:\\project\\result.gif",
+    "file:///tmp/result.png",
+    "file://localhost/tmp/result.webp?rev=2",
   ];
   const browserSources = [
     "",
@@ -35,12 +37,20 @@ test("preview resource helpers distinguish local image paths from browser URLs",
     "http://example.test/result.png",
     "data:image/png;base64,AAAA",
     "blob:http://127.0.0.1/id",
-    "file:///tmp/result.png",
+    "file://files.example.test/share/result.png",
     "javascript:alert(1)",
   ];
 
   localSources.forEach((source) => assert.equal(helpers.isResolvableStudioPreviewImageSource(source), true, source));
   browserSources.forEach((source) => assert.equal(helpers.isResolvableStudioPreviewImageSource(source), false, source));
+});
+
+test("preview resource helpers recognize local PDF embeds", () => {
+  assert.equal(helpers.isResolvableStudioPreviewPdfSource("figures/result.pdf"), true);
+  assert.equal(helpers.isResolvableStudioPreviewPdfSource("../figures/result.pdf#page=2"), true);
+  assert.equal(helpers.isResolvableStudioPreviewPdfSource("file:///tmp/result.pdf#page=2"), true);
+  assert.equal(helpers.isResolvableStudioPreviewPdfSource("https://example.test/result.pdf"), false);
+  assert.equal(helpers.isResolvableStudioPreviewPdfSource("figures/result.png"), false);
 });
 
 test("preview resource helpers hydrate only current connected local images", async () => {
@@ -79,6 +89,47 @@ test("preview resource helpers hydrate only current connected local images", asy
   assert.equal(stale.getAttribute("src"), "figures/newer.png");
   assert.equal(disconnected.getAttribute("src"), "figures/disconnected.png");
   assert.equal(invalidPayload.getAttribute("src"), "figures/not-an-image.png");
+});
+
+test("preview resource helpers expose blocked image failures to the trusted Studio UI", async () => {
+  const blocked = makeImage("../outside/blocked.png");
+  const target = {
+    querySelectorAll(selector) {
+      assert.equal(selector, "img[src]");
+      return [blocked];
+    },
+  };
+  const failures = [];
+  const denied = new Error("Resource grant required.");
+  denied.studioPayload = { code: "studio-resource-grant-required", path: "/outside/blocked.png" };
+
+  const result = await helpers.hydrateStudioPreviewLocalImages(
+    target,
+    async () => { throw denied; },
+    { onError: (element, source, error) => failures.push({ element, source, error }) },
+  );
+
+  assert.deepEqual(result, { attempted: 1, resolved: 0 });
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].element, blocked);
+  assert.equal(failures[0].source, "../outside/blocked.png");
+  assert.equal(failures[0].error, denied);
+});
+
+test("preview resource helpers hydrate local PDF embeds for pdf.js", async () => {
+  const local = makeImage("figures/result.pdf#page=2");
+  const external = makeImage("https://example.test/result.pdf");
+  const target = {
+    querySelectorAll(selector) {
+      assert.equal(selector, "embed[src]");
+      return [local, external];
+    },
+  };
+
+  const result = await helpers.hydrateStudioPreviewLocalPdfEmbeds(target, async () => "data:application/pdf;base64,JVBERi0xLjQK");
+  assert.deepEqual(result, { attempted: 1, resolved: 1 });
+  assert.equal(local.getAttribute("src"), "data:application/pdf;base64,JVBERi0xLjQK");
+  assert.equal(external.getAttribute("src"), "https://example.test/result.pdf");
 });
 
 test("preview resource contexts compare source and working directory", () => {
@@ -147,8 +198,10 @@ test("Studio hydrates rendered local images and refreshes previews when their re
   const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 
   assert.match(indexSource, /studio-preview-resource-helpers\.js/);
-  assert.match(clientSource, /previewResourceHelpers\.hydrateStudioPreviewLocalImages\(targetEl/);
-  assert.match(clientSource, /fetchLocalPreviewResourceDataUrl\(\s*previewResourceContext/);
+  assert.match(clientSource, /async function hydrateStudioPreviewLocalMedia\(/);
+  assert.match(clientSource, /previewResourceHelpers\.hydrateStudioPreviewLocalImages\(/);
+  assert.match(clientSource, /previewResourceHelpers\.hydrateStudioPreviewLocalPdfEmbeds\(/);
+  assert.match(clientSource, /fetchLocalPreviewResourceDataUrl\(/);
   assert.match(clientSource, /function refreshPreviewsForResourceContextChange\(\) \{\s*renderSourcePreview\(\);\s*if \(rightView === "preview"\) \{\s*renderActiveResult\(\);/);
 
   const applyStart = clientSource.indexOf("function applyResourceDir()");
