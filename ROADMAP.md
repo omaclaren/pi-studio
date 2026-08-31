@@ -34,9 +34,9 @@ A focused portability and affordance pass:
 
 This release must not add Muxy-specific branches or attempt to instrument opaque Quarto/authored-HTML iframe contents.
 
-## 0.9.53 — Resource locations
+## 0.9.53 — Resource locations (shipped 2026-08-31)
 
-Status: implementation and release-candidate validation complete; push, tag, and npm publication await explicit approval. The bounded canonical workspace registry now governs explicit local links, the Files view, passive images/PDFs, and Side questions' related-file roots.
+The bounded canonical workspace registry governs explicit local links, the Files view, passive images/PDFs, and Side questions' related-file roots.
 
 Replace the single-root assumption with explicit resource grants:
 
