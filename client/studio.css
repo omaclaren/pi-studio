@@ -6548,6 +6548,13 @@
       margin: 6px 0 0 18px;
     }
 
+    .side-question-context-access-note {
+      margin: 9px 0 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.42;
+    }
+
     .side-question-context-grid select,
     .side-question-path-label input,
     .side-question-composer-label textarea {

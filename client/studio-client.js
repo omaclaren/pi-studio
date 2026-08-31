@@ -479,6 +479,7 @@
       let sideQuestionAvailablePiTools = [];
       let sideQuestionPreviewRenderNonce = 0;
       let sideQuestionContextRefreshHandle = null;
+      let sideQuestionContextGrantPending = false;
       let sideQuestionMarkdownExportRequest = null;
       const sideQuestionMarkdownRenderCache = new Map();
       let sideQuestionUi = {
@@ -12654,6 +12655,33 @@
         };
       }
 
+      async function ensureSideQuestionContextRootAuthorized(context) {
+        if (!context || context.gatherScope === "none") return { contextRoot: "" };
+        const body = JSON.stringify({
+          gatherScope: context.gatherScope,
+          sourcePath: context.sourcePath,
+          resourceDir: context.resourceDir,
+          contextPath: context.contextPath,
+        });
+        const check = () => fetchStudioJson("/side-question-context-root", { method: "POST", body });
+        try {
+          return await check();
+        } catch (error) {
+          const request = getStudioDirectoryGrantRequest(error);
+          if (!request) throw error;
+          const allowed = await requestStudioDirectoryGrant(request, {
+            message: "Side questions can map, search, and read supported files beneath this folder through read-only context tools. Allow that access for this Studio session?",
+            cancelStatus: "Side-question folder access cancelled.",
+          });
+          if (!allowed) {
+            const cancelled = new Error("Side-question folder access cancelled.");
+            cancelled.studioCancelled = true;
+            throw cancelled;
+          }
+          return check();
+        }
+      }
+
       async function renderSideQuestionMarkdownToHtml(markdown) {
         const source = String(markdown || "");
         if (sideQuestionMarkdownRenderCache.has(source)) return sideQuestionMarkdownRenderCache.get(source);
@@ -12745,6 +12773,7 @@
           ], sideQuestionUi.thinking) + "</select></label>"
           + "</div>"
           + "<details class='side-question-context-rule'><summary id='sideQuestionContextRule'>Automatic: selection → heading block at cursor → nearby text</summary><p>A heading block starts at the nearest Markdown/LaTeX heading above the cursor and ends before the next heading of the same or higher level. With no heading, Studio uses the surrounding text block or a nearby excerpt.</p></details>"
+          + (scope === "none" ? "" : "<p class='side-question-context-access-note'>Related-file access is limited to folders allowed for this Studio session. Studio asks before starting if this folder is not already allowed.</p>")
           + (scope === "custom" ? "<label class='side-question-path-label'>Folder path<input data-side-question-field='customPath' type='text' value='" + escapeHtml(sideQuestionUi.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
           + "<div class='side-question-checks'>"
           + "<label><input data-side-question-field='includeConversation' type='checkbox'" + (sideQuestionUi.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
@@ -12755,7 +12784,7 @@
           + "<dl class='side-question-context-summary'><div><dt>Starting text</dt><dd>" + escapeHtml(summary.attachmentText) + "</dd></div><div><dt>Related files</dt><dd>" + escapeHtml(summary.relatedFilesText) + "</dd></div>" + (summary.gitContextText ? "<div><dt>Git context</dt><dd>" + escapeHtml(summary.gitContextText) + "</dd></div>" : "") + "</dl>"
           + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' title='Enter adds a new line. Cmd/Ctrl+Enter asks the side question.' placeholder='Ask about the starting text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
-          + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask side question (Cmd/Ctrl+Enter)'" + (!isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question") + "</button></div>"
+          + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask side question (Cmd/Ctrl+Enter)'" + (sideQuestionContextGrantPending || !isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionContextGrantPending ? "Checking related-file access…" : (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question")) + "</button></div>"
           + "</div>";
       }
 
@@ -12826,7 +12855,8 @@
         }
       }
 
-      function submitSideQuestion() {
+      async function submitSideQuestion() {
+        if (sideQuestionContextGrantPending) return;
         const question = String(sideQuestionUi.draft || "").trim();
         if (!question) {
           setStatus("Enter a side question first.", "warning");
@@ -12845,11 +12875,31 @@
         if (sideQuestionState && sideQuestionState.threadId) {
           message.threadId = sideQuestionState.threadId;
         } else {
-          message.context = buildSideQuestionContextPayload();
-          if (message.context.gatherScope === "custom" && !String(message.context.contextPath || "").trim()) {
+          const context = buildSideQuestionContextPayload();
+          if (context.gatherScope === "custom" && !String(context.contextPath || "").trim()) {
             setStatus("Choose a custom context path first.", "warning");
             return;
           }
+          if (context.gatherScope !== "none") {
+            sideQuestionContextGrantPending = true;
+            if (rightView === "side-questions") renderSideQuestionView();
+            setStatus("Checking side-question folder access…", "warning");
+            try {
+              await ensureSideQuestionContextRootAuthorized(context);
+            } catch (error) {
+              if (!(error && error.studioCancelled)) {
+                const messageText = error && error.message ? error.message : String(error || "Could not authorize side-question context.");
+                if (!sideQuestionState) sideQuestionState = normalizeSideQuestionState(null);
+                sideQuestionState.error = messageText;
+                setStatus("Could not use related files: " + messageText, "warning");
+              }
+              return;
+            } finally {
+              sideQuestionContextGrantPending = false;
+              if (rightView === "side-questions" && (!sideQuestionState || !sideQuestionState.threadId)) renderSideQuestionView();
+            }
+          }
+          message.context = context;
         }
         if (!sendMessage(message)) return;
         sideQuestionUi.draft = "";
@@ -12965,7 +13015,7 @@
         event.preventDefault();
         const action = target.getAttribute("data-side-question-action");
         if (action === "ask") {
-          submitSideQuestion();
+          await submitSideQuestion();
         } else if (action === "stop") {
           if (sideQuestionState && sideQuestionState.threadId && sideQuestionState.requestId) {
             sendMessage({ type: "side_question_cancel_request", threadId: sideQuestionState.threadId, requestId: sideQuestionState.requestId });
@@ -13018,7 +13068,7 @@
         if (field === "draft") sideQuestionUi.draft = target.value;
         if (field === "customPath") sideQuestionUi.customPath = target.value;
         const askButton = critiqueViewEl.querySelector("[data-side-question-action='ask']");
-        if (askButton) askButton.disabled = !isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() || (getSideQuestionGatherScope() === "custom" && !sideQuestionUi.customPath.trim());
+        if (askButton) askButton.disabled = sideQuestionContextGrantPending || !isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() || (getSideQuestionGatherScope() === "custom" && !sideQuestionUi.customPath.trim());
       }
 
       function handleSideQuestionKeydown(event) {
@@ -13032,7 +13082,7 @@
         if (!submitShortcut) return;
         event.preventDefault();
         event.stopPropagation();
-        if (!sideQuestionState || sideQuestionState.status !== "running") submitSideQuestion();
+        if (!sideQuestionState || sideQuestionState.status !== "running") void submitSideQuestion();
       }
 
       async function handleSideQuestionChange(event) {
@@ -15173,6 +15223,43 @@
           directoryPath,
           label: typeof payload.label === "string" && payload.label.trim() ? payload.label.trim() : basenameForStudioPath(path),
         };
+      }
+
+      function getStudioDirectoryGrantRequest(error) {
+        const payload = error && error.studioPayload && typeof error.studioPayload === "object"
+          ? error.studioPayload
+          : null;
+        if (!payload || payload.code !== "studio-resource-directory-grant-required") return null;
+        const directoryPath = typeof payload.directoryPath === "string" ? payload.directoryPath.trim() : "";
+        if (!directoryPath) return null;
+        return {
+          directoryPath,
+          label: typeof payload.label === "string" && payload.label.trim() ? payload.label.trim() : basenameForStudioPath(directoryPath),
+        };
+      }
+
+      async function requestStudioDirectoryGrant(request, options) {
+        if (!request || !request.directoryPath) return false;
+        const config = options && typeof options === "object" ? options : {};
+        const choice = await openStudioDecision({
+          mode: "confirm",
+          title: "Allow " + (request.label || "this folder") + "?",
+          message: (config.message || "Allow read-only access beneath this folder for the current Studio session?")
+            + "\n\nFolder on the computer running Pi:\n" + request.directoryPath,
+          cancelLabel: "Cancel",
+          confirmLabel: "Allow this folder for this Studio session",
+        });
+        if (choice !== true) {
+          setStatus(config.cancelStatus || "Folder access cancelled.", "warning");
+          return false;
+        }
+        const payload = await fetchStudioJson("/resource-grants", {
+          method: "POST",
+          body: JSON.stringify({ grantKind: "directory", path: request.directoryPath }),
+        });
+        fileBrowserState = { ...fileBrowserState, contextKey: "", loaded: false };
+        setStatus(typeof payload.message === "string" ? payload.message : "Allowed this folder for the current Studio session.", "success");
+        return true;
       }
 
       async function requestStudioResourceGrant(request) {

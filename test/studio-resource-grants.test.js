@@ -56,6 +56,7 @@ test("Studio resource grants distinguish exact files from folders", () => {
 
 		assert.equal(registry.allows(exactFile), true);
 		assert.equal(registry.allows(siblingFile), false);
+		assert.equal(registry.findGrant(otherDir), null, "an exact-file grant must not authorize its parent directory");
 		assert.equal(registry.allows(nestedFile), true);
 		assert.equal(registry.findGrant(exactFile).kind, "file");
 		assert.equal(registry.findGrant(nestedFile).kind, "directory");

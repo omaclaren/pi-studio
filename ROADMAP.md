@@ -36,7 +36,7 @@ This release must not add Muxy-specific branches or attempt to instrument opaque
 
 ## 0.9.53 — Resource locations
 
-Status: in progress. The bounded canonical workspace registry, explicit cross-boundary local-link decisions, grant-rooted Files view, and passive image/PDF authorization are implemented. Side questions still need to move onto the shared grant model.
+Status: implementation complete; release-candidate validation in progress. The bounded canonical workspace registry now governs explicit local links, the Files view, passive images/PDFs, and Side questions' related-file roots.
 
 Replace the single-root assumption with explicit resource grants:
 

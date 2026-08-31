@@ -76,6 +76,7 @@ import {
 } from "./shared/studio-side-question.js";
 import {
 	STUDIO_SIDE_CONTEXT_MAX_OUTPUT_CHARS,
+	assertStudioSideQuestionRootStable,
 	formatStudioSideQuestionContextMap,
 	listStudioSideQuestionContext,
 	readStudioSideQuestionContextText,
@@ -451,6 +452,8 @@ interface StudioSideQuestionToolDescriptor {
 	source: string;
 	gateway: boolean;
 }
+
+type StudioSideQuestionContextRootInput = Pick<StudioSideQuestionContextInput, "sourcePath" | "resourceDir" | "gatherScope" | "contextPath">;
 
 interface StudioSideQuestionContextInput {
 	focusKind: StudioSideQuestionFocusKind;
@@ -7810,6 +7813,17 @@ function respondStudioResourceGrantRequiredJson(res: ServerResponse, error: Stud
 	});
 }
 
+function respondStudioDirectoryGrantRequiredJson(res: ServerResponse, error: StudioDirectoryGrantRequiredError): void {
+	respondJson(res, 403, {
+		ok: false,
+		code: error.code,
+		error: error.message,
+		path: error.directoryPath,
+		directoryPath: error.directoryPath,
+		label: basename(error.directoryPath) || error.directoryPath,
+	});
+}
+
 function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: string): void {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "GET" && method !== "HEAD") {
@@ -8816,10 +8830,11 @@ async function searchStudioSideQuestionLocalContext(
 	const query = String(queryInput || "").trim();
 	if (!query) throw new Error("Local context search query is empty.");
 	if (query.length > 500) throw new Error("Local context search query is too long.");
+	const stableRoot = assertStudioSideQuestionRootStable(contextRoot);
 	const target = options.path
-		? resolveStudioSideQuestionPath(contextRoot, options.path, { directory: true }).path
-		: contextRoot;
-	const targetRelative = relative(contextRoot, target) || ".";
+		? resolveStudioSideQuestionPath(stableRoot, options.path, { directory: true }).path
+		: stableRoot;
+	const targetRelative = relative(stableRoot, target) || ".";
 	const maxResults = Math.max(1, Math.min(200, Math.floor(Number(options.maxResults) || 60)));
 	const args = [
 		"--fixed-strings",
@@ -8839,7 +8854,7 @@ async function searchStudioSideQuestionLocalContext(
 	args.push("--", query, targetRelative);
 	try {
 		const result = await runStudioSubprocess("rg", args, {
-			cwd: contextRoot,
+			cwd: stableRoot,
 			signal: options.signal,
 			timeoutMs: 20_000,
 			stdoutMaxBytes: 250_000,
@@ -8853,11 +8868,11 @@ async function searchStudioSideQuestionLocalContext(
 			if (!match) return [];
 			return [{ path: match[1].split("\\").join("/"), line: Number(match[2]), text: match[3].trim().slice(0, 1_000) }];
 		}).slice(0, maxResults);
-		return { root: contextRoot, query, results: matches, truncated: result.stdoutTruncated || matches.length >= maxResults };
+		return { root: stableRoot, query, results: matches, truncated: result.stdoutTruncated || matches.length >= maxResults };
 	} catch (error) {
 		if (options.signal?.aborted) throw new Error("Local context search was cancelled.");
 		if (!(error instanceof Error) || !error.message.includes("__PI_STUDIO_RG_NOT_FOUND__")) throw error;
-		return searchStudioSideQuestionContext(contextRoot, query, {
+		return searchStudioSideQuestionContext(stableRoot, query, {
 			path: targetRelative,
 			caseSensitive: options.caseSensitive,
 			maxResults,
@@ -8959,7 +8974,12 @@ function formatStudioSideQuestionGitSnapshotResult(
 	};
 }
 
-function createStudioSideQuestionTools(contextRoot: string, webEnabled: boolean, gitSnapshot: StudioSideQuestionGitSnapshot | null = null) {
+function createStudioSideQuestionTools(
+	contextRoot: string,
+	webEnabled: boolean,
+	gitSnapshot: StudioSideQuestionGitSnapshot | null = null,
+	assertContextRoot?: () => string,
+) {
 	const mapTool = defineTool({
 		name: "studio_context_map",
 		label: "Map local context",
@@ -8970,6 +8990,7 @@ function createStudioSideQuestionTools(contextRoot: string, webEnabled: boolean,
 		}),
 		async execute(_toolCallId, params, signal) {
 			if (signal?.aborted) throw new Error("Context map was cancelled.");
+			if (assertContextRoot) assertContextRoot();
 			const target = params.path
 				? resolveStudioSideQuestionPath(contextRoot, params.path, { directory: true }).path
 				: contextRoot;
@@ -8992,6 +9013,7 @@ function createStudioSideQuestionTools(contextRoot: string, webEnabled: boolean,
 		}),
 		async execute(_toolCallId, params, signal) {
 			if (signal?.aborted) throw new Error("Context read was cancelled.");
+			if (assertContextRoot) assertContextRoot();
 			const result = readStudioSideQuestionContextText(contextRoot, params.path, { offset: params.offset, limit: params.limit, maxChars: STUDIO_SIDE_CONTEXT_MAX_OUTPUT_CHARS });
 			const extractableResult = result as { path: string; relativePath: string; extension?: string };
 			const content: { text: string; startLine: number; endLine: number; totalLines: number; truncated: boolean } = result.requiresExtraction
@@ -9015,6 +9037,7 @@ function createStudioSideQuestionTools(contextRoot: string, webEnabled: boolean,
 			maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
 		}),
 		async execute(_toolCallId, params, signal) {
+			if (assertContextRoot) assertContextRoot();
 			const result = await searchStudioSideQuestionLocalContext(contextRoot, params.query, {
 				path: params.path,
 				caseSensitive: params.caseSensitive,
@@ -13935,7 +13958,7 @@ export default function (pi: ExtensionAPI) {
 		await closeStudioSideQuestionRuntime(runtime);
 	};
 
-	const resolveStudioSideQuestionContextRoot = (context: StudioSideQuestionContextInput): string => {
+	const resolveStudioSideQuestionContextRoot = (context: StudioSideQuestionContextRootInput): string => {
 		if (context.gatherScope === "none") return "";
 		const sourcePath = resolveStudioQuizContextPath(context.sourcePath, studioCwd);
 		const resourceDir = resolveStudioQuizContextPath(context.resourceDir, studioCwd);
@@ -13956,6 +13979,51 @@ export default function (pi: ExtensionAPI) {
 		let root = resolveStudioSideQuestionRoot(candidate, studioCwd);
 		if (context.gatherScope === "repo") root = findStudioQuizRepoRoot(root) || root;
 		return resolveStudioSideQuestionRoot(root, studioCwd);
+	};
+
+	const assertStudioSideQuestionContextRootAuthorized = (contextRoot: string): string => {
+		if (!contextRoot) return "";
+		const stableRoot = assertStudioSideQuestionRootStable(contextRoot);
+		const grant = studioResourceGrantRegistry.findGrant(stableRoot, { cwd: studioCwd });
+		if (!grant || grant.kind !== "directory") throw new StudioDirectoryGrantRequiredError(stableRoot);
+		return stableRoot;
+	};
+
+	const resolveAuthorizedStudioSideQuestionContextRoot = (context: StudioSideQuestionContextRootInput): string => (
+		assertStudioSideQuestionContextRootAuthorized(resolveStudioSideQuestionContextRoot(context))
+	);
+
+	const handleStudioSideQuestionContextRootRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+		const method = (req.method ?? "GET").toUpperCase();
+		if (method !== "POST") {
+			res.setHeader("Allow", "POST");
+			respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+			return;
+		}
+		const rawBody = await readRequestBody(req, REQUEST_BODY_MAX_BYTES);
+		let payload: Record<string, unknown> = {};
+		try {
+			payload = rawBody ? JSON.parse(rawBody) as Record<string, unknown> : {};
+		} catch {
+			respondJson(res, 400, { ok: false, error: "Invalid JSON body." });
+			return;
+		}
+		const context: StudioSideQuestionContextRootInput = {
+			gatherScope: normalizeStudioSideQuestionGatherScope(payload.gatherScope) as StudioSideQuestionGatherScope,
+			sourcePath: typeof payload.sourcePath === "string" ? payload.sourcePath.slice(0, 16_384) : undefined,
+			resourceDir: typeof payload.resourceDir === "string" ? payload.resourceDir.slice(0, 16_384) : undefined,
+			contextPath: typeof payload.contextPath === "string" ? payload.contextPath.slice(0, 16_384) : undefined,
+		};
+		try {
+			const contextRoot = resolveAuthorizedStudioSideQuestionContextRoot(context);
+			respondJson(res, 200, { ok: true, contextRoot, authorized: Boolean(contextRoot) });
+		} catch (error) {
+			if (error instanceof StudioDirectoryGrantRequiredError) {
+				respondStudioDirectoryGrantRequiredJson(res, error);
+				return;
+			}
+			respondJson(res, 400, { ok: false, error: `Side-question context unavailable: ${error instanceof Error ? error.message : String(error)}` });
+		}
 	};
 
 	const describeStudioSideQuestionActivity = (toolName: string, args: unknown): string => {
@@ -14060,19 +14128,20 @@ export default function (pi: ExtensionAPI) {
 	const createStudioSideQuestionRuntime = async (context: StudioSideQuestionContextInput): Promise<StudioSideQuestionRuntime> => {
 		const ctx = lastCommandCtx;
 		if (!ctx) throw new Error("No active Studio command context is available. Re-open Studio and try again.");
-		const model = latestModelRequestCtx?.model ?? ctx.model;
-		if (!model) throw new Error("No active Pi model is available for side questions.");
-		await resolveStudioModelRequestAuth({ model, modelRegistry: ctx.modelRegistry }, model);
-		const contextRoot = resolveStudioSideQuestionContextRoot(context);
+		const contextRoot = resolveAuthorizedStudioSideQuestionContextRoot(context);
 		if (context.gitContext && context.gatherScope !== "repo") {
 			throw new Error("Git context requires Related files to be set to Repository.");
 		}
+		const model = latestModelRequestCtx?.model ?? ctx.model;
+		if (!model) throw new Error("No active Pi model is available for side questions.");
+		await resolveStudioModelRequestAuth({ model, modelRegistry: ctx.modelRegistry }, model);
 		const gitSnapshot = context.gitContext
 			? await captureStudioSideQuestionGitSnapshot(contextRoot, { runGit: runStudioSideQuestionGitCommand }) as StudioSideQuestionGitSnapshot
 			: null;
 		const webAvailable = Boolean(String(process.env.BRAVE_API_KEY || "").trim());
 		const webEnabled = context.webSearch && webAvailable;
-		const { tools, toolNames } = createStudioSideQuestionTools(contextRoot || studioCwd, webEnabled, gitSnapshot);
+		const assertContextRoot = contextRoot ? () => assertStudioSideQuestionContextRootAuthorized(contextRoot) : undefined;
+		const { tools, toolNames } = createStudioSideQuestionTools(contextRoot || studioCwd, webEnabled, gitSnapshot, assertContextRoot);
 		const localActiveToolNames = context.gatherScope === "none" ? (webEnabled ? ["studio_web_search"] : []) : toolNames;
 		const toolSelection = selectStudioSideQuestionTools(getStudioSideQuestionToolCatalog(), context.toolIds);
 		if (toolSelection.missing.length > 0) {
@@ -14255,6 +14324,7 @@ export default function (pi: ExtensionAPI) {
 		sendStudioSideQuestionState();
 		try {
 			const context = msg.context;
+			if (runtime.contextRoot) assertStudioSideQuestionContextRootAuthorized(runtime.contextRoot);
 			let prompt: string;
 			if (isFollowUp) {
 				prompt = buildStudioSideQuestionFollowUpPrompt(msg.question);
@@ -16752,6 +16822,19 @@ export default function (pi: ExtensionAPI) {
 
 			void handleStudioResourceGrantRequest(req, res, studioResourceGrantRegistry, studioCwd).catch((error) => {
 				respondJson(res, 500, { ok: false, error: `Resource grant failed: ${error instanceof Error ? error.message : String(error)}` });
+			});
+			return;
+		}
+
+		if (requestUrl.pathname === "/side-question-context-root") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." });
+				return;
+			}
+
+			void handleStudioSideQuestionContextRootRequest(req, res).catch((error) => {
+				respondJson(res, 500, { ok: false, error: `Side-question context check failed: ${error instanceof Error ? error.message : String(error)}` });
 			});
 			return;
 		}

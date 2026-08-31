@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const STUDIO_SIDE_CONTEXT_MAX_FILE_BYTES = 5_000_000;
@@ -53,8 +53,21 @@ export function resolveStudioSideQuestionRoot(pathInput, fallbackCwd) {
 	return stats.isDirectory() ? real : dirname(real);
 }
 
+export function assertStudioSideQuestionRootStable(rootPath) {
+	const requested = resolve(String(rootPath || ""));
+	if (lstatSync(requested).isSymbolicLink()) {
+		throw new Error("The selected side-question context root changed or now resolves to another folder.");
+	}
+	const currentReal = realpathSync(requested);
+	if (currentReal !== requested) {
+		throw new Error("The selected side-question context root changed or now resolves to another folder.");
+	}
+	if (!statSync(currentReal).isDirectory()) throw new Error("The selected side-question context root is no longer a folder.");
+	return currentReal;
+}
+
 export function resolveStudioSideQuestionPath(rootPath, pathInput, options = {}) {
-	const rootReal = realpathSync(rootPath);
+	const rootReal = assertStudioSideQuestionRootStable(rootPath);
 	const raw = String(pathInput || "").trim().replace(/^@/, "");
 	if (!raw || /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) throw new Error("Use a local path inside the selected context root.");
 	const candidate = isAbsolute(raw) ? raw : resolve(rootReal, raw);
@@ -76,7 +89,7 @@ function classifyContextPath(filePath) {
 }
 
 export function listStudioSideQuestionContext(rootPath, options = {}) {
-	const root = realpathSync(rootPath);
+	const root = assertStudioSideQuestionRootStable(rootPath);
 	const maxFiles = Math.max(1, Math.min(1_000, Math.floor(Number(options.maxFiles) || 400)));
 	const maxDirs = Math.max(1, Math.min(1_000, Math.floor(Number(options.maxDirs) || 500)));
 	const maxDepth = Math.max(0, Math.min(12, Math.floor(Number(options.maxDepth) || 8)));
@@ -177,7 +190,7 @@ export function sliceStudioSideQuestionExtractedText(text, options = {}) {
 
 export function searchStudioSideQuestionContext(rootPath, queryInput, options = {}) {
 	if (options.signal?.aborted) throw new Error("Local context search was cancelled.");
-	const root = realpathSync(rootPath);
+	const root = assertStudioSideQuestionRootStable(rootPath);
 	const query = String(queryInput || "").trim();
 	if (!query) throw new Error("Search query is empty.");
 	if (query.length > 500) throw new Error("Search query is too long.");

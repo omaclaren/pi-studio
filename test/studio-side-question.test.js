@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,10 +11,12 @@ import {
 	truncateStudioSideQuestionFocus,
 } from "../shared/studio-side-question.js";
 import {
+	assertStudioSideQuestionRootStable,
 	formatStudioSideQuestionContextMap,
 	listStudioSideQuestionContext,
 	readStudioSideQuestionContextText,
 	resolveStudioSideQuestionPath,
+	resolveStudioSideQuestionRoot,
 	searchStudioSideQuestionContext,
 } from "../shared/studio-side-question-context.js";
 import {
@@ -31,7 +33,7 @@ if (!clientHelpers) throw new Error("PiStudioSideQuestionHelpers did not load fo
 function withTempContext(run) {
 	const root = mkdtempSync(join(tmpdir(), "pi-studio-side-context-"));
 	try {
-		return run(root);
+		return run(realpathSync(root));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -213,6 +215,23 @@ test("side-question context rejects traversal and symlinks outside its selected 
 	}
 }));
 
+test("side-question context rejects replacement of an authorized root with a symlink", () => withTempContext((root) => {
+	const outside = mkdtempSync(join(tmpdir(), "pi-studio-side-replacement-"));
+	try {
+		writeFileSync(join(outside, "secret.txt"), "replacement target");
+		const canonicalRoot = resolveStudioSideQuestionRoot(root, process.cwd());
+		assert.equal(assertStudioSideQuestionRootStable(canonicalRoot), canonicalRoot);
+		rmSync(root, { recursive: true, force: true });
+		symlinkSync(outside, root, "dir");
+		assert.throws(() => assertStudioSideQuestionRootStable(canonicalRoot), /context root changed/);
+		assert.throws(() => listStudioSideQuestionContext(canonicalRoot), /context root changed/);
+		assert.throws(() => resolveStudioSideQuestionPath(canonicalRoot, "secret.txt"), /context root changed/);
+		assert.throws(() => searchStudioSideQuestionContext(canonicalRoot, "replacement"), /context root changed/);
+	} finally {
+		rmSync(outside, { recursive: true, force: true });
+	}
+}));
+
 test("side-question Pi tools are provenance-backed, bounded, and explicitly selected", () => {
 	const catalog = buildStudioSideQuestionToolCatalog([
 		{ name: "read", description: "builtin", sourceInfo: { source: "builtin", path: "<builtin:read>" } },
@@ -258,6 +277,12 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(indexSource, /name: "studio_context_map"/);
 	assert.match(indexSource, /name: "studio_context_read"/);
 	assert.match(indexSource, /name: "studio_context_search"/);
+	assert.match(indexSource, /requestUrl\.pathname === "\/side-question-context-root"/);
+	assert.match(indexSource, /resolveAuthorizedStudioSideQuestionContextRoot\(context\)/);
+	assert.match(indexSource, /studioResourceGrantRegistry\.findGrant\(stableRoot/);
+	assert.match(indexSource, /grant\.kind !== "directory"/);
+	assert.match(indexSource, /assertStudioSideQuestionContextRootAuthorized\(runtime\.contextRoot\)/);
+	assert.ok((indexSource.match(/if \(assertContextRoot\) assertContextRoot\(\)/g) || []).length >= 3);
 	assert.match(indexSource, /name: "studio_git_status"/);
 	assert.match(indexSource, /name: "studio_git_diff"/);
 	assert.match(indexSource, /name: "studio_git_log"/);
@@ -303,6 +328,11 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /<dt>Starting text<\/dt>/);
 	assert.match(clientSource, /<dt>Related files<\/dt>/);
 	assert.match(clientSource, /<label>Also use files from<select data-side-question-field='gatherScope'/);
+	assert.match(clientSource, /ensureSideQuestionContextRootAuthorized\(context\)/);
+	assert.match(clientSource, /fetchStudioJson\("\/side-question-context-root"/);
+	assert.match(clientSource, /requestStudioDirectoryGrant\(request/);
+	assert.match(clientSource, /Related-file access is limited to folders allowed for this Studio session/);
+	assert.match(clientSource, /Checking related-file access…/);
 	assert.match(clientSource, /Same folder as document/);
 	assert.match(clientSource, /Repository/);
 	assert.match(clientSource, /Choose a folder/);

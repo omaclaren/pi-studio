@@ -5,15 +5,17 @@ All notable changes to `pi-studio` are documented here.
 ## [Unreleased]
 
 ### Added
-- Begin the `0.9.53` resource-location work with a bounded, session-scoped workspace grant registry that canonicalizes exact-file and directory grants, rejects symlink escapes, automatically records trusted document/workspace locations, and stays separate from the current editor document.
+- Add a bounded, session-scoped workspace grant registry that canonicalizes exact-file and directory grants, rejects symlink escapes, automatically records trusted document/workspace locations, and stays separate from the current editor document.
 - When an explicit local preview link crosses the current resource boundary, show an in-page **Allow this file** / **Allow this folder for this Studio session** / **Cancel** decision, identify the path as belonging to the computer running Pi, and retry the original PDF, image, document, copy, reveal, or system-viewer action only after a grant is confirmed.
 - Root the Files view in session directory grants, add an explicit **Allow folder…** action and allowed-location selector, and show exact-file grants without exposing or making their parent folders browsable.
 - Add `Cmd/Ctrl+Alt+F` as a mnemonic shortcut for switching the right pane directly to Files (`Ctrl+Option+F` is accepted on macOS).
 - Keep passive local images and embedded PDFs behind the same server-side session grants: already allowed media loads without interruption, while blocked media stays unloaded and presents an explicit **Allow local image/PDF…** action for choosing an exact-file or containing-folder grant.
+- Require a directory grant before a new Side questions thread can map, search, or read related files, with a trusted outer-Studio confirmation that names the canonical folder and explains the read-only scope.
 
 ### Changed
 - Check local-link access before presenting its action menu, and route text/office links through that menu, so permission decisions remain visible in the originating Studio page instead of being hidden behind a preliminary waiting tab.
 - Resolve interactive preview media only through authenticated Studio endpoints rather than allowing Pandoc to embed files from a client-supplied resource directory; authored-HTML image blocks are surfaced in trusted outer Studio UI.
+- Revalidate Side questions' selected context root before prompting and before each built-in local context tool call; exact-file grants cannot authorize parent-folder access, and replacement symlinks cannot redirect an active context root.
 
 ## [0.9.52] — 2026-08-28
 
