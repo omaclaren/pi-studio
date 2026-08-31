@@ -184,6 +184,28 @@ test("cross-boundary local links require an explicit file or folder grant", () =
 	assert.match(clientSource, /secondaryValue: "directory"/);
 	assert.match(clientSource, /fetchStudioJson\("\/resource-grants"/);
 	assert.match(clientSource, /if \(!\(await requestStudioResourceGrant\(grantRequest\)\)\)/);
+	const menuStart = clientSource.indexOf("async function showPreviewLinkMenu");
+	const grantRequestStart = clientSource.indexOf("function getStudioResourceGrantRequest", menuStart);
+	assert.ok(menuStart >= 0 && grantRequestStart > menuStart);
+	const menuSource = clientSource.slice(menuStart, grantRequestStart);
+	const menuPreflight = menuSource.indexOf('await fetchPreviewLocalLink("resolve", href, nextContext)');
+	const firstMenuAction = menuSource.indexOf("appendPreviewLinkMenuButton", menuPreflight);
+	assert.ok(menuPreflight >= 0 && firstMenuAction > menuPreflight, "Local-link access must be decided before an action menu can create a pending tab.");
+	assert.match(menuSource, /const menuRequestId = \+\+previewLinkMenuRequestId/);
+	assert.match(menuSource, /if \(menuRequestId !== previewLinkMenuRequestId\) return false/);
+	assert.match(menuSource, /if \(!\(error && error\.studioCancelled\)\)/);
+
+	const previewClickStart = clientSource.indexOf("function handlePreviewLocalLinkClick");
+	const previewContextMenuStart = clientSource.indexOf("function handlePreviewLocalLinkContextMenu", previewClickStart);
+	const previewClickSource = clientSource.slice(previewClickStart, previewContextMenuStart);
+	assert.match(previewClickSource, /kind === "text" \|\| kind === "office"[\s\S]*void showPreviewLinkMenu\(anchor, event\)/);
+	assert.doesNotMatch(previewClickSource, /openPreviewDocumentInNewEditor/);
+
+	const htmlLinkStart = clientSource.indexOf("function handleHtmlArtifactFrameLocalLinkMessage");
+	const htmlCommentStart = clientSource.indexOf("function handleHtmlArtifactFrameCommentTargetMessage", htmlLinkStart);
+	const htmlLinkSource = clientSource.slice(htmlLinkStart, htmlCommentStart);
+	assert.match(htmlLinkSource, /kind === "text" \|\| kind === "office"[\s\S]*void showPreviewLinkMenu\(null, point, context\)/);
+	assert.doesNotMatch(htmlLinkSource, /openPreviewDocumentInNewEditor/);
 	assert.match(clientSource, /if \(error && error\.studioCancelled\) \{\s*cancelPendingStudioTab\(launch, "Local resource access was cancelled\."\)/);
 	const pdfOpenStart = clientSource.indexOf("async function openPreviewPdfLink");
 	const imageOpenStart = clientSource.indexOf("async function openPreviewImageLink", pdfOpenStart);

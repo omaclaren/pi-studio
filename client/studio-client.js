@@ -6626,7 +6626,7 @@
         const action = typeof data.action === "string" ? data.action : "open";
         if (action === "contextmenu") {
           const point = getHtmlArtifactLocalLinkClientPoint(record, data);
-          showPreviewLinkMenu(null, point, context);
+          void showPreviewLinkMenu(null, point, context);
           return;
         }
         const kind = getPreviewLocalLinkKind(context.href);
@@ -6643,9 +6643,8 @@
           return;
         }
         if (kind === "text" || kind === "office") {
-          void openPreviewDocumentInNewEditor(context.href, context).catch((error) => {
-            setStatus((error && error.message) ? error.message : String(error || "Could not open linked file."), "warning");
-          });
+          const point = getHtmlArtifactLocalLinkClientPoint(record, data);
+          void showPreviewLinkMenu(null, point, context);
           return;
         }
         setStatus("Right-click this local HTML preview link for file actions.", "warning");
@@ -14665,6 +14664,7 @@
       ]);
       let previewLinkMenuEl = null;
       let activePreviewLinkContext = null;
+      let previewLinkMenuRequestId = 0;
 
       function stripPreviewLocalLinkUrlSuffix(href) {
         const raw = String(href || "").trim();
@@ -14801,19 +14801,35 @@
         menu.style.top = y + "px";
       }
 
-      function showPreviewLinkMenu(anchor, event, contextOverride) {
+      async function showPreviewLinkMenu(anchor, event, contextOverride) {
         const href = String(anchor && anchor.getAttribute ? anchor.getAttribute("href") || "" : (contextOverride && contextOverride.href ? contextOverride.href : "")).trim();
         if (!isStudioLocalPreviewHref(href)) return false;
         const kind = getPreviewLocalLinkKind(href);
-        const menu = ensurePreviewLinkMenu();
-        menu.innerHTML = "";
         const linkContext = getEffectivePreviewLinkContext(contextOverride);
-        activePreviewLinkContext = {
+        const nextContext = {
           href,
           title: String((contextOverride && contextOverride.title) || (anchor && anchor.textContent) || href || "local link").trim() || href,
           sourcePath: linkContext.sourcePath,
           resourceDir: linkContext.resourceDir,
         };
+        const menuPoint = {
+          clientX: event && event.clientX,
+          clientY: event && event.clientY,
+        };
+        closePreviewLinkMenu();
+        const menuRequestId = ++previewLinkMenuRequestId;
+        try {
+          await fetchPreviewLocalLink("resolve", href, nextContext);
+        } catch (error) {
+          if (!(error && error.studioCancelled)) {
+            setStatus((error && error.message) ? error.message : String(error || "Could not inspect this local resource."), "warning");
+          }
+          return false;
+        }
+        if (menuRequestId !== previewLinkMenuRequestId) return false;
+        const menu = ensurePreviewLinkMenu();
+        menu.innerHTML = "";
+        activePreviewLinkContext = nextContext;
         if (kind === "pdf") {
           appendPreviewLinkMenuButton(menu, "Open PDF preview", "open-pdf");
           appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
@@ -14830,7 +14846,7 @@
         }
         appendPreviewLinkMenuButton(menu, "Reveal in file manager", "reveal");
         appendPreviewLinkMenuButton(menu, "Copy path", "copy-path");
-        positionPreviewLinkMenu(menu, event && event.clientX, event && event.clientY);
+        positionPreviewLinkMenu(menu, menuPoint.clientX, menuPoint.clientY);
         const firstButton = menu.querySelector("button");
         if (firstButton && typeof firstButton.focus === "function") {
           window.setTimeout(() => firstButton.focus({ preventScroll: true }), 0);
@@ -15136,9 +15152,7 @@
           return;
         }
         if (kind === "text" || kind === "office") {
-          void openPreviewDocumentInNewEditor(href).catch((error) => {
-            setStatus((error && error.message) ? error.message : String(error || "Could not open linked file."), "warning");
-          });
+          void showPreviewLinkMenu(anchor, event);
           return;
         }
         setStatus("Right-click this local link for file actions.", "warning");
@@ -15149,7 +15163,7 @@
         if (!anchor) return;
         event.preventDefault();
         event.stopPropagation();
-        showPreviewLinkMenu(anchor, event);
+        void showPreviewLinkMenu(anchor, event);
       }
 
       function makeRequestId() {
