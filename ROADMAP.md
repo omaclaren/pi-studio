@@ -51,7 +51,7 @@ Replace the single-root assumption with explicit resource grants:
 
 The resource-location registry should be workspace-level rather than tied to the current editor document so it remains compatible with multiple buffers. Remembering grants per project can follow after the session-only model is proven.
 
-## 0.9.54 — Disk-backed preview and safe save (shipped 2026-09-01)
+## 0.9.54 — Disk-backed preview and safe save (shipped 2026-09-02)
 
 Builds on the resource-location foundation:
 

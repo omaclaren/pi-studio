@@ -4,7 +4,7 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
-## [0.9.54] — 2026-09-01
+## [0.9.54] — 2026-09-02
 
 ### Added
 - Add read-only **Preview file (follow changes)** tabs from Files, local text links, and `/studio --watch <file>`. Followed previews use canonical disk paths, bounded and expiring path-bound tab capabilities, debounced polling, SHA-256 content revisions, atomic-save replacement handling, staged last-good rendering, and stable-anchor scroll restoration with ratio fallback through temporary read or render failures.
