@@ -39,6 +39,7 @@ export function createStudioFileWatcher(options) {
 	let generation = 0;
 	let debounceTimer = null;
 	let errorRetryTimer = null;
+	let startupReconcileTimer = null;
 	let refreshInFlight = null;
 	let refreshQueued = false;
 	let closed = false;
@@ -135,6 +136,15 @@ export function createStudioFileWatcher(options) {
 
 	const listener = () => schedule();
 	watchFile(canonicalPath, { interval: intervalMs }, listener);
+	// StatWatcher establishes its first comparison baseline asynchronously. Reconcile
+	// once after that window so an atomic replacement immediately after subscribe
+	// cannot become the unseen baseline and wait forever for another filesystem event.
+	startupReconcileTimer = setTimeout(() => {
+		startupReconcileTimer = null;
+		void refresh().catch(() => {
+			// onError owns watcher failures; never create an unhandled rejection.
+		});
+	}, intervalMs);
 
 	return Object.freeze({
 		filePath: canonicalPath,
@@ -150,6 +160,10 @@ export function createStudioFileWatcher(options) {
 			if (errorRetryTimer) {
 				clearTimeout(errorRetryTimer);
 				errorRetryTimer = null;
+			}
+			if (startupReconcileTimer) {
+				clearTimeout(startupReconcileTimer);
+				startupReconcileTimer = null;
 			}
 			unwatchFile(canonicalPath, listener);
 			if (refreshInFlight) await refreshInFlight.catch(() => undefined);
