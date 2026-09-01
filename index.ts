@@ -23,6 +23,12 @@ import {
 	transformStudioMarkdownOutsideFences,
 } from "./shared/studio-annotation-scanner.js";
 import { stripStudioMarkdownHtmlComments } from "./shared/studio-markdown-html-comments.js";
+import { createStudioFileWatcher } from "./shared/studio-file-watcher.js";
+import {
+	readStudioDiskFileSnapshot,
+	saveStudioDiskFileAs,
+	saveStudioDiskFileIfRevision,
+} from "./shared/studio-disk-revisions.js";
 import { normalizeStudioMarkdownSmartFences } from "./shared/studio-markdown-fences.js";
 import {
 	extractStandaloneLatexDefinitionsFromMarkdown,
@@ -314,11 +320,24 @@ interface InitialStudioDocument {
 	path?: string;
 	draftId?: string;
 	resourceDir?: string;
+	diskRevision?: string;
+	watchFile?: boolean;
 }
+
+type StudioDiskWriteResult =
+	| { ok: true; path: string; revision: string; size: number }
+	| {
+		ok: false;
+		conflict?: boolean;
+		reason?: string;
+		path?: string;
+		currentRevision?: string | null;
+		message: string;
+	};
 
 interface StudioLaunchSelection {
 	document: InitialStudioDocument;
-	kind: "document" | "pdf-preview";
+	kind: "document" | "pdf-preview" | "watched-preview";
 	mode?: StudioUiMode;
 	transient?: boolean;
 	skipWorkspaceRestore?: boolean;
@@ -719,18 +738,29 @@ interface SaveAsRequestMessage {
 	requestId: string;
 	path: string;
 	content: string;
+	overwrite?: boolean;
+	expectedRevision?: string;
 }
 
 interface SaveOverRequestMessage {
 	type: "save_over_request";
 	requestId: string;
+	path: string;
 	content: string;
+	expectedRevision?: string;
+	force?: boolean;
 }
 
 interface RefreshFromDiskRequestMessage {
 	type: "refresh_from_disk_request";
 	requestId: string;
 	path?: string;
+}
+
+interface WatchFileSubscribeMessage {
+	type: "watch_file_subscribe";
+	path: string;
+	revision?: string;
 }
 
 interface SendToEditorRequestMessage {
@@ -821,6 +851,7 @@ type IncomingStudioMessage =
 	| SaveAsRequestMessage
 	| SaveOverRequestMessage
 	| RefreshFromDiskRequestMessage
+	| WatchFileSubscribeMessage
 	| SendToEditorRequestMessage
 	| GetFromEditorRequestMessage
 	| QuartoPreviewCheckRequestMessage
@@ -833,6 +864,7 @@ type IncomingStudioMessage =
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
+const STUDIO_WATCHED_FILE_MAX_CLIENTS = 16;
 const STUDIO_COMPLETION_MAX_TEXT_CHARS = 250_000;
 const STUDIO_COMPLETION_MAX_CONTEXT_CHARS = 12_000;
 const STUDIO_COMPLETION_PREFIX_CHARS = 12_000;
@@ -2463,8 +2495,8 @@ function resolveStudioPath(pathArg: string, cwd: string): { ok: true; resolved: 
 	return { ok: true, resolved, label: normalized };
 }
 
-function readStudioFile(pathArg: string, cwd: string):
-	| { ok: true; text: string; label: string; resolvedPath: string }
+function readStudioFile(pathArg: string, cwd: string, options?: { requireCanonicalPath?: boolean }):
+	| { ok: true; text: string; label: string; resolvedPath: string; diskRevision: string }
 	| { ok: false; message: string } {
 	const resolved = resolveStudioPath(pathArg, cwd);
 	if (resolved.ok === false) {
@@ -2472,39 +2504,41 @@ function readStudioFile(pathArg: string, cwd: string):
 	}
 
 	try {
-		const stats = statSync(resolved.resolved);
-		if (!stats.isFile()) {
-			return { ok: false, message: `Path is not a file: ${resolved.label}` };
+		const snapshot = readStudioDiskFileSnapshot(resolved.resolved);
+		if (options?.requireCanonicalPath) {
+			const requestedPath = resolve(resolved.resolved);
+			const canonicalPath = resolve(snapshot.path);
+			const pathsMatch = process.platform === "win32"
+				? requestedPath.toLowerCase() === canonicalPath.toLowerCase()
+				: requestedPath === canonicalPath;
+			if (!pathsMatch) {
+				return { ok: false, message: `Could not read file: ${resolved.label} (the file location now resolves somewhere else)` };
+			}
 		}
-	} catch (error) {
-		return {
-			ok: false,
-			message: `Could not access file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
-		};
-	}
-
-	try {
-		// Read raw bytes first to detect binary content before UTF-8 decode
-		const buf = readFileSync(resolved.resolved);
-		// Heuristic: check the first 8KB for binary indicators
-		const sample = buf.subarray(0, 8192);
+		// Heuristic: check the first 8KB for binary indicators.
+		const sample = snapshot.buffer.subarray(0, 8192);
 		let nulCount = 0;
 		let controlCount = 0;
 		for (let i = 0; i < sample.length; i++) {
 			const b = sample[i];
 			if (b === 0x00) nulCount++;
-			// Control chars excluding tab (0x09), newline (0x0A), carriage return (0x0D)
+			// Control chars excluding tab (0x09), newline (0x0A), carriage return (0x0D).
 			else if (b < 0x08 || (b > 0x0D && b < 0x20 && b !== 0x1B)) controlCount++;
 		}
 		if (nulCount > 0 || (sample.length > 0 && controlCount / sample.length > 0.1)) {
 			return { ok: false, message: `File appears to be binary: ${resolved.label}` };
 		}
-		const text = buf.toString("utf-8");
-		return { ok: true, text, label: resolved.label, resolvedPath: resolved.resolved };
+		return {
+			ok: true,
+			text: snapshot.buffer.toString("utf-8"),
+			label: resolved.label,
+			resolvedPath: snapshot.path,
+			diskRevision: snapshot.revision,
+		};
 	} catch (error) {
 		return {
 			ok: false,
-			message: `Failed to read file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
+			message: `Could not read file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
 		};
 	}
 }
@@ -2864,23 +2898,18 @@ function writeStudioPreviewExportFile(path: string | null, data: Buffer): { file
 	}
 }
 
-function writeStudioFile(pathArg: string, cwd: string, content: string):
-	| { ok: true; label: string; resolvedPath: string }
-	| { ok: false; message: string } {
-	const resolved = resolveStudioPath(pathArg, cwd);
-	if (resolved.ok === false) {
-		return { ok: false, message: resolved.message };
-	}
-
-	try {
-		writeFileSync(resolved.resolved, content, "utf-8");
-		return { ok: true, label: resolved.label, resolvedPath: resolved.resolved };
-	} catch (error) {
-		return {
-			ok: false,
-			message: `Failed to write file: ${resolved.label} (${error instanceof Error ? error.message : String(error)})`,
-		};
-	}
+function writeStudioFile(pathArg: string, cwd: string, content: string, overwrite = false, expectedRevision?: string):
+	| { ok: true; label: string; resolvedPath: string; diskRevision: string }
+	| { ok: false; conflict?: boolean; reason?: string; path?: string; currentRevision?: string | null; message: string } {
+	const normalizedLabel = normalizePathInput(pathArg);
+	const result = saveStudioDiskFileAs({ path: pathArg, cwd, content, overwrite, expectedRevision }) as StudioDiskWriteResult;
+	if (result.ok === false) return result;
+	return {
+		ok: true,
+		label: normalizedLabel || basename(result.path),
+		resolvedPath: result.path,
+		diskRevision: result.revision,
+	};
 }
 
 function writeStudioSideQuestionMarkdownFile(
@@ -7961,6 +7990,13 @@ async function respondLocalPreviewLinkJson(
 	}
 
 	const action = (requestUrl.searchParams.get("action") ?? "resolve").trim().toLowerCase();
+	const originDocId = (requestUrl.searchParams.get("docId") ?? "").trim();
+	const originDocument = originDocId ? readTransientStudioDocument(originDocId) : null;
+	const originatesFromWatchedPreview = requestUrl.searchParams.get("watchedFile") === "1" || originDocument?.watchFile === true;
+	if (action === "document" && originatesFromWatchedPreview) {
+		respondJson(res, 409, { ok: false, error: "Open here is unavailable in a watched preview. Open a separate editable file tab instead." });
+		return;
+	}
 	const basePayload = {
 		ok: true,
 		kind: resource.kind,
@@ -7990,8 +8026,12 @@ async function respondLocalPreviewLinkJson(
 		return;
 	}
 
-	if (action !== "document" && action !== "editor-url") {
+	if (action !== "document" && action !== "editor-url" && action !== "watch-url") {
 		respondJson(res, 400, { ok: false, error: "Unsupported local link action." });
+		return;
+	}
+	if (action === "watch-url" && resource.kind !== "text") {
+		respondJson(res, 400, { ok: false, error: "Follow-changes preview is available only for readable text files." });
 		return;
 	}
 	if (resource.kind !== "text" && resource.kind !== "office") {
@@ -8038,6 +8078,7 @@ async function respondLocalPreviewLinkJson(
 			source: "file",
 			path: file.resolvedPath,
 			resourceDir: documentResourceDir,
+			diskRevision: file.diskRevision,
 		};
 	}
 	if (action === "document") {
@@ -8047,10 +8088,18 @@ async function respondLocalPreviewLinkJson(
 			label: document.label,
 			converted,
 			resourceDir: documentResourceDir,
+			diskRevision: document.diskRevision || null,
 		});
 		return;
 	}
 
+	if (action === "watch-url") {
+		if (responseText.length > PREVIEW_RENDER_MAX_CHARS) {
+			respondJson(res, 413, { ok: false, error: `Watched preview source exceeds ${PREVIEW_RENDER_MAX_CHARS.toLocaleString()} characters.` });
+			return;
+		}
+		document = { ...document, watchFile: true };
+	}
 	const docId = storeTransientStudioDocument(document);
 	respondJson(res, 200, {
 		...basePayload,
@@ -9956,21 +10005,35 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 		msg.type === "save_as_request" &&
 		typeof msg.requestId === "string" &&
 		typeof msg.path === "string" &&
-		typeof msg.content === "string"
+		typeof msg.content === "string" &&
+		(msg.overwrite === undefined || typeof msg.overwrite === "boolean") &&
+		(msg.expectedRevision === undefined || typeof msg.expectedRevision === "string")
 	) {
 		return {
 			type: "save_as_request",
 			requestId: msg.requestId,
 			path: msg.path,
 			content: msg.content,
+			overwrite: msg.overwrite === true,
+			expectedRevision: typeof msg.expectedRevision === "string" ? msg.expectedRevision : undefined,
 		};
 	}
 
-	if (msg.type === "save_over_request" && typeof msg.requestId === "string" && typeof msg.content === "string") {
+	if (
+		msg.type === "save_over_request"
+		&& typeof msg.requestId === "string"
+		&& typeof msg.path === "string"
+		&& typeof msg.content === "string"
+		&& (msg.expectedRevision === undefined || typeof msg.expectedRevision === "string")
+		&& (msg.force === undefined || typeof msg.force === "boolean")
+	) {
 		return {
 			type: "save_over_request",
 			requestId: msg.requestId,
+			path: msg.path,
 			content: msg.content,
+			expectedRevision: typeof msg.expectedRevision === "string" ? msg.expectedRevision : undefined,
+			force: msg.force === true,
 		};
 	}
 
@@ -9983,6 +10046,19 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 			type: "refresh_from_disk_request",
 			requestId: msg.requestId,
 			path: typeof msg.path === "string" ? msg.path : undefined,
+		};
+	}
+
+	if (
+		msg.type === "watch_file_subscribe"
+		&& typeof msg.path === "string"
+		&& msg.path.length <= 16_384
+		&& (msg.revision === undefined || typeof msg.revision === "string")
+	) {
+		return {
+			type: "watch_file_subscribe",
+			path: msg.path,
+			revision: typeof msg.revision === "string" ? msg.revision : undefined,
 		};
 	}
 
@@ -11322,6 +11398,7 @@ function buildStudioRelativeUrl(
 	if (doc?.path) params.set("docPath", doc.path);
 	if (doc?.draftId) params.set("draftId", doc.draftId);
 	if (doc?.resourceDir) params.set("resourceDir", doc.resourceDir);
+	if (doc?.watchFile) params.set("watchFile", "1");
 	if (options?.skipWorkspaceRestore) params.set("skipWorkspaceRestore", "1");
 	if (options?.paneFocus) params.set("paneFocus", options.paneFocus);
 	return `/?${params.toString()}`;
@@ -11411,16 +11488,36 @@ function resolveRequestedStudioDocumentFromUrl(
 	const requestedLabel = (requestUrl.searchParams.get("docLabel") ?? "").trim();
 	const requestedDraftId = (requestUrl.searchParams.get("draftId") ?? "").trim();
 	const requestedResourceDir = (requestUrl.searchParams.get("resourceDir") ?? "").trim();
+	const requestedWatchFile = requestUrl.searchParams.get("watchFile") === "1";
 
 	if (requestedPath) {
 		const file = readStudioFile(requestedPath, studioCwd);
-		if (file.ok !== false) {
+		const requestedCanonicalTextPath = resolve(requestedPath);
+		const resolvedFilePath = file.ok !== false ? resolve(file.resolvedPath) : "";
+		const watchedPathStayedCanonical = !requestedWatchFile || (
+			process.platform === "win32"
+				? requestedCanonicalTextPath.toLowerCase() === resolvedFilePath.toLowerCase()
+				: requestedCanonicalTextPath === resolvedFilePath
+		);
+		if (file.ok !== false && watchedPathStayedCanonical) {
 			return {
 				text: file.text,
 				label: requestedLabel || file.label,
 				source: "file",
 				path: file.resolvedPath,
 				resourceDir: requestedResourceDir || fallback?.resourceDir || studioCwd,
+				diskRevision: file.diskRevision,
+				watchFile: requestedWatchFile,
+			};
+		}
+		if (requestedWatchFile && isAbsolute(requestedPath)) {
+			return {
+				text: fallback?.watchFile && fallback.path === requestedPath ? fallback.text : "",
+				label: requestedLabel || basename(requestedPath),
+				source: "file",
+				path: resolve(requestedPath),
+				resourceDir: requestedResourceDir || dirname(resolve(requestedPath)),
+				watchFile: true,
 			};
 		}
 	}
@@ -11705,6 +11802,8 @@ function buildStudioHtml(
 	const initialPath = escapeHtmlForInline(initialDocument?.path ?? "");
 	const initialDraftId = escapeHtmlForInline(initialDocument?.draftId ?? "");
 	const initialResourceDir = escapeHtmlForInline(initialDocument?.resourceDir ?? "");
+	const initialDiskRevision = escapeHtmlForInline(initialDocument?.diskRevision ?? "");
+	const initialWatchFile = initialDocument?.watchFile === true ? "1" : "0";
 	const initialModel = escapeHtmlForInline(initialModelLabel ?? "none");
 	const initialTerminal = escapeHtmlForInline(initialTerminalLabel ?? "unknown");
 	const initialTerminalDetailAttr = escapeHtmlForInline(initialTerminalDetail ?? initialTerminalLabel ?? "unknown");
@@ -11781,12 +11880,12 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
+<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
   <header id="studioHeader">
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
-      <button id="saveAsBtn" type="button" title="Save editor content to a new file path. Cmd/Ctrl+S falls back here when no direct save path is available.">Save editor as…</button>
-      <button id="saveOverBtn" type="button" title="Overwrite current file with editor content. Shortcut: Cmd/Ctrl+S.">Save editor</button>
+      <button id="saveAsBtn" type="button" title="Save editor content to a new file path. Shortcut: Cmd/Ctrl+Shift+S; Cmd/Ctrl+S falls back here for new drafts.">Save editor as…</button>
+      <button id="saveOverBtn" type="button" title="Save only when the current file still matches Studio's disk revision. Shortcut: Cmd/Ctrl+S.">Save editor</button>
       <button id="refreshFromDiskBtn" type="button" title="Reload the current file-backed document from disk.">Refresh from disk</button>
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
       <button id="importFileBtn" type="button" title="Import a file as an editable copy.">Import file copy…</button>
@@ -12020,6 +12119,7 @@ ${cssVarsBlock}
         </div>
         <div class="section-header-actions">
           <button id="rightFocusBtn" class="pane-focus-btn" type="button" title="Show only the response pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
+          <button id="watchedOpenEditableBtn" type="button" hidden title="Open this watched file in a separate editable Studio tab with conflict-safe saving.">Open editable tab</button>
           <span id="exportPreviewControls" class="export-preview-controls">
             <button id="exportPdfBtn" class="export-preview-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose a format and export the current right-pane preview.">Export right preview</button>
             <div id="exportPreviewMenu" class="export-preview-menu" role="menu" hidden>
@@ -12137,7 +12237,8 @@ ${cssVarsBlock}
         <section class="shortcuts-group">
           <h3>Editor</h3>
           <dl>
-            <div><dt>Cmd/Ctrl+S</dt><dd>Save editor</dd></div>
+            <div><dt>Cmd/Ctrl+S</dt><dd>Save editor when the disk revision still matches</dd></div>
+            <div><dt>Cmd/Ctrl+Shift+S</dt><dd>Save editor as a new file</dd></div>
             <div class="shortcuts-full-only"><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
             <div><dt>Option/Alt+Tab or Cmd/Ctrl+Shift+Space</dt><dd>Suggest a completion at the editor cursor</dd></div>
             <div><dt>Tab</dt><dd>Insert a visible completion suggestion; otherwise indent selected editor text</dd></div>
@@ -12213,6 +12314,9 @@ export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
 	const studioWorkspaceStateStore = createStudioWorkspaceStateStore();
 	const studioResourceGrantRegistry = createStudioResourceGrantRegistry();
+	const studioFileWatchers = new Map<WebSocket, ReturnType<typeof createStudioFileWatcher>>();
+	const studioWatchedClientPaths = new Map<WebSocket, string>();
+	const studioFileWatchSubscriptionGenerations = new Map<WebSocket, number>();
 	let activeRequest: ActiveStudioRequest | null = null;
 	let studioDirectRunChain: StudioDirectRunChain | null = null;
 	let queuedStudioDirectRequests: QueuedStudioDirectRequest[] = [];
@@ -12271,6 +12375,21 @@ export default function (pi: ExtensionAPI) {
 		startedAt: null,
 		updatedAt: Date.now(),
 		actionRequestId: null,
+	};
+
+	const closeStudioFileWatcher = async (client: WebSocket): Promise<void> => {
+		const watcher = studioFileWatchers.get(client);
+		if (!watcher) return;
+		studioFileWatchers.delete(client);
+		await watcher.close().catch(() => undefined);
+	};
+
+	const closeAllStudioFileWatchers = async (): Promise<void> => {
+		const clients = Array.from(studioFileWatchers.keys());
+		await Promise.all(clients.map((client) => closeStudioFileWatcher(client)));
+		// Keep socket capability metadata until each socket is closed. Clearing it
+		// while an authenticated socket is still open would briefly make a watched
+		// preview look writable to the save handlers.
 	};
 
 	const recordStudioDocumentResourceGrants = (document: InitialStudioDocument, cwd = studioCwd) => {
@@ -14393,6 +14512,92 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const subscribeStudioWatchedFile = async (client: WebSocket, msg: WatchFileSubscribeMessage): Promise<void> => {
+		const subscriptionGeneration = (studioFileWatchSubscriptionGenerations.get(client) ?? 0) + 1;
+		studioFileWatchSubscriptionGenerations.set(client, subscriptionGeneration);
+		await closeStudioFileWatcher(client);
+		if (studioFileWatchSubscriptionGenerations.get(client) !== subscriptionGeneration || client.readyState !== WebSocket.OPEN) return;
+		if (studioFileWatchers.size >= STUDIO_WATCHED_FILE_MAX_CLIENTS) {
+			sendToClient(client, {
+				type: "watched_file_error",
+				path: msg.path,
+				message: `Studio watched-file client limit reached (${STUDIO_WATCHED_FILE_MAX_CLIENTS}).`,
+			});
+			return;
+		}
+		const canonicalPath = resolve(msg.path);
+		const clientWatchedPath = studioWatchedClientPaths.get(client) ?? "";
+		if (clientWatchedPath !== canonicalPath) {
+			sendToClient(client, {
+				type: "watched_file_error",
+				path: canonicalPath,
+				message: "This socket is not authorized for that server-created watched preview.",
+			});
+			return;
+		}
+
+		const watcher = createStudioFileWatcher({
+			filePath: canonicalPath,
+			initialRevision: msg.revision,
+			readSnapshot: (filePath: string) => {
+				const file = readStudioFile(filePath, dirname(filePath), { requireCanonicalPath: true });
+				if (file.ok === false) throw new Error(file.message);
+				if (file.text.length > PREVIEW_RENDER_MAX_CHARS) {
+					throw new Error(`Watched file exceeds the ${PREVIEW_RENDER_MAX_CHARS.toLocaleString()}-character preview limit.`);
+				}
+				return { path: file.resolvedPath, text: file.text, revision: file.diskRevision };
+			},
+			onUpdate: (snapshot: { path: string; text: string; revision: string }, details: { generation: number; recovered: boolean }) => {
+				if (studioFileWatchers.get(client) !== watcher || client.readyState !== WebSocket.OPEN) return;
+				sendToClient(client, {
+					type: "watched_file_update",
+					path: snapshot.path,
+					text: snapshot.text,
+					diskRevision: snapshot.revision,
+					generation: details.generation,
+					recovered: details.recovered,
+					message: `Updated ${basename(snapshot.path)} from disk.`,
+				});
+			},
+			onError: (error: unknown, details: { generation: number; lastRevision: string | null }) => {
+				if (studioFileWatchers.get(client) !== watcher || client.readyState !== WebSocket.OPEN) return;
+				sendToClient(client, {
+					type: "watched_file_error",
+					path: canonicalPath,
+					diskRevision: details.lastRevision,
+					generation: details.generation,
+					message: `Could not refresh ${basename(canonicalPath)}; keeping the last good preview: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			},
+			onRecovered: (snapshot: { path: string; revision: string }, details: { generation: number; changed: boolean }) => {
+				if (studioFileWatchers.get(client) !== watcher || client.readyState !== WebSocket.OPEN || details.changed) return;
+				sendToClient(client, {
+					type: "watched_file_ready",
+					path: snapshot.path,
+					diskRevision: snapshot.revision,
+					generation: details.generation,
+					recovered: true,
+					message: `Watching ${basename(snapshot.path)} for disk changes.`,
+				});
+			},
+		});
+		studioFileWatchers.set(client, watcher);
+		await watcher.refresh();
+		if (
+			studioFileWatchers.get(client) === watcher
+			&& client.readyState === WebSocket.OPEN
+			&& !watcher.error
+		) {
+			sendToClient(client, {
+				type: "watched_file_ready",
+				path: canonicalPath,
+				diskRevision: watcher.revision,
+				generation: watcher.generation,
+				message: `Watching ${basename(canonicalPath)} for disk changes.`,
+			});
+		}
+	};
+
 	const handleStudioMessage = (client: WebSocket, msg: IncomingStudioMessage) => {
 		if (msg.type === "ping") {
 			sendToClient(client, { type: "pong", timestamp: Date.now() });
@@ -14400,6 +14605,16 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (msg.type === "workspace_state_update") {
 			studioWorkspaceStateStore.set(msg.tabStateId, msg.state);
+			return;
+		}
+		if (msg.type === "watch_file_subscribe") {
+			void subscribeStudioWatchedFile(client, msg).catch((error) => {
+				sendToClient(client, {
+					type: "watched_file_error",
+					path: msg.path,
+					message: `Could not start watched preview: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			});
 			return;
 		}
 
@@ -15372,6 +15587,10 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		if (msg.type === "save_as_request") {
+			if (studioWatchedClientPaths.has(client)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Watched previews are read-only. Open an editable Studio tab before saving." });
+				return;
+			}
 			if (!isValidRequestId(msg.requestId)) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
@@ -15380,14 +15599,21 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
 				return;
 			}
-			if (!msg.content.trim()) {
-				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Nothing to save." });
-				return;
-			}
 
-			const result = writeStudioFile(msg.path, studioCwd, msg.content);
+			const result = writeStudioFile(msg.path, studioCwd, msg.content, msg.overwrite === true, msg.expectedRevision);
 			if (result.ok === false) {
-				sendToClient(client, { type: "error", requestId: msg.requestId, message: result.message });
+				if (result.conflict) {
+					sendToClient(client, {
+						type: "save_as_conflict",
+						requestId: msg.requestId,
+						path: result.path || msg.path,
+						currentRevision: result.currentRevision || null,
+						reason: result.reason || "target-exists",
+						message: result.message,
+					});
+				} else {
+					sendToClient(client, { type: "error", requestId: msg.requestId, message: result.message });
+				}
 				return;
 			}
 
@@ -15397,6 +15623,7 @@ export default function (pi: ExtensionAPI) {
 				source: "file",
 				path: result.resolvedPath,
 				resourceDir: dirname(result.resolvedPath),
+				diskRevision: result.diskRevision,
 			};
 			recordStudioDocumentResourceGrants(initialStudioDocument);
 
@@ -15406,12 +15633,17 @@ export default function (pi: ExtensionAPI) {
 				path: result.resolvedPath,
 				label: result.label,
 				resourceDir: dirname(result.resolvedPath),
+				diskRevision: result.diskRevision,
 				message: `Saved editor text to ${result.label}`,
 			});
 			return;
 		}
 
 		if (msg.type === "save_over_request") {
+			if (studioWatchedClientPaths.has(client)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Watched previews are read-only. Open an editable Studio tab before saving." });
+				return;
+			}
 			if (!isValidRequestId(msg.requestId)) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
@@ -15420,35 +15652,52 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
 				return;
 			}
-			if (!initialStudioDocument || initialStudioDocument.source !== "file" || !initialStudioDocument.path) {
-				sendToClient(client, {
-					type: "error",
-					requestId: msg.requestId,
-					message: "Save file is only available for file-backed documents.",
-				});
+
+			const result = saveStudioDiskFileIfRevision({
+				path: msg.path,
+				content: msg.content,
+				expectedRevision: msg.expectedRevision,
+				force: msg.force === true,
+			}) as StudioDiskWriteResult;
+			if (result.ok === false) {
+				if (result.conflict) {
+					sendToClient(client, {
+						type: "save_conflict",
+						requestId: msg.requestId,
+						path: result.path || msg.path,
+						currentRevision: result.currentRevision || null,
+						reason: result.reason || "disk-changed",
+						canOverwrite: result.reason !== "location-changed" && result.reason !== "hard-linked-file",
+						message: result.message,
+					});
+				} else {
+					sendToClient(client, { type: "error", requestId: msg.requestId, message: result.message });
+				}
 				return;
 			}
 
-			try {
-				writeFileSync(initialStudioDocument.path, msg.content, "utf-8");
-				initialStudioDocument = {
-					...initialStudioDocument,
-					text: msg.content,
-				};
-				sendToClient(client, {
-					type: "saved",
-					requestId: msg.requestId,
-					path: initialStudioDocument.path,
-					label: initialStudioDocument.label,
-					message: `Saved over ${initialStudioDocument.label}`,
-				});
-			} catch (error) {
-				sendToClient(client, {
-					type: "error",
-					requestId: msg.requestId,
-					message: `Failed to save over file: ${error instanceof Error ? error.message : String(error)}`,
-				});
-			}
+			const previousDocument = initialStudioDocument;
+			const existingLabel = previousDocument?.path === result.path
+				? previousDocument.label
+				: basename(result.path);
+			initialStudioDocument = {
+				text: msg.content,
+				label: existingLabel,
+				source: "file",
+				path: result.path,
+				resourceDir: dirname(result.path),
+				diskRevision: result.revision,
+			};
+			recordStudioDocumentResourceGrants(initialStudioDocument);
+			sendToClient(client, {
+				type: "saved",
+				requestId: msg.requestId,
+				path: result.path,
+				label: existingLabel,
+				resourceDir: dirname(result.path),
+				diskRevision: result.revision,
+				message: `Saved over ${existingLabel}`,
+			});
 			return;
 		}
 
@@ -15472,7 +15721,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const refreshed = readStudioFile(refreshPath, studioCwd);
+			const refreshed = readStudioFile(refreshPath, studioCwd, { requireCanonicalPath: true });
 			if (refreshed.ok === false) {
 				sendToClient(client, {
 					type: "error",
@@ -15488,6 +15737,7 @@ export default function (pi: ExtensionAPI) {
 				source: "file",
 				path: refreshed.resolvedPath,
 				resourceDir: dirname(refreshed.resolvedPath),
+				diskRevision: refreshed.diskRevision,
 			};
 			if (!requestedPath || initialStudioDocument?.path === refreshed.resolvedPath) {
 				initialStudioDocument = refreshedDocument;
@@ -16855,7 +17105,14 @@ export default function (pi: ExtensionAPI) {
 						studioCwd,
 						studioResourceGrantRegistry,
 					);
-					await respondLocalPreviewLinkJson(req, res, requestUrl, resource, serverState, studioResourceGrantRegistry);
+					await respondLocalPreviewLinkJson(
+						req,
+						res,
+						requestUrl,
+						resource,
+						serverState,
+						studioResourceGrantRegistry,
+					);
 				} catch (error) {
 					if (error instanceof StudioResourceGrantRequiredError) {
 						respondStudioResourceGrantRequiredJson(res, error);
@@ -17019,6 +17276,32 @@ export default function (pi: ExtensionAPI) {
 			const host = req.headers.host ?? `127.0.0.1:${state.port}`;
 			const requestUrl = new URL(req.url ?? "/ws", `http://${host}`);
 			const clientMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
+			const requestedWatchedPath = (requestUrl.searchParams.get("watchPath") ?? "").trim();
+			const canonicalWatchedPath = requestedWatchedPath ? resolve(requestedWatchedPath) : "";
+			const requestedDocId = (requestUrl.searchParams.get("docId") ?? "").trim();
+			const capabilityDocument = requestedDocId ? readTransientStudioDocument(requestedDocId) : null;
+			const capabilityWatchedPath = capabilityDocument?.watchFile && capabilityDocument.path
+				? resolve(capabilityDocument.path)
+				: "";
+			const comparableWatchedPath = process.platform === "win32" ? canonicalWatchedPath.toLowerCase() : canonicalWatchedPath;
+			const comparableCapabilityPath = process.platform === "win32" ? capabilityWatchedPath.toLowerCase() : capabilityWatchedPath;
+			const requestsWatchedCapability = Boolean(canonicalWatchedPath || capabilityWatchedPath);
+			if (
+				requestsWatchedCapability
+				&& (
+					clientMode !== "editor-only"
+					|| !canonicalWatchedPath
+					|| !capabilityWatchedPath
+					|| comparableWatchedPath !== comparableCapabilityPath
+				)
+			) {
+				try {
+					ws.close(4003, "Watched preview authorization unavailable");
+				} catch {
+					// Ignore close errors.
+				}
+				return;
+			}
 			if (clientMode === "full") {
 				for (const client of clients) {
 					if (client.readyState !== WebSocket.OPEN) continue;
@@ -17034,6 +17317,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			clients.add(ws);
 			clientModes.set(ws, clientMode);
+			if (canonicalWatchedPath) studioWatchedClientPaths.set(ws, canonicalWatchedPath);
 			emitDebugEvent("studio_ws_connected", { clients: clients.size, mode: clientMode });
 			broadcastState();
 
@@ -17046,15 +17330,33 @@ export default function (pi: ExtensionAPI) {
 				handleStudioMessage(ws, parsed);
 			});
 
-			ws.on("close", () => {
+			const cleanupClient = () => {
 				clients.delete(ws);
 				clientModes.delete(ws);
+				studioWatchedClientPaths.delete(ws);
+				const cleanupGeneration = (studioFileWatchSubscriptionGenerations.get(ws) ?? 0) + 1;
+				studioFileWatchSubscriptionGenerations.set(ws, cleanupGeneration);
+				void closeStudioFileWatcher(ws).finally(() => {
+					if (studioFileWatchSubscriptionGenerations.get(ws) === cleanupGeneration) {
+						studioFileWatchSubscriptionGenerations.delete(ws);
+					}
+				});
+			};
+
+			ws.on("close", () => {
+				cleanupClient();
 				emitDebugEvent("studio_ws_disconnected", { clients: clients.size });
 			});
 
 			ws.on("error", () => {
-				clients.delete(ws);
-				clientModes.delete(ws);
+				// Make the socket unusable before removing its watched-path marker;
+				// otherwise an error event could briefly weaken read-only enforcement.
+				try {
+					ws.terminate();
+				} catch {
+					try { ws.close(); } catch {}
+				}
+				cleanupClient();
 			});
 		});
 
@@ -17122,7 +17424,12 @@ export default function (pi: ExtensionAPI) {
 	const stopServer = async () => {
 		studioSideQuestionStartRequestId = null;
 		await disposeStudioSideQuestionRuntime();
-		if (!serverState) return;
+		await closeAllStudioFileWatchers();
+		if (!serverState) {
+			studioWatchedClientPaths.clear();
+			studioFileWatchSubscriptionGenerations.clear();
+			return;
+		}
 		clearStudioDirectRunState();
 		clearActiveRequest();
 		clearPendingStudioCompletion();
@@ -17148,6 +17455,8 @@ export default function (pi: ExtensionAPI) {
 		await new Promise<void>((resolve) => {
 			state.server.close(() => resolve());
 		});
+		studioWatchedClientPaths.clear();
+		studioFileWatchSubscriptionGenerations.clear();
 		studioWorkspaceStateStore.clear();
 		studioResourceGrantRegistry.clear();
 	};
@@ -17166,6 +17475,13 @@ export default function (pi: ExtensionAPI) {
 			await disposeStudioSideQuestionRuntime();
 			studioTraceHistory.clear();
 			lastCommandCtx = null;
+			for (const client of studioWatchedClientPaths.keys()) {
+				try { client.close(4001, "Watched preview session changed"); } catch {}
+			}
+			await closeAllStudioFileWatchers();
+			transientStudioDocuments.clear();
+			studioResourceGrantRegistry.clear();
+			initialStudioDocument = null;
 		}
 		latestModelRequestCtx = ctx;
 		hydrateLatestAssistant(ctx.sessionManager.getBranch());
@@ -17517,7 +17833,7 @@ export default function (pi: ExtensionAPI) {
 	const resolveStudioLaunchDocument = (
 		trimmed: string,
 		ctx: ExtensionCommandContext,
-		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; allowPdfPreview?: boolean; watchPdf?: boolean },
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; allowPdfPreview?: boolean; watchPdf?: boolean; watchText?: boolean },
 	): StudioLaunchSelection | null => {
 		const defaultSource = options?.defaultSource === "blank" ? "blank" : "last-response";
 		const commandLabel = options?.commandLabel ?? "/studio";
@@ -17624,6 +17940,30 @@ export default function (pi: ExtensionAPI) {
 			return null;
 		}
 
+		if (options?.watchText) {
+			if (file.text.length > PREVIEW_RENDER_MAX_CHARS) {
+				ctx.ui.notify(`Watched preview source exceeds ${PREVIEW_RENDER_MAX_CHARS.toLocaleString()} characters.`, "error");
+				return null;
+			}
+			return {
+				document: {
+					text: file.text,
+					label: file.label,
+					source: "file",
+					path: file.resolvedPath,
+					resourceDir: dirname(file.resolvedPath),
+					diskRevision: file.diskRevision,
+					watchFile: true,
+				},
+				kind: "watched-preview",
+				mode: "editor-only",
+				transient: true,
+				skipWorkspaceRestore: true,
+				paneFocus: "right",
+				resourcePath: file.resolvedPath,
+			};
+		}
+
 		if (file.text.length > 200_000) {
 			ctx.ui.notify(
 				"Loaded a large file. Studio critique requests currently reject documents over 200k characters.",
@@ -17637,6 +17977,7 @@ export default function (pi: ExtensionAPI) {
 			source: "file",
 			path: file.resolvedPath,
 			resourceDir: ctx.cwd,
+			diskRevision: file.diskRevision,
 		});
 	};
 
@@ -17894,7 +18235,7 @@ export default function (pi: ExtensionAPI) {
 		trimmed: string,
 		ctx: ExtensionCommandContext,
 		mode: StudioUiMode,
-		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; replaceExistingFull?: boolean; allowPdfPreview?: boolean; watchPdf?: boolean },
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string; replaceExistingFull?: boolean; allowPdfPreview?: boolean; watchPdf?: boolean; watchText?: boolean },
 	) => {
 		const launchOpenFlags = parseStudioLaunchOpenFlags(trimmed);
 		if (launchOpenFlags.error) {
@@ -17910,11 +18251,12 @@ export default function (pi: ExtensionAPI) {
 		const launchesPdfPreview = parsedLaunchPath
 			? Boolean(parseStudioPdfLaunchTarget(normalizePathInput(parsedLaunchPath)))
 			: false;
-		if (launchOpenFlags.watchPdf && !launchesPdfPreview) {
-			ctx.ui.notify("--watch requires a local PDF path, for example: /studio --watch main.pdf", "error");
+		if (launchOpenFlags.watchPdf && !parsedLaunchPath) {
+			ctx.ui.notify("--watch requires a local text or PDF path, for example: /studio --watch notes.md", "error");
 			return;
 		}
-		const requestedLaunchMode: StudioUiMode = launchesPdfPreview ? "editor-only" : mode;
+		const launchesWatchedTextPreview = Boolean(launchOpenFlags.watchPdf && parsedLaunchPath && !launchesPdfPreview);
+		const requestedLaunchMode: StudioUiMode = launchesPdfPreview || launchesWatchedTextPreview ? "editor-only" : mode;
 		if (requestedLaunchMode === "full" && hasConnectedFullStudioView()) {
 			if (options?.replaceExistingFull) {
 				closeStudioClientsByMode("full", 4001, "Full Studio replaced");
@@ -17948,7 +18290,8 @@ export default function (pi: ExtensionAPI) {
 
 		const selection = resolveStudioLaunchDocument(launchArgs, ctx, {
 			...options,
-			watchPdf: launchOpenFlags.watchPdf,
+			watchPdf: launchOpenFlags.watchPdf && launchesPdfPreview,
+			watchText: launchesWatchedTextPreview,
 		});
 		if (!selection) return;
 		const selected = selection.document;
@@ -17974,7 +18317,9 @@ export default function (pi: ExtensionAPI) {
 			?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
 		const openedLabel = selection.kind === "pdf-preview"
 			? "pi Studio PDF preview"
-			: (launchMode === "editor-only" ? "pi Studio editor-only view" : "pi Studio");
+			: (selection.kind === "watched-preview"
+				? "pi Studio watched file preview"
+				: (launchMode === "editor-only" ? "pi Studio editor-only view" : "pi Studio"));
 
 		const shouldOpenBrowser = shouldAutoOpenStudioBrowser({
 			openRemoteBrowser: launchOpenFlags.openRemoteBrowser,
@@ -17989,6 +18334,8 @@ export default function (pi: ExtensionAPI) {
 				if (selection.kind === "pdf-preview") {
 					const watchLabel = launchOpenFlags.watchPdf ? " (auto-refresh on)" : "";
 					ctx.ui.notify(`Opened ${openedLabel}${watchLabel}: ${selection.resourcePath ?? selected.label}`, "info");
+				} else if (selection.kind === "watched-preview") {
+					ctx.ui.notify(`Opened ${openedLabel}: ${selection.resourcePath ?? selected.label}`, "info");
 				} else if (selected.source === "file") {
 					ctx.ui.notify(`Opened ${openedLabel} with file loaded: ${selected.label}`, "info");
 				} else if (selected.source === "last-response") {
@@ -18011,7 +18358,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("studio", {
-		description: "Open pi Studio browser UI or a PDF preview (/studio, /studio <file>, /studio --watch <pdf>, /studio --blank, /studio --last, /studio --no-browser)",
+		description: "Open pi Studio browser UI or a read-only watched preview (/studio, /studio <file>, /studio --watch <file>, /studio --blank, /studio --last, /studio --no-browser)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 
@@ -18042,7 +18389,7 @@ export default function (pi: ExtensionAPI) {
 					"Usage: /studio [path|--blank|--last]\n"
 						+ "  /studio           Open studio with last model response (fallback: blank)\n"
 						+ "  /studio <path>    Open a text file in Studio, or a PDF in a read-only companion preview\n"
-						+ "  /studio --watch <pdf>  Open a PDF with auto-refresh enabled\n"
+						+ "  /studio --watch <file>  Open a read-only text preview that follows disk changes, or a PDF with auto-refresh\n"
 						+ "  /studio --blank   Open with blank editor\n"
 						+ "  /studio --last    Open with last model response\n"
 						+ "  /studio --no-browser  Print the Studio URL without opening a browser\n"
@@ -18093,7 +18440,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("studio-editor-only", {
-		description: "Open pi Studio in editor-only mode or preview a PDF (/studio-editor-only, /studio-editor-only <file>, /studio-editor-only --watch <pdf>)",
+		description: "Open pi Studio in editor-only mode or a read-only watched preview (/studio-editor-only, /studio-editor-only <file>, /studio-editor-only --watch <file>)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
@@ -18101,7 +18448,7 @@ export default function (pi: ExtensionAPI) {
 					"Usage: /studio-editor-only [path|--blank|--last]\n"
 						+ "  /studio-editor-only         Open an editor-only Studio view (default: blank editor)\n"
 						+ "  /studio-editor-only <path>  Open a text file for editing, or a PDF in a read-only preview\n"
-						+ "  /studio-editor-only --watch <pdf>  Open a PDF with auto-refresh enabled\n"
+						+ "  /studio-editor-only --watch <file>  Open a read-only text preview that follows disk changes, or a PDF with auto-refresh\n"
 						+ "  /studio-editor-only --blank Open with blank editor\n"
 						+ "  /studio-editor-only --last  Open with last model response loaded into the editor\n"
 						+ "  /studio-editor-only --no-browser  Print URL without opening a browser\n"
@@ -18457,6 +18804,7 @@ export default function (pi: ExtensionAPI) {
 				label: file.label,
 				source: "file",
 				path: file.resolvedPath,
+				diskRevision: file.diskRevision,
 			};
 			initialStudioDocument = nextDoc;
 			recordStudioDocumentResourceGrants(nextDoc, ctx.cwd);

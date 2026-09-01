@@ -21,6 +21,7 @@ function workspaceState(text, savedAt = 1, overrides = {}) {
 		version: 1,
 		savedAt,
 		sourceState: { source: "file", label: "notes.qmd", path: "/tmp/notes.qmd", draftId: null },
+		diskRevision: "sha256:" + "a".repeat(64),
 		resourceDir: "/tmp",
 		editorView: "markdown",
 		rightView: "editor-quarto-preview",
@@ -45,6 +46,8 @@ test("Studio workspace recovery accepts only bounded tab IDs and editor states",
 	assert.equal(normalized.text, "unsaved editor text");
 	assert.equal(normalized.rightView, "editor-quarto-preview");
 	assert.equal(normalized.sourceState.path, "/tmp/notes.qmd");
+	assert.equal(normalized.diskRevision, "sha256:" + "a".repeat(64));
+	assert.equal(normalizeStudioWorkspaceRecoveryState(workspaceState("text", 8, { diskRevision: "not-a-revision" })).diskRevision, null);
 	assert.equal(normalizeStudioWorkspaceRecoveryState({ version: 1, text: "x".repeat(STUDIO_WORKSPACE_STATE_MAX_TEXT_CHARS + 1) }), null);
 	assert.equal(normalizeStudioWorkspaceRecoveryState({ version: 2, text: "wrong version" }), null);
 });

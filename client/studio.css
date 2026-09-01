@@ -496,6 +496,45 @@
       font-size: 14px;
     }
 
+    body[data-watched-file-preview="1"] #rightSectionHeader .section-header-main::before {
+      content: "Watched preview";
+    }
+
+    body[data-watched-file-preview="1"] #saveAsBtn,
+    body[data-watched-file-preview="1"] #saveOverBtn,
+    body[data-watched-file-preview="1"] #refreshFromDiskBtn,
+    body[data-watched-file-preview="1"] #clearWorkspaceBtn,
+    body[data-watched-file-preview="1"] #importFileBtn,
+    body[data-watched-file-preview="1"] #suggestCompletionBtn,
+    body[data-watched-file-preview="1"] #suggestCompletionOptionsBtn,
+    body[data-watched-file-preview="1"] #insertHeaderBtn,
+    body[data-watched-file-preview="1"] #annotationModeSelect,
+    body[data-watched-file-preview="1"] #stripAnnotationsBtn,
+    body[data-watched-file-preview="1"] #saveAnnotatedBtn,
+    body[data-watched-file-preview="1"] #getEditorBtn {
+      display: none !important;
+    }
+
+    body[data-watched-file-preview="1"] #sourceText {
+      cursor: default;
+    }
+
+    .studio-watched-preview-error {
+      position: sticky;
+      top: 8px;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 8px 0;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    }
+
+    .studio-watched-preview-error button {
+      flex: 0 0 auto;
+    }
+
     .reference-meta {
       padding: 8px 10px;
       border-bottom: 1px solid var(--panel-border);
@@ -3007,6 +3046,17 @@
     .preview-loading {
       color: var(--muted);
       font-style: italic;
+    }
+
+    .studio-preview-staging {
+      position: fixed !important;
+      top: 0;
+      left: -100000px;
+      z-index: -1;
+      max-height: none !important;
+      overflow: visible !important;
+      visibility: hidden;
+      pointer-events: none;
     }
 
     .panel-scroll.preview-pending::after {

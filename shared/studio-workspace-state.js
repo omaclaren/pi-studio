@@ -20,6 +20,9 @@ export function normalizeStudioWorkspaceRecoveryState(value) {
 	if (!value || typeof value !== "object" || value.version !== 1 || typeof value.text !== "string") return null;
 	if (value.text.length > STUDIO_WORKSPACE_STATE_MAX_TEXT_CHARS) return null;
 	const sourceState = value.sourceState && typeof value.sourceState === "object" ? value.sourceState : {};
+	const diskRevision = typeof value.diskRevision === "string" && /^sha256:[a-f0-9]{64}$/i.test(value.diskRevision.trim())
+		? value.diskRevision.trim().toLowerCase()
+		: null;
 	return {
 		version: 1,
 		savedAt: Math.max(0, finiteNumber(value.savedAt)),
@@ -29,6 +32,7 @@ export function normalizeStudioWorkspaceRecoveryState(value) {
 			path: boundedString(sourceState.path, 16_384) || null,
 			draftId: boundedString(sourceState.draftId, 256) || null,
 		},
+		diskRevision,
 		resourceDir: boundedString(value.resourceDir, 16_384),
 		editorView: boundedString(value.editorView, 100),
 		rightView: boundedString(value.rightView, 100),

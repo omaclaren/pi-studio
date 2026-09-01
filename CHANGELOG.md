@@ -4,6 +4,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add read-only **Preview file (follow changes)** tabs from Files, local text links, and `/studio --watch <file>`. Followed previews use canonical disk paths, bounded and expiring path-bound tab capabilities, debounced polling, SHA-256 content revisions, atomic-save replacement handling, staged last-good rendering, and stable-anchor scroll restoration with ratio fallback through temporary read or render failures.
+- Track canonical SHA-256 disk revisions for file-backed editor documents and retain the revision behind dirty recovery state.
+- Add `Cmd/Ctrl+Shift+S` for Save As and explicit Save As replacement confirmation when the target already exists.
+
+### Changed
+- Make `Cmd/Ctrl+S` save a file-backed editor directly only while its known disk revision still matches, without routine confirmation; empty documents are valid save content.
+- Use same-directory exclusive temporary files and atomic commits for Studio disk writes, while refusing replacement symlinks and hard-linked targets, preserving ordinary mode/ownership metadata where supported, and revalidating the expected revision immediately before commit. Platform-specific ACLs and extended attributes are not guaranteed to survive replacement.
+
+### Fixed
+- Preserve dirty editor text when a file changes externally and offer an explicit **Reload / Save As… / Overwrite / Cancel** conflict decision instead of silently replacing either version.
+
 ## [0.9.53] — 2026-08-31
 
 ### Added

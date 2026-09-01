@@ -155,6 +155,7 @@
       const shortcutsCloseBtn = document.getElementById("shortcutsCloseBtn");
       const leftFocusBtn = document.getElementById("leftFocusBtn");
       const rightFocusBtn = document.getElementById("rightFocusBtn");
+      const watchedOpenEditableBtn = document.getElementById("watchedOpenEditableBtn");
       const reviewNotesBtn = document.getElementById("reviewNotesBtn");
       const outlineBtn = document.getElementById("outlineBtn");
       const scratchpadBtn = document.getElementById("scratchpadBtn");
@@ -192,6 +193,7 @@
         ? "editor-only"
         : "full";
       const isEditorOnlyMode = studioMode === "editor-only";
+      const isWatchedFilePreview = Boolean(document.body && document.body.dataset && document.body.dataset.watchedFilePreview === "1");
       const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
       const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "editor-quarto-preview", "files", "changes", "repl", "side-questions"]);
       const RIGHT_VIEW_LABELS = {
@@ -282,6 +284,16 @@
       };
       const initialResourceDir = initialQueryParams.get("resourceDir")
         || ((document.body && document.body.dataset && document.body.dataset.initialResourceDir) || "");
+      const initialDiskRevision = (document.body && document.body.dataset && document.body.dataset.initialDiskRevision) || "";
+      let watchedFilePreviewState = {
+        enabled: isWatchedFilePreview,
+        path: isWatchedFilePreview && initialSourceState.path ? initialSourceState.path : "",
+        diskRevision: isWatchedFilePreview ? initialDiskRevision : "",
+        generation: 0,
+        lastError: "",
+        renderError: "",
+      };
+      const watchedFilePreviewReadingPositions = { source: null, response: null };
 
       let ws = null;
       let wsState = "Connecting";
@@ -333,6 +345,7 @@
       let studioDecisionMessageEl = null;
       let studioDecisionInputEl = null;
       let studioDecisionCancelBtn = null;
+      let studioDecisionTertiaryBtn = null;
       let studioDecisionSecondaryBtn = null;
       let studioDecisionConfirmBtn = null;
       let studioDecisionState = null;
@@ -340,6 +353,7 @@
       let pendingRequestId = null;
       let pendingKind = null;
       let stickyStudioKind = null;
+      const pendingSaveOperations = new Map();
       const pendingCompanionLaunches = new Map();
       const activeStudioTabLaunches = new Set();
       let sourceOriginSummaryEl = null;
@@ -369,6 +383,7 @@
 
       function normalizeRightViewValue(nextView) {
         const normalized = canonicalRightViewValue(nextView);
+        if (isWatchedFilePreview && normalized !== "editor-preview") return "editor-preview";
         if (normalized === "editor-quarto-preview" && !isCurrentStudioQuartoDocument()) {
           return "editor-preview";
         }
@@ -380,6 +395,7 @@
 
       function isRightViewAvailableInCurrentMode(view) {
         const normalized = canonicalRightViewValue(view);
+        if (isWatchedFilePreview) return normalized === "editor-preview";
         if (normalized === "editor-quarto-preview" && !isCurrentStudioQuartoDocument()) return false;
         return !isEditorOnlyMode || EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized);
       }
@@ -399,12 +415,17 @@
         Array.from(rightViewSelect.options).forEach((option) => {
           if (!option) return;
           const isQuartoOption = option.value === "editor-quarto-preview";
+          if (isWatchedFilePreview && option.value === "editor-preview") option.textContent = "Watched preview";
           if (isQuartoOption) option.hidden = !quartoRelevant;
-          option.disabled = (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value)) || (isQuartoOption && !quartoRelevant);
+          option.disabled = (isWatchedFilePreview && option.value !== "editor-preview")
+            || (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value))
+            || (isQuartoOption && !quartoRelevant);
         });
-        rightViewSelect.title = isEditorOnlyMode
+        rightViewSelect.title = isWatchedFilePreview
+          ? "Read-only watched preview follows this file on disk."
+          : (isEditorOnlyMode
           ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7/8 switch directly to numbered right-pane views, and Cmd/Ctrl+Alt+F/Q open Files/Side questions."
-          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W/F/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, and Side questions.";
+          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W/F/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, and Side questions.");
       }
 
       function getInitialRightView(source) {
@@ -2164,6 +2185,7 @@
         actionRequestId: null,
       };
       let fileBackedBaselineText = null;
+      let fileBackedDiskRevision = null;
       let activePane = initialPaneFocusTarget === "right" ? "right" : "left";
       let paneFocusTarget = initialPaneFocusTarget;
       let paneSplitPercent = 50;
@@ -2923,6 +2945,7 @@
           rightTitleGroupEl.appendChild(rightViewSelect);
           rightIdentityEl.appendChild(rightTitleGroupEl);
           const rightToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
+          if (watchedOpenEditableBtn && isWatchedFilePreview) rightToolsEl.appendChild(watchedOpenEditableBtn);
           if (exportPreviewControlsEl) {
             rightToolsEl.appendChild(exportPreviewControlsEl);
           } else if (exportPdfBtn) {
@@ -3846,7 +3869,7 @@
       }
 
       function getStudioDecisionFocusableElements() {
-        return [studioDecisionInputEl, studioDecisionCancelBtn, studioDecisionSecondaryBtn, studioDecisionConfirmBtn]
+        return [studioDecisionInputEl, studioDecisionCancelBtn, studioDecisionTertiaryBtn, studioDecisionSecondaryBtn, studioDecisionConfirmBtn]
           .filter((element) => element && !element.hidden && !element.disabled);
       }
 
@@ -3893,6 +3916,30 @@
         cancelBtn.textContent = "Cancel";
         cancelBtn.addEventListener("click", () => finishStudioDecision(null));
         actions.appendChild(cancelBtn);
+
+        const tertiaryBtn = document.createElement("button");
+        tertiaryBtn.type = "button";
+        tertiaryBtn.className = "studio-decision-tertiary";
+        tertiaryBtn.hidden = true;
+        tertiaryBtn.addEventListener("click", () => {
+          const state = studioDecisionState;
+          const handler = state && state.onTertiary;
+          if (typeof handler !== "function") {
+            if (state && state.hasTertiaryValue) finishStudioDecision(state.tertiaryValue);
+            return;
+          }
+          try {
+            const result = handler();
+            if (result && typeof result.catch === "function") {
+              result.catch((error) => {
+                setStatus("Action failed: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+              });
+            }
+          } catch (error) {
+            setStatus("Action failed: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+          }
+        });
+        actions.appendChild(tertiaryBtn);
 
         const secondaryBtn = document.createElement("button");
         secondaryBtn.type = "button";
@@ -3964,6 +4011,7 @@
         studioDecisionMessageEl = message;
         studioDecisionInputEl = input;
         studioDecisionCancelBtn = cancelBtn;
+        studioDecisionTertiaryBtn = tertiaryBtn;
         studioDecisionSecondaryBtn = secondaryBtn;
         studioDecisionConfirmBtn = confirmBtn;
         return overlay;
@@ -3976,6 +4024,7 @@
         if (studioDecisionState) finishStudioDecision(null, false);
         const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
+        const tertiaryLabel = String(settings.tertiaryLabel || "").trim();
         const secondaryLabel = String(settings.secondaryLabel || "").trim();
         studioDecisionTitleEl.textContent = String(settings.title || (mode === "prompt" ? "Enter a value" : "Confirm action"));
         studioDecisionMessageEl.textContent = String(settings.message || "");
@@ -3984,9 +4033,13 @@
         studioDecisionInputEl.placeholder = mode === "prompt" ? String(settings.placeholder || "") : "";
         studioDecisionInputEl.setAttribute("aria-label", String(settings.inputLabel || "Value"));
         studioDecisionCancelBtn.textContent = String(settings.cancelLabel || "Cancel");
+        studioDecisionTertiaryBtn.hidden = !tertiaryLabel;
+        studioDecisionTertiaryBtn.disabled = settings.tertiaryDisabled === true;
+        studioDecisionTertiaryBtn.textContent = tertiaryLabel;
         studioDecisionSecondaryBtn.hidden = !secondaryLabel;
         studioDecisionSecondaryBtn.disabled = settings.secondaryDisabled === true;
         studioDecisionSecondaryBtn.textContent = secondaryLabel;
+        studioDecisionConfirmBtn.disabled = settings.confirmDisabled === true;
         studioDecisionConfirmBtn.textContent = String(settings.confirmLabel || (mode === "prompt" ? "Continue" : "Confirm"));
         studioDecisionConfirmBtn.classList.toggle("is-destructive", settings.destructive === true);
         studioDecisionDialogEl.classList.toggle("is-destructive", settings.destructive === true);
@@ -3998,6 +4051,9 @@
             mode,
             resolve,
             returnFocusEl,
+            onTertiary: typeof settings.onTertiary === "function" ? settings.onTertiary : null,
+            hasTertiaryValue: Object.prototype.hasOwnProperty.call(settings, "tertiaryValue"),
+            tertiaryValue: settings.tertiaryValue,
             onSecondary: typeof settings.onSecondary === "function" ? settings.onSecondary : null,
             hasSecondaryValue: Object.prototype.hasOwnProperty.call(settings, "secondaryValue"),
             secondaryValue: settings.secondaryValue,
@@ -4059,12 +4115,20 @@
         }
       });
 
-      function markFileBackedBaseline(text) {
+      function normalizeStudioDiskRevision(value) {
+        const revision = typeof value === "string" ? value.trim().toLowerCase() : "";
+        return /^sha256:[a-f0-9]{64}$/.test(revision) ? revision : null;
+      }
+
+      function markFileBackedBaseline(text, diskRevision) {
         fileBackedBaselineText = String(text || "");
+        fileBackedDiskRevision = normalizeStudioDiskRevision(diskRevision);
+        scheduleWorkspacePersistence();
       }
 
       function clearFileBackedBaseline() {
         fileBackedBaselineText = null;
+        fileBackedDiskRevision = null;
       }
 
       function hasRefreshableFilePath() {
@@ -4079,13 +4143,17 @@
 
       function updateSourceBadge() {
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
-        const originText = (studioUiRefreshEnabled ? "Origin: " : "Editor origin: ") + label + (hasRefreshableFilePath() ? " · file" : "");
+        const originText = isWatchedFilePreview
+          ? ("Watching: " + label + " · read-only" + (watchedFilePreviewState.lastError || watchedFilePreviewState.renderError ? " · last good preview" : ""))
+          : ((studioUiRefreshEnabled ? "Origin: " : "Editor origin: ") + label + (hasRefreshableFilePath() ? " · file" : ""));
         const descriptor = getCurrentStudioDocumentDescriptor();
         if (sourceBadgeEl) {
           sourceBadgeEl.textContent = originText;
-          sourceBadgeEl.title = descriptor.fileBacked
+          sourceBadgeEl.title = isWatchedFilePreview
+            ? ("Read-only watched file: " + (descriptor.label || label) + "\nStudio follows settled disk changes and keeps the last good rendered preview through temporary failures.")
+            : (descriptor.fileBacked
             ? ("Editor origin: " + label + "\nClick to reset origin and detach the current editor text into a new draft. The file on disk will not be changed.")
-            : ("Editor origin: " + label + "\nClick to reset origin and start a new independent draft while keeping the current text and local notes.");
+            : ("Editor origin: " + label + "\nClick to reset origin and start a new independent draft while keeping the current text and local notes."));
         }
         if (sourceOriginSummaryEl) {
           sourceOriginSummaryEl.textContent = originText;
@@ -4544,10 +4612,14 @@
       }
 
       function triggerEditorSaveShortcut() {
-        if (saveOverBtn && !saveOverBtn.disabled && !saveOverBtn.hidden) {
+        if (hasRefreshableFilePath() && saveOverBtn && !saveOverBtn.disabled && !saveOverBtn.hidden) {
           saveOverBtn.click();
           return true;
         }
+        return triggerEditorSaveAsShortcut();
+      }
+
+      function triggerEditorSaveAsShortcut() {
         if (saveAsBtn && !saveAsBtn.disabled && !saveAsBtn.hidden) {
           saveAsBtn.click();
           return true;
@@ -4890,6 +4962,22 @@
           return;
         }
 
+        const isSaveAsShortcut =
+          key.toLowerCase() === "s"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
+          && event.shiftKey;
+
+        if (isSaveAsShortcut) {
+          event.preventDefault();
+          if (isWatchedFilePreview) {
+            setStatus("This preview is read-only. Open a file tab to edit or save a copy.", "warning");
+            return;
+          }
+          triggerEditorSaveAsShortcut();
+          return;
+        }
+
         const isSaveShortcut =
           key.toLowerCase() === "s"
           && (event.metaKey || event.ctrlKey)
@@ -4898,6 +4986,10 @@
 
         if (isSaveShortcut) {
           event.preventDefault();
+          if (isWatchedFilePreview) {
+            setStatus("This preview follows disk and cannot save. Open a file tab to edit safely.", "warning");
+            return;
+          }
           triggerEditorSaveShortcut();
           return;
         }
@@ -5644,6 +5736,8 @@
         clearPreviewJumpHighlight(targetEl);
         finishPreviewRender(targetEl);
         targetEl.innerHTML = html;
+        clearWatchedPreviewRenderError();
+        scheduleWatchedPreviewReadingPositionRestore(targetEl, text);
         if (pane === "response") {
           applyPendingResponseScrollReset();
           scheduleResponsePaneRepaintNudge();
@@ -7123,6 +7217,8 @@
         });
 
         targetEl.appendChild(shell);
+        clearWatchedPreviewRenderError();
+        scheduleWatchedPreviewReadingPositionRestore(targetEl, html);
 
         if (pane === "response") {
           applyPendingResponseScrollReset();
@@ -9364,9 +9460,117 @@
 
       function hasMeaningfulPreviewContent(targetEl) {
         if (!targetEl || typeof targetEl.querySelector !== "function") return false;
+        if (targetEl.dataset && targetEl.dataset.studioPreviewCommitted === "1") return true;
         if (targetEl.querySelector(".preview-loading")) return false;
         const text = typeof targetEl.textContent === "string" ? targetEl.textContent.trim() : "";
         return text.length > 0;
+      }
+
+      function getWatchedPreviewAnchorSignature(element) {
+        if (!element || !element.tagName) return "";
+        const text = String(element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 180);
+        if (!text) return "";
+        return String(element.tagName).toLowerCase() + ":" + text;
+      }
+
+      function captureWatchedPreviewReadingPosition(targetEl) {
+        if (!isWatchedFilePreview || !targetEl || typeof targetEl.querySelectorAll !== "function") return null;
+        const maxScroll = Math.max(0, Number(targetEl.scrollHeight || 0) - Number(targetEl.clientHeight || 0));
+        const ratio = maxScroll > 0 ? Math.max(0, Math.min(1, Number(targetEl.scrollTop || 0) / maxScroll)) : 0;
+        if (typeof targetEl.getBoundingClientRect !== "function") return { ratio };
+        const targetRect = targetEl.getBoundingClientRect();
+        const anchorLine = Number(targetRect.top || 0) + Math.max(20, Math.min(Number(targetEl.clientHeight || 0) * 0.22, 140));
+        const candidates = Array.from(targetEl.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,pre,table,blockquote,figure"));
+        let anchor = null;
+        for (const candidate of candidates) {
+          if (!candidate || typeof candidate.getBoundingClientRect !== "function") continue;
+          const rect = candidate.getBoundingClientRect();
+          if (Number(rect.bottom || rect.top || 0) >= anchorLine) {
+            anchor = candidate;
+            break;
+          }
+        }
+        if (!anchor && candidates.length) anchor = candidates[candidates.length - 1];
+        const signature = getWatchedPreviewAnchorSignature(anchor);
+        if (!anchor || !signature) return { ratio };
+        let occurrence = 0;
+        for (const candidate of candidates) {
+          if (candidate === anchor) break;
+          if (getWatchedPreviewAnchorSignature(candidate) === signature) occurrence += 1;
+        }
+        const anchorRect = anchor.getBoundingClientRect();
+        return {
+          ratio,
+          signature,
+          occurrence,
+          offset: Number(anchorRect.top || 0) - Number(targetRect.top || 0),
+        };
+      }
+
+      function restoreWatchedPreviewReadingPosition(targetEl, snapshot) {
+        if (!isWatchedFilePreview || !targetEl || !snapshot) return;
+        const candidates = typeof targetEl.querySelectorAll === "function"
+          ? Array.from(targetEl.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,pre,table,blockquote,figure"))
+          : [];
+        const matching = snapshot.signature
+          ? candidates.filter((candidate) => getWatchedPreviewAnchorSignature(candidate) === snapshot.signature)
+          : [];
+        const anchor = matching[Math.max(0, Number(snapshot.occurrence) || 0)] || null;
+        if (anchor && typeof anchor.getBoundingClientRect === "function" && typeof targetEl.getBoundingClientRect === "function") {
+          const targetRect = targetEl.getBoundingClientRect();
+          const anchorRect = anchor.getBoundingClientRect();
+          const delta = (Number(anchorRect.top || 0) - Number(targetRect.top || 0)) - (Number(snapshot.offset) || 0);
+          targetEl.scrollTop = Math.max(0, Number(targetEl.scrollTop || 0) + delta);
+          return;
+        }
+        const maxScroll = Math.max(0, Number(targetEl.scrollHeight || 0) - Number(targetEl.clientHeight || 0));
+        targetEl.scrollTop = Math.max(0, Math.min(maxScroll, maxScroll * Math.max(0, Math.min(1, Number(snapshot.ratio) || 0))));
+      }
+
+      function scheduleWatchedPreviewReadingPositionRestore(targetEl, renderedText) {
+        if (!isWatchedFilePreview || !targetEl) return;
+        const pane = targetEl === sourcePreviewEl ? "source" : (targetEl === critiqueViewEl ? "response" : "");
+        if (!pane || !watchedFilePreviewReadingPositions[pane]) return;
+        const pending = watchedFilePreviewReadingPositions[pane];
+        if (String(pending.text || "") !== String(renderedText || "")) return;
+        const snapshot = pending.snapshot;
+        watchedFilePreviewReadingPositions[pane] = null;
+        let restored = false;
+        const applyRestore = () => {
+          if (restored) return;
+          restored = true;
+          restoreWatchedPreviewReadingPosition(targetEl, snapshot);
+        };
+        if (typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(applyRestore);
+        }
+        // Hidden embedded/headless surfaces can suspend animation frames entirely.
+        window.setTimeout(applyRestore, 80);
+      }
+
+      function showWatchedPreviewRenderError(targetEl, message) {
+        if (!isWatchedFilePreview || !targetEl || typeof targetEl.appendChild !== "function") return false;
+        const existing = typeof targetEl.querySelector === "function" ? targetEl.querySelector(".studio-watched-preview-error") : null;
+        if (existing && existing.remove) existing.remove();
+        const notice = document.createElement("div");
+        notice.className = "preview-warning studio-watched-preview-error";
+        notice.setAttribute("role", "status");
+        notice.appendChild(document.createTextNode("Could not render the latest disk revision; keeping the last good preview. " + String(message || "Preview renderer unavailable.") + " "));
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.textContent = "Retry";
+        retry.addEventListener("click", () => renderActiveResult());
+        notice.appendChild(retry);
+        targetEl.appendChild(notice);
+        return true;
+      }
+
+      function clearWatchedPreviewRenderError() {
+        if (!isWatchedFilePreview) return;
+        const recovered = Boolean(watchedFilePreviewState.renderError);
+        watchedFilePreviewState.renderError = "";
+        updateSourceBadge();
+        if (recovered) setStatus("Rendered the latest watched file revision.", "success");
       }
 
       function beginPreviewRender(targetEl) {
@@ -10695,6 +10899,28 @@
         );
       }
 
+      function isCurrentStudioPreviewRender(pane, nonce) {
+        if (pane === "source") {
+          return nonce === sourcePreviewRenderNonce && editorView === "preview";
+        }
+        return nonce === responsePreviewRenderNonce && (rightView === "preview" || rightView === "editor-preview");
+      }
+
+      function createStudioPreviewStagingElement(targetEl) {
+        const staging = document.createElement("div");
+        staging.className = String(targetEl && targetEl.className ? targetEl.className : "rendered-markdown") + " studio-preview-staging";
+        staging.setAttribute("aria-hidden", "true");
+        staging.style.width = Math.max(320, Number(targetEl && targetEl.clientWidth) || 0) + "px";
+        document.body.appendChild(staging);
+        return staging;
+      }
+
+      function commitStudioPreviewStagingElement(targetEl, staging) {
+        const nodes = Array.from(staging.childNodes || []);
+        targetEl.replaceChildren(...nodes);
+        staging.remove();
+      }
+
       async function applyRenderedMarkdown(targetEl, markdown, pane, nonce) {
         const previewPrepared = annotationsEnabled
           ? prepareMarkdownForPandocPreview(markdown)
@@ -10705,35 +10931,44 @@
         };
         const pdfPrepared = prepareStudioPdfBlocksForPreview(previewPrepared.markdown);
         const previewResourceContext = getHtmlPreviewResourceContextOptions();
+        let staging = null;
+        let previewCommitted = false;
+        const stillCurrent = () => isCurrentStudioPreviewRender(pane, nonce);
+        const abandonIfStale = () => {
+          if (stillCurrent()) return false;
+          if (staging && staging.remove) staging.remove();
+          staging = null;
+          return true;
+        };
 
         try {
           const renderedHtml = await renderMarkdownWithPandoc(pdfPrepared.markdown, {
             includeEditorLanguage: pane === "source" || rightView === "editor-preview",
             resourceContext: previewResourceContext,
           });
+          if (abandonIfStale()) return;
 
-          if (pane === "source") {
-            if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
-          } else {
-            if (nonce !== responsePreviewRenderNonce || (rightView !== "preview" && rightView !== "editor-preview")) return;
-          }
-
-          clearPreviewJumpHighlight(targetEl);
-          finishPreviewRender(targetEl);
-          targetEl.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown, previewFallbackOptions);
-          await hydrateStudioPreviewLocalMedia(targetEl, previewResourceContext);
-          await renderStudioPdfBlocksInElement(targetEl, pdfPrepared.blocks, previewingEditorText);
-          applyPreviewAnnotationPlaceholdersToElement(targetEl, previewPrepared.placeholders);
-          await renderAnnotationMathInElement(targetEl);
-          decoratePdfEmbeds(targetEl);
-          await renderPdfPreviewsInElement(targetEl);
-          decoratePreviewPdfFigures(targetEl);
+          staging = createStudioPreviewStagingElement(targetEl);
+          staging.innerHTML = sanitizeRenderedHtml(renderedHtml, markdown, previewFallbackOptions);
+          await hydrateStudioPreviewLocalMedia(staging, previewResourceContext);
+          if (abandonIfStale()) return;
+          await renderStudioPdfBlocksInElement(staging, pdfPrepared.blocks, previewingEditorText);
+          if (abandonIfStale()) return;
+          applyPreviewAnnotationPlaceholdersToElement(staging, previewPrepared.placeholders);
+          await renderAnnotationMathInElement(staging);
+          if (abandonIfStale()) return;
+          decoratePdfEmbeds(staging);
+          await renderPdfPreviewsInElement(staging);
+          if (abandonIfStale()) return;
+          decoratePreviewPdfFigures(staging);
           const annotationMode = (pane === "source" || pane === "response")
             ? (annotationsEnabled ? "highlight" : "hide")
             : "none";
-          applyAnnotationMarkersToElement(targetEl, annotationMode);
-          await renderMermaidInElement(targetEl);
-          await renderMathFallbackInElement(targetEl);
+          applyAnnotationMarkersToElement(staging, annotationMode);
+          await renderMermaidInElement(staging);
+          if (abandonIfStale()) return;
+          await renderMathFallbackInElement(staging);
+          if (abandonIfStale()) return;
 
           const shouldDecoratePreviewComments = supportsPreviewCommentsForCurrentEditor()
             && (
@@ -10741,35 +10976,56 @@
               || (pane === "response" && rightView === "editor-preview")
             );
           if (shouldDecoratePreviewComments) {
-            decorateRenderedEditorPreviewComments(targetEl, sourceTextEl.value || "");
+            decorateRenderedEditorPreviewComments(staging, sourceTextEl.value || "");
           }
-          decorateCopyablePreviewBlocks(targetEl);
-          decoratePreviewImages(targetEl);
+          decorateCopyablePreviewBlocks(staging);
+          decoratePreviewImages(staging);
 
-          // Warn if relative images are present but unlikely to resolve (non-file-backed content)
+          // Warn if relative images are present but unlikely to resolve (non-file-backed content).
           if (!sourceState.path && !getCurrentResourceDirValue()) {
             var hasRelativeImages = /!\[.*?\]\((?!https?:\/\/|data:)[^)]+\)/.test(markdown || "");
             var hasLatexImages = /\\includegraphics/.test(markdown || "");
             if (hasRelativeImages || hasLatexImages) {
-              appendPreviewNotice(targetEl, "Images not displaying? Set working dir in the editor pane or open via /studio <path>.");
+              appendPreviewNotice(staging, "Images not displaying? Set working dir in the editor pane or open via /studio <path>.");
             }
           }
+          if (abandonIfStale()) return;
 
+          clearPreviewJumpHighlight(targetEl);
+          finishPreviewRender(targetEl);
+          commitStudioPreviewStagingElement(targetEl, staging);
+          staging = null;
+          if (targetEl.dataset) targetEl.dataset.studioPreviewCommitted = "1";
+          previewCommitted = true;
+          if (shouldDecoratePreviewComments) updatePreviewCommentBlocksForElement(targetEl);
+          clearWatchedPreviewRenderError();
+          scheduleWatchedPreviewReadingPositionRestore(targetEl, markdown);
           if (pane === "response") {
             applyPendingResponseScrollReset();
             scheduleResponsePaneRepaintNudge();
           }
         } catch (error) {
-          if (pane === "source") {
-            if (nonce !== sourcePreviewRenderNonce || editorView !== "preview") return;
-          } else {
-            if (nonce !== responsePreviewRenderNonce || (rightView !== "preview" && rightView !== "editor-preview")) return;
+          if (staging && staging.remove) staging.remove();
+          staging = null;
+          if (previewCommitted) {
+            console.error("Preview post-render update failed after the staged document was committed:", error);
+            return;
           }
+          if (!stillCurrent()) return;
 
           const detail = error && error.message ? error.message : String(error || "unknown error");
           clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl);
+          if (isWatchedFilePreview && hasMeaningfulPreviewContent(targetEl)) {
+            watchedFilePreviewState.renderError = detail;
+            showWatchedPreviewRenderError(targetEl, detail);
+            updateSourceBadge();
+            scheduleWatchedPreviewReadingPositionRestore(targetEl, markdown);
+            setStatus("Could not render the latest disk revision; keeping the last good preview.", "warning");
+            return;
+          }
           targetEl.innerHTML = buildPreviewErrorHtml("Preview renderer unavailable (" + detail + "). Showing plain markdown.", markdown, previewFallbackOptions);
+          scheduleWatchedPreviewReadingPositionRestore(targetEl, markdown);
           if (pane === "response") {
             applyPendingResponseScrollReset();
             scheduleResponsePaneRepaintNudge();
@@ -11614,6 +11870,9 @@
         const newTabButton = newTabAction
           ? "<button type='button' data-files-action='" + escapeHtml(newTabAction) + "' data-files-path='" + escapeHtml(path) + "' data-files-kind='" + escapeHtml(kind) + "' title='" + escapeHtml(newTabTitle) + "'>" + escapeHtml(newTabLabel) + "</button>"
           : "";
+        const watchButton = kind === "text"
+          ? "<button type='button' data-files-action='watch-new' data-files-path='" + escapeHtml(path) + "' data-files-kind='text' title='Open a read-only rendered preview that follows this file on disk.'>Preview (follow)</button>"
+          : "";
         const openTitle = type === "directory"
           ? "Open folder"
           : (kind === "text" ? "Open file-backed document in the current editor. Save editor and Refresh from disk will use this file." : (kind === "office" ? "Convert to Markdown in the current editor" : (kind === "pdf" ? "Open PDF preview" : (kind === "image" ? "Open image preview" : "Copy or reveal this file"))));
@@ -11624,6 +11883,7 @@
           + "<span class='files-meta'>" + escapeHtml(metaParts.filter(Boolean).join(" · ")) + "</span>"
           + "</button>"
           + "<span class='files-actions'>"
+          + watchButton
           + newTabButton
           + "<button type='button' data-files-action='copy-path' data-files-path='" + escapeHtml(path) + "'>Copy path</button>"
           + (type === "file" ? "<button type='button' data-files-action='reveal' data-files-path='" + escapeHtml(path) + "'>Reveal</button>" : "")
@@ -11797,7 +12057,7 @@
       function ensureCurrentEditorFileBackedFromFilesPath(path) {
         const cleanPath = stripPreviewLocalLinkUrlSuffix(path || "").trim();
         if (!isLikelyAbsoluteStudioPath(cleanPath)) return;
-        if (sourceState && sourceState.path === cleanPath) return;
+        if (sourceState && sourceState.path) return;
         const resourceDir = normalizeStudioResourceDirValue(fileBrowserState.rootDir || getCurrentResourceDirValue() || dirnameForDisplayPath(cleanPath));
         if (resourceDirInput && resourceDir) resourceDirInput.value = resourceDir;
         setSourceState({
@@ -11805,7 +12065,7 @@
           label: sourceState && sourceState.label && sourceState.label !== "blank" ? sourceState.label : basenameForStudioPath(cleanPath),
           path: cleanPath,
         });
-        markFileBackedBaseline(sourceTextEl.value);
+        markFileBackedBaseline(sourceTextEl.value, null);
       }
 
       async function openFileBrowserEntry(path, kind) {
@@ -11943,6 +12203,10 @@
           }
           if (action === "open-new") {
             await openPreviewDocumentInNewEditor(path, getFileBrowserLocalLinkContext());
+            return;
+          }
+          if (action === "watch-new") {
+            await openPreviewDocumentInWatchedPreview(path, getFileBrowserLocalLinkContext());
             return;
           }
           if (action === "open-preview-new") {
@@ -13575,13 +13839,13 @@
       function updateSaveFileTooltip() {
         if (!saveOverBtn) return;
 
-        var effectivePath = getEffectiveSavePath();
+        var effectivePath = sourceState && sourceState.path ? sourceState.path : "";
         if (effectivePath) {
-          saveOverBtn.title = "Overwrite file: " + effectivePath + " · Shortcut: Cmd/Ctrl+S.";
+          saveOverBtn.title = "Save file when its disk revision still matches: " + effectivePath + " · Shortcut: Cmd/Ctrl+S.";
           return;
         }
 
-        saveOverBtn.title = "Save editor is available after opening a file, setting a working dir, or using Save editor as…. Shortcut: Cmd/Ctrl+S falls back to Save editor as… when needed.";
+        saveOverBtn.title = "Save editor is available after opening a file-backed document. Use Save editor as… for a new file.";
       }
 
       function updateRefreshFromDiskTooltip() {
@@ -13596,13 +13860,13 @@
       }
 
       function syncActionButtons() {
-        const canSaveOver = Boolean(getEffectiveSavePath());
+        const canSaveOver = hasRefreshableFilePath();
         const canRefreshFromDisk = hasRefreshableFilePath();
 
-        fileInput.disabled = uiBusy;
-        if (importFileBtn) importFileBtn.disabled = uiBusy;
-        if (sourceBadgeEl) sourceBadgeEl.disabled = uiBusy;
-        if (sourceResetOriginBtn) sourceResetOriginBtn.disabled = uiBusy;
+        fileInput.disabled = uiBusy || isWatchedFilePreview;
+        if (importFileBtn) importFileBtn.disabled = uiBusy || isWatchedFilePreview;
+        if (sourceBadgeEl) sourceBadgeEl.disabled = uiBusy || isWatchedFilePreview;
+        if (sourceResetOriginBtn) sourceResetOriginBtn.disabled = uiBusy || isWatchedFilePreview;
         if (sourceOpenCurrentFileTabBtn) {
           sourceOpenCurrentFileTabBtn.disabled = uiBusy || !hasRefreshableFilePath();
           sourceOpenCurrentFileTabBtn.title = hasRefreshableFilePath()
@@ -13610,17 +13874,21 @@
             : "Available after opening a file-backed document.";
         }
         if (sourceOpenCurrentTextCopyTabBtn) sourceOpenCurrentTextCopyTabBtn.disabled = uiBusy || wsState !== "Ready" || !String(sourceTextEl.value || "").trim();
-        saveAsBtn.disabled = uiBusy;
-        saveOverBtn.disabled = uiBusy || !canSaveOver;
-        if (refreshFromDiskBtn) refreshFromDiskBtn.disabled = uiBusy || !canRefreshFromDisk;
-        if (clearWorkspaceBtn) clearWorkspaceBtn.disabled = uiBusy;
+        saveAsBtn.disabled = uiBusy || isWatchedFilePreview;
+        saveOverBtn.disabled = uiBusy || isWatchedFilePreview || !canSaveOver;
+        if (refreshFromDiskBtn) refreshFromDiskBtn.disabled = uiBusy || isWatchedFilePreview || !canRefreshFromDisk;
+        if (clearWorkspaceBtn) clearWorkspaceBtn.disabled = uiBusy || isWatchedFilePreview;
         sendEditorBtn.disabled = uiBusy || isEditorOnlyMode;
-        if (getEditorBtn) getEditorBtn.disabled = uiBusy;
+        if (getEditorBtn) getEditorBtn.disabled = uiBusy || isWatchedFilePreview;
+        if (watchedOpenEditableBtn) {
+          watchedOpenEditableBtn.hidden = !isWatchedFilePreview;
+          watchedOpenEditableBtn.disabled = uiBusy || !watchedFilePreviewState.path;
+        }
         syncRunAndCritiqueButtons();
         copyDraftBtn.disabled = uiBusy;
         if (suggestCompletionBtn) {
           const hasSuggestionForCurrentText = Boolean(completionSuggestionState && sourceTextEl && sourceTextEl.value === completionSuggestionState.baseText);
-          suggestCompletionBtn.disabled = wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || !String(sourceTextEl.value || "").trim()));
+          suggestCompletionBtn.disabled = isWatchedFilePreview || wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || !String(sourceTextEl.value || "").trim()));
           suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Stop" : (hasSuggestionForCurrentText ? "Try another" : "Suggest");
           suggestCompletionBtn.title = completionSuggestionInFlight
             ? "Stop the current suggestion request."
@@ -13636,15 +13904,15 @@
         if (highlightSelect) highlightSelect.disabled = uiBusy;
         if (lineNumbersSelect) lineNumbersSelect.disabled = uiBusy;
         if (annotationModeSelect) annotationModeSelect.disabled = uiBusy;
-        if (saveAnnotatedBtn) saveAnnotatedBtn.disabled = uiBusy;
-        if (stripAnnotationsBtn) stripAnnotationsBtn.disabled = uiBusy || !hasAnnotationMarkers(sourceTextEl.value);
+        if (saveAnnotatedBtn) saveAnnotatedBtn.disabled = uiBusy || isWatchedFilePreview;
+        if (stripAnnotationsBtn) stripAnnotationsBtn.disabled = uiBusy || isWatchedFilePreview || !hasAnnotationMarkers(sourceTextEl.value);
         if (compactBtn) compactBtn.disabled = isEditorOnlyMode || uiBusy || compactInProgress || wsState === "Disconnected";
         editorViewSelect.disabled = isEditorOnlyMode;
         syncRightViewModeOptions();
-        rightViewSelect.disabled = false;
+        rightViewSelect.disabled = isWatchedFilePreview;
         followSelect.disabled = isEditorOnlyMode || uiBusy;
         if (responseHighlightSelect) responseHighlightSelect.disabled = isEditorOnlyMode || rightView !== "markdown";
-        insertHeaderBtn.disabled = uiBusy;
+        insertHeaderBtn.disabled = uiBusy || isWatchedFilePreview;
         lensSelect.disabled = uiBusy || isEditorOnlyMode;
         updateSaveFileTooltip();
         updateRefreshFromDiskTooltip();
@@ -13661,9 +13929,14 @@
 
       function setSourceState(next, options) {
         const previousDescriptor = getCurrentStudioDocumentDescriptor();
+        const previousPath = sourceState && sourceState.path ? sourceState.path : null;
         const previousQuartoPath = getCurrentStudioQuartoSourcePath();
         const previousPreviewResourceContext = getHtmlPreviewResourceContextOptions();
         const nextPath = next && next.path ? next.path : null;
+        if (isWatchedFilePreview && watchedFilePreviewState.path && nextPath !== watchedFilePreviewState.path) {
+          setStatus("This read-only preview remains bound to its watched file.", "warning");
+          return false;
+        }
         sourceState = {
           source: next && next.source ? next.source : "blank",
           label: next && next.label ? next.label : "blank",
@@ -13681,7 +13954,7 @@
           quartoPreviewActionRequestId = null;
           quartoPreviewLogVisible = false;
         }
-        if (!sourceState.path) {
+        if (!sourceState.path || sourceState.path !== previousPath) {
           clearFileBackedBaseline();
         }
         syncRightViewModeOptions();
@@ -13788,6 +14061,7 @@
           version: 1,
           savedAt: lastWorkspacePersistenceSavedAt,
           sourceState: normalizeWorkspaceSourceState(sourceState),
+          diskRevision: fileBackedDiskRevision,
           resourceDir: getCurrentResourceDirValue(),
           editorView,
           rightView: normalizeRightViewValue(rightView),
@@ -13823,7 +14097,7 @@
       }
 
       function persistWorkspaceStateNow(options) {
-        if (!workspacePersistenceReady) return;
+        if (!workspacePersistenceReady || isWatchedFilePreview) return;
         try {
           const payload = buildWorkspacePersistencePayload();
           if (payload.text.length > STUDIO_WORKSPACE_MAX_TEXT_CHARS) {
@@ -13845,7 +14119,7 @@
       }
 
       function scheduleWorkspacePersistence() {
-        if (!workspacePersistenceReady || workspacePersistTimer !== null) return;
+        if (!workspacePersistenceReady || isWatchedFilePreview || workspacePersistTimer !== null) return;
         workspacePersistTimer = window.setTimeout(() => {
           workspacePersistTimer = null;
           persistWorkspaceStateNow();
@@ -13853,6 +14127,7 @@
       }
 
       function flushWorkspacePersistence(options) {
+        if (isWatchedFilePreview) return;
         if (workspacePersistTimer !== null) {
           window.clearTimeout(workspacePersistTimer);
           workspacePersistTimer = null;
@@ -13882,9 +14157,17 @@
         if (!shouldRestorePersistedWorkspaceState(state)) return false;
         const nextSourceState = normalizeWorkspaceSourceState(state.sourceState);
         const nextResourceDir = normalizeStudioResourceDirValue(typeof state.resourceDir === "string" ? state.resourceDir : "");
+        const currentBaselineText = fileBackedBaselineText;
+        const currentDiskRevision = fileBackedDiskRevision;
+        const persistedDiskRevision = normalizeStudioDiskRevision(state.diskRevision);
         if (resourceDirInput) resourceDirInput.value = nextResourceDir;
         setEditorText(state.text, { preserveScroll: false, preserveSelection: false });
         setSourceState(nextSourceState);
+        if (nextSourceState.path) {
+          fileBackedBaselineText = currentBaselineText;
+          fileBackedDiskRevision = persistedDiskRevision
+            || (currentBaselineText !== null && state.text === currentBaselineText ? currentDiskRevision : null);
+        }
         if (resourceDirInput && nextResourceDir) {
           resourceDirInput.value = nextResourceDir;
           updateSourceBadge();
@@ -13970,6 +14253,10 @@
       }
 
       function setEditorText(nextText, options) {
+        if (isWatchedFilePreview && !(options && options.allowWatchedFileUpdate === true)) {
+          setStatus("This preview is read-only and follows its watched file on disk.", "warning");
+          return false;
+        }
         const value = String(nextText || "");
         const preserveScroll = Boolean(options && options.preserveScroll);
         const preserveSelection = Boolean(options && options.preserveSelection);
@@ -14017,9 +14304,14 @@
         updateEditorSelectionCommentUi();
         updateOutlineUi();
         scheduleWorkspacePersistence();
+        return true;
       }
 
       function applySourceTextEdit(nextText, selectionStart, selectionEnd) {
+        if (isWatchedFilePreview) {
+          setStatus("This preview is read-only and follows its watched file on disk.", "warning");
+          return false;
+        }
         const value = String(nextText || "");
         sourceTextEl.value = value;
         const maxIndex = value.length;
@@ -14031,6 +14323,7 @@
         if (editorView === "markdown") {
           scheduleEditorLineNumberRender();
         }
+        return true;
       }
 
       function readCompletionSuggestionContextMode() {
@@ -15191,11 +15484,12 @@
           appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
           appendPreviewLinkMenuButton(menu, "Open in system viewer", "open-system");
         } else if (kind === "text") {
+          appendPreviewLinkMenuButton(menu, "Preview file (follow changes)", "watch-new");
           appendPreviewLinkMenuButton(menu, "Open file tab", "open-new");
-          appendPreviewLinkMenuButton(menu, "Open here", "open-here");
+          if (!isWatchedFilePreview) appendPreviewLinkMenuButton(menu, "Open here", "open-here");
         } else if (kind === "office") {
           appendPreviewLinkMenuButton(menu, "Convert tab", "open-new");
-          appendPreviewLinkMenuButton(menu, "Convert here", "open-here");
+          if (!isWatchedFilePreview) appendPreviewLinkMenuButton(menu, "Convert here", "open-here");
         } else if (kind === "image") {
           appendPreviewLinkMenuButton(menu, "Open image preview", "open-image");
           appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
@@ -15291,9 +15585,15 @@
       }
 
       async function fetchPreviewLocalLink(action, href, contextOverride, options) {
-        const request = () => fetchStudioJson("/local-preview-link", {
-          query: { ...getPreviewLinkResourceQuery(href, contextOverride), action },
-        });
+        const request = () => {
+          const query = { ...getPreviewLinkResourceQuery(href, contextOverride), action };
+          if (isWatchedFilePreview) {
+            query.watchedFile = "1";
+            const watchedDocId = initialQueryParams.get("docId") || "";
+            if (watchedDocId) query.docId = watchedDocId;
+          }
+          return fetchStudioJson("/local-preview-link", { query });
+        };
         try {
           return await request();
         } catch (error) {
@@ -15385,6 +15685,9 @@
       }
 
       async function openPreviewDocumentHere(href, contextOverride, options) {
+        if (isWatchedFilePreview) {
+          throw new Error("This preview follows one disk file and cannot open another document here. Open a new file tab instead.");
+        }
         if (!(await confirmPreviewOfficeConversion(href, "here"))) return;
         if (editorHasPotentialUnsavedContent()) {
           const kind = getPreviewLocalLinkKind(href);
@@ -15414,7 +15717,7 @@
           setSourceState({ source: "blank", label, path: null });
         } else {
           setSourceState({ source: "file", label, path });
-          markFileBackedBaseline(payload.text);
+          markFileBackedBaseline(payload.text, payload.diskRevision);
         }
         const detected = converted ? "markdown" : detectLanguageFromName(path || label);
         if (detected) setEditorLanguage(detected);
@@ -15440,6 +15743,25 @@
             cancelPendingStudioTab(launch, "Local resource access was cancelled.");
           } else {
             failPendingStudioTab(launch, "Studio could not prepare this document tab. Return to the originating Studio page for details.");
+          }
+          throw error;
+        }
+      }
+
+      async function openPreviewDocumentInWatchedPreview(href, contextOverride) {
+        let launch = null;
+        try {
+          launch = openPendingStudioTab("preview");
+          const payload = await fetchPreviewLocalLink("watch-url", href, contextOverride);
+          const relativeUrl = payload && typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
+          if (!relativeUrl) throw new Error("Studio did not return a watched-preview URL.");
+          navigatePendingStudioTab(launch, relativeUrl);
+          setStatus("Opening read-only preview that follows disk changes.");
+        } catch (error) {
+          if (error && error.studioCancelled) {
+            cancelPendingStudioTab(launch, "Local resource access was cancelled.");
+          } else {
+            failPendingStudioTab(launch, "Studio could not prepare this watched preview. Return to the originating Studio page for details.");
           }
           throw error;
         }
@@ -15498,6 +15820,10 @@
           }
           if (action === "open-new") {
             await openPreviewDocumentInNewEditor(href, context);
+            return;
+          }
+          if (action === "watch-new") {
+            await openPreviewDocumentInWatchedPreview(href, context);
             return;
           }
           if (action === "open-preview-new") {
@@ -16861,6 +17187,8 @@
         ensurePreviewSelectionActions(targetEl);
         updatePreviewCommentBlocksForElement(targetEl);
         decorateCopyablePreviewBlocks(targetEl);
+        clearWatchedPreviewRenderError();
+        scheduleWatchedPreviewReadingPositionRestore(targetEl, text);
         if (pane === "response") {
           applyPendingResponseScrollReset();
           scheduleResponsePaneRepaintNudge();
@@ -21734,7 +22062,11 @@
         } catch {}
       }
 
-      function setEditorLanguage(lang) {
+      function setEditorLanguage(lang, options) {
+        if (isWatchedFilePreview && !(options && options.allowWatchedFileUpdate === true)) {
+          setStatus("The watched preview language follows its file path.", "warning");
+          return false;
+        }
         editorLanguage = (lang && SUPPORTED_LANGUAGES.indexOf(lang) !== -1) ? lang : "markdown";
         persistEditorLanguage(editorLanguage);
         syncHighlightSelectUi();
@@ -21749,6 +22081,7 @@
         }
         updateOutlineUi();
         scheduleWorkspacePersistence();
+        return true;
       }
 
       function setEditorHighlightMode(mode) {
@@ -22050,10 +22383,89 @@
         return true;
       }
 
+      function handleWatchedFileUpdate(message) {
+        if (!isWatchedFilePreview || !message || typeof message.text !== "string") return;
+        const messagePath = String(message.path || "");
+        if (!watchedFilePreviewState.path || messagePath !== watchedFilePreviewState.path) return;
+        const generation = Math.max(0, Number(message.generation) || 0);
+        if (generation < watchedFilePreviewState.generation) return;
+
+        const expectedPreviewText = prepareEditorTextForPreview(message.text);
+        watchedFilePreviewReadingPositions.source = {
+          snapshot: captureWatchedPreviewReadingPosition(sourcePreviewEl),
+          text: expectedPreviewText,
+        };
+        watchedFilePreviewReadingPositions.response = {
+          snapshot: captureWatchedPreviewReadingPosition(critiqueViewEl),
+          text: expectedPreviewText,
+        };
+        const textareaMaxScroll = Math.max(0, Number(sourceTextEl.scrollHeight || 0) - Number(sourceTextEl.clientHeight || 0));
+        const textareaScrollRatio = textareaMaxScroll > 0 ? Number(sourceTextEl.scrollTop || 0) / textareaMaxScroll : 0;
+        const selectionStart = Math.max(0, Number(sourceTextEl.selectionStart) || 0);
+        const selectionEnd = Math.max(selectionStart, Number(sourceTextEl.selectionEnd) || selectionStart);
+
+        sourceTextEl.value = message.text;
+        const nextMaxScroll = Math.max(0, Number(sourceTextEl.scrollHeight || 0) - Number(sourceTextEl.clientHeight || 0));
+        sourceTextEl.scrollTop = Math.max(0, Math.min(nextMaxScroll, nextMaxScroll * textareaScrollRatio));
+        try {
+          sourceTextEl.setSelectionRange(
+            Math.min(selectionStart, message.text.length),
+            Math.min(selectionEnd, message.text.length),
+          );
+        } catch {
+          // Selection APIs are not guaranteed in every embedded browser.
+        }
+
+        watchedFilePreviewState.generation = generation;
+        watchedFilePreviewState.diskRevision = normalizeStudioDiskRevision(message.diskRevision) || watchedFilePreviewState.diskRevision;
+        watchedFilePreviewState.lastError = "";
+        fileBackedBaselineText = message.text;
+        fileBackedDiskRevision = watchedFilePreviewState.diskRevision || null;
+        editorLanguage = detectLanguageFromName(watchedFilePreviewState.path) || editorLanguage;
+        syncHighlightSelectUi();
+        scheduleEditorHighlightRender();
+        renderSourcePreview({ previewDelayMs: 0 });
+        renderActiveResult();
+        updateSourceBadge();
+        setStatus(message.message || "Watched preview updated from disk.", "success");
+      }
+
+      function handleWatchedFileError(message) {
+        if (!isWatchedFilePreview || !message) return;
+        const messagePath = String(message.path || "");
+        if (watchedFilePreviewState.path && messagePath && messagePath !== watchedFilePreviewState.path) return;
+        watchedFilePreviewState.lastError = String(message.message || "Could not refresh the watched file.");
+        updateSourceBadge();
+        setStatus(watchedFilePreviewState.lastError, "warning");
+      }
+
+      function handleWatchedFileReady(message) {
+        if (!isWatchedFilePreview || !message) return;
+        const messagePath = String(message.path || "");
+        if (watchedFilePreviewState.path && messagePath && messagePath !== watchedFilePreviewState.path) return;
+        watchedFilePreviewState.diskRevision = normalizeStudioDiskRevision(message.diskRevision) || watchedFilePreviewState.diskRevision;
+        watchedFilePreviewState.lastError = "";
+        updateSourceBadge();
+        setStatus(message.message || "Watching file for disk changes.", "success");
+      }
+
       function handleServerMessage(message) {
         if (!message || typeof message !== "object") return;
 
         debugTrace("server_message", summarizeServerMessage(message));
+
+        if (message.type === "watched_file_update") {
+          handleWatchedFileUpdate(message);
+          return;
+        }
+        if (message.type === "watched_file_error") {
+          handleWatchedFileError(message);
+          return;
+        }
+        if (message.type === "watched_file_ready") {
+          handleWatchedFileReady(message);
+          return;
+        }
 
         const contextChanged = applyContextUsageFromMessage(message);
         if (contextChanged) {
@@ -22291,7 +22703,11 @@
             message.initialDocument &&
             typeof message.initialDocument.text === "string"
           ) {
-            setEditorText(message.initialDocument.text, { preserveScroll: false, preserveSelection: false });
+            setEditorText(message.initialDocument.text, {
+              preserveScroll: false,
+              preserveSelection: false,
+              allowWatchedFileUpdate: isWatchedFilePreview,
+            });
             initialDocumentApplied = true;
             loadedInitialDocument = true;
             setSourceState({
@@ -22303,7 +22719,7 @@
                 : (initialSourceState.draftId || null),
             });
             if (message.initialDocument.path) {
-              markFileBackedBaseline(message.initialDocument.text);
+              markFileBackedBaseline(message.initialDocument.text, message.initialDocument.diskRevision);
             }
             refreshResponseUi();
             if (typeof message.initialDocument.label === "string" && message.initialDocument.label.length > 0) {
@@ -22664,7 +23080,19 @@
           return;
         }
 
+        if (message.type === "save_conflict") {
+          void handleEditorSaveConflict(message);
+          return;
+        }
+
+        if (message.type === "save_as_conflict") {
+          void handleEditorSaveAsConflict(message);
+          return;
+        }
+
         if (message.type === "saved") {
+          const savedOperation = typeof message.requestId === "string" ? pendingSaveOperations.get(message.requestId) : null;
+          if (typeof message.requestId === "string") pendingSaveOperations.delete(message.requestId);
           if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
             pendingRequestId = null;
             pendingKind = null;
@@ -22683,7 +23111,7 @@
             }, {
               carryCurrentMetadataToNewDocument: true,
             });
-            markFileBackedBaseline(sourceTextEl.value);
+            markFileBackedBaseline(savedOperation && typeof savedOperation.content === "string" ? savedOperation.content : sourceTextEl.value, message.diskRevision);
           }
           setBusy(false);
           setWsState("Ready");
@@ -22703,6 +23131,10 @@
         }
 
         if (message.type === "editor_snapshot") {
+          if (isWatchedFilePreview) {
+            setStatus("Ignored editor snapshot because this preview follows its watched file on disk.", "warning");
+            return;
+          }
           if (typeof message.requestId === "string" && pendingRequestId && message.requestId !== pendingRequestId) {
             return;
           }
@@ -22726,6 +23158,10 @@
         }
 
         if (message.type === "studio_document") {
+          if (isWatchedFilePreview) {
+            setStatus("Ignored document replacement because this preview follows its watched file on disk.", "warning");
+            return;
+          }
           const nextDoc = message.document;
           if (!nextDoc || typeof nextDoc !== "object" || typeof nextDoc.text !== "string") {
             return;
@@ -22763,7 +23199,7 @@
             draftId: typeof nextDoc.draftId === "string" && nextDoc.draftId.trim() ? nextDoc.draftId.trim() : null,
           });
           if (nextPath) {
-            markFileBackedBaseline(nextDoc.text);
+            markFileBackedBaseline(nextDoc.text, nextDoc.diskRevision);
           }
           refreshResponseUi();
           setStatus(
@@ -22906,6 +23342,7 @@
 
         if (message.type === "busy") {
           if (typeof message.requestId === "string") {
+            pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not start the companion editor because another request was busy.");
           }
           if (message.requestId && pendingRequestId === message.requestId) {
@@ -22927,6 +23364,7 @@
 
         if (message.type === "error") {
           if (typeof message.requestId === "string") {
+            pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not prepare the companion editor. Return to the originating Studio page for details.");
           }
           if (message.requestId && pendingRequestId === message.requestId) {
@@ -23033,6 +23471,11 @@
         if (studioMode !== "full") {
           wsParams.set("mode", studioMode);
         }
+        if (isWatchedFilePreview && watchedFilePreviewState.path) {
+          wsParams.set("watchPath", watchedFilePreviewState.path);
+          const watchedDocId = initialQueryParams.get("docId") || "";
+          if (watchedDocId) wsParams.set("docId", watchedDocId);
+        }
         if (DEBUG_ENABLED) {
           wsParams.set("debug", "1");
         }
@@ -23083,6 +23526,14 @@
             return;
           }
 
+          if (kind === "watch_unauthorized") {
+            clearScheduledReconnect();
+            reconnectAttempt = 0;
+            setWsState("Disconnected");
+            setStatus("Watched preview authorization is unavailable. Reload this tab or open a new watched preview from Studio.", "warning");
+            return;
+          }
+
           if (kind === "shutdown") {
             clearScheduledReconnect();
             reconnectAttempt = 0;
@@ -23098,14 +23549,28 @@
         };
 
         socket.addEventListener("open", () => {
+          if (ws !== socket) {
+            try { socket.close(); } catch {}
+            return;
+          }
           window.clearTimeout(connectWatchdog);
           setWsState("Ready");
           setStatus(wasReconnect ? "Reconnected. Syncing…" : "Connected. Syncing…");
           sendMessage({ type: "hello" });
+          if (isWatchedFilePreview && watchedFilePreviewState.path) {
+            watchedFilePreviewState.generation = 0;
+            sendMessage({
+              type: "watch_file_subscribe",
+              path: watchedFilePreviewState.path,
+              revision: watchedFilePreviewState.diskRevision || undefined,
+            });
+            setStatus(wasReconnect ? "Reconnected. Resuming watched preview…" : "Connected. Starting watched preview…");
+          }
           reconnectAttempt = 0;
         });
 
         socket.addEventListener("message", (event) => {
+          if (ws !== socket) return;
           try {
             const message = JSON.parse(event.data);
             handleServerMessage(message);
@@ -23116,12 +23581,17 @@
         });
 
         socket.addEventListener("close", (event) => {
+          if (ws !== socket && !disconnectHandled) return;
           if (event && event.code === 4001) {
             handleDisconnect("invalidated", 4001);
             return;
           }
           if (event && event.code === 4004) {
             handleDisconnect("full_conflict", 4004);
+            return;
+          }
+          if (event && event.code === 4003) {
+            handleDisconnect("watch_unauthorized", 4003);
             return;
           }
           if (event && event.code === 1001) {
@@ -23133,6 +23603,7 @@
         });
 
         socket.addEventListener("error", () => {
+          if (ws !== socket) return;
           handleDisconnect("error");
         });
       }
@@ -23358,6 +23829,25 @@
             return;
           }
           enterPaneFocus("right");
+        });
+      }
+
+      if (watchedOpenEditableBtn) {
+        watchedOpenEditableBtn.addEventListener("click", () => {
+          const path = watchedFilePreviewState.path;
+          if (!path) {
+            setStatus("This watched preview no longer has a file path.", "warning");
+            return;
+          }
+          try {
+            openFileBackedStudioEditorTab(path, {
+              label: sourceState && sourceState.label ? sourceState.label : basenameForStudioPath(path),
+              resourceDir: getCurrentResourceDirValue() || dirnameForDisplayPath(path),
+            });
+            setStatus("Opening watched file in a separate editable tab.");
+          } catch (error) {
+            setStatus(error && error.message ? error.message : String(error || "Could not open editable tab."), "warning");
+          }
         });
       }
 
@@ -23882,100 +24372,249 @@
         setFooterThemeMenuOpen(false);
       });
 
-      saveAsBtn.addEventListener("click", async () => {
-        const content = sourceTextEl.value;
-        if (!content.trim()) {
-          setStatus("Editor is empty. Nothing to save.", "warning");
-          return;
+      function abandonPendingSaveRequest(requestId) {
+        pendingSaveOperations.delete(requestId);
+        if (requestId) clearArmedTitleAttention(requestId);
+        if (pendingRequestId === requestId) {
+          pendingRequestId = null;
+          pendingKind = null;
         }
+        stickyStudioKind = null;
+        setBusy(false);
+        setWsState("Ready");
+      }
 
-        var suggestedName = sourceState.label ? stripImportedFileLabel(sourceState.label) : "draft.md";
-        var suggestedDir = getCurrentResourceDirValue() ? getCurrentResourceDirValue().replace(/\/$/, "") + "/" : "./";
-        const suggested = sourceState.path || (suggestedDir + suggestedName);
+      function sendEditorSaveAsRequest(path, content, overwrite, expectedRevision) {
+        const cleanPath = String(path || "").trim();
+        if (!cleanPath) {
+          setStatus("Save cancelled: path is required.", "warning");
+          return false;
+        }
+        const requestId = beginUiAction("save_as");
+        if (!requestId) return false;
+        const operation = {
+          kind: "save_as",
+          path: cleanPath,
+          content: String(content ?? ""),
+          overwrite: overwrite === true,
+          expectedRevision: normalizeStudioDiskRevision(expectedRevision),
+        };
+        pendingSaveOperations.set(requestId, operation);
+        if (!sendMessage({
+          type: "save_as_request",
+          requestId,
+          path: operation.path,
+          content: operation.content,
+          overwrite: operation.overwrite,
+          expectedRevision: operation.expectedRevision || undefined,
+        })) {
+          abandonPendingSaveRequest(requestId);
+          return false;
+        }
+        return true;
+      }
+
+      async function openEditorSaveAsDialog(options) {
+        if (uiBusy) return false;
+        const settings = options && typeof options === "object" ? options : {};
+        const resourceDir = getCurrentResourceDirValue();
+        const currentPath = getEffectiveSavePath();
+        const label = sourceState.label ? stripImportedFileLabel(sourceState.label) : "draft.md";
+        const suggested = typeof settings.suggestedPath === "string" && settings.suggestedPath.trim()
+          ? settings.suggestedPath.trim()
+          : (currentPath || (resourceDir ? resourceDir.replace(/\/$/, "") + "/" + label : "./draft.md"));
         const path = await requestStudioTextInput("Save editor content as:", suggested, {
           title: "Save editor as",
           confirmLabel: "Save",
+          inputLabel: "File path",
         });
-        if (!path) return;
+        if (path === null) {
+          if (settings.reportCancellation === true) setStatus("Save As cancelled; editor changes were kept.", "warning");
+          return false;
+        }
+        const content = Object.prototype.hasOwnProperty.call(settings, "content")
+          ? String(settings.content ?? "")
+          : sourceTextEl.value;
+        return sendEditorSaveAsRequest(path, content, false);
+      }
 
-        const requestId = beginUiAction("save_as");
-        if (!requestId) return;
-
-        const sent = sendMessage({
-          type: "save_as_request",
-          requestId,
+      function sendEditorSaveOverRequest(options) {
+        const settings = options && typeof options === "object" ? options : {};
+        const path = typeof settings.path === "string" && settings.path.trim()
+          ? settings.path.trim()
+          : (sourceState && sourceState.path ? sourceState.path : "");
+        if (!path) {
+          setStatus("Save editor requires a file-backed document. Use Save editor as… for a new file.", "warning");
+          return false;
+        }
+        const requestId = beginUiAction("save_over");
+        if (!requestId) return false;
+        const operation = {
+          kind: "save_over",
           path,
-          content,
-        });
+          content: Object.prototype.hasOwnProperty.call(settings, "content")
+            ? String(settings.content ?? "")
+            : sourceTextEl.value,
+          expectedRevision: Object.prototype.hasOwnProperty.call(settings, "expectedRevision")
+            ? normalizeStudioDiskRevision(settings.expectedRevision)
+            : fileBackedDiskRevision,
+          force: settings.force === true,
+        };
+        pendingSaveOperations.set(requestId, operation);
+        if (!sendMessage({
+          type: "save_over_request",
+          requestId,
+          path: operation.path,
+          content: operation.content,
+          expectedRevision: operation.expectedRevision || undefined,
+          force: operation.force,
+        })) {
+          abandonPendingSaveRequest(requestId);
+          return false;
+        }
+        return true;
+      }
 
-        if (!sent) {
+      async function requestEditorRefreshFromDisk(options) {
+        const settings = options && typeof options === "object" ? options : {};
+        if (uiBusy) return false;
+        const path = typeof settings.path === "string" && settings.path.trim()
+          ? settings.path.trim()
+          : (sourceState && sourceState.path ? sourceState.path : "");
+        if (!path) {
+          setStatus("Refresh from disk requires a file-backed editor. Open one from Files or use /studio-editor-only <path>.", "warning");
+          return false;
+        }
+        if (settings.skipConfirm !== true && editorDiffersFromFileBackedBaseline()) {
+          const confirmed = await requestStudioConfirmation(
+            "Replace the current editor contents with the latest version from disk? Unsaved editor changes will be lost.\n\n" + path,
+            { title: "Refresh from disk?", confirmLabel: "Replace", destructive: true },
+          );
+          if (!confirmed) return false;
+        }
+        const requestId = beginUiAction("refresh_from_disk");
+        if (!requestId) return false;
+        if (!sendMessage({ type: "refresh_from_disk_request", requestId, path })) {
           pendingRequestId = null;
           pendingKind = null;
+          stickyStudioKind = null;
           setBusy(false);
+          setWsState("Ready");
+          return false;
         }
-      });
+        return true;
+      }
 
-      saveOverBtn.addEventListener("click", async () => {
-        var effectivePath = getEffectiveSavePath();
-        if (!effectivePath) {
-          setStatus("Save editor requires a file path. Open via /studio <path>, set a working dir, or use Save editor as…", "warning");
-          return;
-        }
-
-        const confirmed = await requestStudioConfirmation("Overwrite " + effectivePath + "?", {
-          title: "Overwrite file?",
+      async function handleEditorSaveConflict(message) {
+        const requestId = typeof message.requestId === "string" ? message.requestId : "";
+        const operation = pendingSaveOperations.get(requestId) || {
+          kind: "save_over",
+          path: typeof message.path === "string" ? message.path : (sourceState.path || ""),
+          content: sourceTextEl.value,
+          expectedRevision: fileBackedDiskRevision,
+          force: false,
+        };
+        abandonPendingSaveRequest(requestId);
+        const conflictPath = typeof message.path === "string" && message.path.trim() ? message.path.trim() : operation.path;
+        const canOverwrite = message.canOverwrite !== false;
+        const detail = (typeof message.message === "string" && message.message.trim()
+          ? message.message.trim()
+          : "The file changed on disk after Studio loaded it.")
+          + "\n\n" + conflictPath
+          + "\n\nReload replaces the editor with disk content. Save As keeps both versions."
+          + (canOverwrite ? " Overwrite replaces the reported disk revision with the current editor text." : " Overwrite is unavailable for this file location; use Save As to preserve link and path safety.");
+        setStatus("Save paused because the file changed on disk.", "warning");
+        const decision = await openStudioDecision({
+          mode: "confirm",
+          title: "File changed on disk",
+          message: detail,
+          cancelLabel: "Cancel",
+          tertiaryLabel: "Reload",
+          tertiaryValue: "reload",
+          secondaryLabel: "Save As…",
+          secondaryValue: "save-as",
           confirmLabel: "Overwrite",
+          confirmDisabled: !canOverwrite,
           destructive: true,
         });
-        if (!confirmed) return;
-
-        const requestId = beginUiAction("save_over");
-        if (!requestId) return;
-
-        // Use save_as with the effective path for both file-backed and derived paths
-        const sent = sendMessage({
-          type: "save_as_request",
-          requestId,
-          path: effectivePath,
-          content: sourceTextEl.value,
-        });
-
-        if (!sent) {
-          pendingRequestId = null;
-          pendingKind = null;
-          setBusy(false);
+        if (decision === "reload") {
+          await requestEditorRefreshFromDisk({ path: conflictPath, skipConfirm: true });
+          return;
         }
+        if (decision === "save-as") {
+          await openEditorSaveAsDialog({ content: operation.content, suggestedPath: conflictPath, reportCancellation: true });
+          return;
+        }
+        if (decision === true && canOverwrite) {
+          sendEditorSaveOverRequest({
+            path: conflictPath,
+            content: operation.content,
+            expectedRevision: message.currentRevision,
+            force: true,
+          });
+          return;
+        }
+        setStatus("Save cancelled; editor changes were kept.", "warning");
+      }
+
+      async function handleEditorSaveAsConflict(message) {
+        const requestId = typeof message.requestId === "string" ? message.requestId : "";
+        const operation = pendingSaveOperations.get(requestId) || {
+          kind: "save_as",
+          path: typeof message.path === "string" ? message.path : "",
+          content: sourceTextEl.value,
+          overwrite: false,
+          expectedRevision: null,
+        };
+        abandonPendingSaveRequest(requestId);
+        const conflictPath = typeof message.path === "string" && message.path.trim() ? message.path.trim() : operation.path;
+        const targetExists = Boolean(normalizeStudioDiskRevision(message.currentRevision));
+        const unsafeReplacement = message.reason === "location-changed" || message.reason === "hard-linked-file";
+        const canCommitHere = !unsafeReplacement;
+        setStatus(unsafeReplacement
+          ? "Save As cannot replace this target safely; choose another path."
+          : (targetExists
+            ? "Save As paused because the target already exists."
+            : "Save As paused because the target changed while confirmation was open."), "warning");
+        const decision = await openStudioDecision({
+          mode: "confirm",
+          title: unsafeReplacement ? "Cannot replace existing file" : (targetExists ? "Replace existing file?" : "Create file at this path?"),
+          message: (typeof message.message === "string" && message.message.trim()
+            ? message.message.trim()
+            : (targetExists ? "A file already exists at this location." : "The previous replacement target is no longer present."))
+            + (unsafeReplacement
+              ? "\n\nStudio will not replace a symlink, moved path, or hard-linked file. Choose another location instead."
+              : (targetExists ? "\n\nReplacing it cannot be undone." : "\n\nCreating it will keep the current editor text at this path.")),
+          cancelLabel: "Cancel",
+          secondaryLabel: "Choose another…",
+          secondaryValue: "choose-another",
+          confirmLabel: targetExists ? "Replace" : "Create",
+          confirmDisabled: !canCommitHere,
+          destructive: targetExists,
+        });
+        if (decision === "choose-another") {
+          await openEditorSaveAsDialog({ content: operation.content, suggestedPath: conflictPath, reportCancellation: true });
+          return;
+        }
+        if (decision === true && canCommitHere) {
+          sendEditorSaveAsRequest(conflictPath, operation.content, true, message.currentRevision);
+          return;
+        }
+        setStatus("Save As cancelled; editor changes were kept.", "warning");
+      }
+
+      saveAsBtn.addEventListener("click", () => {
+        void openEditorSaveAsDialog();
+      });
+
+      saveOverBtn.addEventListener("click", () => {
+        if (uiBusy) return;
+        sendEditorSaveOverRequest();
       });
 
       if (refreshFromDiskBtn) {
-        refreshFromDiskBtn.addEventListener("click", async () => {
-          if (!hasRefreshableFilePath()) {
-            setStatus("Refresh from disk needs a file path. Use Files → Open here, Files → Open file tab, or /studio-editor-only <path> for a refreshable editor tab.", "warning");
-            return;
-          }
-
-          if (editorDiffersFromFileBackedBaseline()) {
-            const confirmed = await requestStudioConfirmation(
-              "Replace current editor contents with the latest version from disk?",
-              { title: "Refresh from disk?", confirmLabel: "Replace", destructive: true },
-            );
-            if (!confirmed) return;
-          }
-
-          const requestId = beginUiAction("refresh_from_disk");
-          if (!requestId) return;
-
-          const sent = sendMessage({
-            type: "refresh_from_disk_request",
-            requestId,
-            path: sourceState.path,
-          });
-
-          if (!sent) {
-            pendingRequestId = null;
-            pendingKind = null;
-            setBusy(false);
-          }
+        refreshFromDiskBtn.addEventListener("click", () => {
+          void requestEditorRefreshFromDisk();
         });
       }
 
@@ -24709,7 +25348,16 @@
         resourceDirInput.value = normalizeStudioResourceDirValue(initialResourceDir);
       }
       setSourceState(initialSourceState);
-      if (initialSourceState.path) markFileBackedBaseline(sourceTextEl.value);
+      if (initialSourceState.path) markFileBackedBaseline(sourceTextEl.value, initialDiskRevision);
+      if (isWatchedFilePreview) {
+        sourceTextEl.readOnly = true;
+        sourceTextEl.setAttribute("aria-readonly", "true");
+        sourceTextEl.title = "Read-only disk-backed source. Open a file tab to edit and save safely.";
+        editorView = "markdown";
+        rightView = "editor-preview";
+        followLatest = false;
+        if (document.body && document.body.classList) document.body.classList.add("watched-file-preview");
+      }
       refreshResponseUi();
       updateAnnotatedReplyHeaderButton();
       setActivePane(initialPaneFocusTarget === "off" ? "left" : initialPaneFocusTarget);
@@ -24722,7 +25370,9 @@
 
       const initialDetectedLang = detectLanguageFromName(initialSourceState.path || initialSourceState.label || "");
       const storedLang = readStoredEditorLanguage();
-      setEditorLanguage(initialDetectedLang || storedLang || "markdown");
+      setEditorLanguage(initialDetectedLang || storedLang || "markdown", {
+        allowWatchedFileUpdate: isWatchedFilePreview,
+      });
 
       const storedLineNumbersEnabled = readStoredEditorLineNumbersEnabled();
       const initialLineNumbersEnabled = storedLineNumbersEnabled ?? Boolean(lineNumbersSelect && lineNumbersSelect.value === "on");

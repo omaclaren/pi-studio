@@ -64,7 +64,7 @@ test("Studio dispatches PDF paths before text decoding into an isolated companio
     launcherSource.indexOf("resolveStudioLaunchDocument") > launcherSource.indexOf("hasConnectedFullStudioView"),
     "ordinary files should not be read before an existing full view rejects the launch",
   );
-  assert.match(launcherSource, /const requestedLaunchMode: StudioUiMode = launchesPdfPreview \? "editor-only" : mode;/);
+  assert.match(launcherSource, /const requestedLaunchMode: StudioUiMode = launchesPdfPreview \|\| launchesWatchedTextPreview \? "editor-only" : mode;/);
   assert.match(launcherSource, /if \(requestedLaunchMode === "full" && hasConnectedFullStudioView\(\)\)/);
   assert.match(launcherSource, /const launchMode = selection\.mode \?\? requestedLaunchMode;/);
   assert.match(launcherSource, /if \(!selection\.transient\) initialStudioDocument = selected;/);
@@ -73,13 +73,15 @@ test("Studio dispatches PDF paths before text decoding into an isolated companio
 });
 
 
-test("--watch is scoped to local PDF previews and encoded in the transient document", () => {
+test("--watch dispatches PDF auto-refresh and read-only followed text previews", () => {
   assert.match(indexSource, /token === "--watch" \|\| token === "--auto-refresh"/);
-  assert.match(indexSource, /--watch requires a local PDF path, for example: \/studio --watch main\.pdf/);
-  assert.match(indexSource, /watchPdf: launchOpenFlags\.watchPdf/);
+  assert.match(indexSource, /--watch requires a local text or PDF path, for example: \/studio --watch notes\.md/);
+  assert.match(indexSource, /watchPdf: launchOpenFlags\.watchPdf && launchesPdfPreview/);
+  assert.match(indexSource, /watchText: launchesWatchedTextPreview/);
   assert.match(indexSource, /options\?\.watchPdf \? "watch: true\\n" : ""/);
-  assert.match(indexSource, /\/studio --watch <pdf>\s+Open a PDF with auto-refresh enabled/);
-  assert.match(readmeSource, /`\/studio --watch <pdf>`/);
+  assert.match(indexSource, /watchFile: true,[\s\S]*?kind: "watched-preview"/);
+  assert.match(indexSource, /\/studio --watch <file>\s+Open a read-only text preview that follows disk changes, or a PDF with auto-refresh/);
+  assert.match(readmeSource, /`\/studio --watch <file>`/);
   assert.match(readmeSource, /waits for two matching file-version observations/);
 });
 
