@@ -496,6 +496,10 @@
       font-size: 14px;
     }
 
+    body[data-watched-file-preview="1"] #leftSectionHeader .section-header-main::before {
+      content: "Source (read-only)";
+    }
+
     body[data-watched-file-preview="1"] #rightSectionHeader .section-header-main::before {
       content: "Watched preview";
     }
@@ -5843,6 +5847,34 @@
       padding: 3px 5px;
       max-width: 230px;
       white-space: nowrap;
+    }
+
+    body.studio-ui-refresh .studio-watched-source-title {
+      padding-right: 1px;
+    }
+
+    body.studio-ui-refresh .studio-watched-source-read-only-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 20px;
+      padding: 1px 4px;
+      border: 0;
+      background: transparent;
+      color: var(--studio-info-text, var(--muted));
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    body.studio-ui-refresh .studio-watched-source-read-only-badge::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 999px;
+      background: currentColor;
+      opacity: 0.72;
     }
 
     body.studio-ui-refresh #leftFocusBtn,

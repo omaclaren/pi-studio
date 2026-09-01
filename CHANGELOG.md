@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Open watched previews launched from Files or local Studio links with the preview pane focused, matching `/studio --watch`, and label the exposed raw source clearly as read-only and disk-following.
+
 ## [0.9.54] — 2026-09-02
 
 ### Added

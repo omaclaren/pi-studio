@@ -2914,7 +2914,26 @@
         }
         titleGroupEl.appendChild(makeStudioUiRefreshSeparator());
         if (isEditorOnlyMode) {
-          titleGroupEl.appendChild(makeStudioUiRefreshElement("span", "studio-refresh-static-title", "Editor (Raw)"));
+          const staticTitleEl = makeStudioUiRefreshElement(
+            "span",
+            "studio-refresh-static-title",
+            isWatchedFilePreview ? "Source" : "Editor (Raw)",
+          );
+          if (isWatchedFilePreview) {
+            staticTitleEl.classList.add("studio-watched-source-title");
+            staticTitleEl.setAttribute("aria-label", "Source, read-only. Follows the file on disk.");
+            staticTitleEl.title = "This source is read-only and follows the file on disk.";
+          }
+          titleGroupEl.appendChild(staticTitleEl);
+          if (isWatchedFilePreview) {
+            const readOnlyBadgeEl = makeStudioUiRefreshElement(
+              "span",
+              "studio-watched-source-read-only-badge",
+              "Read-only · follows disk",
+            );
+            readOnlyBadgeEl.setAttribute("aria-hidden", "true");
+            titleGroupEl.appendChild(readOnlyBadgeEl);
+          }
         } else if (editorViewSelect) {
           titleGroupEl.appendChild(editorViewSelect);
         }
@@ -4359,7 +4378,9 @@
         ].forEach(([btn, pane]) => {
           if (!btn) return;
           const isFocusedPane = paneFocusTarget === pane;
-          const paneName = pane === "right" ? "response" : "editor";
+          const paneName = pane === "right"
+            ? (isWatchedFilePreview ? "watched preview" : "response")
+            : (isWatchedFilePreview ? "read-only source" : "editor");
           btn.classList.toggle("is-active", isFocusedPane);
           btn.setAttribute("aria-pressed", isFocusedPane ? "true" : "false");
           btn.textContent = isFocusedPane ? "Exit focus" : "Focus pane";

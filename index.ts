@@ -8105,7 +8105,10 @@ async function respondLocalPreviewLinkJson(
 		...basePayload,
 		converted,
 		resourceDir: documentResourceDir,
-		relativeUrl: buildStudioRelativeUrl(serverState.token, "editor-only", document, docId, { skipWorkspaceRestore: true }),
+		relativeUrl: buildStudioRelativeUrl(serverState.token, "editor-only", document, docId, {
+			skipWorkspaceRestore: true,
+			paneFocus: action === "watch-url" ? "right" : undefined,
+		}),
 	});
 }
 

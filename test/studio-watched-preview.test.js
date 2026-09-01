@@ -13,6 +13,12 @@ test("watched preview documents are server-created, transient, and read-only", (
   assert.match(indexSource, /transient: true,[\s\S]*?skipWorkspaceRestore: true,[\s\S]*?paneFocus: "right"/);
   assert.match(clientSource, /sourceTextEl\.readOnly = true/);
   assert.match(clientSource, /sourceTextEl\.setAttribute\("aria-readonly", "true"\)/);
+  assert.match(clientSource, /isWatchedFilePreview \? "Source" : "Editor \(Raw\)"/);
+  assert.match(clientSource, /Source, read-only\. Follows the file on disk\./);
+  assert.match(clientSource, /Read-only · follows disk/);
+  assert.match(clientSource, /isWatchedFilePreview \? "watched preview" : "response"/);
+  assert.match(clientSource, /isWatchedFilePreview \? "read-only source" : "editor"/);
+  assert.match(cssSource, /body\[data-watched-file-preview="1"\] #leftSectionHeader \.section-header-main::before \{[\s\S]*?Source \(read-only\)/);
   assert.match(clientSource, /function setEditorText\([\s\S]*?isWatchedFilePreview[\s\S]*?allowWatchedFileUpdate/);
   assert.match(clientSource, /function applySourceTextEdit\([\s\S]*?if \(isWatchedFilePreview\)[\s\S]*?read-only/);
   assert.match(clientSource, /function setSourceState\([\s\S]*?isWatchedFilePreview[\s\S]*?remains bound to its watched file/);
@@ -87,4 +93,5 @@ test("Files and local text-link menus expose followed preview actions", () => {
   assert.match(clientSource, /Preview \(follow\)/);
   assert.match(clientSource, /fetchPreviewLocalLink\("watch-url", href, contextOverride\)/);
   assert.match(indexSource, /action !== "document" && action !== "editor-url" && action !== "watch-url"/);
+  assert.match(indexSource, /paneFocus: action === "watch-url" \? "right" : undefined/);
 });
