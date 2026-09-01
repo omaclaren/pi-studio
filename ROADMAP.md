@@ -51,9 +51,9 @@ Replace the single-root assumption with explicit resource grants:
 
 The resource-location registry should be workspace-level rather than tied to the current editor document so it remains compatible with multiple buffers. Remembering grants per project can follow after the session-only model is proven.
 
-## 0.9.54 — Disk-backed preview and safe save (in progress)
+## 0.9.54 — Disk-backed preview and safe save (shipped 2026-09-01)
 
-Build on the resource-location foundation:
+Builds on the resource-location foundation:
 
 - distinguish editable buffers, whose in-memory text drives Editor Preview, from read-only watched previews, whose file on disk is authoritative;
 - add a read-only **Preview file (follow changes)** workflow using the proven debounce, content-hash, atomic-save, preserved-scroll, and last-good-render behaviour from `pandoc-glance` / `pi-markdown-preview` without making Studio depend on another extension;
