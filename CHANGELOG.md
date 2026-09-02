@@ -4,6 +4,17 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add a versioned, session-owned **Shared REPL Record** that synchronizes compatible-client code, notes, lifecycle state, and captured output bidirectionally with `pi-repl` while keeping both extensions independently usable.
+- Discover records through first-writer-wins tmux metadata bound to the exact session ID and creation time, with private bounded snapshots, atomic locked updates, stale-lock recovery, and a cross-client send lease held through output capture; timed-out or aborted submissions keep that lease until the runtime completion marker or exact-session shutdown.
+- Import legacy browser-local Studio REPL entries once by stable ID, propagate clear operations, expose shared record details through the browser and `studio_repl_status`, and document direct pane typing as raw-mirror-only activity.
+
+### Changed
+- Rename the compact Studio journal and export surfaces from **Studio REPL Record** to **Shared REPL Record**, identify entry origins, and make browser Markdown output byte-for-byte consistent with the canonical protocol renderer.
+
+### Fixed
+- Prevent compatible Studio and `pi-repl` sends from concurrently attributing the same pane output to different entries.
+
 ## [0.9.55] — 2026-09-02
 
 ### Changed

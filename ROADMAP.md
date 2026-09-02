@@ -69,6 +69,20 @@ A browser-neutral UX pass before buffer-first work:
 - normalize Studio buttons and dropdown controls across Chromium and WebKit without changing native select interaction;
 - expose X-high and Max side-question thinking only when supported by the active model, while retaining Low as the default.
 
+## 0.9.56 — Shared REPL record (in progress)
+
+A coordinated interoperability release with `pi-repl` 0.4.0:
+
+- make the clean structured record belong to the exact tmux session lifetime rather than one browser or extension;
+- discover an opaque versioned record ID through first-writer-wins tmux metadata while keeping bounded content in private user-scoped sidecar storage;
+- synchronize compatible submissions, literate notes, lifecycle status, captured output, clear operations, and bounded legacy Studio migration in both directions;
+- hold one cross-client send lease from pre-send capture through completion capture—including after caller timeout or abort—so compatible clients cannot claim each other's output;
+- preserve raw pane/history output as the honest source for direct attached-pane activity rather than inferring unreliable semantic boundaries;
+- keep Studio and `pi-repl` independently installable and usable, with graceful fallback for unavailable, malformed, stale, or unsupported shared records;
+- produce one canonical Markdown representation across Studio and `pi-repl`.
+
+This release does not change Studio's single-buffer architecture or move buffer-first work forward from `0.10.0`.
+
 ## 0.10.0 — Buffer-first editing
 
 The first architectural `0.10` release should add:
@@ -92,4 +106,5 @@ Cross-environment checks should cover, where relevant:
 - local, SSH, and `--no-browser` Pi sessions;
 - paths with spaces, Unicode, traversal attempts, and symlinks;
 - supported and unavailable browser APIs;
-- browser reconstruction, refresh recovery, and clean shutdown.
+- browser reconstruction, refresh recovery, and clean shutdown;
+- for shared REPL work: bidirectional visibility, compatible-client send contention, output attribution, restart persistence, clear/import behavior, stale or malformed records, and direct attached-pane activity.
