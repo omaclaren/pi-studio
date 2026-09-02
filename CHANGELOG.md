@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.56] — 2026-09-02
+
 ### Added
 - Add a versioned, session-owned **Shared REPL Record** that synchronizes compatible-client code, notes, lifecycle state, and captured output bidirectionally with `pi-repl` while keeping both extensions independently usable.
 - Discover records through first-writer-wins tmux metadata bound to the exact session ID and creation time, with private bounded snapshots, atomic locked updates, stale-lock recovery, and a cross-client send lease held through output capture; timed-out or aborted submissions keep that lease until the runtime completion marker or exact-session shutdown.

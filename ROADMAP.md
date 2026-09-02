@@ -69,7 +69,7 @@ A browser-neutral UX pass before buffer-first work:
 - normalize Studio buttons and dropdown controls across Chromium and WebKit without changing native select interaction;
 - expose X-high and Max side-question thinking only when supported by the active model, while retaining Low as the default.
 
-## 0.9.56 — Shared REPL record (in progress)
+## 0.9.56 — Shared REPL record (shipped 2026-09-02)
 
 A coordinated interoperability release with `pi-repl` 0.4.0:
 
