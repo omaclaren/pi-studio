@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const css = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
+const indexSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 
 function extractRuleBlock(source, marker) {
   const start = source.indexOf(marker);
@@ -19,6 +21,41 @@ function extractRuleBlock(source, marker) {
   }
   throw new Error("Missing closing brace for: " + marker);
 }
+
+test("Studio buttons and header view selectors use browser-neutral control chrome", () => {
+  assert.match(css, /\n\s*button \{\s*-webkit-appearance: none;\s*appearance: none;/);
+  assert.match(indexSource, /id="editorViewSelectWrap" class="studio-header-select-wrap"/);
+  assert.match(indexSource, /id="rightViewSelectWrap" class="studio-header-select-wrap"/);
+  assert.match(clientSource, /titleGroupEl\.appendChild\(editorViewSelectWrap \|\| editorViewSelect\)/);
+  assert.match(clientSource, /rightTitleGroupEl\.appendChild\(rightViewSelectWrap \|\| rightViewSelect\)/);
+
+  const selectWrapRule = extractRuleBlock(css, ".studio-header-select-wrap::after {");
+  assert.match(selectWrapRule, /content: "⌄";/);
+  assert.match(selectWrapRule, /pointer-events: none;/);
+
+  assert.match(clientSource, /class='studio-menu-select-wrap'><select id='footerPiModelSelect'/);
+  assert.match(clientSource, /class='studio-menu-select-wrap'><select id='footerPiThinkingSelect'/);
+  assert.match(clientSource, /class='studio-menu-select-wrap'><select id='footerPiThemeSelect'/);
+  const menuSelectWrapRule = extractRuleBlock(css, ".studio-menu-select-wrap::after {");
+  assert.match(menuSelectWrapRule, /content: "⌄";/);
+  assert.match(menuSelectWrapRule, /pointer-events: none;/);
+  const menuSelectRule = extractRuleBlock(css, ".footer-model-menu-field select {");
+  assert.match(menuSelectRule, /padding: 5px 24px 5px 7px;/);
+  assert.match(menuSelectRule, /-webkit-appearance: none;/);
+  assert.match(menuSelectRule, /background-image: none;/);
+
+  const baseSelectRule = extractRuleBlock(css, ".section-header select {");
+  assert.match(baseSelectRule, /-webkit-appearance: none;/);
+  assert.match(baseSelectRule, /appearance: none;/);
+  assert.match(baseSelectRule, /background-image: none;/);
+  assert.match(baseSelectRule, /padding: 2px 18px 2px 4px;/);
+
+  const refreshedSelectRule = extractRuleBlock(css, "body.studio-ui-refresh #leftSectionHeader #editorViewSelect,");
+  assert.match(refreshedSelectRule, /padding: 3px 20px 3px 5px;/);
+  assert.match(refreshedSelectRule, /-webkit-appearance: none;/);
+  assert.match(refreshedSelectRule, /background-image: none;/);
+  assert.doesNotMatch(css, /appearance:\s*menulist/);
+});
 
 test("Studio editor controls use pane-local component breakpoints", () => {
   const toolbarBase = css.indexOf("body.studio-ui-refresh .studio-refresh-toolbar-main {");

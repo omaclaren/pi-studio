@@ -11906,10 +11906,12 @@ ${cssVarsBlock}
     <section id="leftPane">
       <div id="leftSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="editorViewSelect" aria-label="Editor view mode" title="Editor view mode. Shortcut: F7 when the editor pane is active; F6 switches panes.">
-            <option value="markdown" selected>Editor (Raw)</option>
-            <option value="preview">Editor (Preview)</option>
-          </select>
+          <span id="editorViewSelectWrap" class="studio-header-select-wrap">
+            <select id="editorViewSelect" aria-label="Editor view mode" title="Editor view mode. Shortcut: F7 when the editor pane is active; F6 switches panes.">
+              <option value="markdown" selected>Editor (Raw)</option>
+              <option value="preview">Editor (Preview)</option>
+            </select>
+          </span>
         </div>
         <div class="section-header-actions">
           <button id="leftFocusBtn" class="pane-focus-btn" type="button" title="Show only the editor pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>
@@ -12108,17 +12110,19 @@ ${cssVarsBlock}
     <section id="rightPane">
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
-          <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+1–8 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W/F/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, and Side questions.">
-            <option value="markdown">Response (Raw)</option>
-            <option value="preview" selected>Response (Preview)</option>
-            <option value="editor-preview">Editor (Preview)</option>
-            <option value="editor-quarto-preview" hidden>Editor (Quarto Preview)</option>
-            <option value="trace">Working</option>
-            <option value="changes">Changes</option>
-            <option value="files">Files</option>
-            <option value="repl">REPL</option>
-            <option value="side-questions">Side questions</option>
-          </select>
+          <span id="rightViewSelectWrap" class="studio-header-select-wrap">
+            <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+1–8 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W/F/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, and Side questions.">
+              <option value="markdown">Response (Raw)</option>
+              <option value="preview" selected>Response (Preview)</option>
+              <option value="editor-preview">Editor (Preview)</option>
+              <option value="editor-quarto-preview" hidden>Editor (Quarto Preview)</option>
+              <option value="trace">Working</option>
+              <option value="changes">Changes</option>
+              <option value="files">Files</option>
+              <option value="repl">REPL</option>
+              <option value="side-questions">Side questions</option>
+            </select>
+          </span>
         </div>
         <div class="section-header-actions">
           <button id="rightFocusBtn" class="pane-focus-btn" type="button" title="Show only the response pane. Shortcut: F10 or Cmd/Ctrl+Esc.">Focus pane</button>

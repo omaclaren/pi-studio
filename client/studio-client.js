@@ -74,7 +74,9 @@
         : null;
       const referenceBadgeEl = document.getElementById("referenceBadge");
       const editorViewSelect = document.getElementById("editorViewSelect");
+      const editorViewSelectWrap = document.getElementById("editorViewSelectWrap");
       const rightViewSelect = document.getElementById("rightViewSelect");
+      const rightViewSelectWrap = document.getElementById("rightViewSelectWrap");
       const followSelect = document.getElementById("followSelect");
       const responseHighlightSelect = document.getElementById("responseHighlightSelect");
       const responseFontSizeSelect = document.getElementById("responseFontSizeSelect");
@@ -2935,7 +2937,7 @@
             titleGroupEl.appendChild(readOnlyBadgeEl);
           }
         } else if (editorViewSelect) {
-          titleGroupEl.appendChild(editorViewSelect);
+          titleGroupEl.appendChild(editorViewSelectWrap || editorViewSelect);
         }
         if (contextMenu) {
           titleGroupEl.appendChild(makeStudioUiRefreshSeparator());
@@ -2961,7 +2963,7 @@
             rightTitleGroupEl.appendChild(rightFocusBtn);
             rightTitleGroupEl.appendChild(makeStudioUiRefreshSeparator());
           }
-          rightTitleGroupEl.appendChild(rightViewSelect);
+          rightTitleGroupEl.appendChild(rightViewSelectWrap || rightViewSelect);
           rightIdentityEl.appendChild(rightTitleGroupEl);
           const rightToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
           if (watchedOpenEditableBtn && isWatchedFilePreview) rightToolsEl.appendChild(watchedOpenEditableBtn);
@@ -3668,8 +3670,8 @@
         });
         footerModelMenuEl.innerHTML = ""
           + "<div class='footer-model-menu-heading'>Pi model & thinking</div>"
-          + "<label class='footer-model-menu-field'><span>Pi model</span><select id='footerPiModelSelect'>" + modelOptionsHtml.join("") + "</select></label>"
-          + "<label class='footer-model-menu-field'><span>Thinking</span><select id='footerPiThinkingSelect'>" + thinkingOptionsHtml.join("") + "</select></label>"
+          + "<label class='footer-model-menu-field'><span>Pi model</span><span class='studio-menu-select-wrap'><select id='footerPiModelSelect'>" + modelOptionsHtml.join("") + "</select></span></label>"
+          + "<label class='footer-model-menu-field'><span>Thinking</span><span class='studio-menu-select-wrap'><select id='footerPiThinkingSelect'>" + thinkingOptionsHtml.join("") + "</select></span></label>"
           + "<div class='footer-model-menu-note'>Affects future Pi turns. Studio Suggest has its own model setting.</div>";
       }
 
@@ -3749,7 +3751,7 @@
         footerThemeMenuEl.innerHTML = ""
           + "<div class='footer-model-menu-heading'>Pi theme</div>"
           + (optionsHtml.length
-            ? "<label class='footer-model-menu-field'><span>Active theme</span><select id='footerPiThemeSelect'>" + optionsHtml.join("") + "</select></label>"
+            ? "<label class='footer-model-menu-field'><span>Active theme</span><span class='studio-menu-select-wrap'><select id='footerPiThemeSelect'>" + optionsHtml.join("") + "</select></span></label>"
             : "<div class='footer-model-menu-note'>No Pi themes are available yet.</div>")
           + "<div class='footer-model-menu-note'>Switches the active Pi theme and persists it to Pi settings.</div>";
       }
