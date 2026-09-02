@@ -74,9 +74,11 @@ import {
 import {
 	buildStudioSideQuestionFollowUpPrompt,
 	buildStudioSideQuestionPrompt,
+	getStudioSideQuestionThinkingLevels,
 	normalizeStudioSideQuestionFocusKind,
 	normalizeStudioSideQuestionGatherScope,
 	normalizeStudioSideQuestionThinking,
+	resolveStudioSideQuestionThinking,
 	STUDIO_SIDE_QUESTION_FOCUS_MAX_CHARS,
 	STUDIO_SIDE_QUESTION_QUESTION_MAX_CHARS,
 } from "./shared/studio-side-question.js";
@@ -120,7 +122,7 @@ type StudioQuartoPreviewStatus = "idle" | "starting" | "running" | "stopping" | 
 type StudioShowMeSourceKind = "selection" | "response" | "editor" | "context";
 type StudioSideQuestionFocusKind = "selection" | "section" | "editor" | "response" | "none";
 type StudioSideQuestionGatherScope = "none" | "folder" | "repo" | "custom";
-type StudioSideQuestionThinking = "off" | "minimal" | "low" | "medium" | "high";
+type StudioSideQuestionThinking = ModelThinkingLevel;
 type StudioSideQuestionStatus = "idle" | "running" | "error";
 
 interface StudioQuartoPreviewContext {
@@ -13699,6 +13701,9 @@ export default function (pi: ExtensionAPI) {
 		}
 		: null;
 
+	const getCurrentStudioSideQuestionThinkingLevels = (): StudioSideQuestionThinking[] =>
+		getStudioSideQuestionThinkingLevels(latestModelRequestCtx?.model ?? lastCommandCtx?.model) as StudioSideQuestionThinking[];
+
 	const getStudioThemeOptions = () => {
 		try {
 			const themes = lastCommandCtx?.ui?.getAllThemes?.() ?? [];
@@ -13734,6 +13739,7 @@ export default function (pi: ExtensionAPI) {
 			modelLabel: currentModelLabel,
 			currentModel: getCurrentStudioModelDescriptor(),
 			thinkingLevel: getThinkingLevelSafe() ?? "off",
+			sideQuestionThinkingLevels: getCurrentStudioSideQuestionThinkingLevels(),
 			piModels: modelOptions,
 			suggestionModels: modelOptions,
 			currentTheme: getCurrentStudioThemeDescriptor(),
@@ -14040,6 +14046,7 @@ export default function (pi: ExtensionAPI) {
 		const payload: Record<string, unknown> = {
 			type: "side_question_state",
 			state: getStudioSideQuestionPublicState(),
+			sideQuestionThinkingLevels: getCurrentStudioSideQuestionThinkingLevels(),
 			webSearchAvailable: Boolean(String(process.env.BRAVE_API_KEY || "").trim()),
 		};
 		if (client) payload.availablePiTools = getPublicStudioSideQuestionToolCatalog();
@@ -14261,6 +14268,7 @@ export default function (pi: ExtensionAPI) {
 		const model = latestModelRequestCtx?.model ?? ctx.model;
 		if (!model) throw new Error("No active Pi model is available for side questions.");
 		await resolveStudioModelRequestAuth({ model, modelRegistry: ctx.modelRegistry }, model);
+		const thinking = resolveStudioSideQuestionThinking(model, context.thinking) as StudioSideQuestionThinking;
 		const gitSnapshot = context.gitContext
 			? await captureStudioSideQuestionGitSnapshot(contextRoot, { runGit: runStudioSideQuestionGitCommand }) as StudioSideQuestionGitSnapshot
 			: null;
@@ -14299,7 +14307,7 @@ export default function (pi: ExtensionAPI) {
 				customTools: tools,
 				sessionManager: sideSessionManager,
 				model,
-				thinking: context.thinking,
+				thinking,
 				inheritedPrompt: stripStudioDynamicSystemPromptFooter(ctx.getSystemPrompt()),
 			});
 			session = agentRuntime.session;
@@ -14308,7 +14316,7 @@ export default function (pi: ExtensionAPI) {
 				cwd: workingDirectory,
 				sessionManager: sideSessionManager,
 				model,
-				thinkingLevel: context.thinking,
+				thinkingLevel: thinking,
 				tools: activeToolNames,
 				customTools: tools,
 				resourceLoader: createStudioSideQuestionResourceLoader(ctx),
@@ -14341,7 +14349,7 @@ export default function (pi: ExtensionAPI) {
 				tools: selectedPiTools,
 			},
 			modelLabel: formatStudioModelOptionLabel(model),
-			thinking: context.thinking,
+			thinking,
 			messages: [],
 			activity: [],
 			error: context.webSearch && !webAvailable ? "Web search was requested but BRAVE_API_KEY is not configured; this thread will use local context only." : "",
@@ -14645,6 +14653,7 @@ export default function (pi: ExtensionAPI) {
 				modelLabel: currentModelLabel,
 				currentModel: getCurrentStudioModelDescriptor(),
 				thinkingLevel: getThinkingLevelSafe() ?? "off",
+				sideQuestionThinkingLevels: getCurrentStudioSideQuestionThinkingLevels(),
 				piModels: getStudioModelOptions(),
 				suggestionModels: getStudioModelOptions(),
 				currentTheme: getCurrentStudioThemeDescriptor(),

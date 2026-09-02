@@ -7,7 +7,11 @@ import { join } from "node:path";
 import {
 	buildStudioSideQuestionFollowUpPrompt,
 	buildStudioSideQuestionPrompt,
+	getStudioSideQuestionThinkingLevels,
+	normalizeStudioSideQuestionThinking,
+	resolveStudioSideQuestionThinking,
 	STUDIO_SIDE_QUESTION_FOCUS_MAX_CHARS,
+	STUDIO_SIDE_QUESTION_THINKING_LEVELS,
 	truncateStudioSideQuestionFocus,
 } from "../shared/studio-side-question.js";
 import {
@@ -94,6 +98,31 @@ test("side-question focus chooses selections and bounded Markdown or LaTeX secti
 		language: "text",
 	});
 	assert.equal(unstructuredFocus.focusLabel, "Text around cursor");
+});
+
+test("side-question thinking exposes extended levels only when the active model supports them", () => {
+	assert.ok(Object.isFrozen(STUDIO_SIDE_QUESTION_THINKING_LEVELS));
+	assert.equal(normalizeStudioSideQuestionThinking(" XHIGH "), "xhigh");
+	assert.equal(normalizeStudioSideQuestionThinking("max"), "max");
+	assert.equal(normalizeStudioSideQuestionThinking("unbounded"), "low");
+
+	const ordinaryReasoningModel = { reasoning: true };
+	assert.deepEqual(
+		getStudioSideQuestionThinkingLevels(ordinaryReasoningModel),
+		["off", "minimal", "low", "medium", "high"],
+	);
+	assert.equal(resolveStudioSideQuestionThinking(ordinaryReasoningModel, "max"), "high");
+
+	const extendedReasoningModel = {
+		reasoning: true,
+		thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+	};
+	assert.deepEqual(getStudioSideQuestionThinkingLevels(extendedReasoningModel), STUDIO_SIDE_QUESTION_THINKING_LEVELS);
+	assert.equal(resolveStudioSideQuestionThinking(extendedReasoningModel, "xhigh"), "xhigh");
+	assert.equal(resolveStudioSideQuestionThinking(extendedReasoningModel, "max"), "max");
+
+	assert.deepEqual(getStudioSideQuestionThinkingLevels({ reasoning: false }), ["off"]);
+	assert.equal(resolveStudioSideQuestionThinking({ reasoning: false }, "max"), "off");
 });
 
 test("side-question transcript export is readable Markdown and excludes hidden context and raw tool output", () => {
@@ -299,6 +328,8 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(indexSource, /additionalExtensionPaths: options\.extensionPaths/);
 	assert.match(indexSource, /noExtensions: true/);
 	assert.match(indexSource, /availablePiTools/);
+	assert.match(indexSource, /sideQuestionThinkingLevels: getCurrentStudioSideQuestionThinkingLevels\(\)/);
+	assert.match(indexSource, /const thinking = resolveStudioSideQuestionThinking\(model, context\.thinking\)/);
 	assert.doesNotMatch(indexSource, /from ["']pi-mcp-adapter/);
 	assert.match(indexSource, /signal: options\.signal/);
 	assert.match(indexSource, /cancelRequested/);
@@ -349,6 +380,10 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /staged and unstaged changes, and up to 20 recent commits · read only · frozen when thread starts/);
 	assert.match(clientSource, /gitContext: summary\.scope === "repo" && sideQuestionUi\.gitContext/);
 	assert.match(clientSource, /Allow web search/);
+	assert.match(clientSource, /getSideQuestionThinkingOptions\(\)/);
+	assert.match(clientSource, /X-high \(slower\)/);
+	assert.match(clientSource, /Max \(slowest\)/);
+	assert.match(clientSource, /applySideQuestionThinkingLevels\(message\.sideQuestionThinkingLevels\)/);
 	assert.match(clientSource, /Additional Pi tools/);
 	assert.match(clientSource, /data-side-question-tool/);
 	assert.match(clientSource, /loads its owning extension into the isolated side runtime/);

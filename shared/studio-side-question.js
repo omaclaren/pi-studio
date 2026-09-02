@@ -1,5 +1,16 @@
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+
 export const STUDIO_SIDE_QUESTION_FOCUS_MAX_CHARS = 60_000;
 export const STUDIO_SIDE_QUESTION_QUESTION_MAX_CHARS = 12_000;
+export const STUDIO_SIDE_QUESTION_THINKING_LEVELS = Object.freeze([
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+]);
 
 export function normalizeStudioSideQuestionFocusKind(value) {
 	const normalized = String(value ?? "").trim().toLowerCase();
@@ -20,10 +31,28 @@ export function normalizeStudioSideQuestionGatherScope(value) {
 
 export function normalizeStudioSideQuestionThinking(value) {
 	const normalized = String(value ?? "").trim().toLowerCase();
-	if (normalized === "off" || normalized === "minimal" || normalized === "low" || normalized === "medium" || normalized === "high") {
-		return normalized;
+	return STUDIO_SIDE_QUESTION_THINKING_LEVELS.includes(normalized) ? normalized : "low";
+}
+
+export function getStudioSideQuestionThinkingLevels(model) {
+	if (!model) return [...STUDIO_SIDE_QUESTION_THINKING_LEVELS];
+	try {
+		const supported = getSupportedThinkingLevels(model)
+			.filter((level) => STUDIO_SIDE_QUESTION_THINKING_LEVELS.includes(level));
+		return supported.length > 0 ? supported : ["off"];
+	} catch {
+		return [...STUDIO_SIDE_QUESTION_THINKING_LEVELS];
 	}
-	return "low";
+}
+
+export function resolveStudioSideQuestionThinking(model, value) {
+	const requested = normalizeStudioSideQuestionThinking(value);
+	if (!model) return requested;
+	try {
+		return clampThinkingLevel(model, requested);
+	} catch {
+		return requested;
+	}
 }
 
 function sanitizePromptContent(value) {

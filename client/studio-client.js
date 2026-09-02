@@ -488,6 +488,7 @@
       const EDITOR_TAB_TEXT = "  ";
       const QUIZ_DEFAULT_COUNT = 5;
       const SIDE_QUESTION_THINKING_STORAGE_KEY = "piStudio.sideQuestionThinking";
+      const SIDE_QUESTION_THINKING_LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
       const SIDE_QUESTION_GATHER_STORAGE_KEY = "piStudio.sideQuestionGatherScope";
       const SIDE_QUESTION_TOOLS_STORAGE_KEY = "piStudio.sideQuestionTools";
       const SIDE_QUESTION_TRANSCRIPT_RENDER_MAX_CHARS = 400_000;
@@ -498,6 +499,7 @@
       const QUIZ_ANGLES = ["general", "scientist", "mathematician", "statistician", "developer", "reviewer"];
       const QUIZ_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
       let sideQuestionState = null;
+      let sideQuestionThinkingLevels = [...SIDE_QUESTION_THINKING_LEVELS];
       let sideQuestionWebSearchAvailable = false;
       let sideQuestionAvailablePiTools = [];
       let sideQuestionPreviewRenderNonce = 0;
@@ -526,11 +528,12 @@
         thinking: (() => {
           try {
             const value = window.localStorage && window.localStorage.getItem(SIDE_QUESTION_THINKING_STORAGE_KEY);
-            return ["off", "minimal", "low", "medium", "high"].includes(value) ? value : "low";
+            return SIDE_QUESTION_THINKING_LEVELS.includes(value) ? value : "low";
           } catch { return "low"; }
         })(),
         draft: "",
       };
+      let sideQuestionPreferredThinking = sideQuestionUi.thinking;
       let quizOverlayEl = null;
       let quizDialogEl = null;
       let quizPreviewRenderNonce = 0;
@@ -3635,6 +3638,9 @@
         }
         if (typeof message.thinkingLevel === "string") {
           piThinkingLevel = message.thinkingLevel.trim();
+        }
+        if (Array.isArray(message.sideQuestionThinkingLevels)) {
+          applySideQuestionThinkingLevels(message.sideQuestionThinkingLevels);
         }
         renderFooterModelMenu();
       }
@@ -13013,6 +13019,49 @@
         return values.map(([value, label]) => "<option value='" + escapeHtml(value) + "'" + (value === current ? " selected" : "") + ">" + escapeHtml(label) + "</option>").join("");
       }
 
+      function clampSideQuestionThinkingLevel(value, levels) {
+        const available = Array.isArray(levels) && levels.length ? levels : [...SIDE_QUESTION_THINKING_LEVELS];
+        if (available.includes(value)) return value;
+        const requestedIndex = SIDE_QUESTION_THINKING_LEVELS.indexOf(value);
+        if (requestedIndex < 0) return available.includes("low") ? "low" : available[0];
+        for (let index = requestedIndex; index < SIDE_QUESTION_THINKING_LEVELS.length; index += 1) {
+          const candidate = SIDE_QUESTION_THINKING_LEVELS[index];
+          if (available.includes(candidate)) return candidate;
+        }
+        for (let index = requestedIndex - 1; index >= 0; index -= 1) {
+          const candidate = SIDE_QUESTION_THINKING_LEVELS[index];
+          if (available.includes(candidate)) return candidate;
+        }
+        return "off";
+      }
+
+      function applySideQuestionThinkingLevels(value) {
+        const seen = new Set();
+        const normalized = (Array.isArray(value) ? value : []).filter((level) => {
+          if (typeof level !== "string" || !SIDE_QUESTION_THINKING_LEVELS.includes(level) || seen.has(level)) return false;
+          seen.add(level);
+          return true;
+        });
+        const next = normalized.length ? normalized : [...SIDE_QUESTION_THINKING_LEVELS];
+        const levelsChanged = next.length !== sideQuestionThinkingLevels.length
+          || next.some((level, index) => level !== sideQuestionThinkingLevels[index]);
+        sideQuestionThinkingLevels = next;
+        const nextThinking = clampSideQuestionThinkingLevel(sideQuestionPreferredThinking, next);
+        const thinkingChanged = nextThinking !== sideQuestionUi.thinking;
+        if (thinkingChanged) sideQuestionUi.thinking = nextThinking;
+        if ((levelsChanged || thinkingChanged) && rightView === "side-questions" && (!sideQuestionState || !sideQuestionState.threadId)) {
+          renderSideQuestionView();
+        }
+      }
+
+      function getSideQuestionThinkingOptions() {
+        return sideQuestionThinkingLevels.map((level) => {
+          if (level === "xhigh") return [level, "X-high (slower)"];
+          if (level === "max") return [level, "Max (slowest)"];
+          return [level, level.charAt(0).toUpperCase() + level.slice(1)];
+        });
+      }
+
       function renderSideQuestionPiToolPicker() {
         const selected = new Set(sideQuestionUi.toolIds);
         const selectedCount = sideQuestionUi.toolIds.length;
@@ -13055,9 +13104,9 @@
           + "<label>Also use files from<select data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
             ["none", "No other files"], ["folder", "Same folder as document"], ["repo", "Repository"], ["custom", "Choose a folder"],
           ], scope) + "</select></label>"
-          + "<label>Thinking<select data-side-question-field='thinking'>" + sideQuestionSelectOptions([
-            ["off", "Off"], ["minimal", "Minimal"], ["low", "Low"], ["medium", "Medium"], ["high", "High"],
-          ], sideQuestionUi.thinking) + "</select></label>"
+          + "<label>Thinking<select data-side-question-field='thinking'>" + sideQuestionSelectOptions(
+            getSideQuestionThinkingOptions(), sideQuestionUi.thinking
+          ) + "</select></label>"
           + "</div>"
           + "<details class='side-question-context-rule'><summary id='sideQuestionContextRule'>Automatic: selection → heading block at cursor → nearby text</summary><p>A heading block starts at the nearest Markdown/LaTeX heading above the cursor and ends before the next heading of the same or higher level. With no heading, Studio uses the surrounding text block or a nearby excerpt.</p></details>"
           + (scope === "none" ? "" : "<p class='side-question-context-access-note'>Related-file access is limited to folders allowed for this Studio session. Studio asks before starting if this folder is not already allowed.</p>")
@@ -13415,9 +13464,10 @@
           if (sideQuestionUi.gatherScope !== "repo") sideQuestionUi.gitContext = false;
           try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_GATHER_STORAGE_KEY, sideQuestionUi.gatherScope); } catch {}
         }
-        if (field === "thinking") {
+        if (field === "thinking" && sideQuestionThinkingLevels.includes(target.value)) {
+          sideQuestionPreferredThinking = target.value;
           sideQuestionUi.thinking = target.value;
-          try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_THINKING_STORAGE_KEY, sideQuestionUi.thinking); } catch {}
+          try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_THINKING_STORAGE_KEY, sideQuestionPreferredThinking); } catch {}
         }
         if (field === "includeConversation") sideQuestionUi.includeConversation = target.checked;
         if (field === "gitContext") sideQuestionUi.gitContext = target.checked && getSideQuestionGatherScope() === "repo";
@@ -22513,6 +22563,7 @@
         }
 
         if (message.type === "side_question_state") {
+          if (Array.isArray(message.sideQuestionThinkingLevels)) applySideQuestionThinkingLevels(message.sideQuestionThinkingLevels);
           sideQuestionWebSearchAvailable = message.webSearchAvailable === true;
           if (Array.isArray(message.availablePiTools)) applySideQuestionToolCatalog(message.availablePiTools);
           const previousStatus = sideQuestionState && sideQuestionState.status;
