@@ -61,6 +61,14 @@ Builds on the resource-location foundation:
 - add **Cmd/Ctrl+Shift+S** for Save As and keep autosave opt-in rather than default;
 - carry the resulting disk identity and revision model forward into `StudioBufferStore`.
 
+## 0.9.55 — Watched-preview and control polish (shipped 2026-09-02)
+
+A browser-neutral UX pass before buffer-first work:
+
+- focus followed previews on their rendered pane and label the exposed source as read-only and disk-following;
+- normalize Studio buttons and dropdown controls across Chromium and WebKit without changing native select interaction;
+- expose X-high and Max side-question thinking only when supported by the active model, while retaining Low as the default.
+
 ## 0.10.0 — Buffer-first editing
 
 The first architectural `0.10` release should add:

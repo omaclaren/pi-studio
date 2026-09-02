@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.55] — 2026-09-02
+
 ### Changed
 - Let side questions use **X-high** and **Max** thinking when the active model supports them, while retaining **Low** as the default.
 
