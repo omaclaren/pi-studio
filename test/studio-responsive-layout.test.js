@@ -22,7 +22,7 @@ function extractRuleBlock(source, marker) {
   throw new Error("Missing closing brace for: " + marker);
 }
 
-test("Studio buttons and header view selectors use browser-neutral control chrome", () => {
+test("Studio controls use browser-neutral control chrome", () => {
   assert.match(css, /\n\s*button \{\s*-webkit-appearance: none;\s*appearance: none;/);
   assert.match(indexSource, /id="editorViewSelectWrap" class="studio-header-select-wrap"/);
   assert.match(indexSource, /id="rightViewSelectWrap" class="studio-header-select-wrap"/);
@@ -36,6 +36,9 @@ test("Studio buttons and header view selectors use browser-neutral control chrom
   assert.match(clientSource, /class='studio-menu-select-wrap'><select id='footerPiModelSelect'/);
   assert.match(clientSource, /class='studio-menu-select-wrap'><select id='footerPiThinkingSelect'/);
   assert.match(clientSource, /class='studio-menu-select-wrap'><select id='footerPiThemeSelect'/);
+  assert.match(indexSource, /id="followSelectWrap" class="studio-menu-select-wrap response-option-select-wrap"/);
+  assert.match(indexSource, /id="responseHighlightSelectWrap" class="studio-menu-select-wrap response-option-select-wrap"/);
+  assert.match(indexSource, /id="responseFontSizeSelectWrap" class="studio-menu-select-wrap response-option-select-wrap"/);
   const menuSelectWrapRule = extractRuleBlock(css, ".studio-menu-select-wrap::after {");
   assert.match(menuSelectWrapRule, /content: "⌄";/);
   assert.match(menuSelectWrapRule, /pointer-events: none;/);
@@ -43,6 +46,12 @@ test("Studio buttons and header view selectors use browser-neutral control chrom
   assert.match(menuSelectRule, /padding: 5px 24px 5px 7px;/);
   assert.match(menuSelectRule, /-webkit-appearance: none;/);
   assert.match(menuSelectRule, /background-image: none;/);
+  const responseSelectRule = extractRuleBlock(css, "#responseActions .response-option-select-wrap select {");
+  assert.match(responseSelectRule, /padding-right: 26px;/);
+  assert.match(responseSelectRule, /-webkit-appearance: none;/);
+  assert.match(responseSelectRule, /background-image: none;/);
+  assert.match(css, /body\[data-studio-mode="editor-only"\] #followSelectWrap,/);
+  assert.match(css, /body\[data-studio-mode="editor-only"\] #responseHighlightSelectWrap,/);
 
   const baseSelectRule = extractRuleBlock(css, ".section-header select {");
   assert.match(baseSelectRule, /-webkit-appearance: none;/);

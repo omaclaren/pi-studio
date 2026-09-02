@@ -9,7 +9,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Fixed
 - Open watched previews launched from Files or local Studio links with the preview pane focused, matching `/studio --watch`, and label the exposed raw source clearly as read-only and disk-following.
-- Normalize Studio buttons plus header and footer-menu selectors with flat browser-neutral styling and custom chevrons instead of WebKit's native shaded controls.
+- Normalize Studio buttons plus header, response-option, and footer-menu selectors with flat browser-neutral styling and custom chevrons instead of WebKit's native shaded controls.
 
 ## [0.9.54] — 2026-09-02
 

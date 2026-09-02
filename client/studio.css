@@ -498,7 +498,9 @@
     body[data-studio-mode="editor-only"] #critiqueBtn,
     body[data-studio-mode="editor-only"] #showMeBtn,
     body[data-studio-mode="editor-only"] #showMeResponseBtn,
+    body[data-studio-mode="editor-only"] #followSelectWrap,
     body[data-studio-mode="editor-only"] #followSelect,
+    body[data-studio-mode="editor-only"] #responseHighlightSelectWrap,
     body[data-studio-mode="editor-only"] #responseHighlightSelect,
     body[data-studio-mode="editor-only"] #pullLatestBtn,
     body[data-studio-mode="editor-only"] #historyPrevBtn,
@@ -3290,6 +3292,20 @@
       flex: 0 0 auto;
     }
 
+    #responseActions .response-option-select-wrap {
+      width: auto;
+      flex: 0 0 auto;
+    }
+
+    #responseActions .response-option-select-wrap select {
+      width: 100%;
+      min-width: 0;
+      padding-right: 26px;
+      -webkit-appearance: none;
+      appearance: none;
+      background-image: none;
+    }
+
     #critiqueView.git-changes-host {
       flex: 1 1 auto;
       min-height: 0;
@@ -5731,6 +5747,10 @@
     body.studio-ui-refresh #responseActions select {
       padding: 5px 7px;
       font-size: 12px;
+    }
+
+    body.studio-ui-refresh #responseActions .response-option-select-wrap select {
+      padding-right: 24px;
     }
 
 

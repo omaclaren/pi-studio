@@ -12151,28 +12151,34 @@ ${cssVarsBlock}
       <div class="response-wrap">
         <div id="responseActions" class="response-actions">
           <div class="response-actions-row response-options-row">
-            <select id="followSelect" aria-label="Auto-update response">
-              <option value="on" selected>Auto-update response: On</option>
-              <option value="off">Auto-update response: Off</option>
-            </select>
-            <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
-              <option value="off">Syntax highlight: Off</option>
-              <option value="on" selected>Syntax highlight: On</option>
-            </select>
-            <select id="responseFontSizeSelect" aria-label="Response text size" title="Adjust right-pane response, preview, and working text size.">
-              <option value="11">Response text: 11px</option>
-              <option value="12">Response text: 12px</option>
-              <option value="12.5">Response text: 12.5px</option>
-              <option value="13">Response text: 13px</option>
-              <option value="13.5" selected>Response text: 13.5px</option>
-              <option value="14">Response text: 14px</option>
-              <option value="14.5">Response text: 14.5px</option>
-              <option value="15">Response text: 15px</option>
-              <option value="15.5">Response text: 15.5px</option>
-              <option value="16">Response text: 16px</option>
-              <option value="18">Response text: 18px</option>
-              <option value="20">Response text: 20px</option>
-            </select>
+            <span id="followSelectWrap" class="studio-menu-select-wrap response-option-select-wrap">
+              <select id="followSelect" aria-label="Auto-update response">
+                <option value="on" selected>Auto-update response: On</option>
+                <option value="off">Auto-update response: Off</option>
+              </select>
+            </span>
+            <span id="responseHighlightSelectWrap" class="studio-menu-select-wrap response-option-select-wrap">
+              <select id="responseHighlightSelect" aria-label="Response markdown highlighting">
+                <option value="off">Syntax highlight: Off</option>
+                <option value="on" selected>Syntax highlight: On</option>
+              </select>
+            </span>
+            <span id="responseFontSizeSelectWrap" class="studio-menu-select-wrap response-option-select-wrap">
+              <select id="responseFontSizeSelect" aria-label="Response text size" title="Adjust right-pane response, preview, and working text size.">
+                <option value="11">Response text: 11px</option>
+                <option value="12">Response text: 12px</option>
+                <option value="12.5">Response text: 12.5px</option>
+                <option value="13">Response text: 13px</option>
+                <option value="13.5" selected>Response text: 13.5px</option>
+                <option value="14">Response text: 14px</option>
+                <option value="14.5">Response text: 14.5px</option>
+                <option value="15">Response text: 15px</option>
+                <option value="15.5">Response text: 15.5px</option>
+                <option value="16">Response text: 16px</option>
+                <option value="18">Response text: 18px</option>
+                <option value="20">Response text: 20px</option>
+              </select>
+            </span>
           </div>
           <div class="response-actions-row history-row">
             <button id="pullLatestBtn" type="button" title="Fetch the latest assistant response when auto-update is off.">Fetch latest response</button>
