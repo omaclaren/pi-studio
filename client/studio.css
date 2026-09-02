@@ -227,6 +227,25 @@
       cursor: pointer;
     }
 
+    .studio-flat-select {
+      -webkit-appearance: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23717a84' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;
+      background-position: right 8px center !important;
+      background-repeat: no-repeat !important;
+      background-size: 10px 6px !important;
+      padding-right: 26px !important;
+    }
+
+    @media (forced-colors: active) {
+      .studio-flat-select {
+        -webkit-appearance: auto;
+        appearance: auto;
+        background-image: none !important;
+        padding-right: 10px !important;
+      }
+    }
+
     button:not(:disabled):hover,
     select:hover {
       background: var(--panel-2);

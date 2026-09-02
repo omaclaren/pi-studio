@@ -11645,10 +11645,10 @@
         return "<div class='repl-panel'>"
           + "<div class='repl-toolbar'>"
           + "<div class='repl-controls'>"
-          + "<label class='repl-control-label'>Runtime <select data-repl-runtime aria-label='REPL runtime'>" + runtimeOptions + "</select></label>"
+          + "<label class='repl-control-label'>Runtime <select class='studio-flat-select' data-repl-runtime aria-label='REPL runtime'>" + runtimeOptions + "</select></label>"
           + "<label class='repl-control-label repl-command-label'>Start cmd <input data-repl-command type='text' value='" + escapeHtml(replCommand) + "' placeholder='default' aria-label='REPL start command' title='Command used by Start for this runtime. Leave blank for the default; use this for envs, e.g. .venv/bin/python, uv run python, or conda run --no-capture-output -n env python.'></label>"
           + "<button class='repl-start-btn' type='button' data-repl-action='start'" + (replBusy || replTmuxAvailable === false ? " disabled" : "") + " title='Start or switch to a " + escapeHtml(runtimeLabel) + " session using the selected runtime and start command.'>Start</button>"
-          + "<label class='repl-control-label repl-session-label'>Session <select data-repl-session aria-label='REPL session'" + (visibleSessions.length ? "" : " disabled") + ">" + sessionOptions + "</select></label>"
+          + "<label class='repl-control-label repl-session-label'>Session <select class='studio-flat-select' data-repl-session aria-label='REPL session'" + (visibleSessions.length ? "" : " disabled") + ">" + sessionOptions + "</select></label>"
           + "<details class='repl-more-controls'>"
           + "<summary title='More REPL actions'>More</summary>"
           + "<div class='repl-more-menu'>"
@@ -11874,7 +11874,7 @@
         const options = getFileBrowserSortOptions().map((option) => {
           return "<option value='" + escapeHtml(option.value) + "'" + (option.value === currentSort ? " selected" : "") + ">" + escapeHtml(option.label) + "</option>";
         }).join("");
-        return "<select class='files-sort-select' data-files-sort aria-label='Files sort order' title='Sort file browser entries. Folders remain grouped first.'>" + options + "</select>";
+        return "<select class='files-sort-select studio-flat-select' data-files-sort aria-label='Files sort order' title='Sort file browser entries. Folders remain grouped first.'>" + options + "</select>";
       }
 
       function buildFileBrowserEntryRowHtml(entry) {
@@ -11929,7 +11929,7 @@
           const label = String((location && location.label) || basenameForStudioPath(path) || path);
           return "<option value='" + escapeHtml(path) + "'" + (path === rootDir ? " selected" : "") + ">" + escapeHtml(label + " — " + path) + "</option>";
         }).join("");
-        return "<select class='files-location-select' data-files-location aria-label='Allowed Files location' title='Choose a folder allowed for this Studio session on the computer running Pi.'>" + options + "</select>";
+        return "<select class='files-location-select studio-flat-select' data-files-location aria-label='Allowed Files location' title='Choose a folder allowed for this Studio session on the computer running Pi.'>" + options + "</select>";
       }
 
       function buildFileBrowserPanelHtml() {
@@ -13098,13 +13098,13 @@
         return "<div class='side-question-empty'>"
           + "<div class='side-question-intro'><h2>Side question</h2><p>Ask something without adding it to the main Pi conversation. Choose the starting text and whether Studio may look through related files.</p></div>"
           + "<div class='side-question-context-grid'>"
-          + "<label>Starting text<select data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'>" + sideQuestionSelectOptions([
+          + "<label>Starting text<select class='studio-flat-select' data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'>" + sideQuestionSelectOptions([
             ["auto", "Automatic"], ["selection", "Editor selection only"], ["section", "Heading block or nearby text at cursor"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No starting text"],
           ], sideQuestionUi.focusMode) + "</select></label>"
-          + "<label>Also use files from<select data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
+          + "<label>Also use files from<select class='studio-flat-select' data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
             ["none", "No other files"], ["folder", "Same folder as document"], ["repo", "Repository"], ["custom", "Choose a folder"],
           ], scope) + "</select></label>"
-          + "<label>Thinking<select data-side-question-field='thinking'>" + sideQuestionSelectOptions(
+          + "<label>Thinking<select class='studio-flat-select' data-side-question-field='thinking'>" + sideQuestionSelectOptions(
             getSideQuestionThinkingOptions(), sideQuestionUi.thinking
           ) + "</select></label>"
           + "</div>"
@@ -16394,13 +16394,13 @@
         return "<div class='studio-quiz-setup'>"
           + "<p class='studio-quiz-copy'>A short active-recall loop: answer one question, check it, ask about the card if useful, then move on.</p>"
           + "<div class='studio-quiz-fields'>"
-          + "<label>Scope<select data-quiz-field='scope'>"
+          + "<label>Scope<select class='studio-flat-select' data-quiz-field='scope'>"
           + QUIZ_SCOPES.map((candidate) => candidate === "selection" && !hasSelection ? "" : renderQuizOption(candidate, scope, getQuizScopeLabel(candidate))).join("")
           + "</select></label>"
-          + "<label>Angle<select data-quiz-field='angle'>"
+          + "<label>Angle<select class='studio-flat-select' data-quiz-field='angle'>"
           + QUIZ_ANGLES.map((candidate) => renderQuizOption(candidate, angle, getQuizAngleLabel(candidate))).join("")
           + "</select></label>"
-          + "<label>Thinking<select data-quiz-field='thinking'>"
+          + "<label>Thinking<select class='studio-flat-select' data-quiz-field='thinking'>"
           + QUIZ_THINKING_LEVELS.map((candidate) => renderQuizOption(candidate, thinking, getQuizThinkingLabel(candidate))).join("")
           + "</select></label>"
           + "<label>Questions<input data-quiz-field='count' type='number' min='1' max='8' value='" + String(count) + "'></label>"

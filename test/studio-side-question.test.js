@@ -340,7 +340,7 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /value="side-questions"|"side-questions": "Side questions"/);
 	assert.match(clientSource, /<h2>Side question<\/h2>/);
 	assert.match(clientSource, /askAsideBtn\.textContent = isEditorOnlyMode\s*\? "Side questions"/);
-	assert.match(clientSource, /<label>Starting text<select data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'/);
+	assert.match(clientSource, /<label>Starting text<select class='studio-flat-select' data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'/);
 	assert.match(clientSource, /\["auto", "Automatic"\]/);
 	assert.match(clientSource, /Automatic: selection → heading block at cursor → nearby text/);
 	assert.match(clientSource, /nearest Markdown\/LaTeX heading above the cursor/);
@@ -358,7 +358,7 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /relatedFilesText:/);
 	assert.match(clientSource, /<dt>Starting text<\/dt>/);
 	assert.match(clientSource, /<dt>Related files<\/dt>/);
-	assert.match(clientSource, /<label>Also use files from<select data-side-question-field='gatherScope'/);
+	assert.match(clientSource, /<label>Also use files from<select class='studio-flat-select' data-side-question-field='gatherScope'/);
 	assert.match(clientSource, /ensureSideQuestionContextRootAuthorized\(context\)/);
 	assert.match(clientSource, /fetchStudioJson\("\/side-question-context-root"/);
 	assert.match(clientSource, /requestStudioDirectoryGrant\(request/);

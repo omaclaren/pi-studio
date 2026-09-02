@@ -24,6 +24,12 @@ function extractRuleBlock(source, marker) {
 
 test("Studio controls use browser-neutral control chrome", () => {
   assert.match(css, /\n\s*button \{\s*-webkit-appearance: none;\s*appearance: none;/);
+  const flatSelectRule = extractRuleBlock(css, ".studio-flat-select {");
+  assert.match(flatSelectRule, /-webkit-appearance: none;/);
+  assert.match(flatSelectRule, /appearance: none;/);
+  assert.match(flatSelectRule, /background-image: url\("data:image\/svg\+xml,/);
+  assert.match(flatSelectRule, /background-repeat: no-repeat !important;/);
+  assert.match(flatSelectRule, /padding-right: 26px !important;/);
   assert.match(indexSource, /id="editorViewSelectWrap" class="studio-header-select-wrap"/);
   assert.match(indexSource, /id="rightViewSelectWrap" class="studio-header-select-wrap"/);
   assert.match(clientSource, /titleGroupEl\.appendChild\(editorViewSelectWrap \|\| editorViewSelect\)/);
@@ -52,6 +58,27 @@ test("Studio controls use browser-neutral control chrome", () => {
   assert.match(responseSelectRule, /background-image: none;/);
   assert.match(css, /body\[data-studio-mode="editor-only"\] #followSelectWrap,/);
   assert.match(css, /body\[data-studio-mode="editor-only"\] #responseHighlightSelectWrap,/);
+
+  const customWrappedSelectIds = new Set([
+    "editorViewSelect",
+    "rightViewSelect",
+    "followSelect",
+    "responseHighlightSelect",
+    "responseFontSizeSelect",
+    "footerPiModelSelect",
+    "footerPiThinkingSelect",
+    "footerPiThemeSelect",
+  ]);
+  for (const source of [indexSource, clientSource]) {
+    for (const match of source.matchAll(/<select\b[^>]*>/g)) {
+      const tag = match[0];
+      const id = tag.match(/\bid=['"]([^'"]+)['"]/)?.[1] || "";
+      assert.ok(
+        /\bclass=['"][^'"]*\bstudio-flat-select\b/.test(tag) || customWrappedSelectIds.has(id),
+        "Unstyled Studio select: " + tag,
+      );
+    }
+  }
 
   const baseSelectRule = extractRuleBlock(css, ".section-header select {");
   assert.match(baseSelectRule, /-webkit-appearance: none;/);

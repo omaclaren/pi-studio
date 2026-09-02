@@ -11941,7 +11941,7 @@ ${cssVarsBlock}
             </div>
             <div class="source-actions-row repl-action-line" hidden>
               <button id="sendReplBtn" type="button" hidden title="Send the current selection, or the full editor text, to the active REPL session shown in the right pane.">Send to REPL</button>
-              <select id="replSendModeSelect" hidden aria-label="REPL send mode" title="Choose how Send to REPL interprets the editor text.">
+              <select id="replSendModeSelect" class="studio-flat-select" hidden aria-label="REPL send mode" title="Choose how Send to REPL interprets the editor text.">
                 <option value="raw" selected>Send mode: Raw</option>
                 <option value="literate">Send mode: Literate</option>
               </select>
@@ -11950,11 +11950,11 @@ ${cssVarsBlock}
               <button id="copyDraftBtn" type="button" title="Copy the current editor text to the clipboard.">Copy</button>
               <button id="suggestCompletionBtn" type="button" title="Ask the current model for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.">Suggest</button>
               <button id="suggestCompletionOptionsBtn" type="button" hidden title="Suggestion context options">▾</button>
-              <select id="completionContextSelect" hidden aria-label="Suggestion context mode" title="Choose how much context Suggest includes.">
+              <select id="completionContextSelect" class="studio-flat-select" hidden aria-label="Suggestion context mode" title="Choose how much context Suggest includes.">
                 <option value="cursor" selected>Context: editor only</option>
                 <option value="session">Context: editor + latest response</option>
               </select>
-              <select id="completionModelSelect" hidden aria-label="Suggestion model" title="Choose the model used for Suggest. Suggestions use direct completion with thinking off and do not change the main Pi model.">
+              <select id="completionModelSelect" class="studio-flat-select" hidden aria-label="Suggestion model" title="Choose the model used for Suggest. Suggestions use direct completion with thinking off and do not change the main Pi model.">
                 <option value="current" selected>Suggestion model: current Pi model</option>
               </select>
               <button id="openCompanionBtn" type="button" title="Open a blank editor-only Studio tab.">New editor tab</button>
@@ -11962,7 +11962,7 @@ ${cssVarsBlock}
             </div>
             <div class="source-actions-row">
               <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).">Annotation header</button>
-              <select id="annotationModeSelect" aria-label="Inline annotation visibility mode" title="On: keep and send [an: ...] markers. Hide: keep markers in the editor, hide them in preview, and strip before Run/Critique.">
+              <select id="annotationModeSelect" class="studio-flat-select" aria-label="Inline annotation visibility mode" title="On: keep and send [an: ...] markers. Hide: keep markers in the editor, hide them in preview, and strip before Run/Critique.">
                 <option value="on" selected>Inline annotations: On</option>
                 <option value="off">Inline annotations: Hide</option>
               </select>
@@ -11970,7 +11970,7 @@ ${cssVarsBlock}
               <button id="saveAnnotatedBtn" type="button" title="Save full editor content (including [an: ...] markers) as a .annotated.md file.">Save .annotated.md</button>
             </div>
             <div class="source-actions-row">
-              <select id="lensSelect" aria-label="Critique focus">
+              <select id="lensSelect" class="studio-flat-select" aria-label="Critique focus">
                 <option value="auto" selected>Critique: Auto</option>
                 <option value="writing">Critique: Writing</option>
                 <option value="code">Critique: Code</option>
@@ -11980,7 +11980,7 @@ ${cssVarsBlock}
               <button id="showMeResponseBtn" type="button" hidden title="Explain the response displayed in the right pane using the smallest useful visual or structural representation.">Explain displayed response</button>
               <button id="askAsideBtn" type="button" title="Open a separate side-question thread without adding it to the main Pi conversation.">Side question</button>
               <button id="quizBtn" type="button" title="Open an active quiz for the current editor selection or document.">Quiz me</button>
-              <select id="highlightSelect" aria-label="Editor syntax highlighting">
+              <select id="highlightSelect" class="studio-flat-select" aria-label="Editor syntax highlighting">
                 <option value="off">Syntax highlight: Off</option>
                 <option value="bash">Syntax highlight: Bash</option>
                 <option value="c">Syntax highlight: C</option>
@@ -12010,11 +12010,11 @@ ${cssVarsBlock}
                 <option value="xml">Syntax highlight: XML</option>
                 <option value="yaml">Syntax highlight: YAML</option>
               </select>
-              <select id="lineNumbersSelect" aria-label="Editor line numbers">
+              <select id="lineNumbersSelect" class="studio-flat-select" aria-label="Editor line numbers">
                 <option value="off">Line numbers: Off</option>
                 <option value="on" selected>Line numbers: On</option>
               </select>
-              <select id="editorFontSizeSelect" aria-label="Editor text size" title="Adjust raw editor text size.">
+              <select id="editorFontSizeSelect" class="studio-flat-select" aria-label="Editor text size" title="Adjust raw editor text size.">
                 <option value="10">Editor text: 10px</option>
                 <option value="11">Editor text: 11px</option>
                 <option value="12" selected>Editor text: 12px</option>
