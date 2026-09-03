@@ -569,6 +569,7 @@
     body[data-studio-mode="editor-only"] #sendRunBtn,
     body[data-studio-mode="editor-only"] #queueSteerBtn,
     body[data-studio-mode="editor-only"] #sendEditorBtn,
+    body[data-studio-mode="editor-only"] #clearPiEditorBtn,
     body[data-studio-mode="editor-only"] #lensSelect,
     body[data-studio-mode="editor-only"] #critiqueBtn,
     body[data-studio-mode="editor-only"] #showMeBtn,

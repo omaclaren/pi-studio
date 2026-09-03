@@ -106,6 +106,16 @@ A small interaction increment before the buffer-first architecture:
 - add opt-in activity following from Working during main-agent generation to Response Preview on completion, disabled by default and cancelled when the user manually changes views;
 - keep Quick send separate from the durable editor, the raw tmux mirror read-only, and protocol-v1 authority unchanged.
 
+## Unreleased 0.9.x — Safe Pi input-draft handoff
+
+A small workflow refinement for moving Neovim-provided context through Pi and Studio:
+
+- load or stage Pi's terminal input draft without clearing it, retaining only a transient SHA-256 fingerprint and byte length for provenance;
+- keep that link through unrestricted Studio edits, then clear the original Pi draft only after Pi accepts the Studio run and the current terminal text still matches exactly;
+- silently preserve later terminal typing, added `pi-nvim-context` context, or another client's changes, and never clear after a rejected submission;
+- provide `Cmd/Ctrl+Shift+L` for loading and a confirmed **Clear Pi editor text…** fallback without changing Studio text or conversation history;
+- keep `pi-nvim-context`, protocol v1, networking, and the buffer-first architecture unchanged.
+
 ## 0.10.0 — Buffer-first editing
 
 The first architectural `0.10` release should add:

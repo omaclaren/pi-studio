@@ -29,6 +29,11 @@ import {
 	saveStudioDiskFileAs,
 	saveStudioDiskFileIfRevision,
 } from "./shared/studio-disk-revisions.js";
+import {
+	consumeStudioPiEditorDraftSnapshot,
+	createStudioPiEditorDraftSnapshot,
+	normalizeStudioPiEditorDraftSnapshot,
+} from "./shared/studio-pi-editor-draft.js";
 import { normalizeStudioMarkdownSmartFences } from "./shared/studio-markdown-fences.js";
 import {
 	extractStandaloneLatexDefinitionsFromMarkdown,
@@ -646,10 +651,16 @@ interface AnnotationRequestMessage {
 	text: string;
 }
 
+interface StudioPiEditorDraftSnapshot {
+	fingerprint: string;
+	byteLength: number;
+}
+
 interface SendRunRequestMessage {
 	type: "send_run_request";
 	requestId: string;
 	text: string;
+	piEditorDraftSnapshot?: StudioPiEditorDraftSnapshot;
 }
 
 interface CompletionSuggestionRequestMessage {
@@ -839,6 +850,11 @@ interface GetFromEditorRequestMessage {
 	requestId: string;
 }
 
+interface ClearPiEditorRequestMessage {
+	type: "clear_pi_editor_request";
+	requestId: string;
+}
+
 interface QuartoPreviewCheckRequestMessage {
 	type: "quarto_preview_check_request";
 	requestId: string;
@@ -922,6 +938,7 @@ type IncomingStudioMessage =
 	| WatchFileSubscribeMessage
 	| SendToEditorRequestMessage
 	| GetFromEditorRequestMessage
+	| ClearPiEditorRequestMessage
 	| QuartoPreviewCheckRequestMessage
 	| QuartoPreviewStartRequestMessage
 	| QuartoPreviewStopRequestMessage
@@ -9917,10 +9934,15 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 	}
 
 	if (msg.type === "send_run_request" && typeof msg.requestId === "string" && typeof msg.text === "string") {
+		const piEditorDraftSnapshot = msg.piEditorDraftSnapshot === undefined
+			? undefined
+			: normalizeStudioPiEditorDraftSnapshot(msg.piEditorDraftSnapshot);
+		if (msg.piEditorDraftSnapshot !== undefined && !piEditorDraftSnapshot) return null;
 		return {
 			type: "send_run_request",
 			requestId: msg.requestId,
 			text: msg.text,
+			piEditorDraftSnapshot: piEditorDraftSnapshot ?? undefined,
 		};
 	}
 
@@ -10196,6 +10218,13 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 	if (msg.type === "get_from_editor_request" && typeof msg.requestId === "string") {
 		return {
 			type: "get_from_editor_request",
+			requestId: msg.requestId,
+		};
+	}
+
+	if (msg.type === "clear_pi_editor_request" && typeof msg.requestId === "string") {
+		return {
+			type: "clear_pi_editor_request",
 			requestId: msg.requestId,
 		};
 	}
@@ -12385,7 +12414,7 @@ ${cssVarsBlock}
       <button id="clearWorkspaceBtn" type="button" title="Clear editor text and reset this tab to a fresh blank draft. Saved files and responses are not changed.">Reset editor</button>
       <button id="importFileBtn" type="button" title="Import a file as an editable copy.">Import file copy…</button>
       <input id="fileInput" class="file-input-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".md,.markdown,.mdx,.qmd,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.pyw,.sh,.bash,.zsh,.json,.jsonc,.json5,.rs,.c,.h,.cpp,.cxx,.cc,.hpp,.hxx,.jl,.f90,.f95,.f03,.f,.for,.r,.R,.m,.tex,.latex,.diff,.patch,.java,.go,.rb,.swift,.html,.htm,.css,.xml,.yaml,.yml,.toml,.lua,.txt,.rst,.adoc" />
-      <button id="getEditorBtn" type="button" title="Load the current terminal editor draft into Studio.">Load from pi editor</button>
+      <button id="getEditorBtn" type="button" aria-keyshortcuts="Meta+Shift+L Control+Shift+L" title="Copy the current Pi terminal input draft into Studio without clearing it. A later Studio Run clears that draft only if it remains unchanged. Shortcut: Cmd/Ctrl+Shift+L.">Load from pi editor</button>
       <button id="hideStudioHeaderBtn" class="header-visibility-btn" type="button" aria-controls="studioHeader" title="Hide the global Studio header. Restore it from the top-right edge.">Hide header</button>
       <button id="zenModeBtn" class="zen-mode-btn" type="button" title="Hide the Studio header and secondary controls. Shortcut: F9.">Zen</button>
     </div>
@@ -12426,7 +12455,7 @@ ${cssVarsBlock}
           </div>
           <div class="source-actions">
             <div class="source-actions-row">
-              <button id="sendRunBtn" type="button" title="Run editor text. While a direct run is active, this button becomes Stop. Cmd/Ctrl+Enter queues steering from the current editor text. Stop the active request with Esc.">Run editor text</button>
+              <button id="sendRunBtn" type="button" title="Run editor text. If Studio loaded or staged an unchanged Pi terminal draft, clear that draft after Pi accepts the run. While a direct run is active, this button becomes Stop. Cmd/Ctrl+Enter queues steering from the current editor text. Stop the active request with Esc.">Run editor text</button>
               <button id="queueSteerBtn" type="button" title="Queue steering is available while Run editor text is active." disabled>Queue steering</button>
             </div>
             <div class="source-actions-row repl-action-line" hidden>
@@ -12453,7 +12482,8 @@ ${cssVarsBlock}
                 <option value="current" selected>Suggestion model: current Pi model</option>
               </select>
               <button id="openCompanionBtn" type="button" title="Open a blank editor-only Studio tab.">New editor tab</button>
-              <button id="sendEditorBtn" type="button">Send current text to Pi editor</button>
+              <button id="sendEditorBtn" type="button" title="Replace the Pi terminal input draft with the current Studio text. A later Studio Run clears that staged draft only if it remains unchanged.">Send current text to Pi editor</button>
+              <button id="clearPiEditorBtn" type="button" title="Clear text currently waiting in the Pi terminal input editor without changing Studio text or conversation history.">Clear Pi editor text…</button>
             </div>
             <div class="source-actions-row">
               <button id="insertHeaderBtn" type="button" title="Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).">Annotation header</button>
@@ -12759,6 +12789,7 @@ ${cssVarsBlock}
           <dl>
             <div><dt>Cmd/Ctrl+S</dt><dd>Save editor when the disk revision still matches</dd></div>
             <div><dt>Cmd/Ctrl+Shift+S</dt><dd>Save editor as a new file</dd></div>
+            <div><dt>Cmd/Ctrl+Shift+L</dt><dd>Load the current Pi terminal input draft without clearing it</dd></div>
             <div class="shortcuts-full-only"><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
             <div><dt>Option/Alt+Tab or Cmd/Ctrl+Shift+Space</dt><dd>Suggest a completion at the editor cursor</dd></div>
             <div><dt>Tab</dt><dd>Insert a visible completion suggestion; otherwise indent selected editor text</dd></div>
@@ -13647,6 +13678,23 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			// Ignore transport errors; close handler will clean up
 		}
+	};
+
+	const reportPiEditorDraftDisposition = (
+		client: WebSocket,
+		requestId: string,
+		snapshot: StudioPiEditorDraftSnapshot | undefined,
+	) => {
+		if (!snapshot) return;
+		const result = consumeStudioPiEditorDraftSnapshot(lastCommandCtx?.ui, snapshot);
+		if (result.status === "not-requested") return;
+		emitDebugEvent("pi_editor_draft_disposition", { requestId, outcome: result.status });
+		sendToClient(client, {
+			type: "pi_editor_draft_result",
+			requestId,
+			outcome: result.status,
+			piEditorDraftSnapshot: snapshot,
+		});
 	};
 
 	const broadcast = (payload: unknown) => {
@@ -15743,6 +15791,7 @@ export default function (pi: ExtensionAPI) {
 						queuedSteeringCount: getQueuedStudioSteeringCount(),
 					});
 					broadcastState();
+					reportPiEditorDraftDisposition(client, msg.requestId, msg.piEditorDraftSnapshot);
 				} catch (error) {
 					queuedStudioDirectRequests = queuedStudioDirectRequests.filter((request) => request.requestId !== msg.requestId);
 					if (studioDirectRunChain?.steeringPrompts.length) {
@@ -15766,6 +15815,7 @@ export default function (pi: ExtensionAPI) {
 
 			try {
 				pi.sendUserMessage(msg.text);
+				reportPiEditorDraftDisposition(client, msg.requestId, msg.piEditorDraftSnapshot);
 			} catch (error) {
 				clearStudioDirectRunState();
 				clearActiveRequest();
@@ -16510,7 +16560,8 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, {
 					type: "editor_loaded",
 					requestId: msg.requestId,
-					message: "Draft loaded into pi editor.",
+					message: "Draft loaded into pi editor. A Studio Run will clear it if it remains unchanged.",
+					piEditorDraftSnapshot: createStudioPiEditorDraftSnapshot(msg.content),
 				});
 			} catch (error) {
 				sendToClient(client, {
@@ -16546,12 +16597,50 @@ export default function (pi: ExtensionAPI) {
 					type: "editor_snapshot",
 					requestId: msg.requestId,
 					content,
+					piEditorDraftSnapshot: createStudioPiEditorDraftSnapshot(content),
 				});
 			} catch (error) {
 				sendToClient(client, {
 					type: "error",
 					requestId: msg.requestId,
 					message: `Failed to read pi editor text: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			}
+			return;
+		}
+
+		if (msg.type === "clear_pi_editor_request") {
+			if (!isValidRequestId(msg.requestId)) {
+				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
+				return;
+			}
+			if (isStudioBusy()) {
+				sendToClient(client, { type: "busy", requestId: msg.requestId, message: "Studio is busy." });
+				return;
+			}
+			if (!lastCommandCtx || !lastCommandCtx.hasUI) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: "No interactive pi editor context is available.",
+				});
+				return;
+			}
+
+			try {
+				const hadContent = lastCommandCtx.ui.getEditorText().length > 0;
+				if (hadContent) lastCommandCtx.ui.setEditorText("");
+				lastCommandCtx.ui.notify(hadContent ? "Pi editor text cleared from Studio." : "Pi editor text is already empty.", "info");
+				sendToClient(client, {
+					type: "pi_editor_cleared",
+					requestId: msg.requestId,
+					cleared: hadContent,
+				});
+			} catch (error) {
+				sendToClient(client, {
+					type: "error",
+					requestId: msg.requestId,
+					message: `Failed to clear pi editor text: ${error instanceof Error ? error.message : String(error)}`,
 				});
 			}
 			return;

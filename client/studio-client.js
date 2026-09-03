@@ -121,6 +121,7 @@
       const refreshFromDiskBtn = document.getElementById("refreshFromDiskBtn");
       const clearWorkspaceBtn = document.getElementById("clearWorkspaceBtn");
       const sendEditorBtn = document.getElementById("sendEditorBtn");
+      const clearPiEditorBtn = document.getElementById("clearPiEditorBtn");
       const openCompanionBtn = document.getElementById("openCompanionBtn");
       const getEditorBtn = document.getElementById("getEditorBtn");
       const studioHeaderEl = document.getElementById("studioHeader");
@@ -361,6 +362,9 @@
       const pendingSaveOperations = new Map();
       const pendingCompanionLaunches = new Map();
       const activeStudioTabLaunches = new Set();
+      // Deliberately page-memory-only: never persist Pi input-draft handoff fingerprints.
+      const pendingPiEditorDraftSnapshots = new Map();
+      let linkedPiEditorDraftSnapshot = null;
       let sourceOriginSummaryEl = null;
       let sourceResetOriginBtn = null;
       let sourceOpenCurrentFileTabBtn = null;
@@ -3186,7 +3190,9 @@
           if (sendEditorBtn) sendEditorBtn.textContent = "Send current text to Pi editor";
           appendStudioUiRefreshMenuSection(contextMenu.menu, "Document", [sourceOriginSummaryEl, sourceResetOriginBtn, sourceOpenCurrentFileTabBtn, sourceOpenCurrentTextCopyTabBtn]);
           appendStudioUiRefreshMenuSection(contextMenu.menu, "Working directory", [resourceDirBtn, resourceDirLabel, resourceDirInputWrap]);
-          if (!isEditorOnlyMode && sendEditorBtn) appendStudioUiRefreshMenuSection(contextMenu.menu, "Pi editor", [sendEditorBtn]);
+          if (!isEditorOnlyMode) {
+            appendStudioUiRefreshMenuSection(contextMenu.menu, "Pi editor", [sendEditorBtn, clearPiEditorBtn]);
+          }
           const cursorContextBtn = makeStudioUiRefreshElement("button", "completion-context-option", "Editor only");
           cursorContextBtn.type = "button";
           cursorContextBtn.setAttribute("data-completion-context-mode", "cursor");
@@ -3545,6 +3551,7 @@
         if (kind === "compact") return "compacting context";
         if (kind === "send_to_editor") return "sending to pi editor";
         if (kind === "get_from_editor") return "loading from pi editor";
+        if (kind === "clear_pi_editor") return "clearing Pi editor text";
         if (kind === "load_git_diff") return "loading git diff";
         if (kind === "open_editor_only") return "opening companion editor";
         if (kind === "refresh_from_disk") return "refreshing from disk";
@@ -3803,6 +3810,7 @@
         if (kind === "compact") return "Compacting…";
         if (kind === "send_to_editor") return "Sending to editor…";
         if (kind === "get_from_editor") return "Loading from editor…";
+        if (kind === "clear_pi_editor") return "Clearing Pi editor text…";
         if (kind === "load_git_diff") return "Loading git diff…";
         if (kind === "refresh_from_disk") return "Refreshing from disk…";
         if (kind === "save_as" || kind === "save_over") return "Saving…";
@@ -4464,6 +4472,58 @@
         return /^sha256:[a-f0-9]{64}$/.test(revision) ? revision : null;
       }
 
+      function normalizePiEditorDraftSnapshot(value) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+        const fingerprint = normalizeStudioDiskRevision(value.fingerprint);
+        const byteLength = value.byteLength;
+        if (!fingerprint || typeof byteLength !== "number" || !Number.isSafeInteger(byteLength) || byteLength < 0) return null;
+        return { fingerprint, byteLength };
+      }
+
+      function piEditorDraftSnapshotsMatch(left, right) {
+        const normalizedLeft = normalizePiEditorDraftSnapshot(left);
+        const normalizedRight = normalizePiEditorDraftSnapshot(right);
+        return Boolean(
+          normalizedLeft
+          && normalizedRight
+          && normalizedLeft.fingerprint === normalizedRight.fingerprint
+          && normalizedLeft.byteLength === normalizedRight.byteLength
+        );
+      }
+
+      function setLinkedPiEditorDraftSnapshot(value, hasContent) {
+        linkedPiEditorDraftSnapshot = hasContent ? normalizePiEditorDraftSnapshot(value) : null;
+      }
+
+      function clearLinkedPiEditorDraftSnapshot() {
+        linkedPiEditorDraftSnapshot = null;
+      }
+
+      function reserveLinkedPiEditorDraftSnapshot(requestId) {
+        const snapshot = normalizePiEditorDraftSnapshot(linkedPiEditorDraftSnapshot);
+        if (!snapshot || typeof requestId !== "string" || !requestId) return null;
+        linkedPiEditorDraftSnapshot = null;
+        pendingPiEditorDraftSnapshots.set(requestId, snapshot);
+        return snapshot;
+      }
+
+      function restoreReservedPiEditorDraftSnapshot(requestId) {
+        if (typeof requestId !== "string" || !requestId) return;
+        const snapshot = pendingPiEditorDraftSnapshots.get(requestId);
+        if (!snapshot) return;
+        pendingPiEditorDraftSnapshots.delete(requestId);
+        if (!linkedPiEditorDraftSnapshot) linkedPiEditorDraftSnapshot = snapshot;
+      }
+
+      function settleReservedPiEditorDraftSnapshot(requestId, reportedSnapshot) {
+        if (typeof requestId !== "string" || !requestId) return false;
+        const snapshot = pendingPiEditorDraftSnapshots.get(requestId);
+        if (!snapshot) return false;
+        if (reportedSnapshot && !piEditorDraftSnapshotsMatch(snapshot, reportedSnapshot)) return false;
+        pendingPiEditorDraftSnapshots.delete(requestId);
+        return true;
+      }
+
       function markFileBackedBaseline(text, diskRevision) {
         fileBackedBaselineText = String(text || "");
         fileBackedDiskRevision = normalizeStudioDiskRevision(diskRevision);
@@ -5098,6 +5158,20 @@
         return true;
       }
 
+      function triggerLoadFromPiEditorShortcut() {
+        if (isWatchedFilePreview) {
+          setStatus("This preview is read-only. Open full Studio to load the Pi draft.", "warning");
+          return false;
+        }
+        if (!getEditorBtn || getEditorBtn.hidden) return false;
+        if (getEditorBtn.disabled) {
+          setStatus("Load from Pi editor is unavailable while Studio is busy.", "warning");
+          return false;
+        }
+        getEditorBtn.click();
+        return true;
+      }
+
       function triggerEditorSaveShortcut() {
         if (hasRefreshableFilePath() && saveOverBtn && !saveOverBtn.disabled && !saveOverBtn.hidden) {
           saveOverBtn.click();
@@ -5456,6 +5530,18 @@
         if (isToggleShortcut) {
           event.preventDefault();
           togglePaneFocus();
+          return;
+        }
+
+        const isLoadFromPiEditorShortcut =
+          (key.toLowerCase() === "l" || code === "KeyL")
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
+          && event.shiftKey;
+
+        if (isLoadFromPiEditorShortcut) {
+          event.preventDefault();
+          triggerLoadFromPiEditorShortcut();
           return;
         }
 
@@ -13888,7 +13974,7 @@
         const safeStart = Math.max(0, Math.min(start, current.length));
         const safeEnd = Math.max(safeStart, Math.min(end, current.length));
         const next = current.slice(0, safeStart) + answer.text + current.slice(safeEnd);
-        setEditorText(next, { preserveScroll: false, preserveSelection: false });
+        setEditorText(next, { preserveScroll: false, preserveSelection: false, preservePiEditorDraftLink: true });
         const caret = safeStart + answer.text.length;
         sourceTextEl.setSelectionRange(caret, caret);
         setActivePane("left");
@@ -14504,6 +14590,7 @@
         if (refreshFromDiskBtn) refreshFromDiskBtn.disabled = uiBusy || isWatchedFilePreview || !canRefreshFromDisk;
         if (clearWorkspaceBtn) clearWorkspaceBtn.disabled = uiBusy || isWatchedFilePreview;
         sendEditorBtn.disabled = uiBusy || isEditorOnlyMode;
+        if (clearPiEditorBtn) clearPiEditorBtn.disabled = uiBusy || isEditorOnlyMode;
         if (getEditorBtn) getEditorBtn.disabled = uiBusy || isWatchedFilePreview;
         if (watchedOpenEditableBtn) {
           watchedOpenEditableBtn.hidden = !isWatchedFilePreview;
@@ -14885,6 +14972,9 @@
         const value = String(nextText || "");
         const preserveScroll = Boolean(options && options.preserveScroll);
         const preserveSelection = Boolean(options && options.preserveSelection);
+        if (!(options && options.preservePiEditorDraftLink === true)) {
+          clearLinkedPiEditorDraftSnapshot();
+        }
         if (activePreviewCommentSelection) {
           clearPreviewCommentSelection();
         }
@@ -22387,7 +22477,7 @@
           ? current.slice(0, inlineState.range.end) + current.slice(inlineState.range.end + inlineState.markerText.length)
           : current.slice(0, inlineState.range.end) + inlineState.markerText + current.slice(inlineState.range.end);
         setEditorView("markdown");
-        setEditorText(next, { preserveScroll: true, preserveSelection: true });
+        setEditorText(next, { preserveScroll: true, preserveSelection: true, preservePiEditorDraftLink: true });
         pendingReviewNoteInlineFocusId = note.id;
         renderReviewNotesList();
         updateReviewNotesUi();
@@ -22432,7 +22522,7 @@
         }
 
         setEditorView("markdown");
-        setEditorText(currentText, { preserveScroll: true, preserveSelection: true });
+        setEditorText(currentText, { preserveScroll: true, preserveSelection: true, preservePiEditorDraftLink: true });
         renderReviewNotesList();
         updateReviewNotesUi();
         if (reviewNotesInlineAllBtn && typeof reviewNotesInlineAllBtn.focus === "function") {
@@ -22618,7 +22708,7 @@
         const safeStart = Math.max(0, Math.min(start, current.length));
         const safeEnd = Math.max(safeStart, Math.min(end, current.length));
         const next = current.slice(0, safeStart) + content + current.slice(safeEnd);
-        setEditorText(next, { preserveScroll: false, preserveSelection: false });
+        setEditorText(next, { preserveScroll: false, preserveSelection: false, preservePiEditorDraftLink: true });
         const caret = safeStart + content.length;
         sourceTextEl.setSelectionRange(caret, caret);
         setActivePane("left");
@@ -22821,11 +22911,14 @@
           const replHint = rightView === "repl" && getActiveReplSessionForCurrentRuntime()
             ? " Sends text to Pi, not the REPL; use Send chunk/selection or Send to REPL to execute code in the active REPL."
             : "";
+          const piEditorDraftHint = linkedPiEditorDraftSnapshot
+            ? " The linked Pi terminal draft will be cleared after Pi accepts this run only if that draft remains unchanged."
+            : "";
           sendRunBtn.title = directIsStop
             ? "Stop the active run. Shortcut: Esc."
             : (annotationsEnabled
-              ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + replHint
-              : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + replHint);
+              ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + piEditorDraftHint + replHint
+              : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + piEditorDraftHint + replHint);
         }
 
         if (queueSteerBtn) {
@@ -23670,6 +23763,7 @@
           }
 
           const completedRequestId = typeof message.requestId === "string" ? message.requestId : pendingRequestId;
+          if (completedRequestId) pendingPiEditorDraftSnapshots.delete(completedRequestId);
           const responseKind =
             typeof message.kind === "string"
               ? message.kind
@@ -23804,14 +23898,43 @@
           return;
         }
 
+        if (message.type === "pi_editor_draft_result") {
+          const requestId = typeof message.requestId === "string" ? message.requestId : "";
+          if (!settleReservedPiEditorDraftSnapshot(requestId, message.piEditorDraftSnapshot)) return;
+          const outcome = String(message.outcome || "");
+          syncActionButtons();
+          if (outcome === "cleared") {
+            setStatus("Submission accepted; cleared the unchanged Pi draft.", "success");
+          } else if (outcome === "already-empty") {
+            setStatus("Submission accepted; the Pi draft was already empty.", "success");
+          } else if (outcome !== "changed") {
+            setStatus("Submission accepted, but Studio could not confirm Pi-draft cleanup; check the terminal draft.", "warning");
+          }
+          return;
+        }
+
         if (message.type === "editor_loaded") {
           if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
             pendingRequestId = null;
             pendingKind = null;
           }
+          const snapshot = normalizePiEditorDraftSnapshot(message.piEditorDraftSnapshot);
+          setLinkedPiEditorDraftSnapshot(snapshot, Boolean(snapshot && snapshot.byteLength > 0));
           setBusy(false);
           setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Loaded into pi editor.", "success");
+          return;
+        }
+
+        if (message.type === "pi_editor_cleared") {
+          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+            pendingRequestId = null;
+            pendingKind = null;
+          }
+          clearLinkedPiEditorDraftSnapshot();
+          setBusy(false);
+          setWsState("Ready");
+          setStatus(message.cleared ? "Cleared Pi editor text." : "Pi editor text was already empty.", "success");
           return;
         }
 
@@ -23830,12 +23953,14 @@
 
           const content = typeof message.content === "string" ? message.content : "";
           setEditorText(content, { preserveScroll: false, preserveSelection: false });
+          const snapshot = normalizePiEditorDraftSnapshot(message.piEditorDraftSnapshot);
+          setLinkedPiEditorDraftSnapshot(snapshot, Boolean(content.length > 0 && snapshot));
           setSourceState({ source: "pi-editor", label: "pi editor draft", path: null });
           setBusy(false);
           setWsState("Ready");
           setStatus(
             content.trim()
-              ? "Loaded draft from pi editor."
+              ? "Loaded draft from pi editor. A Studio Run will clear it if the Pi draft remains unchanged."
               : "pi editor is empty. Loaded blank text.",
             content.trim() ? "success" : "warning",
           );
@@ -24032,6 +24157,7 @@
 
         if (message.type === "busy") {
           if (typeof message.requestId === "string") {
+            restoreReservedPiEditorDraftSnapshot(message.requestId);
             pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not start the companion editor because another request was busy.");
           }
@@ -24055,6 +24181,7 @@
 
         if (message.type === "error") {
           if (typeof message.requestId === "string") {
+            restoreReservedPiEditorDraftSnapshot(message.requestId);
             pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not prepare the companion editor. Return to the originating Studio page for details.");
           }
@@ -24203,6 +24330,7 @@
           quartoPreviewCheckSourcePath = "";
           quartoPreviewActionRequestId = null;
           sideQuestionMarkdownExportRequest = null;
+          pendingPiEditorDraftSnapshots.clear();
           failAllPendingCompanionLaunches("The originating Studio connection was lost before the companion editor was ready.");
           if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
           setBusy(true);
@@ -24473,7 +24601,7 @@
 
         if (stripped.hadHeader) {
           const updated = stripped.body;
-          setEditorText(updated, { preserveScroll: true, preserveSelection: true });
+          setEditorText(updated, { preserveScroll: true, preserveSelection: true, preservePiEditorDraftLink: true });
           updateResultActionButtons();
           setStatus("Removed annotated reply header.", "success");
           return;
@@ -24486,7 +24614,7 @@
           return;
         }
 
-        setEditorText(updated, { preserveScroll: true, preserveSelection: true });
+        setEditorText(updated, { preserveScroll: true, preserveSelection: true, preservePiEditorDraftLink: true });
         updateResultActionButtons();
         setStatus("Inserted annotated reply header.", "success");
       }
@@ -25356,6 +25484,29 @@
         }
       });
 
+      if (clearPiEditorBtn) {
+        clearPiEditorBtn.addEventListener("click", async () => {
+          closeStudioUiRefreshMenus();
+          const confirmed = await requestStudioConfirmation(
+            "Clear the current Pi input draft? This removes text waiting in the terminal editor, including context added from Neovim. Studio text and Pi conversation history will not change.",
+            { title: "Clear Pi editor text?", confirmLabel: "Clear text", destructive: true },
+          );
+          if (!confirmed) {
+            setStatus("Pi editor text was not cleared.");
+            return;
+          }
+
+          const requestId = beginUiAction("clear_pi_editor");
+          if (!requestId) return;
+          const sent = sendMessage({ type: "clear_pi_editor_request", requestId });
+          if (!sent) {
+            pendingRequestId = null;
+            pendingKind = null;
+            setBusy(false);
+          }
+        });
+      }
+
       if (openCompanionBtn) {
         openCompanionBtn.addEventListener("click", () => {
           requestOpenEditorOnlyDocument("", {
@@ -25423,14 +25574,17 @@
 
         const requestId = beginUiAction("direct");
         if (!requestId) return;
+        const piEditorDraftSnapshot = reserveLinkedPiEditorDraftSnapshot(requestId);
 
         const sent = sendMessage({
           type: "send_run_request",
           requestId,
           text: prepared,
+          piEditorDraftSnapshot: piEditorDraftSnapshot || undefined,
         });
 
         if (!sent) {
+          restoreReservedPiEditorDraftSnapshot(requestId);
           pendingRequestId = null;
           pendingKind = null;
           setBusy(false);
@@ -25451,12 +25605,17 @@
 
           const requestId = makeRequestId();
           clearTitleAttention();
+          const piEditorDraftSnapshot = reserveLinkedPiEditorDraftSnapshot(requestId);
           const sent = sendMessage({
             type: "send_run_request",
             requestId,
             text: prepared,
+            piEditorDraftSnapshot: piEditorDraftSnapshot || undefined,
           });
-          if (!sent) return;
+          if (!sent) {
+            restoreReservedPiEditorDraftSnapshot(requestId);
+            return;
+          }
           setStatus("Queueing steering…", "warning");
         });
       }
@@ -25892,7 +26051,7 @@
           if (!confirmed) return;
 
           const strippedContent = stripAnnotationMarkers(content);
-          setEditorText(strippedContent, { preserveScroll: true, preserveSelection: false });
+          setEditorText(strippedContent, { preserveScroll: true, preserveSelection: false, preservePiEditorDraftLink: true });
           setStatus("Removed annotation markers from editor text.", "success");
         });
       }

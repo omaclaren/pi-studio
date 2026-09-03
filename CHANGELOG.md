@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add `Cmd/Ctrl+Shift+L` for loading the current Pi terminal input draft into Studio without clearing it.
+- Add a confirmed **Clear Pi editor text…** action for removing text waiting in Pi's terminal input editor without changing Studio text or conversation history.
+
+### Changed
+- Treat Pi terminal drafts loaded into Studio or staged from Studio as transient linked handoffs. An accepted **Run editor text** now clears the terminal draft only when its SHA-256 fingerprint and byte length still match; later terminal typing, added `pi-nvim-context` context, another client change, and failed submissions all preserve it.
+
 ## [0.9.58] — 2026-09-03
 
 ### Added
