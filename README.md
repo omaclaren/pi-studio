@@ -83,8 +83,9 @@ When Pi accepts **Run editor text**, Studio clears the linked terminal draft onl
 | `/studio --last` | Force last response |
 | `/studio --blank` | Force blank editor |
 | `/studio --no-browser` | Start/print the Studio URL without opening a browser, useful for forwarded or phone/browser sessions |
-| `/studio --port <port>` | Bind Studio to a fixed localhost port instead of a random free port |
-| `/studio --status` | Show studio server status |
+| `/studio --port <port>` | Bind Studio to a fixed port instead of a random free port; the default host remains localhost |
+| `/studio --listen-all` | Explicitly bind Studio to all IPv4 interfaces (`0.0.0.0`) for a container or trusted private-network workflow |
+| `/studio --status` | Show studio server status, including its listening address |
 | `/studio --stop` | Stop studio server |
 | `/studio --help` | Show help |
 | `/studio-replace [path\|--blank\|--last]` | Replace the current full Studio view with a new full Studio view |
@@ -117,6 +118,18 @@ Run once without installing:
 ```bash
 pi -e https://github.com/omaclaren/pi-studio
 ```
+
+## Container and network access
+
+Studio binds to `127.0.0.1` by default. For a container or sandbox whose port must be published to the host, opt in explicitly and choose a stable port:
+
+```text
+/studio --no-browser --listen-all --port 4321
+```
+
+This listens on `0.0.0.0:4321` while still printing a tokenized `http://127.0.0.1:4321/...` browser URL. With a same-port mapping such as `sbx run --publish 4321:4321`, open that URL unchanged on the host. `--listen-all` is a server-lifetime setting: if Studio is already running on localhost, use `/studio --stop` before restarting it with the flag.
+
+Treat wildcard binding as a security-sensitive mode. The URL token remains required, but anyone who obtains the full URL can control Studio for that Pi process: they can submit prompts, read or write files through Studio, and expand local-resource access. Studio does not add TLS. Treat the URL like a password, never expose the port directly to the public internet, and bind the host side of a container mapping to loopback when possible—for example, `-p 127.0.0.1:4321:4321`. For access across an untrusted network, keep Studio on its localhost default and use SSH local port forwarding instead.
 
 ## Shared REPL record
 
@@ -220,7 +233,7 @@ Thanks to [Hal Gumbert / CampSoftware](https://github.com/campsoftware) for publ
 
 ## Notes
 
-- Local-only server (`127.0.0.1`) with tokenized Studio URLs.
+- The Studio server is localhost-only (`127.0.0.1`) by default and every Studio URL carries a server-lifetime token. The explicit `--listen-all` option changes the listening address to `0.0.0.0` without changing the advertised loopback URL or removing token authentication; `/studio --status` reports the active binding.
 - When Pi runs inside Muxy or cmux, Studio opens in that terminal app’s built-in browser. Muxy is detected from its pane/socket environment without installing global hooks; cmux targets and focuses the caller’s workspace. If the detected terminal browser is unavailable, disabled, or declines the request, Studio falls back once to the system browser.
 - For remote SSH sessions, keep Studio bound to localhost and use SSH local port forwarding; `/studio` and `/studio --status` print the full tokenized localhost URL. The SSH hint repeats the full URL so it is visible even if your terminal only shows the latest notification. Open that URL through the tunnel, preserving the `?token=...` parameter. If SSH is not auto-detected, use `/studio --no-browser`; for stable forwarding, use `/studio --port <port>` or combine them, e.g. `/studio --no-browser --port 3417`.
 - Full Studio is a singleton per Pi session: use `/studio` to open it, `/studio-replace` to explicitly replace it, and `/studio-editor-only` for extra editing/preview tabs that do not take over the full Studio session view.

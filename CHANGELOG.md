@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add explicit `/studio --listen-all` support for container and trusted private-network workflows. Studio binds to `0.0.0.0` only when requested, retains token authentication, keeps generated browser URLs on `127.0.0.1` for same-port host publishing, reports the active listening address in `/studio --status`, and requires a stop/restart before changing a running localhost server to wildcard binding.
+
+### Security
+- Wildcard network binding remains opt-in and emits a prominent warning that the tokenized URL grants control of Studio for the Pi process, including prompt submission and broad file access through Studio workflows. HTTP routing no longer derives its base authority from the inbound `Host` header. In wildcard mode, a browser-supplied HTTP(S) `Origin` must match that request's `Host`; originless non-browser or embedded clients continue to rely on the URL token. Documentation recommends loopback-only host port publishing, forbids direct public-internet exposure, and retains localhost plus SSH forwarding as the safe default.
+
 ## [0.9.59] — 2026-09-03
 
 ### Added

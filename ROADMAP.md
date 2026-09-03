@@ -116,6 +116,17 @@ A small workflow refinement for moving Neovim-provided context through Pi and St
 - provide `Cmd/Ctrl+Shift+L` for loading and a confirmed **Clear Pi editor text…** fallback without changing Studio text or conversation history;
 - keep `pi-nvim-context`, protocol v1, networking, and the buffer-first architecture unchanged.
 
+## 0.9.60 — Opt-in container/network binding (implemented, unreleased)
+
+A bounded implementation of GitHub issue #4, separate from REPL transcript and buffer work:
+
+- retain `127.0.0.1` as the default and require explicit `--listen-all` intent before binding to `0.0.0.0`;
+- keep the server-lifetime bearer token mandatory and the generated URL on loopback for same-port container publishing;
+- keep inbound `Host` values out of route parsing and require wildcard-mode browser origins to match the request authority;
+- report the actual listening address, emit a prominent exposure warning, and require `/studio --stop` before changing a running server's binding;
+- document loopback-only host publishing, private-network limits, and SSH forwarding as the safer option on untrusted networks;
+- validate both default loopback and opt-in wildcard sockets without changing the buffer model, protocol v1, or `pi-repl`.
+
 ## 0.10.0 — Buffer-first editing
 
 The first architectural `0.10` release should add:

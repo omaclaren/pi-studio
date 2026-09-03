@@ -46,6 +46,13 @@ import { createStudioPandocHtmlResourceFlagResolver } from "./shared/studio-pand
 import { createStudioResourceGrantRegistry } from "./shared/studio-resource-grants.js";
 import { prepareStudioLatexForPandoc } from "./shared/studio-latex-pandoc-compat.js";
 import { isStudioCmuxSession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
+import {
+	buildStudioListenAllWarning,
+	isStudioWebSocketOriginAllowed,
+	parseStudioRequestTarget,
+	resolveStudioNetworkBinding,
+	STUDIO_ADVERTISED_HOST,
+} from "./shared/studio-network-binding.js";
 import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
 import {
 	REPL_SESSION_RECORD_ID_OPTION,
@@ -197,6 +204,8 @@ interface StudioServerState {
 	clients: Set<WebSocket>;
 	clientModes: Map<WebSocket, StudioUiMode>;
 	port: number;
+	bindHost: string;
+	listenAll: boolean;
 	token: string;
 }
 
@@ -11865,13 +11874,6 @@ function interruptStudioReplSession(sessionName: string): { ok: true; message: s
 	return { ok: true, message: `Interrupted ${sessionName}.` };
 }
 
-function isAllowedOrigin(_origin: string | undefined, _port: number): boolean {
-	// For local-only studio, token auth is the primary guard. In practice,
-	// browser origin headers can vary (or be omitted) across wrappers/browsers,
-	// so we avoid brittle origin-based rejection here.
-	return true;
-}
-
 function normalizeStudioUiMode(raw: string | null | undefined): StudioUiMode {
 	return raw === "editor-only" ? "editor-only" : "full";
 }
@@ -11936,7 +11938,7 @@ function buildStudioUrl(
 	docId?: string,
 	options?: StudioUrlOptions,
 ): string {
-	return `http://127.0.0.1:${port}${buildStudioRelativeUrl(token, mode, doc, docId, options)}`;
+	return `http://${STUDIO_ADVERTISED_HOST}:${port}${buildStudioRelativeUrl(token, mode, doc, docId, options)}`;
 }
 
 interface StudioLaunchFlags {
@@ -11944,17 +11946,19 @@ interface StudioLaunchFlags {
 	openRemoteBrowser: boolean;
 	noBrowser: boolean;
 	watchPdf: boolean;
+	listenAll: boolean;
 	port?: number;
 	error?: string;
 }
 
 function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 	const parsed = tokenizeStudioCommandArgs(rawArgs);
-	if (parsed.error) return { args: rawArgs, openRemoteBrowser: false, noBrowser: false, watchPdf: false, error: parsed.error };
+	if (parsed.error) return { args: rawArgs, openRemoteBrowser: false, noBrowser: false, watchPdf: false, listenAll: false, error: parsed.error };
 	const remaining: string[] = [];
 	let openRemoteBrowser = false;
 	let noBrowser = false;
 	let watchPdf = false;
+	let listenAll = false;
 	let port: number | undefined;
 	for (let i = 0; i < parsed.tokens.length; i += 1) {
 		const token = parsed.tokens[i]!;
@@ -11970,14 +11974,18 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 			watchPdf = true;
 			continue;
 		}
+		if (token === "--listen-all") {
+			listenAll = true;
+			continue;
+		}
 		if (token === "--port" || token.startsWith("--port=")) {
 			const rawPort = token.startsWith("--port=") ? token.slice("--port=".length) : parsed.tokens[++i];
 			if (!rawPort) {
-				return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, error: "Missing value for --port." };
+				return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, listenAll, error: "Missing value for --port." };
 			}
 			const requestedPort = Number(rawPort);
 			if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
-				return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, error: `Invalid --port value: ${rawPort}. Use an integer from 1 to 65535.` };
+				return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, listenAll, error: `Invalid --port value: ${rawPort}. Use an integer from 1 to 65535.` };
 			}
 			port = requestedPort;
 			continue;
@@ -11985,9 +11993,9 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 		remaining.push(token);
 	}
 	if (openRemoteBrowser && noBrowser) {
-		return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, port, error: "Use either --no-browser or --open-browser, not both." };
+		return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, listenAll, port, error: "Use either --no-browser or --open-browser, not both." };
 	}
-	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, watchPdf, port };
+	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, watchPdf, listenAll, port };
 }
 
 function shouldAutoOpenStudioBrowser(options?: { openRemoteBrowser?: boolean; noBrowser?: boolean }): boolean {
@@ -17446,12 +17454,9 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		let requestUrl: URL;
-		try {
-			const host = req.headers.host ?? `127.0.0.1:${serverState.port}`;
-			requestUrl = new URL(req.url ?? "/", `http://${host}`);
-		} catch (error) {
-			respondText(res, 400, `Invalid request URL: ${error instanceof Error ? error.message : String(error)}`);
+		const requestUrl = parseStudioRequestTarget(req.url);
+		if (!requestUrl) {
+			respondText(res, 400, "Invalid request URL");
 			return;
 		}
 
@@ -18044,9 +18049,10 @@ export default function (pi: ExtensionAPI) {
 		res.end(buildStudioHtml(requestInitialDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, terminalSessionDetail, contextUsageSnapshot, studioMode));
 	};
 
-	const ensureServer = async (requestedPort?: number): Promise<StudioServerState> => {
+	const ensureServer = async (requestedPort?: number, listenAll = false): Promise<StudioServerState> => {
 		if (serverState) return serverState;
 
+		const binding = resolveStudioNetworkBinding(listenAll);
 		const server = createServer(handleHttpRequest);
 		const wsServer = new WebSocketServer({ noServer: true });
 		const clients = new Set<WebSocket>();
@@ -18058,12 +18064,18 @@ export default function (pi: ExtensionAPI) {
 			clients,
 			clientModes,
 			port: 0,
+			bindHost: binding.bindHost,
+			listenAll: binding.listenAll,
 			token: createSessionToken(),
 		};
 
 		server.on("upgrade", (req, socket, head) => {
-			const host = req.headers.host ?? `127.0.0.1:${state.port}`;
-			const requestUrl = new URL(req.url ?? "/", `http://${host}`);
+			const requestUrl = parseStudioRequestTarget(req.url);
+			if (!requestUrl) {
+				socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+				socket.destroy();
+				return;
+			}
 
 			if (requestUrl.pathname !== "/ws") {
 				socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -18078,7 +18090,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (!isAllowedOrigin(req.headers.origin, state.port)) {
+			const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+			const requestHost = typeof req.headers.host === "string" ? req.headers.host : undefined;
+			if (!isStudioWebSocketOriginAllowed(origin, requestHost, state.listenAll)) {
 				socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
 				socket.destroy();
 				return;
@@ -18090,8 +18104,15 @@ export default function (pi: ExtensionAPI) {
 		});
 
 		wsServer.on("connection", (ws, req) => {
-			const host = req.headers.host ?? `127.0.0.1:${state.port}`;
-			const requestUrl = new URL(req.url ?? "/ws", `http://${host}`);
+			const requestUrl = parseStudioRequestTarget(req.url);
+			if (!requestUrl) {
+				try {
+					ws.close(1008, "Invalid request URL");
+				} catch {
+					// Ignore close errors.
+				}
+				return;
+			}
 			const clientMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
 			const requestedWatchedPath = (requestUrl.searchParams.get("watchPath") ?? "").trim();
 			const canonicalWatchedPath = requestedWatchedPath ? resolve(requestedWatchedPath) : "";
@@ -18190,7 +18211,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			server.once("error", onError);
 			server.once("listening", onListening);
-			server.listen(listenPort, "127.0.0.1");
+			server.listen(listenPort, state.bindHost);
 		});
 
 		const address = server.address();
@@ -19063,6 +19084,10 @@ export default function (pi: ExtensionAPI) {
 		if (serverState && launchOpenFlags.port && serverState.port !== launchOpenFlags.port) {
 			ctx.ui.notify(`Studio server is already running on port ${serverState.port}; requested port ${launchOpenFlags.port}. Use /studio --stop, then restart Studio with --port ${launchOpenFlags.port} to change it.`, "warning");
 		}
+		if (serverState && launchOpenFlags.listenAll && !serverState.listenAll) {
+			ctx.ui.notify(`Studio server is already bound to localhost at 127.0.0.1:${serverState.port}. Use /studio --stop, then restart it with --listen-all.`, "warning");
+			return;
+		}
 
 		const parsedLaunchPath = options?.allowPdfPreview ? parsePathArgument(launchArgs) : null;
 		const launchesPdfPreview = parsedLaunchPath
@@ -19082,9 +19107,12 @@ export default function (pi: ExtensionAPI) {
 				if (serverState) {
 					const url = buildStudioUrl(serverState.port, serverState.token, "full");
 					ctx.ui.notify(`Studio URL: ${url}`, "info");
-					const tunnelHint = buildStudioSshTunnelHint(serverState.port, url)
-						?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(serverState.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
+					const tunnelHint = serverState.listenAll
+						? null
+						: buildStudioSshTunnelHint(serverState.port, url)
+							?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(serverState.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
 					if (tunnelHint) ctx.ui.notify(tunnelHint, "info");
+					if (serverState.listenAll) ctx.ui.notify(buildStudioListenAllWarning(serverState.port, url), "warning");
 				}
 				return;
 			}
@@ -19117,7 +19145,7 @@ export default function (pi: ExtensionAPI) {
 
 		let state: StudioServerState;
 		try {
-			state = await ensureServer(launchOpenFlags.port);
+			state = await ensureServer(launchOpenFlags.port, launchOpenFlags.listenAll);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const portText = launchOpenFlags.port ? ` on port ${launchOpenFlags.port}` : "";
@@ -19130,8 +19158,10 @@ export default function (pi: ExtensionAPI) {
 			skipWorkspaceRestore: selection.skipWorkspaceRestore,
 			paneFocus: selection.paneFocus,
 		});
-		const tunnelHint = buildStudioSshTunnelHint(state.port, url)
-			?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
+		const tunnelHint = state.listenAll
+			? null
+			: buildStudioSshTunnelHint(state.port, url)
+				?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
 		const openedLabel = selection.kind === "pdf-preview"
 			? "pi Studio PDF preview"
 			: (selection.kind === "watched-preview"
@@ -19171,11 +19201,12 @@ export default function (pi: ExtensionAPI) {
 		} finally {
 			ctx.ui.notify(`Studio URL: ${url}`, "info");
 			if (tunnelHint) ctx.ui.notify(tunnelHint, "info");
+			if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
 		}
 	};
 
 	pi.registerCommand("studio", {
-		description: "Open pi Studio browser UI or a read-only watched preview (/studio, /studio <file>, /studio --watch <file>, /studio --blank, /studio --last, /studio --no-browser)",
+		description: "Open pi Studio browser UI or a read-only watched preview (/studio, /studio <file>, /studio --watch <file>, /studio --blank, /studio --last, /studio --no-browser, /studio --listen-all)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 
@@ -19193,11 +19224,12 @@ export default function (pi: ExtensionAPI) {
 				const counts = getStudioClientCounts();
 				const url = buildStudioUrl(serverState.port, serverState.token, "full");
 				ctx.ui.notify(
-					`Studio running at ${url} (busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
+					`Studio running at ${url} (listening on ${serverState.bindHost}:${serverState.port}; busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
 					"info",
 				);
-				const sshTunnelHint = buildStudioSshTunnelHint(serverState.port, url);
+				const sshTunnelHint = serverState.listenAll ? null : buildStudioSshTunnelHint(serverState.port, url);
 				if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
+				if (serverState.listenAll) ctx.ui.notify(buildStudioListenAllWarning(serverState.port, url), "warning");
 				return;
 			}
 
@@ -19210,7 +19242,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio --blank   Open with blank editor\n"
 						+ "  /studio --last    Open with last model response\n"
 						+ "  /studio --no-browser  Print the Studio URL without opening a browser\n"
-						+ "  /studio --port <port> Bind Studio to a fixed localhost port when starting\n"
+						+ "  /studio --port <port> Bind Studio to a fixed port when starting\n"
+						+ "  /studio --listen-all  Explicitly bind to 0.0.0.0 instead of localhost (security-sensitive)\n"
 						+ "  /studio --open-remote  Over SSH, open the remote browser anyway\n"
 						+ "  /studio --status  Show studio status\n"
 						+ "  /studio --stop    Stop studio server\n"
@@ -19241,7 +19274,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio-replace --blank Replace with blank editor\n"
 						+ "  /studio-replace --last  Replace with last model response\n"
 						+ "  /studio-replace --no-browser  Print URL without opening a browser\n"
-						+ "  /studio-replace --port <port> Bind Studio to a fixed localhost port when starting\n"
+						+ "  /studio-replace --port <port> Bind Studio to a fixed port when starting\n"
+						+ "  /studio-replace --listen-all  Explicitly bind to 0.0.0.0 instead of localhost\n"
 						+ "Editor-only Studio views stay open.",
 					"info",
 				);
@@ -19269,7 +19303,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio-editor-only --blank Open with blank editor\n"
 						+ "  /studio-editor-only --last  Open with last model response loaded into the editor\n"
 						+ "  /studio-editor-only --no-browser  Print URL without opening a browser\n"
-						+ "  /studio-editor-only --port <port> Bind Studio to a fixed localhost port when starting\n"
+						+ "  /studio-editor-only --port <port> Bind Studio to a fixed port when starting\n"
+						+ "  /studio-editor-only --listen-all  Explicitly bind to 0.0.0.0 instead of localhost\n"
 						+ "Multiple editor-only views are allowed in the same Pi session.",
 					"info",
 				);
