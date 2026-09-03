@@ -55,6 +55,15 @@ import {
 	readReplSessionRecord,
 	upsertReplSessionRecordEntry,
 } from "./shared/repl-session-record.js";
+import {
+	createReplSubmissionDisplay,
+	normalizeReplSubmissionEchoMode,
+	stripReplSubmissionDisplay,
+} from "./shared/repl-submission-display.js";
+import {
+	cleanupPrivateReplControlFiles,
+	createPrivateReplControlFiles,
+} from "./shared/repl-control-files.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import {
 	buildStudioPendingPage,
@@ -127,6 +136,8 @@ type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 type StudioPromptMode = "response" | "run" | "effective";
 type StudioPromptTriggerKind = "run" | "steer";
 type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure";
+type ReplSubmissionEchoMode = "off" | "summary" | "full";
+type ReplSubmissionDisplay = ReturnType<typeof createReplSubmissionDisplay>;
 type StudioQuizAngle = "general" | "scientist" | "mathematician" | "statistician" | "developer" | "reviewer";
 type StudioQuizScope = "selection" | "editor" | "file" | "folder" | "repo";
 type StudioQuizThinking = "off" | "minimal" | "low" | "medium" | "high";
@@ -746,6 +757,7 @@ interface ReplSendRequestMessage {
 	requestId: string;
 	sessionName: string;
 	text: string;
+	echoMode?: ReplSubmissionEchoMode;
 	journalEntryId?: string;
 	createdAt?: number;
 	label?: string;
@@ -968,7 +980,6 @@ const STUDIO_REPL_SEND_DEFAULT_TIMEOUT_MS = 20_000;
 const STUDIO_REPL_SEND_MAX_TIMEOUT_MS = 120_000;
 const STUDIO_REPL_JOURNAL_MAX_ENTRIES = 300;
 const STUDIO_REPL_RUNTIME_OPTION = "@pi_repl_runtime";
-const STUDIO_REPL_CONTROL_ROOT = join(tmpdir(), "pi-studio-repl");
 const STUDIO_SUBPROCESS_OUTPUT_MAX_BYTES = 2_000_000;
 const STUDIO_PANDOC_TIMEOUT_MS = readStudioPositiveEnvMs("PI_STUDIO_PANDOC_TIMEOUT_MS", 120_000, 5_000, 15 * 60_000);
 const STUDIO_LATEX_TIMEOUT_MS = readStudioPositiveEnvMs("PI_STUDIO_LATEX_TIMEOUT_MS", 120_000, 5_000, 15 * 60_000);
@@ -988,7 +999,12 @@ const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name. If omitted, Studio uses the active REPL session, or the first session matching target." })),
 	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, or clojure. Used when sessionName is omitted." })),
 	timeoutMs: Type.Optional(Type.Number({ description: "Maximum time to wait for completion when Studio can detect it (default 20000, max 120000).", minimum: 1000, maximum: STUDIO_REPL_SEND_MAX_TIMEOUT_MS })),
+	echoMode: Type.Optional(Type.Union(
+		[Type.Literal("off"), Type.Literal("summary"), Type.Literal("full")],
+		{ description: "How much submitted code to echo visibly in the raw REPL pane. Defaults to PI_STUDIO_REPL_ECHO_MODE or off. Summary shows short submissions in full and truncates longer ones; Full has larger bounds and writes source code into persistent raw terminal history." },
+	)),
 });
+const STUDIO_REPL_TOOL_ECHO_MODE = normalizeReplSubmissionEchoMode(process.env.PI_STUDIO_REPL_ECHO_MODE) as ReplSubmissionEchoMode;
 const STUDIO_REPL_STATUS_TOOL_PARAMS = Type.Object({
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name to inspect." })),
 	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, or clojure. If omitted, report all Studio-visible REPL sessions." })),
@@ -10064,6 +10080,7 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 			requestId: msg.requestId,
 			sessionName: msg.sessionName,
 			text: msg.text,
+			echoMode: normalizeReplSubmissionEchoMode(msg.echoMode) as ReplSubmissionEchoMode,
 			journalEntryId: typeof msg.journalEntryId === "string" ? msg.journalEntryId.slice(0, 240) : undefined,
 			createdAt: typeof msg.createdAt === "number" && Number.isFinite(msg.createdAt) ? msg.createdAt : undefined,
 			label: typeof msg.label === "string" ? msg.label.slice(0, 240) : undefined,
@@ -11159,7 +11176,9 @@ type StudioReplPreparedSubmission = {
 	runtime: StudioReplRuntime | "unknown";
 	usedControlFile: boolean;
 	submissionText: string;
+	completionLine?: string;
 	controlFiles?: StudioReplControlFiles;
+	display?: ReplSubmissionDisplay;
 };
 
 type StudioReplSendSuccess = {
@@ -11168,7 +11187,9 @@ type StudioReplSendSuccess = {
 	runtime: StudioReplRuntime | "unknown";
 	usedControlFile: boolean;
 	submissionText: string;
+	completionLine?: string;
 	controlFiles?: StudioReplControlFiles;
+	display?: ReplSubmissionDisplay;
 };
 
 type StudioReplSendFailure = {
@@ -11178,7 +11199,9 @@ type StudioReplSendFailure = {
 	runtime?: StudioReplRuntime | "unknown";
 	usedControlFile?: boolean;
 	submissionText?: string;
+	completionLine?: string;
 	controlFiles?: StudioReplControlFiles;
+	display?: ReplSubmissionDisplay;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -11194,33 +11217,44 @@ function shellQuote(value: string): string {
 	return `'${String(value || "").replace(/'/g, `'"'"'`)}'`;
 }
 
-function getStudioReplControlFiles(sessionName: string, runtime: StudioReplRuntime | "unknown"): StudioReplControlFiles {
-	const safeSession = sessionName.replace(/[^-_.A-Za-z0-9]+/g, "_");
-	const safeRuntime = String(runtime || "repl").replace(/[^-_.A-Za-z0-9]+/g, "_");
-	const dir = join(STUDIO_REPL_CONTROL_ROOT, safeSession, randomUUID().replace(/-/g, ""));
-	const extension = runtime === "julia"
-		? "jl"
-		: runtime === "r"
-			? "R"
-			: runtime === "ghci"
-				? "ghci"
-				: runtime === "clojure"
-					? "clj"
-					: runtime === "shell"
-						? "sh"
-						: "py";
-	return {
-		dir,
-		sourceFile: join(dir, `studio-repl-${safeRuntime}.${extension}`),
-		doneFile: join(dir, "done.flag"),
-	};
+function getStudioReplControlExtension(runtime: StudioReplRuntime): string {
+	if (runtime === "julia") return "jl";
+	if (runtime === "r") return "R";
+	if (runtime === "ghci") return "ghci";
+	if (runtime === "clojure") return "clj";
+	if (runtime === "shell") return "sh";
+	return "py";
 }
 
-function buildStudioPythonControlSource(runtime: "python" | "ipython", code: string, doneFile: string): string {
+function buildStudioPythonDisplayStatements(display: ReplSubmissionDisplay, indent = ""): string[] {
+	if (!display.enabled) return [];
+	return display.prefixLines.map((line) => `${indent}__pi_studio_builtins.print(${JSON.stringify(line)})`);
+}
+
+function buildStudioJuliaDisplayStatements(display: ReplSubmissionDisplay, indent = ""): string[] {
+	if (!display.enabled) return [];
+	return display.prefixLines.map((line) => `${indent}Base.println(${JSON.stringify(line)})`);
+}
+
+function buildStudioRDisplayStatements(display: ReplSubmissionDisplay, indent = ""): string[] {
+	if (!display.enabled) return [];
+	return display.prefixLines.map((line) => `${indent}base::cat(${JSON.stringify(`${line}\n`)})`);
+}
+
+function buildStudioClojureDisplayStatements(display: ReplSubmissionDisplay, indent = ""): string[] {
+	if (!display.enabled) return [];
+	return display.prefixLines.map((line) => `${indent}(clojure.core/println ${JSON.stringify(line)})`);
+}
+
+function buildStudioPythonControlSource(runtime: "python" | "ipython", code: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	const prefix = buildStudioPythonDisplayStatements(display);
+	const completion = display.enabled ? [`    __pi_studio_builtins.print(${JSON.stringify(display.endMarker)})`] : [];
 	if (runtime === "ipython") {
 		return [
 			"from pathlib import Path as __pi_studio_path",
+			"import builtins as __pi_studio_builtins",
 			"import traceback as __pi_studio_traceback",
+			...prefix,
 			"try:",
 			"    __pi_studio_ip = get_ipython()",
 			"    if __pi_studio_ip is None:",
@@ -11231,14 +11265,17 @@ function buildStudioPythonControlSource(runtime: "python" | "ipython", code: str
 			"except Exception:",
 			"    __pi_studio_traceback.print_exc()",
 			"finally:",
+			...completion,
 			`    __pi_studio_path(${JSON.stringify(doneFile)}).write_text('done\\n', encoding='utf-8')`,
 		].join("\n");
 	}
 
 	return [
 		"from pathlib import Path as __pi_studio_path",
+		"import builtins as __pi_studio_builtins",
 		"import traceback as __pi_studio_traceback",
 		`__pi_studio_code = ${JSON.stringify(code)}`,
+		...prefix,
 		"try:",
 		"    try:",
 		"        __pi_studio_expr = compile(__pi_studio_code, '<pi-studio-repl>', 'eval')",
@@ -11251,12 +11288,15 @@ function buildStudioPythonControlSource(runtime: "python" | "ipython", code: str
 		"except Exception:",
 		"    __pi_studio_traceback.print_exc()",
 		"finally:",
+		...completion,
 		`    __pi_studio_path(${JSON.stringify(doneFile)}).write_text('done\\n', encoding='utf-8')`,
 	].join("\n");
 }
 
-function buildStudioJuliaControlSource(code: string, doneFile: string): string {
+function buildStudioJuliaControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	const completion = display.enabled ? [`    Base.println(${JSON.stringify(display.endMarker)})`] : [];
 	return [
+		...buildStudioJuliaDisplayStatements(display),
 		"try",
 		`    local __pi_studio_result = Base.include_string(Main, ${JSON.stringify(code)}, "pi-studio-repl")`,
 		"    if !isnothing(__pi_studio_result)",
@@ -11265,14 +11305,17 @@ function buildStudioJuliaControlSource(code: string, doneFile: string): string {
 		"catch e",
 		"    Base.display_error(stderr, e, catch_backtrace())",
 		"finally",
+		...completion,
 		`    write(${JSON.stringify(doneFile)}, "done\\n")`,
 		"end",
 	].join("\n");
 }
 
-function buildStudioRControlSource(code: string, doneFile: string): string {
+function buildStudioRControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	const completion = display.enabled ? [`    base::cat(${JSON.stringify(`${display.endMarker}\n`)})`] : [];
 	return [
 		"local({",
+		...buildStudioRDisplayStatements(display, "  "),
 		`  .__pi_studio_done_file <- ${JSON.stringify(doneFile)}`,
 		`  .__pi_studio_code <- ${JSON.stringify(code)}`,
 		"  tryCatch({",
@@ -11294,15 +11337,33 @@ function buildStudioRControlSource(code: string, doneFile: string): string {
 		"      message(\"Error in \", .__pi_studio_call_text, \": \", conditionMessage(e))",
 		"    }",
 		"  }, finally = {",
+		...completion,
 		"    writeLines(\"done\", .__pi_studio_done_file)",
 		"  })",
 		"})",
 	].join("\n");
 }
 
-function buildStudioClojureControlSource(code: string, doneFile: string): string {
+function buildStudioGhciControlSource(code: string, display: ReplSubmissionDisplay): string {
+	const prefix = display.enabled
+		? display.prefixLines.map((line) => `:! command printf '%s\\n' ${shellQuote(line)}`)
+		: [];
+	return [
+		...prefix,
+		code.replace(/\r/g, "").trimEnd(),
+	].filter(Boolean).join("\n") + "\n";
+}
+
+function buildStudioGhciCompletionLine(doneFile: string, display: ReplSubmissionDisplay): string {
+	const completion = display.enabled ? `command printf '%s\\n' ${shellQuote(display.endMarker)}; ` : "";
+	return `:! ${completion}touch ${shellQuote(doneFile)}`;
+}
+
+function buildStudioClojureControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	const completion = display.enabled ? [`      (clojure.core/println ${JSON.stringify(display.endMarker)})`] : [];
 	return [
 		"(let [code " + JSON.stringify(code) + "]",
+		...buildStudioClojureDisplayStatements(display, "  "),
 		"  (try",
 		"    (let [rdr (clojure.lang.LineNumberingPushbackReader. (java.io.StringReader. code))]",
 		"      (loop [last-val nil has-val false]",
@@ -11313,17 +11374,29 @@ function buildStudioClojureControlSource(code: string, doneFile: string): string
 		"    (catch Throwable t",
 		"      (#'clojure.main/repl-caught t))",
 		"    (finally",
+		...completion,
 		`      (spit ${JSON.stringify(doneFile)} "done\\n"))))`,
 	].join("\n");
 }
 
-function buildStudioReplControlSource(runtime: StudioReplRuntime, code: string, doneFile: string): string | null {
-	if (runtime === "python" || runtime === "ipython") return buildStudioPythonControlSource(runtime, code, doneFile);
-	if (runtime === "julia") return buildStudioJuliaControlSource(code, doneFile);
-	if (runtime === "r") return buildStudioRControlSource(code, doneFile);
-	if (runtime === "ghci") return `${code.replace(/\r/g, "").trimEnd()}\n:! touch ${shellQuote(doneFile)}\n`;
-	if (runtime === "clojure") return buildStudioClojureControlSource(code, doneFile);
-	if (runtime === "shell") return `${code.replace(/\r/g, "").trimEnd()}\n`;
+function buildStudioShellControlSource(code: string, display: ReplSubmissionDisplay): string {
+	if (!display.enabled) return `${code.replace(/\r/g, "").trimEnd()}\n`;
+	return [
+		...display.prefixLines.map((line) => `command printf '%s\\n' ${shellQuote(line)}`),
+		code.replace(/\r/g, "").trimEnd(),
+		"__pi_studio_repl_status=$?",
+		`command printf '%s\\n' ${shellQuote(display.endMarker)}`,
+		"return \"$__pi_studio_repl_status\"",
+	].filter(Boolean).join("\n") + "\n";
+}
+
+function buildStudioReplControlSource(runtime: StudioReplRuntime, code: string, doneFile: string, display: ReplSubmissionDisplay): string | null {
+	if (runtime === "python" || runtime === "ipython") return buildStudioPythonControlSource(runtime, code, doneFile, display);
+	if (runtime === "julia") return buildStudioJuliaControlSource(code, doneFile, display);
+	if (runtime === "r") return buildStudioRControlSource(code, doneFile, display);
+	if (runtime === "ghci") return buildStudioGhciControlSource(code, display);
+	if (runtime === "clojure") return buildStudioClojureControlSource(code, doneFile, display);
+	if (runtime === "shell") return buildStudioShellControlSource(code, display);
 	return null;
 }
 
@@ -11340,29 +11413,36 @@ function buildStudioReplSubmissionLine(runtime: StudioReplRuntime, sourceFile: s
 function prepareStudioReplSubmission(
 	sessionName: string,
 	source: string,
+	details: { submissionId: string; echoMode: ReplSubmissionEchoMode },
 	runtimeHint?: StudioReplRuntime | "unknown",
 ): StudioReplPreparedSubmission {
 	const normalizedSource = String(source || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 	const runtime = runtimeHint && runtimeHint !== "unknown" ? runtimeHint : inferStudioReplSessionRuntime(sessionName).runtime;
 	if (runtime !== "unknown") {
-		const controlFiles = getStudioReplControlFiles(sessionName, runtime);
-		const controlSource = buildStudioReplControlSource(runtime, normalizedSource, controlFiles.doneFile);
-		if (controlSource) {
-			mkdirSync(controlFiles.dir, { recursive: true });
-			try {
-				unlinkSync(controlFiles.doneFile);
-			} catch {
-				// Ignore stale done file cleanup failures.
-			}
-			writeFileSync(controlFiles.sourceFile, controlSource, "utf-8");
-			const submissionLine = buildStudioReplSubmissionLine(runtime, controlFiles.sourceFile, controlFiles.doneFile);
-			return {
-				runtime,
-				usedControlFile: true,
-				controlFiles,
-				submissionText: submissionLine,
-			};
-		}
+		const display = createReplSubmissionDisplay({
+			entryId: details.submissionId,
+			origin: "pi-studio",
+			code: normalizedSource,
+			mode: details.echoMode,
+		});
+		const controlFiles: StudioReplControlFiles = createPrivateReplControlFiles({
+			extension: getStudioReplControlExtension(runtime),
+			buildSource: ({ doneFile }: StudioReplControlFiles) => {
+				const source = buildStudioReplControlSource(runtime, normalizedSource, doneFile, display);
+				if (source === null) throw new Error(`No control-file wrapper is available for ${runtime}.`);
+				return source;
+			},
+		});
+		const submissionLine = buildStudioReplSubmissionLine(runtime, controlFiles.sourceFile, controlFiles.doneFile);
+		const completionLine = runtime === "ghci" ? buildStudioGhciCompletionLine(controlFiles.doneFile, display) : undefined;
+		return {
+			runtime,
+			usedControlFile: true,
+			controlFiles,
+			display,
+			completionLine,
+			submissionText: [submissionLine, completionLine].filter(Boolean).join("\n"),
+		};
 	}
 
 	return {
@@ -11393,6 +11473,7 @@ function sendTextToStudioReplSession(
 	text: string,
 	paneTarget?: string,
 	runtimeHint?: StudioReplRuntime | "unknown",
+	options: { submissionId?: string; echoMode?: string } = {},
 ): StudioReplSendSuccess | StudioReplSendFailure {
 	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
 	const source = String(text || "");
@@ -11400,7 +11481,10 @@ function sendTextToStudioReplSession(
 	if (source.length > STUDIO_REPL_SEND_MAX_CHARS) {
 		return { ok: false, message: `REPL input is too large (${source.length} chars; max ${STUDIO_REPL_SEND_MAX_CHARS}).` };
 	}
-	const prepared = prepareStudioReplSubmission(sessionName, source, runtimeHint);
+	const prepared = prepareStudioReplSubmission(sessionName, source, {
+		submissionId: options.submissionId || `pi-studio:local:${randomUUID()}`,
+		echoMode: normalizeReplSubmissionEchoMode(options.echoMode, STUDIO_REPL_TOOL_ECHO_MODE) as ReplSubmissionEchoMode,
+	}, runtimeHint);
 	const pasted = pasteTextToStudioReplPane(sessionName, prepared.submissionText, paneTarget);
 	if (!pasted.ok) return {
 		ok: false,
@@ -11409,7 +11493,9 @@ function sendTextToStudioReplSession(
 		runtime: prepared.runtime,
 		usedControlFile: prepared.usedControlFile,
 		submissionText: prepared.submissionText,
+		completionLine: prepared.completionLine,
 		controlFiles: prepared.controlFiles,
+		display: prepared.display,
 	};
 	return {
 		ok: true,
@@ -11417,7 +11503,9 @@ function sendTextToStudioReplSession(
 		runtime: prepared.runtime,
 		usedControlFile: prepared.usedControlFile,
 		submissionText: prepared.submissionText,
+		completionLine: prepared.completionLine,
 		controlFiles: prepared.controlFiles,
+		display: prepared.display,
 	};
 }
 
@@ -11442,15 +11530,15 @@ function stripStudioReplSubmissionEcho(output: string): string {
 	let value = String(output || "").replace(/^\s+/, "");
 	// The raw tmux mirror should stay raw, but Studio/tool result output should not
 	// expose the temp-file wrapper used to submit multiline snippets safely. The
-	// `pi-studio-re` fragment intentionally catches IPython's wrapped display of
-	// `pi-studio-repl/...` paths across continuation prompt lines.
+	// The root fragment catches both legacy long Studio paths and compact private
+	// control paths when IPython wraps them across continuation prompt lines.
 	const submissionEchoPatterns = [
-		/^.*exec\(open\([\s\S]*?pi-studio-re[\s\S]*?globals\(\)\)\s*$/gm,
-		/^.*include\([\s\S]*?pi-studio-re[\s\S]*?\.jl"\)\s*$/gm,
-		/^.*source\([\s\S]*?pi-studio-re[\s\S]*?local\s*=\s*\.GlobalEnv\)\s*$/gm,
-		/^.*:script\s+[\s\S]*?pi-studio-re[\s\S]*?\.ghci"?\s*$/gm,
-		/^.*\(do\s+\(load-file\s+[\s\S]*?pi-studio-re[\s\S]*?:pi-studio\/silent\)\s*$/gm,
-		/^.*\.\s+[\s\S]*?pi-studio-re[\s\S]*?\.sh[\s\S]*?done\.flag.*$/gm,
+		/^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?globals\(\)\)\s*$/gm,
+		/^.*include\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.jl"\)\s*$/gm,
+		/^.*source\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?local\s*=\s*\.GlobalEnv\)\s*$/gm,
+		/^.*:script\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.ghci"?\s*$/gm,
+		/^.*\(do\s+\(load-file\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?:pi-studio\/silent\)\s*$/gm,
+		/^.*\.\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.sh[\s\S]*?(?:done\.flag|[a-f0-9]{16}\.done).*$/gm,
 	];
 	for (const pattern of submissionEchoPatterns) value = value.replace(pattern, "");
 	return value.replace(/^(?:\s*\n)+/, "").replace(/[\t ]+$/gm, "").trimEnd();
@@ -11464,8 +11552,21 @@ function stripTrailingStudioReplPrompts(output: string): string {
 	return lines.join("\n").trimEnd();
 }
 
-function cleanStudioReplCapturedOutput(output: string): string {
-	return stripTrailingStudioReplPrompts(stripStudioReplSubmissionEcho(output));
+function stripStudioReplCompletionEcho(output: string, completionLine?: string): string {
+	const value = String(output || "");
+	if (!completionLine) return value;
+	const completionIndex = value.lastIndexOf(completionLine);
+	if (completionIndex < 0) return value;
+	const lineStart = value.lastIndexOf("\n", completionIndex - 1) + 1;
+	const newlineIndex = value.indexOf("\n", completionIndex + completionLine.length);
+	const lineEnd = newlineIndex < 0 ? value.length : newlineIndex + 1;
+	return value.slice(0, lineStart) + value.slice(lineEnd);
+}
+
+function cleanStudioReplCapturedOutput(output: string, display?: ReplSubmissionDisplay, completionLine?: string): string {
+	const completionCleaned = stripStudioReplCompletionEcho(output, completionLine);
+	const displayCleaned = display ? stripReplSubmissionDisplay(completionCleaned, display) : completionCleaned;
+	return stripTrailingStudioReplPrompts(stripStudioReplSubmissionEcho(displayCleaned));
 }
 
 function normalizeStudioReplJournalMode(mode: unknown): StudioReplJournalEntry["mode"] {
@@ -11554,7 +11655,10 @@ function isSameStudioReplSessionLifetime(left: StudioReplSessionInfo, right: Stu
 		&& left.tmuxSessionCreatedAt === right.tmuxSessionCreatedAt;
 }
 
-function recordStudioReplJournalEntry(details: Partial<StudioReplJournalEntry> & { sessionName: string; code?: string }): StudioReplJournalEntry {
+function recordStudioReplJournalEntry(
+	details: Partial<StudioReplJournalEntry> & { sessionName: string; code?: string },
+	knownSession?: StudioReplSessionInfo | null,
+): StudioReplJournalEntry {
 	let entry = upsertStudioReplJournalEntry(makeStudioReplJournalEntry({
 		...details,
 		origin: details.origin || "pi-studio",
@@ -11562,8 +11666,10 @@ function recordStudioReplJournalEntry(details: Partial<StudioReplJournalEntry> &
 	}));
 	const localEntryId = entry.id;
 	studioReplUnsyncedJournalEntryIds.add(localEntryId);
-	const session = inspectStudioReplSession(entry.sessionName);
-	if (!session?.recordId || session.recordWarning) return entry;
+	// A previously validated exact-lifetime identity lets completion/error updates
+	// reach the same sidecar even if that tmux session disappears before capture.
+	const session = knownSession || inspectStudioReplSession(entry.sessionName);
+	if (!session?.recordId || session.recordWarning || session.sessionName !== entry.sessionName) return entry;
 	try {
 		const recorded = upsertReplSessionRecordEntry(
 			session.recordId,
@@ -11619,7 +11725,13 @@ function getStudioReplJournalEntries(sessionName: string | null | undefined): St
 	}));
 }
 
-function updateStudioReplJournalEntryOutput(requestId: string, sessionName: string, output: string, status: StudioReplJournalEntry["status"]): void {
+function updateStudioReplJournalEntryOutput(
+	requestId: string,
+	sessionName: string,
+	output: string,
+	status: StudioReplJournalEntry["status"],
+	knownSession?: StudioReplSessionInfo | null,
+): void {
 	const normalizedRequestId = String(requestId || "");
 	const normalizedSessionName = String(sessionName || "");
 	const existing = getStudioReplJournalEntries(normalizedSessionName).slice().reverse().find((entry) => (
@@ -11633,7 +11745,7 @@ function updateStudioReplJournalEntryOutput(requestId: string, sessionName: stri
 		status,
 		completedAt: Date.now(),
 		updatedAt: Date.now(),
-	});
+	}, knownSession);
 }
 
 function clearStudioReplJournal(sessionName: string): void {
@@ -11665,19 +11777,20 @@ function sleepWithoutKeepingStudioProcessAlive(ms: number): Promise<void> {
 	});
 }
 
-function retainStudioReplSendLeaseUntilSubmissionSettles(
+function retainStudioReplSubmissionUntilSettled(
 	session: StudioReplSessionInfo,
-	doneFile: string,
-	lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>>,
+	controlFiles: StudioReplControlFiles,
+	lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null,
 ): void {
 	// A caller timeout or abort does not stop code already submitted to tmux.
-	// Continue heartbeating the shared lease until the runtime wrapper reports
-	// completion, or until this exact tmux session lifetime disappears.
+	// Keep the private control files (and any shared lease) until the runtime
+	// wrapper reports completion, or until this exact tmux lifetime disappears.
 	void (async () => {
 		let nextIdentityCheck = 0;
 		let missingChecks = 0;
 		try {
-			while (!existsSync(doneFile)) {
+			while (!existsSync(controlFiles.doneFile)) {
+				if (!existsSync(controlFiles.sourceFile)) return;
 				if (Date.now() >= nextIdentityCheck) {
 					try {
 						const current = inspectStudioReplSession(session.sessionName);
@@ -11696,21 +11809,23 @@ function retainStudioReplSendLeaseUntilSubmissionSettles(
 				await sleepWithoutKeepingStudioProcessAlive(100);
 			}
 		} finally {
-			await lease.release().catch(() => undefined);
+			cleanupPrivateReplControlFiles(controlFiles);
+			await lease?.release().catch(() => undefined);
 		}
 	})();
 }
 
-async function releaseOrRetainStudioReplSendLease(
-	lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>>,
+async function releaseOrRetainStudioReplSubmission(
+	lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null,
 	session: StudioReplSessionInfo | null,
-	doneFile: string | undefined,
+	controlFiles: StudioReplControlFiles | undefined,
 ): Promise<void> {
-	if (session && doneFile && !existsSync(doneFile)) {
-		retainStudioReplSendLeaseUntilSubmissionSettles(session, doneFile, lease);
+	if (session && controlFiles && !existsSync(controlFiles.doneFile)) {
+		retainStudioReplSubmissionUntilSettled(session, controlFiles, lease);
 		return;
 	}
-	await lease.release().catch(() => undefined);
+	cleanupPrivateReplControlFiles(controlFiles);
+	await lease?.release().catch(() => undefined);
 }
 
 function interruptStudioReplSession(sessionName: string): { ok: true; message: string } | { ok: false; message: string } {
@@ -12319,6 +12434,11 @@ ${cssVarsBlock}
                 <option value="raw" selected>Send mode: Raw</option>
                 <option value="literate">Send mode: Literate</option>
               </select>
+              <select id="replEchoModeSelect" class="studio-flat-select" hidden aria-label="REPL submission echo" title="Choose how much submitted code Studio displays in the raw REPL pane.">
+                <option value="off" selected>Pane echo: Off</option>
+                <option value="summary">Pane echo: Summary</option>
+                <option value="full">Pane echo: Full (raw code)</option>
+              </select>
             </div>
             <div class="source-actions-row">
               <button id="copyDraftBtn" type="button" title="Copy the current editor text to the clipboard.">Copy</button>
@@ -12889,6 +13009,7 @@ export default function (pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use studio_repl_send when the user asks to run code in the active Studio REPL.",
 			"Do not improvise tmux paste-buffer commands for Studio REPL code; studio_repl_send handles multiline quoting and runtime-specific submission.",
+			"Submitted-code display is off by default; use echoMode='summary' or echoMode='full' only when the user asks to show code and alignment anchors in the raw pane.",
 			"If several REPL sessions of the same runtime are running, use studio_repl_status first or pass the exact sessionName when known.",
 		],
 		parameters: STUDIO_REPL_SEND_TOOL_PARAMS,
@@ -12905,7 +13026,7 @@ export default function (pi: ExtensionAPI) {
 			const timeoutMs = clampStudioReplSendTimeout(params.timeoutMs);
 			let lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null = null;
 			let submittedSession: StudioReplSessionInfo | null = null;
-			let submittedDoneFile: string | undefined;
+			let submittedControlFiles: StudioReplControlFiles | undefined;
 			let journalEntry: StudioReplJournalEntry | null = null;
 			try {
 				if (selected.session.recordId && !selected.session.recordWarning) {
@@ -12938,26 +13059,26 @@ export default function (pi: ExtensionAPI) {
 					mode: "agent",
 					code: params.code,
 					status: "sending",
+				}, currentSession);
+				const sent = sendTextToStudioReplSession(currentSession.sessionName, params.code, currentSession.target, currentSession.runtime, {
+					submissionId: journalEntry.id,
+					echoMode: params.echoMode || STUDIO_REPL_TOOL_ECHO_MODE,
 				});
-				const sent = sendTextToStudioReplSession(currentSession.sessionName, params.code, currentSession.target, currentSession.runtime);
+				submittedControlFiles = sent.controlFiles;
 				if (!sent.ok) {
-					if (sent.submissionStarted) {
-						submittedSession = currentSession;
-						submittedDoneFile = sent.controlFiles?.doneFile;
-					}
+					if (sent.submissionStarted) submittedSession = currentSession;
 					journalEntry = recordStudioReplJournalEntry({
 						...journalEntry,
 						output: sent.message,
 						status: "error",
 						completedAt: Date.now(),
-					});
+					}, currentSession);
 					return {
 						content: [{ type: "text", text: sent.message }],
 						details: { ok: false, error: sent.message, session: selected.session, sessions: selected.sessions, recordEntryId: journalEntry.id } as Record<string, unknown>,
 					};
 				}
 				submittedSession = currentSession;
-				submittedDoneFile = sent.controlFiles?.doneFile;
 				studioReplActiveSessionName = selected.session.sessionName;
 
 				let completed = false;
@@ -12976,7 +13097,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				const afterTranscript = after.transcript;
 				const rawOutput = extractStudioReplTranscriptDelta(beforeTranscript, afterTranscript);
-				const output = cleanStudioReplCapturedOutput(rawOutput);
+				const output = cleanStudioReplCapturedOutput(rawOutput, sent.display, sent.completionLine);
 				const status: StudioReplJournalEntry["status"] = sent.controlFiles?.doneFile
 					? (completed ? "captured" : "timeout")
 					: (output.trim() ? "captured" : "sent");
@@ -12986,7 +13107,7 @@ export default function (pi: ExtensionAPI) {
 					output,
 					status,
 					completedAt: Date.now(),
-				});
+				}, currentSession);
 				const statusLine = sent.controlFiles?.doneFile
 					? (completed ? "Completed." : `Timed out after ${timeoutMs} ms waiting for completion marker.`)
 					: "Submitted.";
@@ -13022,6 +13143,8 @@ export default function (pi: ExtensionAPI) {
 						usedControlFile: sent.usedControlFile,
 						submissionText: sent.submissionText,
 						controlFiles: sent.controlFiles,
+						echoMode: sent.display?.mode || "off",
+						submissionAnchorId: sent.display?.enabled ? sent.display.anchorId : undefined,
 						output,
 						recordEntryId: journalEntry.id,
 						recordPath: selected.session.recordPath,
@@ -13035,17 +13158,16 @@ export default function (pi: ExtensionAPI) {
 							output: error instanceof Error ? error.message : String(error),
 							status: error instanceof Error && /timed out/i.test(error.message) ? "timeout" : "error",
 							completedAt: Date.now(),
-						});
+						}, submittedSession || selected.session);
 					} catch {
 						// Preserve the execution error when record maintenance also fails.
 					}
 				}
 				throw error;
 			} finally {
-				if (lease) {
-					await releaseOrRetainStudioReplSendLease(lease, submittedSession, submittedDoneFile);
-					lease = null;
-				}
+				await releaseOrRetainStudioReplSubmission(lease, submittedSession, submittedControlFiles);
+				lease = null;
+				submittedControlFiles = undefined;
 			}
 		},
 	});
@@ -15914,7 +16036,7 @@ export default function (pi: ExtensionAPI) {
 				let journalEntry: StudioReplJournalEntry | null = null;
 				let lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null = null;
 				let submittedSession: StudioReplSessionInfo | null = null;
-				let submittedDoneFile: string | undefined;
+				let submittedControlFiles: StudioReplControlFiles | undefined;
 				try {
 					if (!session) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
 					if (session.recordId && !session.recordWarning) {
@@ -15949,17 +16071,17 @@ export default function (pi: ExtensionAPI) {
 						code: msg.text,
 						status: "sending",
 						skippedChunks: msg.skippedChunks,
+					}, currentSession);
+					const sent = sendTextToStudioReplSession(msg.sessionName, msg.text, currentSession.target, currentSession.runtime, {
+						submissionId: journalEntry.id,
+						echoMode: msg.echoMode,
 					});
-					const sent = sendTextToStudioReplSession(msg.sessionName, msg.text, currentSession.target, currentSession.runtime);
+					submittedControlFiles = sent.controlFiles;
 					if (!sent.ok) {
-						if (sent.submissionStarted) {
-							submittedSession = currentSession;
-							submittedDoneFile = sent.controlFiles?.doneFile;
-						}
+						if (sent.submissionStarted) submittedSession = currentSession;
 						throw new Error(sent.message);
 					}
 					submittedSession = currentSession;
-					submittedDoneFile = sent.controlFiles?.doneFile;
 					studioReplActiveSessionName = msg.sessionName;
 					sendToClient(client, {
 						type: "repl_send_ack",
@@ -15982,29 +16104,30 @@ export default function (pi: ExtensionAPI) {
 					}
 					const afterTranscript = after.transcript;
 					const rawOutput = extractStudioReplTranscriptDelta(beforeTranscript, afterTranscript);
-					const output = cleanStudioReplCapturedOutput(rawOutput);
+					const output = cleanStudioReplCapturedOutput(rawOutput, sent.display, sent.completionLine);
 					updateStudioReplJournalEntryOutput(
 						msg.requestId,
 						msg.sessionName,
 						output,
 						sent.controlFiles?.doneFile ? (completed ? "captured" : "timeout") : (output.trim() ? "captured" : "sent"),
+						currentSession,
 					);
-					if (lease) {
-						await releaseOrRetainStudioReplSendLease(lease, submittedSession, submittedDoneFile);
-						lease = null;
-					}
 					sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId });
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					if (journalEntry) updateStudioReplJournalEntryOutput(msg.requestId, msg.sessionName, message, "error");
-					if (lease) {
-						await releaseOrRetainStudioReplSendLease(lease, submittedSession, submittedDoneFile);
-						lease = null;
-					}
+					if (journalEntry) updateStudioReplJournalEntryOutput(
+						msg.requestId,
+						msg.sessionName,
+						message,
+						"error",
+						submittedSession || session,
+					);
 					sendToClient(client, { type: "error", requestId: msg.requestId, message });
 					sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId, replError: message });
 				} finally {
-					await lease?.release().catch(() => undefined);
+					await releaseOrRetainStudioReplSubmission(lease, submittedSession, submittedControlFiles);
+					lease = null;
+					submittedControlFiles = undefined;
 				}
 			})();
 			return;

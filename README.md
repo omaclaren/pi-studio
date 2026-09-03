@@ -39,7 +39,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
 - Includes a right-pane **Changes** view for browsing the current git diff by file, previewing per-file diffs, opening changed files, loading the full diff into the editor, and copying the diff
 - Includes a right-pane **Files** view rooted in folders allowed for the current Studio session, with an **Allow folder…** action and location selector; exact-file grants can still be opened independently without exposing their parent folders. Files supports sorting by name/modified time/size, opening folders or the current root in Finder/the system file manager, loading text/code/CSV/TSV documents into the editor, opening a read-only **Preview (follow)** tab whose disk content is authoritative, previewing PDFs/images, opening previews in new Studio tabs, converting DOCX/ODT documents to editable Markdown when Pandoc is available after confirmation, copying paths, setting the current folder as the Studio working directory, and revealing files in the file manager
 - Imports detached text-file copies either through the browser's file picker or from a path on the computer running Pi, keeping the path option available in embedded and remote browser views; imported copies remain detached until saved or opened as file-backed documents
-- Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with Raw/Literate send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/stop/interrupt controls, a compact refresh-persistent **Shared REPL Record** of compatible-client submissions, a secondary raw tmux mirror, agent-facing `studio_repl_status` / `studio_repl_send` tools, and Markdown/PDF/HTML export
+- Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with Raw/Literate send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/stop/interrupt controls, a privacy-conscious Off/Summary/Full pane-echo selector, a compact refresh-persistent **Shared REPL Record** of compatible-client submissions, a secondary raw tmux mirror, agent-facing `studio_repl_status` / `studio_repl_send` tools, and Markdown/PDF/HTML export
 - Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them, with a **Recent…** picker for recovering scratchpads saved under earlier file/draft identities
 - Includes a docked **Outline** rail for navigating document structure in the current editor text, with clickable entries that jump in the raw editor and reveal matching preview locations when available
 - Restores each browser tab’s editor workspace after refresh or cmux hidden-surface reconstruction, and provides an explicit **Reset editor** action when you want to discard the restored draft and return the tab to a fresh blank draft without changing responses or saved files
@@ -92,7 +92,7 @@ _The video shows an earlier version of the Studio interface. The basic workflow 
 | `studio_export_pdf` | Export direct Markdown/LaTeX, a local file, or the last model response to PDF. Defaults to writing a file without opening a viewer. |
 | `studio_export_html` | Export direct Markdown/LaTeX, a local file, or the last model response to standalone HTML. Defaults to writing a file without opening a viewer. |
 | `studio_repl_status` | Inspect tmux-backed REPL sessions, including shared clean-record identity, compatible-client entries, and raw-mirror details. |
-| `studio_repl_send` | Send code to a visible REPL under the cross-client send lease and add its captured output to the shared clean record. |
+| `studio_repl_send` | Send code to a visible REPL under the cross-client send lease, optionally choose its raw-pane `echoMode`, and add its captured output to the shared clean record. |
 
 ## Install
 
@@ -117,6 +117,20 @@ Studio remains a standalone REPL client: it can create and use its own tmux sess
 Compatible clients publish a versioned opaque record ID in tmux and keep the bounded JSON record in a private per-user temporary directory. The record is tied to the exact tmux session ID and creation time, uses atomic locked updates, and serializes compatible sends from pre-capture through output capture so concurrent Studio and `pi-repl` submissions do not claim each other's output. Existing sessions attach lazily; Studio's legacy browser-local entries are imported once with stable IDs.
 
 The clean record covers only submissions and notes whose boundaries a compatible client knows. Text typed directly into an attached tmux pane remains in the secondary raw pane/history mirror and is not presented as reliably parsed code/output. **Export record** produces a canonical Markdown representation with origin, mode, status, runtime, timestamp, and this limitation; PDF and HTML exports are derived from that Markdown.
+
+### Submission display and alignment anchors
+
+Optional pane echo places submitted code after a compact begin anchor, followed by a plain `── output ──` divider and a completion anchor. The anchors contain a stable 12-character hash derived from the Shared REPL Record entry ID, so compatible clients can align known sends in future derived transcripts without exposing the entry ID itself. Studio strips the exact header, source preview, divider, and footer from captured tool output and the clean record; they remain visible only in the raw pane/history.
+
+The REPL footer selector offers:
+
+- **Off** (default): no optional submission display or anchors; the runtime's unavoidable temporary-file control command can still be echoed by the REPL.
+- **Summary**: short submissions in full, truncating after 6 lines or 600 source characters, with compact begin/end anchors and a plain output divider.
+- **Full**: up to 40 lines or 4,000 source characters with the same anchors and divider. Full mode writes source code into persistent raw terminal history, so use it only when that is acceptable.
+
+The browser choice is stored locally for that Studio origin. `studio_repl_send` accepts the same per-call `echoMode`; `PI_STUDIO_REPL_ECHO_MODE=off|summary|full` changes the tool-send startup default from Off. Display text escapes terminal, line-separator, and bidirectional control characters. The anchors improve raw-history alignment but do not make direct pane activity without instrumentation authoritative or alter protocol-v1 entries.
+
+Runtime wrappers use compact request-unique paths such as `/tmp/pi-rc-<user-key>/<token>.py` rather than a long Studio/session directory tree. The per-user root is current-user-owned mode `0700`, source files are mode `0600`, and files are removed after capture or by the timeout/abort watcher once execution settles. This keeps the unavoidable echoed loader command short without reverting to a collision-prone shared filename.
 
 See [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md) for protocol, safety, retention, and compatibility details.
 
@@ -199,7 +213,7 @@ Studio only passes icon-pack arguments when a diagram actually references `lucid
 - Studio is designed as a complement to terminal pi, not a replacement.
 - Installing pi-studio makes the optional `pi-studio-dark` and `pi-studio-light` themes available in pi's theme selector; it does not change your active theme.
 - Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack. Use `PI_STUDIO_FONT_UI` or `PI_STUDIO_FONT_PROSE` to override the Studio UI or rendered-preview font stacks.
-- The optional REPL view requires `tmux`. Studio can start and stop Studio-owned `pi-studio-repl-*` sessions and can mirror detected `pi-repl-*` sessions, but it will not stop external `pi-repl-*` sessions. Compatible clients synchronize their clean record automatically; direct pane interaction remains available only in the raw mirror. A send timeout or tool abort does not stop submitted runtime code, so Studio keeps that session's cross-client lease until the completion marker appears or the exact tmux session ends.
+- The optional REPL view requires `tmux`. Studio can start and stop Studio-owned `pi-studio-repl-*` sessions and can mirror detected `pi-repl-*` sessions, but it will not stop external `pi-repl-*` sessions. Compatible clients synchronize their clean record automatically; direct pane interaction remains available only in the raw mirror. A send timeout or tool abort does not stop submitted runtime code, so Studio keeps that session's cross-client lease until the runtime completion signal appears or the exact tmux session ends. The visible request-specific completion anchor is separate presentation metadata and stays in raw history when pane echo is enabled.
 - Side-question web search requires `BRAVE_API_KEY`; without it, local and conversation context still work, and the web option is shown as unavailable. Side sub-sessions are deliberately read-only and can run independently while the main Pi agent is busy.
 - Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
   - `brew install pandoc`

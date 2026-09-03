@@ -83,6 +83,20 @@ A coordinated interoperability release with `pi-repl` 0.4.0:
 
 This release does not change Studio's single-buffer architecture or move buffer-first work forward from `0.10.0`.
 
+## 0.9.57 — REPL submission display and alignment anchors (in progress)
+
+A coordinated presentation and future-alignment increment with `pi-repl`:
+
+- keep optional pane echo Off by default, with an adaptive Summary that shows short submissions in full and a separately bounded Full choice;
+- derive collision-resistant human-readable anchors from immutable clean-record entry IDs without exposing those IDs in the pane;
+- retain compact begin/completion anchors and a plain unanchored output divider in raw tmux history while stripping the exact header, source preview, divider, and footer from captured output and protocol-v1 records;
+- sanitize terminal controls, cap all visible source previews, and warn that Full mode persists bounded source code in raw history;
+- cover Shell, Python/IPython, Julia, R, GHCi, and Clojure consistently across browser and tool sends, including error, timeout, abort, and exact-session-disappearance paths;
+- replace verbose or fixed loader paths in both clients with compact request-unique files in a private per-user control root, retaining files through timed-out/aborted execution and cleaning them when the submission settles;
+- treat markers only as presentation and alignment evidence, never as authority for silently promoting inferred direct activity into the clean record.
+
+A separate Derived REPL Transcript can use these anchors later, but it remains outside protocol v1 and outside this release.
+
 ## 0.10.0 — Buffer-first editing
 
 The first architectural `0.10` release should add:
@@ -107,4 +121,5 @@ Cross-environment checks should cover, where relevant:
 - paths with spaces, Unicode, traversal attempts, and symlinks;
 - supported and unavailable browser APIs;
 - browser reconstruction, refresh recovery, and clean shutdown;
-- for shared REPL work: bidirectional visibility, compatible-client send contention, output attribution, restart persistence, clear/import behavior, stale or malformed records, and direct attached-pane activity.
+- for shared REPL work: bidirectional visibility, compatible-client send contention, output attribution, restart persistence, clear/import behavior, stale or malformed records, and direct attached-pane activity;
+- for REPL submission displays: Summary/Off/Full bounds, raw-versus-clean separation, stable cross-client anchors, compact private collision-resistant control files and cleanup, every supported runtime, runtime errors, timeout/abort lease retention, and exact-session disappearance.

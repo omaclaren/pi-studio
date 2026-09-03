@@ -4,6 +4,20 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add deterministic raw-pane submission displays and alignment anchors for Studio browser and `studio_repl_send` submissions across Shell, Python/IPython, Julia, R, GHCi, and Clojure.
+- Add a browser-stored **Pane echo** selector with privacy-conscious **Off** default, adaptive **Summary**, and bounded **Full** modes, plus per-tool `echoMode` and `PI_STUDIO_REPL_ECHO_MODE` support.
+
+### Changed
+- Keep ordinary panes quiet by default; opt-in Summary now shows short submissions in full, truncates longer ones after 6 lines or 600 source characters, and uses compact begin/completion anchors with a plain unanchored output divider instead of three metadata-heavy marker lines.
+- Strip each request-specific header, source preview, divider, and footer from captured tool output and the Shared REPL Record while retaining the optional display in raw tmux history for human readability and future transcript alignment.
+- Replace long per-request Studio loader paths with compact collision-resistant files under a private per-user `/tmp/pi-rc-<user-key>` root. Source files use mode `0600`; completed files are removed immediately, timeout/abort files remain only until the submission settles, and crash leftovers older than 24 hours are pruned on a later send.
+
+### Fixed
+- Send GHCi completion signalling as a separate command so a submitted Haskell runtime error cannot prevent completion capture or leave the cross-client lease waiting until timeout.
+- Persist a final clean-record error through the previously validated exact session identity when a Studio submission's tmux lifetime disappears before output capture, instead of leaving its sidecar entry stuck in `sending`.
+- Strip the new compact loader path from browser-side optimistic capture as well as server capture, and stop later raw transcript refreshes from overwriting an authoritative finalized clean-record entry.
+
 ## [0.9.56] — 2026-09-02
 
 ### Added

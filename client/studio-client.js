@@ -132,6 +132,7 @@
       const queueSteerBtn = document.getElementById("queueSteerBtn");
       const sendReplBtn = document.getElementById("sendReplBtn");
       const replSendModeSelect = document.getElementById("replSendModeSelect");
+      const replEchoModeSelect = document.getElementById("replEchoModeSelect");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
       const suggestCompletionBtn = document.getElementById("suggestCompletionBtn");
       const suggestCompletionOptionsBtn = document.getElementById("suggestCompletionOptionsBtn");
@@ -593,6 +594,14 @@
           return String(stored || "").trim().toLowerCase() === "literate" ? "literate" : "raw";
         } catch {
           return "raw";
+        }
+      })();
+      let replEchoMode = (() => {
+        try {
+          const stored = String((window.localStorage && window.localStorage.getItem("piStudio.replEchoMode.v2")) || "").trim().toLowerCase();
+          return stored === "summary" || stored === "full" ? stored : "off";
+        } catch {
+          return "off";
         }
       })();
       function normalizeReplJournalEntry(entry) {
@@ -1353,6 +1362,11 @@
         return String(value || "").trim().toLowerCase() === "literate" ? "literate" : "raw";
       }
 
+      function normalizeReplEchoMode(value) {
+        const normalized = String(value || "").trim().toLowerCase();
+        return normalized === "summary" || normalized === "full" ? normalized : "off";
+      }
+
       function isMacShortcutPlatform() {
         try {
           const platform = String((navigator && navigator.platform) || "");
@@ -1392,6 +1406,28 @@
         } catch {
           // Ignore storage failures.
         }
+      }
+
+      function setReplEchoMode(mode) {
+        replEchoMode = normalizeReplEchoMode(mode);
+        if (replEchoModeSelect) replEchoModeSelect.value = replEchoMode;
+        try {
+          if (window.localStorage) window.localStorage.setItem("piStudio.replEchoMode.v2", replEchoMode);
+        } catch {
+          // Ignore storage failures.
+        }
+      }
+
+      function syncReplEchoModeSelect(visible) {
+        if (!replEchoModeSelect) return;
+        replEchoModeSelect.hidden = !visible;
+        replEchoModeSelect.disabled = !visible || wsState === "Disconnected" || uiBusy || replBusy;
+        replEchoModeSelect.value = replEchoMode;
+        replEchoModeSelect.title = replEchoMode === "off"
+          ? "Do not add a submitted-code display or alignment anchors to the raw REPL pane."
+          : (replEchoMode === "full"
+            ? "Display up to 40 lines or 4,000 characters of submitted code; source remains in raw terminal history."
+            : "Display short submissions in full, truncating after 6 lines or 600 characters, with compact anchors and a plain output divider.");
       }
 
       function setReplJournalCollapsed(collapsed) {
@@ -1983,14 +2019,15 @@
       function stripStudioReplSubmissionEcho(delta) {
         let value = String(delta || "").replace(/^\s+/, "");
         // The raw mirror below remains raw; Studio record cards hide only the
-        // temp-file wrapper used to submit multiline snippets safely. The
-        // pi-studio-re fragment catches IPython's wrapped pi-studio-repl paths.
+        // temp-file wrapper used to submit multiline snippets safely. Match
+        // both legacy long Studio roots and compact private control roots.
         const submissionEchoPatterns = [
-          /^.*exec\(open\([\s\S]*?pi-studio-re[\s\S]*?globals\(\)\)\s*$/gm,
-          /^.*include\([\s\S]*?pi-studio-re[\s\S]*?\.jl"\)\s*$/gm,
-          /^.*source\([\s\S]*?pi-studio-re[\s\S]*?local\s*=\s*\.GlobalEnv\)\s*$/gm,
-          /^.*:script\s+[\s\S]*?pi-studio-re[\s\S]*?\.ghci"?\s*$/gm,
-          /^.*\(do\s+\(load-file\s+[\s\S]*?pi-studio-re[\s\S]*?:pi-studio\/silent\)\s*$/gm,
+          /^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?globals\(\)\)\s*$/gm,
+          /^.*include\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.jl"\)\s*$/gm,
+          /^.*source\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?local\s*=\s*\.GlobalEnv\)\s*$/gm,
+          /^.*:script\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.ghci"?\s*$/gm,
+          /^.*\(do\s+\(load-file\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?:pi-studio\/silent\)\s*$/gm,
+          /^.*\.\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.sh[\s\S]*?(?:done\.flag|[a-f0-9]{16}\.done).*$/gm,
         ];
         for (const pattern of submissionEchoPatterns) {
           value = value.replace(pattern, "");
@@ -2026,6 +2063,10 @@
         if (entryIndex < 0) return false;
         const entry = replJournalEntries[entryIndex];
         if (entry.sessionName && sessionName && entry.sessionName !== sessionName) return false;
+        if (!entry.legacyLocal && (entry.status === "captured" || entry.status === "timeout" || entry.status === "error")) {
+          activeReplJournalEntryId = "";
+          return false;
+        }
         const delta = cleanReplCapturedOutput(extractReplTranscriptDelta(entry.beforeTranscript, transcript), entry);
         if (!delta.trim()) return false;
         if (entry.output === delta && entry.status === "captured") return false;
@@ -2231,6 +2272,7 @@
           requestId,
           sessionName: session.sessionName,
           text,
+          echoMode: replEchoMode,
           journalEntryId: journalEntry.id,
           createdAt: journalEntry.createdAt,
           label: journalEntry.label,
@@ -22342,6 +22384,7 @@
               ? "Literate send: Send to REPL uses the selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk."
               : "Raw send: Send to REPL uses the selection, or full editor if no selection.";
           }
+          syncReplEchoModeSelect(showReplSend);
           if (critiqueBtn) {
             critiqueBtn.textContent = "Critique text";
             critiqueBtn.classList.remove("request-stop-active");
@@ -22404,6 +22447,7 @@
             ? "Literate send: Send to REPL uses the selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk."
             : "Raw send: Send to REPL uses the selection, or full editor if no selection.";
         }
+        syncReplEchoModeSelect(rightView === "repl");
 
         if (critiqueBtn) {
           critiqueBtn.textContent = critiqueIsStop ? "Stop" : "Critique text";
@@ -24960,6 +25004,19 @@
         });
       }
 
+      if (replEchoModeSelect) {
+        replEchoModeSelect.addEventListener("change", () => {
+          setReplEchoMode(replEchoModeSelect.value);
+          syncActionButtons();
+          setStatus(replEchoMode === "full"
+            ? "Full pane echo enabled. Bounded submitted source code will remain in raw terminal history."
+            : (replEchoMode === "off"
+              ? "Pane echo disabled; new sends will not add alignment anchors to raw terminal history."
+              : "Summary pane echo enabled; short submissions will be shown with compact anchors and a plain output divider."),
+          replEchoMode === "full" ? "warning" : "success");
+        });
+      }
+
       copyDraftBtn.addEventListener("click", async () => {
         const content = sourceTextEl.value;
         if (!content.trim()) {
@@ -25580,6 +25637,7 @@
       const initialAnnotationsEnabled = storedAnnotationsEnabled ?? Boolean(annotationModeSelect ? annotationModeSelect.value !== "off" : true);
       setAnnotationsEnabled(initialAnnotationsEnabled, { silent: true });
       setReplSendMode(replSendMode);
+      setReplEchoMode(replEchoMode);
 
       const sessionWorkspaceState = readPersistedWorkspaceState();
       const serverWorkspaceRecovery = await readServerWorkspaceRecoveryState();
