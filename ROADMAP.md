@@ -116,7 +116,7 @@ A small workflow refinement for moving Neovim-provided context through Pi and St
 - provide `Cmd/Ctrl+Shift+L` for loading and a confirmed **Clear Pi editor text…** fallback without changing Studio text or conversation history;
 - keep `pi-nvim-context`, protocol v1, networking, and the buffer-first architecture unchanged.
 
-## 0.9.60 — Opt-in container/network binding (implemented, unreleased)
+## 0.9.60 — Opt-in container/network binding (`0.9.60-rc.0` prerelease, 2026-09-03)
 
 A bounded implementation of GitHub issue #4, separate from REPL transcript and buffer work:
 
