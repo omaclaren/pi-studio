@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.58] — 2026-09-03
+
 ### Added
 - Add a scoped REPL-pane **Quick send** composer beneath the Shared REPL Record, with exact raw text, multiline editing, explicit `Cmd/Ctrl+Enter` submission, a compact session-name target that links back to the session controls while retaining full runtime/pane details on hover, exact-tmux-lifetime in-memory drafts, and acknowledgement-aware clearing through the existing shared lease/control-file/record path.
 - Add persisted **Side by side**, **Editor above**, and **Response above** pane layouts with orientation-aware pointer and keyboard resizing.

@@ -97,7 +97,7 @@ A coordinated presentation and future-alignment increment with `pi-repl` 0.4.1:
 
 A separate Derived REPL Transcript can use these anchors later, but it remains outside protocol v1 and outside this release.
 
-## Unreleased 0.9.x — Workspace and REPL interaction refinements
+## 0.9.58 — Workspace and REPL interaction refinements (shipped 2026-09-03)
 
 A small interaction increment before the buffer-first architecture:
 
