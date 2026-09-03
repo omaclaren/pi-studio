@@ -11530,10 +11530,11 @@ function stripStudioReplSubmissionEcho(output: string): string {
 	let value = String(output || "").replace(/^\s+/, "");
 	// The raw tmux mirror should stay raw, but Studio/tool result output should not
 	// expose the temp-file wrapper used to submit multiline snippets safely. The
-	// The root fragment catches both legacy long Studio paths and compact private
-	// control paths when IPython wraps them across continuation prompt lines.
+	// root fragment catches both legacy long Studio paths and compact private
+	// control paths. Match the Python wrapper by its final double close rather
+	// than the word `globals`, which IPython may split across continuation lines.
 	const submissionEchoPatterns = [
-		/^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?globals\(\)\)\s*$/gm,
+		/^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\)\)\s*$/gm,
 		/^.*include\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.jl"\)\s*$/gm,
 		/^.*source\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?local\s*=\s*\.GlobalEnv\)\s*$/gm,
 		/^.*:script\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.ghci"?\s*$/gm,
@@ -12508,6 +12509,15 @@ ${cssVarsBlock}
                 <option value="off">Line numbers: Off</option>
                 <option value="on" selected>Line numbers: On</option>
               </select>
+              <select id="studioPaneLayoutSelect" class="studio-flat-select" aria-label="Studio pane layout" title="Choose whether the two main panes sit side by side or in a vertical stack.">
+                <option value="side-by-side">Layout: Side by side</option>
+                <option value="editor-top">Layout: Editor above</option>
+                <option value="response-top">Layout: Response above</option>
+              </select>
+              <select id="activityTrackingSelect" class="studio-flat-select" aria-label="Follow main Pi activity" title="Optionally follow main Pi activity from Working to the response view; off by default.">
+                <option value="off">Follow activity: Off</option>
+                <option value="on">Follow activity: On</option>
+              </select>
               <select id="editorFontSizeSelect" class="studio-flat-select" aria-label="Editor text size" title="Adjust raw editor text size.">
                 <option value="10">Editor text: 10px</option>
                 <option value="11">Editor text: 11px</option>
@@ -12607,7 +12617,7 @@ ${cssVarsBlock}
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
           <span id="rightViewSelectWrap" class="studio-header-select-wrap">
-            <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+1–8 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W/F/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, and Side questions.">
+            <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+1–8 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W/F/R/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, REPL, and Side questions.">
               <option value="markdown">Response (Raw)</option>
               <option value="preview" selected>Response (Preview)</option>
               <option value="editor-preview">Editor (Preview)</option>
@@ -12725,6 +12735,7 @@ ${cssVarsBlock}
             <div><dt>Cmd/Ctrl+Alt+E</dt><dd>Switch the right pane directly to Editor Preview</dd></div>
             <div><dt>Cmd/Ctrl+Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
             <div><dt>Cmd/Ctrl+Alt+F</dt><dd>Switch the right pane directly to Files</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+R</dt><dd>Switch the right pane directly to REPL and focus Quick send when a session is selected</dd></div>
             <div><dt>Cmd/Ctrl+Alt+Q</dt><dd>Switch the right pane directly to Side questions</dd></div>
             <div><dt>F8</dt><dd>Focus editor text</dd></div>
             <div><dt>Shift+F8</dt><dd>Focus right-pane content</dd></div>
@@ -12740,7 +12751,7 @@ ${cssVarsBlock}
             <div><dt>Alt/Option+=</dt><dd>Increase the active pane's text size when not editing text</dd></div>
             <div><dt>Alt/Option+-</dt><dd>Decrease the active pane's text size when not editing text</dd></div>
             <div><dt>Alt/Option+0</dt><dd>Reset the active pane's text size when not editing text</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+R</dt><dd>Refresh the focused or visible PDF preview from disk</dd></div>
+            <div><dt>Cmd/Ctrl+Alt+Shift+R</dt><dd>Refresh the focused or visible PDF preview from disk</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group">
@@ -12772,6 +12783,7 @@ ${cssVarsBlock}
         <section class="shortcuts-group">
           <h3>REPL</h3>
           <dl>
+            <div><dt>Cmd/Ctrl+Enter</dt><dd>Send exact Quick send text while its REPL composer is focused; Enter adds a new line</dd></div>
             <div><dt>Cmd/Ctrl+Shift+Enter</dt><dd>Send selection, chunks, or editor text to the active REPL when the right pane is REPL</dd></div>
           </dl>
         </section>

@@ -4,6 +4,20 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- Add a scoped REPL-pane **Quick send** composer beneath the Shared REPL Record, with exact raw text, multiline editing, explicit `Cmd/Ctrl+Enter` submission, a compact session-name target that links back to the session controls while retaining full runtime/pane details on hover, exact-tmux-lifetime in-memory drafts, and acknowledgement-aware clearing through the existing shared lease/control-file/record path.
+- Add persisted **Side by side**, **Editor above**, and **Response above** pane layouts with orientation-aware pointer and keyboard resizing.
+- Add opt-in, browser-stored **Follow activity** view switching from Working during main-agent generation to Response Preview on completion, while keeping it off by default and respecting manual view changes.
+
+### Changed
+- Add `Cmd/Ctrl+Alt+R` as a mnemonic direct switch to the REPL view, focus its Quick send composer when available, and move manual PDF refresh to `Cmd/Ctrl+Alt+Shift+R`.
+
+### Fixed
+- Keep Quick send results clean when IPython wraps the private loader command across continuation prompts, including inside the word `globals`.
+
+### Acknowledgements
+- Credit [Hal Gumbert / CampSoftware](https://github.com/campsoftware) for the [Pi Studio Activity](https://campsoftware.com/blog/post.php?post=20260507-ai-ollama-pi-studio-activity) experiments that inspired the built-in **Follow activity** option and stacked pane layouts.
+
 ## [0.9.57] — 2026-09-03
 
 ### Added

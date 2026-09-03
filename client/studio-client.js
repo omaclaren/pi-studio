@@ -148,6 +148,8 @@
       const stripAnnotationsBtn = document.getElementById("stripAnnotationsBtn");
       const highlightSelect = document.getElementById("highlightSelect");
       const lineNumbersSelect = document.getElementById("lineNumbersSelect");
+      const studioPaneLayoutSelect = document.getElementById("studioPaneLayoutSelect");
+      const activityTrackingSelect = document.getElementById("activityTrackingSelect");
       const editorFontSizeSelect = document.getElementById("editorFontSizeSelect");
       const annotationModeSelect = document.getElementById("annotationModeSelect");
       const compactBtn = document.getElementById("compactBtn");
@@ -427,8 +429,8 @@
         rightViewSelect.title = isWatchedFilePreview
           ? "Read-only watched preview follows this file on disk."
           : (isEditorOnlyMode
-          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7/8 switch directly to numbered right-pane views, and Cmd/Ctrl+Alt+F/Q open Files/Side questions."
-          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W/F/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, and Side questions.");
+          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7/8 switch directly to numbered right-pane views, and Cmd/Ctrl+Alt+F/R/Q open Files/REPL/Side questions."
+          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W/F/R/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, REPL, and Side questions.");
       }
 
       function getInitialRightView(source) {
@@ -481,6 +483,8 @@
       const REPL_TRANSCRIPT_MAX_CHARS = 200_000;
       const REPL_JOURNAL_OUTPUT_MAX_CHARS = 80_000;
       const REPL_JOURNAL_MAX_ENTRIES = 80;
+      const REPL_QUICK_DRAFT_MAX_CHARS = 20_000;
+      const REPL_QUICK_DRAFT_MAX_SESSIONS = 12;
       const PDF_EXPORT_FETCH_TIMEOUT_MS = 180_000;
       const HTML_EXPORT_FETCH_TIMEOUT_MS = 180_000;
       const HTML_ARTIFACT_MATH_RENDER_FETCH_TIMEOUT_MS = 30_000;
@@ -588,6 +592,10 @@
       let replFollow = true;
       let replPollTimer = null;
       let replBusy = false;
+      let replPendingRequestId = "";
+      const replQuickDrafts = new Map();
+      let replQuickPending = null;
+      let replQuickFocusRequested = false;
       let replSendMode = (() => {
         try {
           const stored = window.localStorage && window.localStorage.getItem("piStudio.replSendMode");
@@ -622,7 +630,7 @@
           mode: typeof entry.mode === "string" ? entry.mode : "raw",
           prose: typeof entry.prose === "string" ? entry.prose : "",
           code: typeof entry.code === "string" ? entry.code : "",
-          output: typeof entry.output === "string" ? entry.output : "",
+          output: typeof entry.output === "string" ? stripStudioReplSubmissionEcho(entry.output) : "",
           beforeTranscript: "",
           status: typeof entry.status === "string" ? entry.status : "sent",
           skippedChunks: Math.max(0, Math.floor(Number(entry.skippedChunks) || 0)),
@@ -1302,6 +1310,10 @@
         return {
           sessionName,
           target: typeof session.target === "string" ? session.target : (sessionName + ":0.0"),
+          tmuxSessionId: typeof session.tmuxSessionId === "string" ? session.tmuxSessionId : "",
+          tmuxSessionCreatedAt: typeof session.tmuxSessionCreatedAt === "number" && Number.isFinite(session.tmuxSessionCreatedAt)
+            ? session.tmuxSessionCreatedAt
+            : 0,
           runtime: typeof session.runtime === "string" ? session.runtime : "unknown",
           label: typeof session.label === "string" && session.label.trim() ? session.label.trim() : sessionName,
           source: typeof session.source === "string" ? session.source : "tmux",
@@ -1430,6 +1442,63 @@
             : "Display short submissions in full, truncating after 6 lines or 600 characters, with compact anchors and a plain output divider.");
       }
 
+      function getReplQuickDraftKey(session) {
+        const normalized = normalizeReplSession(session);
+        if (!normalized || !normalized.tmuxSessionId || normalized.tmuxSessionCreatedAt <= 0) return "";
+        return [normalizeReplRuntime(normalized.runtime), normalized.tmuxSessionId, normalized.tmuxSessionCreatedAt].join("\u001f");
+      }
+
+      function getReplQuickDraft(session) {
+        const key = getReplQuickDraftKey(session);
+        return key ? String(replQuickDrafts.get(key) || "") : "";
+      }
+
+      function setReplQuickDraft(session, value) {
+        const key = getReplQuickDraftKey(session);
+        if (!key) return "";
+        const draft = String(value || "").slice(0, REPL_QUICK_DRAFT_MAX_CHARS);
+        if (!draft) {
+          replQuickDrafts.delete(key);
+          return "";
+        }
+        if (!replQuickDrafts.has(key) && replQuickDrafts.size >= REPL_QUICK_DRAFT_MAX_SESSIONS) {
+          const oldestKey = replQuickDrafts.keys().next().value;
+          if (oldestKey) replQuickDrafts.delete(oldestKey);
+        }
+        replQuickDrafts.set(key, draft);
+        return draft;
+      }
+
+      function settleReplQuickPending(requestId, submitted) {
+        if (!replQuickPending || !requestId || replQuickPending.requestId !== requestId) return false;
+        const pending = replQuickPending;
+        replQuickPending = null;
+        if (replPendingRequestId === requestId) replPendingRequestId = "";
+        replBusy = Boolean(replPendingRequestId);
+        if (submitted && replQuickDrafts.get(pending.key) === pending.text) {
+          replQuickDrafts.delete(pending.key);
+        }
+        return true;
+      }
+
+      function reconcileReplQuickPending() {
+        if (!replQuickPending) return false;
+        const entry = replJournalEntries.find((candidate) => candidate.requestId === replQuickPending.requestId);
+        if (!entry || entry.status === "sending") return false;
+        return settleReplQuickPending(entry.requestId, entry.status !== "error");
+      }
+
+      function updateReplQuickComposerActions() {
+        if (!critiqueViewEl || rightView !== "repl") return;
+        const session = getActiveReplSessionForCurrentRuntime();
+        const draft = getReplQuickDraft(session);
+        const pending = Boolean(replQuickPending && replQuickPending.key === getReplQuickDraftKey(session));
+        const sendButton = critiqueViewEl.querySelector("[data-repl-action='quick-send']");
+        const clearButton = critiqueViewEl.querySelector("[data-repl-action='quick-clear']");
+        if (sendButton) sendButton.disabled = !session || replTmuxAvailable === false || pending || replBusy || wsState === "Disconnected" || !draft.trim();
+        if (clearButton) clearButton.disabled = pending || !draft;
+      }
+
       function setReplJournalCollapsed(collapsed) {
         replJournalCollapsed = Boolean(collapsed);
         try {
@@ -1460,6 +1529,8 @@
             runtime: session.runtime,
             source: session.source,
             target: session.target,
+            tmuxSessionId: session.tmuxSessionId,
+            tmuxSessionCreatedAt: session.tmuxSessionCreatedAt,
           })));
       }
 
@@ -1579,7 +1650,53 @@
 
       function isReplControlFocused() {
         const activeEl = document.activeElement;
-        return activeEl instanceof Element && Boolean(activeEl.closest(".repl-controls"));
+        return activeEl instanceof Element && Boolean(activeEl.closest(".repl-controls, .repl-quick-composer"));
+      }
+
+      function focusReplQuickComposer() {
+        replQuickFocusRequested = true;
+        window.setTimeout(() => {
+          if (rightView !== "repl" || !critiqueViewEl) {
+            replQuickFocusRequested = false;
+            return;
+          }
+          const composer = critiqueViewEl.querySelector("[data-repl-quick-draft]");
+          if (composer instanceof HTMLTextAreaElement) {
+            if (!composer.disabled) {
+              try {
+                composer.focus({ preventScroll: true });
+              } catch {
+                try { composer.focus(); } catch {}
+              }
+              if (document.activeElement === composer) replQuickFocusRequested = false;
+            }
+            if (typeof composer.scrollIntoView === "function") {
+              try {
+                composer.scrollIntoView({ block: "nearest", inline: "nearest" });
+              } catch {
+                try { composer.scrollIntoView(); } catch {}
+              }
+            }
+          }
+        }, 0);
+      }
+
+      function focusReplSessionControls() {
+        if (rightView !== "repl" || !critiqueViewEl) return;
+        critiqueViewEl.scrollTop = 0;
+        const sessionSelect = critiqueViewEl.querySelector("[data-repl-session]");
+        const runtimeSelect = critiqueViewEl.querySelector("[data-repl-runtime]");
+        const target = sessionSelect instanceof HTMLSelectElement && !sessionSelect.disabled
+          ? sessionSelect
+          : runtimeSelect;
+        if (target instanceof HTMLElement && typeof target.focus === "function") {
+          try {
+            target.focus({ preventScroll: true });
+          } catch {
+            try { target.focus(); } catch {}
+          }
+        }
+        setStatus("REPL session controls focused.");
       }
 
       function renderReplViewIfActive(options) {
@@ -1589,6 +1706,7 @@
         traceRenderRaf = window.requestAnimationFrame(() => {
           traceRenderRaf = null;
           refreshResponseUi();
+          if (replQuickFocusRequested) focusReplQuickComposer();
         });
       }
 
@@ -2020,9 +2138,11 @@
         let value = String(delta || "").replace(/^\s+/, "");
         // The raw mirror below remains raw; Studio record cards hide only the
         // temp-file wrapper used to submit multiline snippets safely. Match
-        // both legacy long Studio roots and compact private control roots.
+        // both legacy long Studio roots and compact private control roots. Use
+        // the Python wrapper's final double close because IPython may wrap in
+        // the middle of the word `globals` and add continuation prompts.
         const submissionEchoPatterns = [
-          /^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?globals\(\)\)\s*$/gm,
+          /^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\)\)\s*$/gm,
           /^.*include\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.jl"\)\s*$/gm,
           /^.*source\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?local\s*=\s*\.GlobalEnv\)\s*$/gm,
           /^.*:script\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.ghci"?\s*$/gm,
@@ -2218,11 +2338,15 @@
         const session = getActiveReplSessionForCurrentRuntime();
         if (!session) {
           setStatus("Start or select a " + getReplRuntimeLabel(replRuntime) + " REPL session first.", "warning");
-          return;
+          return null;
+        }
+        if (replBusy) {
+          setStatus("A REPL request is already in progress.", "warning");
+          return null;
         }
         if (!payload || payload.error) {
           setStatus(payload && payload.error ? payload.error : "Nothing to send to REPL.", "warning");
-          return;
+          return null;
         }
         if (payload.noteOnly) {
           if (String(payload.prose || "").trim()) {
@@ -2241,12 +2365,12 @@
           } else {
             setStatus("No code or prose found to send.", "warning");
           }
-          return;
+          return null;
         }
         const text = String(payload.text || "");
         if (!text.trim()) {
-          setStatus("Editor text is empty.", "warning");
-          return;
+          setStatus("REPL submission is empty.", "warning");
+          return null;
         }
         const requestId = makeRequestId();
         const journalEntry = addReplJournalEntry({
@@ -2262,6 +2386,7 @@
           skippedChunks: payload.skippedChunks,
         });
         activeReplJournalEntryId = journalEntry.id;
+        replPendingRequestId = requestId;
         replBusy = true;
         syncActionButtons();
         renderReplViewIfActive({ force: true });
@@ -2280,11 +2405,15 @@
           prose: journalEntry.prose,
           skippedChunks: journalEntry.skippedChunks,
         })) {
-          replBusy = false;
+          if (replPendingRequestId === requestId) replPendingRequestId = "";
+          replBusy = Boolean(replPendingRequestId);
           replJournalEntries = replJournalEntries.map((entry) => entry.id === journalEntry.id ? { ...entry, status: "error" } : entry);
           persistReplJournalEntries();
           syncActionButtons();
+          renderReplViewIfActive({ force: true });
+          return null;
         }
+        return requestId;
       }
 
       function sendEditorTextToRepl(options) {
@@ -2298,6 +2427,36 @@
           return;
         }
         sendReplPayload(replSendMode === "literate" ? buildLiterateReplSendPayload() : buildRawReplSendPayload());
+      }
+
+      function submitReplQuickDraft() {
+        const session = getActiveReplSessionForCurrentRuntime();
+        if (!session) {
+          setStatus("Start or select a " + getReplRuntimeLabel(replRuntime) + " REPL session first.", "warning");
+          return false;
+        }
+        const key = getReplQuickDraftKey(session);
+        const text = getReplQuickDraft(session);
+        if (!text.trim()) {
+          setStatus("Quick send is empty.", "warning");
+          return false;
+        }
+        if (replQuickPending && replQuickPending.key === key) {
+          setStatus("Quick send is already being submitted to this REPL.", "warning");
+          return false;
+        }
+        const requestId = sendReplPayload({
+          text,
+          prose: "",
+          label: "quick send",
+          mode: "raw",
+          noteOnly: false,
+          skippedChunks: 0,
+        });
+        if (!requestId) return false;
+        replQuickPending = { requestId, key, text };
+        renderReplViewIfActive({ force: true });
+        return true;
       }
 
       function renderTraceViewIfActive() {
@@ -2341,9 +2500,15 @@
       let paneFocusTarget = initialPaneFocusTarget;
       let paneSplitPercent = 50;
       const PANE_SPLIT_STORAGE_KEY = "piStudio.paneSplitPercent";
+      const PANE_LAYOUT_STORAGE_KEY = "piStudio.paneLayout";
+      const ACTIVITY_TRACKING_STORAGE_KEY = "piStudio.trackActivity";
       const PANE_SPLIT_MIN_PERCENT = 20;
       const PANE_SPLIT_MAX_PERCENT = 80;
       const PANE_SPLIT_SNAP_TO_CENTER_PERCENT = 1;
+      let studioPaneLayout = readStudioPaneLayout();
+      let activityTrackingEnabled = readActivityTrackingEnabled();
+      let activityTrackingOwnsWorkingView = false;
+      let activityTrackingRequestId = "";
       const STUDIO_WORKSPACE_MAX_TEXT_CHARS = 900_000;
       const STUDIO_WORKSPACE_PERSIST_INTERVAL_MS = 300;
       const STUDIO_WORKSPACE_RECOVERY_FETCH_TIMEOUT_MS = 1_500;
@@ -2879,7 +3044,11 @@
             : "Off";
           const lineLabel = lineNumbersEnabled ? "Lines on" : "Lines off";
           const editorSizeLabel = formatStudioFontSizeLabel(editorFontSize);
-          setStudioUiRefreshButtonText(studioUiRefreshUi.viewButton, "View: " + syntaxLabel + " · " + lineLabel + " · " + editorSizeLabel);
+          const extras = [];
+          if (studioPaneLayout === "editor-top") extras.push("Editor above");
+          if (studioPaneLayout === "response-top") extras.push("Response above");
+          if (activityTrackingEnabled) extras.push("Following activity");
+          setStudioUiRefreshButtonText(studioUiRefreshUi.viewButton, "View: " + syntaxLabel + " · " + lineLabel + " · " + editorSizeLabel + (extras.length ? " · " + extras.join(" · ") : ""));
         }
         syncStudioUiRefreshReviewTrigger();
       }
@@ -3150,6 +3319,8 @@
         const viewButton = makeStudioUiRefreshElement("button", "", "View");
         const viewMenu = makeStudioUiRefreshMenu(viewButton, "view", "studio-refresh-view-anchor");
         appendStudioUiRefreshMenuSection(viewMenu.menu, "Display", [highlightSelect, lineNumbersSelect, editorFontSizeSelect]);
+        if (activityTrackingSelect) activityTrackingSelect.hidden = isEditorOnlyMode || isWatchedFilePreview;
+        appendStudioUiRefreshMenuSection(viewMenu.menu, "Workspace", [studioPaneLayoutSelect, (isEditorOnlyMode || isWatchedFilePreview) ? null : activityTrackingSelect]);
         stateEl.appendChild(annotationsMenu.anchor);
         stateEl.appendChild(viewMenu.anchor);
 
@@ -4390,6 +4561,127 @@
         setStatus(descriptor.fileBacked ? "Detached editor from file origin into a new draft." : "Reset editor origin to a new draft.", "success");
       }
 
+      function normalizeStudioPaneLayout(value) {
+        const normalized = String(value || "").trim().toLowerCase();
+        return normalized === "editor-top" || normalized === "response-top" ? normalized : "side-by-side";
+      }
+
+      function readStudioPaneLayout() {
+        try {
+          return normalizeStudioPaneLayout(window.localStorage && window.localStorage.getItem(PANE_LAYOUT_STORAGE_KEY));
+        } catch {
+          return "side-by-side";
+        }
+      }
+
+      function readActivityTrackingEnabled() {
+        try {
+          return Boolean(window.localStorage && window.localStorage.getItem(ACTIVITY_TRACKING_STORAGE_KEY) === "on");
+        } catch {
+          return false;
+        }
+      }
+
+      function isStackedStudioPaneLayout() {
+        return studioPaneLayout === "editor-top" || studioPaneLayout === "response-top";
+      }
+
+      function isResponseFirstStudioPaneLayout() {
+        return studioPaneLayout === "response-top";
+      }
+
+      function getStudioPaneLayoutLabel(value) {
+        if (value === "editor-top") return "Editor above response";
+        if (value === "response-top") return "Response above editor";
+        return "Side by side";
+      }
+
+      function setStudioPaneLayout(value, options) {
+        studioPaneLayout = normalizeStudioPaneLayout(value);
+        document.body.dataset.studioLayout = studioPaneLayout;
+        if (studioPaneLayoutSelect) studioPaneLayoutSelect.value = studioPaneLayout;
+        const mainEl = paneResizeHandleEl && typeof paneResizeHandleEl.closest === "function"
+          ? paneResizeHandleEl.closest("main")
+          : null;
+        if (mainEl && leftPaneEl && rightPaneEl && paneResizeHandleEl) {
+          if (isResponseFirstStudioPaneLayout()) {
+            mainEl.append(rightPaneEl, paneResizeHandleEl, leftPaneEl);
+          } else {
+            mainEl.append(leftPaneEl, paneResizeHandleEl, rightPaneEl);
+          }
+        }
+        applyPaneSplitPercent(paneSplitPercent, { persist: false });
+        if (!options || options.persist !== false) {
+          try {
+            if (window.localStorage) window.localStorage.setItem(PANE_LAYOUT_STORAGE_KEY, studioPaneLayout);
+          } catch {
+            // Ignore localStorage failures.
+          }
+        }
+        syncStudioUiRefreshSummaries();
+        if (!options || !options.silent) {
+          setStatus("Pane layout: " + getStudioPaneLayoutLabel(studioPaneLayout) + ".");
+        }
+        return studioPaneLayout;
+      }
+
+      function setActivityTrackingEnabled(enabled, options) {
+        activityTrackingEnabled = Boolean(enabled) && !isEditorOnlyMode && !isWatchedFilePreview;
+        if (activityTrackingSelect) {
+          activityTrackingSelect.value = activityTrackingEnabled ? "on" : "off";
+          activityTrackingSelect.hidden = isEditorOnlyMode || isWatchedFilePreview;
+        }
+        if (!activityTrackingEnabled) {
+          activityTrackingOwnsWorkingView = false;
+          activityTrackingRequestId = "";
+        }
+        if (!options || options.persist !== false) {
+          try {
+            if (window.localStorage) window.localStorage.setItem(ACTIVITY_TRACKING_STORAGE_KEY, activityTrackingEnabled ? "on" : "off");
+          } catch {
+            // Ignore localStorage failures.
+          }
+        }
+        syncStudioUiRefreshSummaries();
+        if (activityTrackingEnabled && agentBusyFromServer) {
+          beginTrackedStudioActivity(pendingRequestId || "active");
+        }
+        if (!options || !options.silent) {
+          setStatus(activityTrackingEnabled
+            ? "Studio will show Working during main Pi activity, then return to Response Preview."
+            : "Activity following disabled.");
+        }
+        return activityTrackingEnabled;
+      }
+
+      function beginTrackedStudioActivity(requestId) {
+        if (!activityTrackingEnabled || isEditorOnlyMode || isWatchedFilePreview) return false;
+        const normalizedRequestId = String(requestId || "active");
+        if (!activityTrackingOwnsWorkingView && activityTrackingRequestId
+          && (activityTrackingRequestId === normalizedRequestId || activityTrackingRequestId === "active")) {
+          if (activityTrackingRequestId === "active" && normalizedRequestId !== "active") {
+            activityTrackingRequestId = normalizedRequestId;
+          }
+          return false;
+        }
+        if (activityTrackingOwnsWorkingView && activityTrackingRequestId === normalizedRequestId && rightView === "trace") return false;
+        activityTrackingRequestId = normalizedRequestId;
+        activityTrackingOwnsWorkingView = true;
+        if (rightView !== "trace") setRightView("trace", { activityTracking: true });
+        return true;
+      }
+
+      function finishTrackedStudioActivity(requestId) {
+        if (!activityTrackingRequestId && !activityTrackingOwnsWorkingView) return false;
+        const normalizedRequestId = String(requestId || "");
+        if (normalizedRequestId && activityTrackingRequestId !== normalizedRequestId) return false;
+        const shouldReturn = activityTrackingEnabled && activityTrackingOwnsWorkingView && rightView === "trace";
+        activityTrackingOwnsWorkingView = false;
+        activityTrackingRequestId = "";
+        if (shouldReturn) setRightView("preview", { activityTracking: true });
+        return shouldReturn;
+      }
+
       function clampPaneSplitPercent(value) {
         const numeric = Number(value);
         if (!Number.isFinite(numeric)) return 50;
@@ -4400,13 +4692,19 @@
       function applyPaneSplitPercent(percent, options) {
         paneSplitPercent = clampPaneSplitPercent(percent);
         const rightPercent = Math.round((100 - paneSplitPercent) * 10) / 10;
+        const dividerPercent = isResponseFirstStudioPaneLayout() ? rightPercent : paneSplitPercent;
         document.documentElement.style.setProperty("--studio-left-pane-fr", paneSplitPercent + "fr");
         document.documentElement.style.setProperty("--studio-right-pane-fr", rightPercent + "fr");
         if (paneResizeHandleEl) {
+          const stacked = isStackedStudioPaneLayout();
+          paneResizeHandleEl.setAttribute("aria-orientation", stacked ? "horizontal" : "vertical");
           paneResizeHandleEl.setAttribute("aria-valuemin", String(PANE_SPLIT_MIN_PERCENT));
           paneResizeHandleEl.setAttribute("aria-valuemax", String(PANE_SPLIT_MAX_PERCENT));
-          paneResizeHandleEl.setAttribute("aria-valuenow", String(Math.round(paneSplitPercent)));
+          paneResizeHandleEl.setAttribute("aria-valuenow", String(Math.round(dividerPercent)));
           paneResizeHandleEl.setAttribute("aria-valuetext", "Editor " + Math.round(paneSplitPercent) + " percent, response " + Math.round(rightPercent) + " percent");
+          paneResizeHandleEl.title = stacked
+            ? "Drag to resize the stacked panes. Double-click to reset."
+            : "Drag to resize the panes. Double-click to reset.";
         }
         if (!options || options.persist !== false) {
           try {
@@ -4438,17 +4736,23 @@
           : null;
         if (!mainEl || typeof mainEl.getBoundingClientRect !== "function") return paneSplitPercent;
         const rect = mainEl.getBoundingClientRect();
-        if (!rect.width) return paneSplitPercent;
-        const x = typeof event.clientX === "number" ? event.clientX : (rect.left + rect.width / 2);
-        return ((x - rect.left) / rect.width) * 100;
+        const stacked = isStackedStudioPaneLayout();
+        const extent = stacked ? rect.height : rect.width;
+        if (!extent) return paneSplitPercent;
+        const coordinate = stacked
+          ? ((typeof event.clientY === "number" ? event.clientY : (rect.top + rect.height / 2)) - rect.top)
+          : ((typeof event.clientX === "number" ? event.clientX : (rect.left + rect.width / 2)) - rect.left);
+        const dividerPercent = (coordinate / extent) * 100;
+        return isResponseFirstStudioPaneLayout() ? 100 - dividerPercent : dividerPercent;
       }
 
       function setupPaneResizeHandle() {
         if (!paneResizeHandleEl) return;
+        setStudioPaneLayout(studioPaneLayout, { persist: false, silent: true });
         loadPaneSplitPercent();
         let dragging = false;
         let movedDuringDrag = false;
-        let pointerStartX = 0;
+        let pointerStartPosition = 0;
         let activePaneResizePointerId = null;
         const finishDrag = () => {
           if (!dragging) return;
@@ -4473,7 +4777,9 @@
           event.stopPropagation();
           dragging = true;
           movedDuringDrag = false;
-          pointerStartX = typeof event.clientX === "number" ? event.clientX : 0;
+          pointerStartPosition = isStackedStudioPaneLayout()
+            ? (typeof event.clientY === "number" ? event.clientY : 0)
+            : (typeof event.clientX === "number" ? event.clientX : 0);
           activePaneResizePointerId = event.pointerId;
           if (document.body && document.body.classList) document.body.classList.add("pane-resizing");
           try {
@@ -4489,7 +4795,10 @@
         });
         paneResizeHandleEl.addEventListener("pointermove", (event) => {
           if (!dragging) return;
-          const movement = typeof event.clientX === "number" ? Math.abs(event.clientX - pointerStartX) : 0;
+          const currentPosition = isStackedStudioPaneLayout()
+            ? (typeof event.clientY === "number" ? event.clientY : pointerStartPosition)
+            : (typeof event.clientX === "number" ? event.clientX : pointerStartPosition);
+          const movement = Math.abs(currentPosition - pointerStartPosition);
           if (!movedDuringDrag && movement < 3) return;
           movedDuringDrag = true;
           event.preventDefault();
@@ -4503,25 +4812,26 @@
           resetPaneSplitPercent();
         });
         paneResizeHandleEl.addEventListener("keydown", (event) => {
+          const stacked = isStackedStudioPaneLayout();
+          const decreaseKey = stacked ? "ArrowUp" : "ArrowLeft";
+          const increaseKey = stacked ? "ArrowDown" : "ArrowRight";
+          let dividerPercent = isResponseFirstStudioPaneLayout() ? 100 - paneSplitPercent : paneSplitPercent;
           if (event.key === "Home") {
-            event.preventDefault();
-            applyPaneSplitPercent(PANE_SPLIT_MIN_PERCENT);
-            return;
-          }
-          if (event.key === "End") {
-            event.preventDefault();
-            applyPaneSplitPercent(PANE_SPLIT_MAX_PERCENT);
-            return;
-          }
-          if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+            dividerPercent = PANE_SPLIT_MIN_PERCENT;
+          } else if (event.key === "End") {
+            dividerPercent = PANE_SPLIT_MAX_PERCENT;
+          } else if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
             event.preventDefault();
             resetPaneSplitPercent();
             return;
+          } else if (event.key === decreaseKey || event.key === increaseKey) {
+            const step = event.shiftKey ? 10 : 5;
+            dividerPercent += event.key === decreaseKey ? -step : step;
+          } else {
+            return;
           }
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
           event.preventDefault();
-          const step = event.shiftKey ? 10 : 5;
-          applyPaneSplitPercent(paneSplitPercent + (event.key === "ArrowLeft" ? -step : step));
+          applyPaneSplitPercent(isResponseFirstStudioPaneLayout() ? 100 - dividerPercent : dividerPercent);
         });
       }
 
@@ -4598,7 +4908,7 @@
       function shouldPreserveScrollForPaneActivationEvent(event) {
         const target = event && event.target;
         if (!(target instanceof Element)) return true;
-        if (target.closest("button, select, input, a, [role='button'], .studio-copy-block-btn, .preview-comment-add, .preview-comment-jump")) {
+        if (target.closest("button, select, input, textarea, a, [role='button'], .studio-copy-block-btn, .preview-comment-add, .preview-comment-jump")) {
           return false;
         }
         return true;
@@ -4702,8 +5012,10 @@
           setStatus(label + " is unavailable in editor-only Studio views.", "warning");
           return false;
         }
-        const snapshot = snapshotStudioScrollablePositions();
-        setRightView(requestedView);
+        const snapshot = snapshotStudioScrollablePositions().filter((entry) => (
+          !(options && options.focusReplComposer && entry.el === critiqueViewEl)
+        ));
+        setRightView(requestedView, options);
         scheduleStudioScrollablePositionRestore(snapshot);
         if (!options || options.announce !== false) {
           setStatus("Right pane view: " + label + ".");
@@ -5086,6 +5398,16 @@
         if (isFilesShortcut) {
           event.preventDefault();
           switchRightPaneToView("files");
+          return;
+        }
+
+        const isReplShortcut = (key.toLowerCase() === "r" || code === "KeyR")
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey;
+        if (isReplShortcut) {
+          event.preventDefault();
+          switchRightPaneToView("repl", { focusReplComposer: true });
           return;
         }
 
@@ -7585,7 +7907,7 @@
         refreshBtn.type = "button";
         refreshBtn.className = "studio-pdf-focus-btn studio-pdf-focus-refresh";
         refreshBtn.textContent = "Refresh";
-        refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Alt+R.";
+        refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Alt+Shift+R.";
         refreshBtn.setAttribute("aria-label", "Refresh PDF preview from disk");
         refreshBtn.addEventListener("click", () => refreshStudioPdfFocusViewer());
         actions.appendChild(refreshBtn);
@@ -8148,7 +8470,7 @@
         const matches = (key === "r" || code === "KeyR")
           && (event.metaKey || event.ctrlKey)
           && event.altKey
-          && !event.shiftKey;
+          && event.shiftKey;
         if (!matches) return false;
         if (!refreshVisibleStudioPdfPreviews()) return false;
         event.preventDefault();
@@ -8904,7 +9226,7 @@
           refreshBtn.type = "button";
           refreshBtn.className = "studio-pdf-card-action studio-pdf-card-refresh";
           refreshBtn.textContent = "Refresh";
-          refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Alt+R.";
+          refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Alt+Shift+R.";
           refreshBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -9870,10 +10192,26 @@
         if (!actionBtn) return;
         event.preventDefault();
         const action = actionBtn.getAttribute("data-repl-action") || "";
+        if (action === "quick-send") {
+          submitReplQuickDraft();
+          return;
+        }
+        if (action === "jump-controls") {
+          focusReplSessionControls();
+          return;
+        }
+        if (action === "quick-clear") {
+          const session = getActiveReplSessionForCurrentRuntime();
+          if (session) setReplQuickDraft(session, "");
+          renderReplViewIfActive({ force: true });
+          focusReplQuickComposer();
+          return;
+        }
         if (action === "start" || action === "new-session") {
           const requestId = makeRequestId();
           const command = getCurrentReplStartCommandFromDom();
           setReplCommandOverride(replRuntime, command);
+          replPendingRequestId = requestId;
           replBusy = true;
           replError = "";
           replMessage = (action === "new-session" ? "Starting new " : "Starting ") + getReplRuntimeLabel(replRuntime) + " session" + (command ? " with custom command" : "") + "…";
@@ -9882,8 +10220,10 @@
           const message = { type: "repl_start_request", requestId, runtime: replRuntime, newSession: action === "new-session" };
           if (command) message.command = command;
           if (!sendMessage(message)) {
-            replBusy = false;
+            if (replPendingRequestId === requestId) replPendingRequestId = "";
+            replBusy = Boolean(replPendingRequestId);
             syncActionButtons();
+            renderReplViewIfActive({ force: true });
           }
           return;
         }
@@ -9894,14 +10234,17 @@
             return;
           }
           const requestId = makeRequestId();
+          replPendingRequestId = requestId;
           replBusy = true;
           replError = "";
           replMessage = "Stopping " + session.sessionName + "…";
           syncActionButtons();
           renderReplViewIfActive({ force: true });
           if (!sendMessage({ type: "repl_stop_request", requestId, sessionName: session.sessionName })) {
-            replBusy = false;
+            if (replPendingRequestId === requestId) replPendingRequestId = "";
+            replBusy = Boolean(replPendingRequestId);
             syncActionButtons();
+            renderReplViewIfActive({ force: true });
           }
           return;
         }
@@ -9912,14 +10255,17 @@
             return;
           }
           const requestId = makeRequestId();
+          replPendingRequestId = requestId;
           replBusy = true;
           replError = "";
           replMessage = "Interrupting REPL…";
           syncActionButtons();
           renderReplViewIfActive({ force: true });
           if (!sendMessage({ type: "repl_interrupt_request", requestId, sessionName: session.sessionName })) {
-            replBusy = false;
+            if (replPendingRequestId === requestId) replPendingRequestId = "";
+            replBusy = Boolean(replPendingRequestId);
             syncActionButtons();
+            renderReplViewIfActive({ force: true });
           }
           return;
         }
@@ -9979,6 +10325,39 @@
         }
       }
 
+      function handleReplPaneFocusIn(event) {
+        if (!replQuickFocusRequested || rightView !== "repl") return;
+        const target = event && event.target;
+        if (target instanceof Element && !target.hasAttribute("data-repl-quick-draft")) {
+          replQuickFocusRequested = false;
+        }
+      }
+
+      function handleReplPaneInput(event) {
+        if (rightView !== "repl") return;
+        const target = event && event.target;
+        if (!(target instanceof HTMLTextAreaElement) || !target.hasAttribute("data-repl-quick-draft")) return;
+        const session = getActiveReplSessionForCurrentRuntime();
+        if (!session) return;
+        const draft = setReplQuickDraft(session, target.value);
+        if (target.value !== draft) target.value = draft;
+        updateReplQuickComposerActions();
+      }
+
+      function handleReplPaneKeydown(event) {
+        if (rightView !== "repl" || !event || event.isComposing) return;
+        const target = event.target;
+        if (!(target instanceof HTMLTextAreaElement) || !target.hasAttribute("data-repl-quick-draft")) return;
+        const submitShortcut = event.key === "Enter"
+          && (event.metaKey || event.ctrlKey)
+          && !event.altKey
+          && !event.shiftKey;
+        if (!submitShortcut) return;
+        event.preventDefault();
+        event.stopPropagation();
+        submitReplQuickDraft();
+      }
+
       function handleReplPaneChange(event) {
         if (rightView !== "repl") return;
         const target = event.target;
@@ -10026,8 +10405,11 @@
         critiqueViewEl.addEventListener("click", handleGitChangesPaneClick);
         critiqueViewEl.addEventListener("click", handleStudioQuartoPreviewClick);
         critiqueViewEl.addEventListener("click", (event) => { void handleSideQuestionClick(event); });
+        critiqueViewEl.addEventListener("focusin", handleReplPaneFocusIn);
         critiqueViewEl.addEventListener("input", handleSideQuestionInput);
+        critiqueViewEl.addEventListener("input", handleReplPaneInput);
         critiqueViewEl.addEventListener("keydown", handleSideQuestionKeydown);
+        critiqueViewEl.addEventListener("keydown", handleReplPaneKeydown);
         critiqueViewEl.addEventListener("change", handleSideQuestionChange);
         critiqueViewEl.addEventListener("change", handleReplPaneChange);
         critiqueViewEl.addEventListener("change", (event) => {
@@ -11763,6 +12145,28 @@
         return "tmux attach -t " + String(session.sessionName || "");
       }
 
+      function buildReplQuickComposerHtml(activeSession, canSendToActiveSession) {
+        const key = getReplQuickDraftKey(activeSession);
+        const draft = getReplQuickDraft(activeSession);
+        const pending = Boolean(replQuickPending && replQuickPending.key === key);
+        const runtimeLabel = activeSession ? getReplRuntimeLabel(activeSession.runtime) : getReplRuntimeLabel(replRuntime);
+        const tmuxTargetLabel = activeSession && activeSession.target ? ("tmux " + activeSession.target) : "";
+        const targetDetails = activeSession
+          ? ([runtimeLabel, activeSession.sessionName, tmuxTargetLabel].filter(Boolean).join(" · "))
+          : (runtimeLabel + " · no session selected");
+        const visibleTargetLabel = activeSession ? activeSession.sessionName : "No session selected";
+        const inputDisabled = !activeSession || !key || pending || replBusy;
+        const sendDisabled = !key || !canSendToActiveSession || wsState === "Disconnected" || pending || !draft.trim();
+        return "<section class='repl-quick-composer' aria-labelledby='replQuickComposerTitle'>"
+          + "<div class='repl-quick-header'><div><strong id='replQuickComposerTitle'>Quick send</strong><button type='button' class='repl-quick-target' data-repl-action='jump-controls' title='Target: " + escapeHtml(targetDetails) + ". Jump to REPL session controls.' aria-label='Target: " + escapeHtml(targetDetails) + ". Jump to REPL session controls.'><span class='repl-quick-target-label'>" + escapeHtml(visibleTargetLabel) + "</span><span class='repl-quick-target-arrow' aria-hidden='true'>↑</span></button></div>"
+          + "<span class='repl-quick-hint'>Enter adds a line · Cmd/Ctrl+Enter sends</span></div>"
+          + "<textarea data-repl-quick-draft rows='3' maxlength='" + REPL_QUICK_DRAFT_MAX_CHARS + "' aria-label='Quick code for " + escapeHtml(targetDetails) + "' aria-keyshortcuts='Meta+Enter Control+Enter' placeholder='" + (activeSession ? (key ? "Type a short command or snippet…" : "Exact tmux identity unavailable; refresh the session list") : "Start or select a REPL session first") + "'" + (inputDisabled ? " disabled" : "") + ">" + escapeHtml(draft) + "</textarea>"
+          + "<div class='repl-quick-actions'><span>Raw send through Studio’s safe submission and Shared REPL Record path.</span><div>"
+          + "<button type='button' data-repl-action='quick-clear'" + (pending || !draft ? " disabled" : "") + ">Clear</button>"
+          + "<button class='repl-quick-send-btn' type='button' data-repl-action='quick-send'" + (sendDisabled ? " disabled" : "") + ">" + (pending ? "Sending…" : "Send") + "</button>"
+          + "</div></div></section>";
+      }
+
       function buildReplPanelHtml() {
         const runtimeOptions = [
           ["shell", "Shell"],
@@ -11814,6 +12218,7 @@
           + (replError ? "<div class='repl-notice repl-notice-error'>" + escapeHtml(replError) + "</div>" : "")
           + buildReplJournalHtml(transcript)
           + buildReplStudioActionsHtml()
+          + buildReplQuickComposerHtml(activeSession, canSendToActiveSession)
           + buildReplMirrorHtml(body, transcript)
           + "</div>";
       }
@@ -15062,9 +15467,14 @@
         scheduleWorkspacePersistence();
       }
 
-      function setRightView(nextView) {
+      function setRightView(nextView, options) {
+        const automatedActivityChange = Boolean(options && options.activityTracking);
+        if (activityTrackingOwnsWorkingView && !automatedActivityChange) {
+          activityTrackingOwnsWorkingView = false;
+        }
         const previousView = rightView;
         rightView = normalizeRightViewValue(nextView);
+        if (rightView !== "repl") replQuickFocusRequested = false;
         syncRightViewModeOptions();
         rightViewSelect.value = rightView;
         if (rightView === "trace" && previousView !== "trace") {
@@ -15102,6 +15512,9 @@
             const composer = critiqueViewEl && critiqueViewEl.querySelector("[data-side-question-field='draft']");
             if (composer instanceof HTMLTextAreaElement) composer.focus({ preventScroll: true });
           }, 0);
+        }
+        if (rightView === "repl" && (previousView !== "repl" || (options && options.focusReplComposer))) {
+          focusReplQuickComposer();
         }
         scheduleWorkspacePersistence();
       }
@@ -22978,6 +23391,11 @@
           }
           if (rightView === "side-questions") renderSideQuestionView();
           syncAskAsideButton();
+          if (agentBusyFromServer) {
+            beginTrackedStudioActivity(pendingRequestId || "active");
+          } else {
+            finishTrackedStudioActivity();
+          }
 
           if (pendingRequestId) {
             if (busy) {
@@ -23054,18 +23472,25 @@
           const previousError = replError;
           const previousMessage = replMessage;
           const wasBusy = replBusy;
+          const responseRequestId = typeof message.requestId === "string" ? message.requestId : "";
+          const settlesPendingRequest = Boolean(responseRequestId && responseRequestId === replPendingRequestId);
+          const previousActiveLifetimeKey = getReplQuickDraftKey(getActiveReplSession());
           replTmuxAvailable = typeof message.tmuxAvailable === "boolean" ? message.tmuxAvailable : replTmuxAvailable;
           const sessionsChanged = setReplSessions(message.sessions);
           if (typeof message.activeSessionName === "string" && message.activeSessionName.trim()) {
             setActiveReplSessionForCurrentRuntime(message.activeSessionName);
           }
           const journalChanged = mergeReplJournalEntries(message.journalEntries);
+          reconcileReplQuickPending();
           maybeImportLegacyReplJournalEntries(replActiveSessionName);
           if (typeof message.transcript === "string") replTranscript = trimReplTranscript(message.transcript);
           if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
           replError = typeof message.replError === "string" ? message.replError : (typeof message.captureError === "string" ? message.captureError : "");
           replMessage = typeof message.replMessage === "string" ? message.replMessage : "";
-          replBusy = false;
+          if (settlesPendingRequest && replPendingRequestId === responseRequestId) replPendingRequestId = "";
+          replBusy = Boolean(replPendingRequestId);
+          const activeSessionIdentityChanged = Boolean(previousActiveLifetimeKey)
+            && previousActiveLifetimeKey !== getReplQuickDraftKey(getActiveReplSession());
           const controlsChanged = wasBusy
             || sessionsChanged
             || previousTmuxAvailable !== replTmuxAvailable
@@ -23077,7 +23502,7 @@
             || previousMessage !== replMessage
             || journalChanged
             || (!previousCapturedAt && replCapturedAt);
-          if (viewChanged) renderReplViewIfActive();
+          if (viewChanged) renderReplViewIfActive({ force: activeSessionIdentityChanged });
           updateReferenceBadge();
           return;
         }
@@ -23102,18 +23527,28 @@
           const previousError = replError;
           const previousMessage = replMessage;
           const wasBusy = replBusy;
+          const responseRequestId = typeof message.requestId === "string" ? message.requestId : "";
+          const settlesPendingRequest = Boolean(responseRequestId && responseRequestId === replPendingRequestId);
+          const previousActiveLifetimeKey = getReplQuickDraftKey(getActiveReplSession());
           let sessionsChanged = false;
           if (message.session) {
             const session = normalizeReplSession(message.session);
-            if (session && !replSessions.some((candidate) => candidate.sessionName === session.sessionName)) {
-              replSessions = [...replSessions, session];
-              sessionsChanged = true;
+            if (session) {
+              const existingIndex = replSessions.findIndex((candidate) => candidate.sessionName === session.sessionName);
+              if (existingIndex < 0) {
+                replSessions = [...replSessions, session];
+                sessionsChanged = true;
+              } else if (serializeReplSessionsForCompare([replSessions[existingIndex]]) !== serializeReplSessionsForCompare([session])) {
+                replSessions = replSessions.map((candidate, index) => index === existingIndex ? session : candidate);
+                sessionsChanged = true;
+              }
             }
           }
           if (typeof message.activeSessionName === "string" && message.activeSessionName.trim()) {
             setActiveReplSessionForCurrentRuntime(message.activeSessionName);
           }
           let journalChanged = mergeReplJournalEntries(message.journalEntries);
+          reconcileReplQuickPending();
           maybeImportLegacyReplJournalEntries(replActiveSessionName);
           if (typeof message.transcript === "string") {
             replTranscript = trimReplTranscript(message.transcript);
@@ -23125,7 +23560,10 @@
           if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
           replError = typeof message.replError === "string" ? message.replError : "";
           if (typeof message.replMessage === "string") replMessage = message.replMessage;
-          replBusy = false;
+          if (settlesPendingRequest && replPendingRequestId === responseRequestId) replPendingRequestId = "";
+          replBusy = Boolean(replPendingRequestId);
+          const activeSessionIdentityChanged = Boolean(previousActiveLifetimeKey)
+            && previousActiveLifetimeKey !== getReplQuickDraftKey(getActiveReplSession());
           const controlsChanged = wasBusy || sessionsChanged || previousActiveSessionName !== replActiveSessionName;
           if (controlsChanged) syncActionButtons();
           const viewChanged = controlsChanged
@@ -23134,7 +23572,7 @@
             || previousMessage !== replMessage
             || journalChanged
             || (!previousCapturedAt && replCapturedAt);
-          if (viewChanged) renderReplViewIfActive();
+          if (viewChanged) renderReplViewIfActive({ force: activeSessionIdentityChanged });
           updateReferenceBadge();
           return;
         }
@@ -23153,9 +23591,12 @@
         }
 
         if (message.type === "repl_send_ack") {
-          replBusy = false;
+          const responseRequestId = typeof message.requestId === "string" ? message.requestId : "";
+          if (responseRequestId && replPendingRequestId === responseRequestId) replPendingRequestId = "";
+          replBusy = Boolean(replPendingRequestId);
           replMessage = "";
           replError = "";
+          if (responseRequestId) settleReplQuickPending(responseRequestId, true);
           mergeReplJournalEntries(message.journalEntries);
           if (typeof message.requestId === "string") {
             replJournalEntries = replJournalEntries.map((entry) => entry.requestId === message.requestId ? { ...entry, status: "sent", updatedAt: Date.now() } : entry);
@@ -23171,6 +23612,8 @@
           pendingRequestId = typeof message.requestId === "string" ? message.requestId : pendingRequestId;
           pendingKind = typeof message.kind === "string" ? message.kind : "unknown";
           stickyStudioKind = pendingKind;
+          agentBusyFromServer = true;
+          beginTrackedStudioActivity(pendingRequestId || "active");
           if (pendingKind === "direct") {
             studioRunChainActive = true;
           }
@@ -23201,6 +23644,7 @@
           const busy = Boolean(message.busy);
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
+          finishTrackedStudioActivity(typeof message.requestId === "string" ? message.requestId : "");
           setStatus(typeof message.message === "string" ? message.message : "Compaction completed.", "success");
           return;
         }
@@ -23215,6 +23659,7 @@
           const busy = Boolean(message.busy);
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
+          finishTrackedStudioActivity(typeof message.requestId === "string" ? message.requestId : "");
           setStatus(typeof message.message === "string" ? message.message : "Compaction failed.", "error");
           return;
         }
@@ -23234,6 +23679,7 @@
           pendingRequestId = null;
           pendingKind = null;
           queuedLatestResponse = null;
+          agentBusyFromServer = false;
           setBusy(false);
           setWsState("Ready");
 
@@ -23250,6 +23696,7 @@
           if (!appliedFromHistory && typeof message.markdown === "string") {
             handleIncomingResponse(message.markdown, responseKind, message.timestamp, message.thinking);
           }
+          finishTrackedStudioActivity(completedRequestId || "");
 
           if (responseKind === "critique") {
             setStatus("Critique ready.", "success");
@@ -23552,6 +23999,11 @@
 
           setBusy(busy);
           setWsState(busy ? "Submitting" : "Ready");
+          if (agentBusyFromServer) {
+            beginTrackedStudioActivity(pendingRequestId || "active");
+          } else {
+            finishTrackedStudioActivity();
+          }
 
           if (pendingRequestId) {
             if (busy) {
@@ -23594,6 +24046,7 @@
             clearArmedTitleAttention(message.requestId);
           }
           stickyStudioKind = null;
+          finishTrackedStudioActivity(typeof message.requestId === "string" ? message.requestId : "");
           setBusy(false);
           setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Studio is busy.", "warning");
@@ -23615,9 +24068,14 @@
           if (typeof message.requestId === "string") {
             clearArmedTitleAttention(message.requestId);
           }
-          if (replBusy) {
+          const failedReplRequestId = typeof message.requestId === "string" && message.requestId === replPendingRequestId
+            ? message.requestId
+            : "";
+          if (failedReplRequestId) {
+            replPendingRequestId = "";
             replBusy = false;
             replError = typeof message.message === "string" ? message.message : "REPL request failed.";
+            settleReplQuickPending(failedReplRequestId, false);
             if (typeof message.requestId === "string") {
               replJournalEntries = replJournalEntries.map((entry) => entry.requestId === message.requestId ? { ...entry, status: "error", output: replError, updatedAt: Date.now() } : entry);
               persistReplJournalEntries();
@@ -23625,6 +24083,7 @@
             renderReplViewIfActive({ force: true });
           }
           stickyStudioKind = null;
+          finishTrackedStudioActivity(typeof message.requestId === "string" ? message.requestId : "");
           setBusy(false);
           setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Request failed.", "error");
@@ -24157,6 +24616,18 @@
       if (lineNumbersSelect) {
         lineNumbersSelect.addEventListener("change", () => {
           setLineNumbersEnabled(lineNumbersSelect.value === "on");
+        });
+      }
+
+      if (studioPaneLayoutSelect) {
+        studioPaneLayoutSelect.addEventListener("change", () => {
+          setStudioPaneLayout(studioPaneLayoutSelect.value);
+        });
+      }
+
+      if (activityTrackingSelect) {
+        activityTrackingSelect.addEventListener("change", () => {
+          setActivityTrackingEnabled(activityTrackingSelect.value === "on");
         });
       }
 
@@ -25628,6 +26099,7 @@
       const storedLineNumbersEnabled = readStoredEditorLineNumbersEnabled();
       const initialLineNumbersEnabled = storedLineNumbersEnabled ?? Boolean(lineNumbersSelect && lineNumbersSelect.value === "on");
       setLineNumbersEnabled(initialLineNumbersEnabled);
+      setActivityTrackingEnabled(activityTrackingEnabled, { persist: false, silent: true });
 
       const storedResponseHighlightEnabled = readStoredResponseHighlightEnabled();
       const initialResponseHighlightEnabled = storedResponseHighlightEnabled ?? Boolean(responseHighlightSelect && responseHighlightSelect.value === "on");

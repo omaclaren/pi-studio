@@ -61,13 +61,115 @@ test("Studio browser clean preview strips compact and legacy loader echoes", () 
 	);
 	const compact = `In [16]: exec(open("/tmp/pi-rc-jta4ib/0123456789abcdef.py", encoding="utf-8").read(), globals())\ntest`;
 	const wrapped = `In [17]: exec(open("/tmp/pi-rc-\n    ...: jta4ib/0123456789abcdef.py", encoding="utf-\n    ...: 8").read(), globals())\ntest`;
+	const wrappedGlobals = `exec(open("/tmp/pi-rc-jta4i\n    ...: b/d223b51e5bae9847.py", enc\n    ...: oding="utf-8").read(), glob\n    ...: als())\ntest`;
 	const legacy = `In [18]: exec(open("/var/folders/example/T/pi-studio-repl/pi-repl-python/request/studio-repl-ipython.py", encoding="utf-8").read(), globals())\ntest`;
 	const shell = `$ . '/tmp/pi-rc-jta4ib/0123456789abcdef.sh'; touch '/tmp/pi-rc-jta4ib/0123456789abcdef.done'\n42`;
 	assert.equal(context.stripLoader(compact), "test");
 	assert.equal(context.stripLoader(wrapped), "test");
+	assert.equal(context.stripLoader(wrappedGlobals), "test");
 	assert.equal(context.stripLoader(legacy), "test");
 	assert.equal(context.stripLoader(shell), "42");
+	const robustPythonLoaderPattern = String.raw`/^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\)\)\s*$/gm`;
+	assert.ok(clientSource.includes(robustPythonLoaderPattern));
+	assert.ok(serverSource.includes(robustPythonLoaderPattern));
+	assert.match(clientSource, /output: typeof entry\.output === "string" \? stripStudioReplSubmissionEcho\(entry\.output\) : ""/);
 	assert.match(clientSource, /!entry\.legacyLocal && \(entry\.status === "captured"/);
+});
+
+test("Studio has numeric and mnemonic direct-switch shortcuts for REPL", () => {
+	assert.match(clientSource, /Digit7: "repl"/);
+	const replShortcutStart = clientSource.indexOf("const isReplShortcut");
+	const sideQuestionsShortcutStart = clientSource.indexOf("const isSideQuestionsShortcut", replShortcutStart);
+	assert.ok(replShortcutStart >= 0 && sideQuestionsShortcutStart > replShortcutStart);
+	const shortcutSource = clientSource.slice(replShortcutStart, sideQuestionsShortcutStart);
+	assert.match(shortcutSource, /code === "KeyR"/);
+	assert.match(shortcutSource, /\(event\.metaKey \|\| event\.ctrlKey\)/);
+	assert.match(shortcutSource, /event\.altKey/);
+	assert.match(shortcutSource, /!event\.shiftKey/);
+	assert.match(shortcutSource, /switchRightPaneToView\("repl", \{ focusReplComposer: true \}\)/);
+	assert.match(serverSource, /Cmd\/Ctrl\+Alt\+R<\/dt><dd>Switch the right pane directly to REPL/);
+});
+
+test("Studio REPL Quick send keeps exact-lifetime drafts until acknowledgement", () => {
+	assert.match(clientSource, /const REPL_QUICK_DRAFT_MAX_CHARS = 20_000/);
+	assert.match(clientSource, /tmuxSessionId: session\.tmuxSessionId/);
+	assert.match(clientSource, /tmuxSessionCreatedAt: session\.tmuxSessionCreatedAt/);
+	assert.match(clientSource, /data-repl-quick-draft/);
+	assert.match(clientSource, /data-repl-action='jump-controls'/);
+	assert.match(clientSource, /function focusReplSessionControls\(\)[\s\S]*?critiqueViewEl\.scrollTop = 0/);
+	assert.match(clientSource, /sessionSelect instanceof HTMLSelectElement && !sessionSelect\.disabled[\s\S]*?\? sessionSelect[\s\S]*?: runtimeSelect/);
+	assert.match(clientSource, /action === "jump-controls"[\s\S]*?focusReplSessionControls\(\)/);
+	assert.match(clientSource, /const tmuxTargetLabel = activeSession && activeSession\.target \? \("tmux " \+ activeSession\.target\) : ""/);
+	assert.match(clientSource, /activeSession\.sessionName, tmuxTargetLabel/);
+	assert.match(clientSource, /const visibleTargetLabel = activeSession \? activeSession\.sessionName : "No session selected"/);
+	assert.match(clientSource, /title='Target: " \+ escapeHtml\(targetDetails\)/);
+	assert.match(clientSource, /repl-quick-target-label'>" \+ escapeHtml\(visibleTargetLabel\)/);
+	assert.match(clientSource, /Cmd\/Ctrl\+Enter sends/);
+	assert.match(clientSource, /composer\.scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/);
+	const focusStart = clientSource.indexOf("      function focusReplQuickComposer");
+	const focusEnd = clientSource.indexOf("      function renderReplViewIfActive", focusStart);
+	assert.ok(focusStart >= 0 && focusEnd > focusStart, "expected Quick send focus helper");
+	const focusSource = clientSource.slice(focusStart, focusEnd);
+	assert.doesNotMatch(focusSource, /composer instanceof HTMLTextAreaElement && !composer\.disabled/,
+		"the shortcut should still reveal a temporarily disabled composer");
+	assert.ok(focusSource.indexOf("if (!composer.disabled)") < focusSource.indexOf("composer.scrollIntoView"),
+		"scrolling the composer into view should not depend on whether it can receive focus");
+	assert.match(clientSource, /options && options\.focusReplComposer && entry\.el === critiqueViewEl/);
+	assert.match(clientSource, /target\.closest\("button, select, input, textarea, a,/,
+		"focusing Quick send must not restore the response pane's old scroll position");
+	const panelStart = clientSource.indexOf("      function buildReplPanelHtml");
+	const panelEnd = clientSource.indexOf("      function buildTracePanelHtml", panelStart);
+	assert.ok(panelStart >= 0 && panelEnd > panelStart, "expected REPL panel renderer");
+	const panelSource = clientSource.slice(panelStart, panelEnd);
+	const journalPosition = panelSource.indexOf("buildReplJournalHtml(transcript)");
+	const actionsPosition = panelSource.indexOf("buildReplStudioActionsHtml()");
+	const composerPosition = panelSource.indexOf("buildReplQuickComposerHtml(activeSession, canSendToActiveSession)");
+	const mirrorPosition = panelSource.indexOf("buildReplMirrorHtml(body, transcript)");
+	assert.ok(journalPosition < actionsPosition && actionsPosition < composerPosition && composerPosition < mirrorPosition,
+		"Quick send should follow the clean record and its actions, before the raw mirror");
+	assert.match(clientSource, /label: "quick send"[\s\S]*?mode: "raw"/);
+	assert.match(clientSource, /type: "repl_send_request"/);
+	assert.match(clientSource, /message\.type === "repl_send_ack"[\s\S]*?settleReplQuickPending\(responseRequestId, true\)/);
+	assert.match(clientSource, /message\.type === "error"[\s\S]*?settleReplQuickPending\(failedReplRequestId, false\)/);
+	assert.match(clientSource, /const settlesPendingRequest = Boolean\(responseRequestId && responseRequestId === replPendingRequestId\)/);
+	assert.match(clientSource, /activeSessionIdentityChanged[\s\S]*?renderReplViewIfActive\(\{ force: activeSessionIdentityChanged \}\)/);
+
+	const start = clientSource.indexOf("      function getReplQuickDraftKey");
+	const end = clientSource.indexOf("      function setReplJournalCollapsed", start);
+	assert.ok(start >= 0 && end > start, "expected Quick send draft helpers");
+	const context = {};
+	vm.runInNewContext(`
+		const REPL_QUICK_DRAFT_MAX_CHARS = 20_000;
+		const REPL_QUICK_DRAFT_MAX_SESSIONS = 12;
+		const replQuickDrafts = new Map();
+		let replQuickPending = null;
+		let replPendingRequestId = "";
+		let replBusy = false;
+		let replJournalEntries = [];
+		function normalizeReplRuntime(value) { return String(value || "unknown").toLowerCase(); }
+		function normalizeReplSession(value) { return value && value.sessionName ? value : null; }
+		${clientSource.slice(start, end)}
+		globalThis.quickDraftApi = {
+			key: getReplQuickDraftKey,
+			get: getReplQuickDraft,
+			set: setReplQuickDraft,
+			settle: settleReplQuickPending,
+			setPending(value) { replQuickPending = value; },
+		};
+	`, context);
+	const firstLifetime = { sessionName: "pi-repl-python", runtime: "ipython", tmuxSessionId: "$1", tmuxSessionCreatedAt: 100 };
+	const secondLifetime = { sessionName: "pi-repl-python", runtime: "ipython", tmuxSessionId: "$2", tmuxSessionCreatedAt: 200 };
+	assert.equal(context.quickDraftApi.key({ sessionName: "pi-repl-python", runtime: "ipython" }), "", "drafts require exact tmux identity");
+	assert.notEqual(context.quickDraftApi.key(firstLifetime), context.quickDraftApi.key(secondLifetime));
+	assert.equal(context.quickDraftApi.set(firstLifetime, "print(1)"), "print(1)");
+	assert.equal(context.quickDraftApi.get(secondLifetime), "");
+	const key = context.quickDraftApi.key(firstLifetime);
+	context.quickDraftApi.setPending({ requestId: "send-1", key, text: "print(1)" });
+	assert.equal(context.quickDraftApi.settle("send-1", false), true);
+	assert.equal(context.quickDraftApi.get(firstLifetime), "print(1)", "rejected text must be retained");
+	context.quickDraftApi.setPending({ requestId: "send-2", key, text: "print(1)" });
+	assert.equal(context.quickDraftApi.settle("send-2", true), true);
+	assert.equal(context.quickDraftApi.get(firstLifetime), "", "acknowledged text may be cleared");
 });
 
 test("Studio sends bounded pane echoes with clean-record-derived anchors", () => {

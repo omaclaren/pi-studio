@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
 
 const css = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
 const indexSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
@@ -91,6 +92,85 @@ test("Studio controls use browser-neutral control chrome", () => {
   assert.match(refreshedSelectRule, /-webkit-appearance: none;/);
   assert.match(refreshedSelectRule, /background-image: none;/);
   assert.doesNotMatch(css, /appearance:\s*menulist/);
+});
+
+test("Studio supports persisted side-by-side and ordered vertical pane layouts", () => {
+  assert.match(indexSource, /id="studioPaneLayoutSelect"/);
+  assert.match(indexSource, /value="side-by-side">Layout: Side by side/);
+  assert.match(indexSource, /value="editor-top">Layout: Editor above/);
+  assert.match(indexSource, /value="response-top">Layout: Response above/);
+  assert.match(clientSource, /const PANE_LAYOUT_STORAGE_KEY = "piStudio\.paneLayout"/);
+  assert.match(clientSource, /document\.body\.dataset\.studioLayout = studioPaneLayout/);
+  assert.match(clientSource, /mainEl\.append\(rightPaneEl, paneResizeHandleEl, leftPaneEl\)/);
+  assert.match(clientSource, /mainEl\.append\(leftPaneEl, paneResizeHandleEl, rightPaneEl\)/);
+  assert.match(clientSource, /const stacked = isStackedStudioPaneLayout\(\)/);
+  assert.match(clientSource, /typeof event\.clientY === "number"/);
+  assert.match(clientSource, /stacked \? "ArrowUp" : "ArrowLeft"/);
+
+  const editorTopRule = extractRuleBlock(css, 'body[data-studio-layout="editor-top"] main {');
+  const responseTopRule = extractRuleBlock(css, 'body[data-studio-layout="response-top"] main {\n      grid-template-rows');
+  assert.match(editorTopRule, /grid-template-rows:[^;]*--studio-left-pane-fr[^;]*--studio-right-pane-fr/);
+  assert.match(responseTopRule, /grid-template-rows:[^;]*--studio-right-pane-fr[^;]*--studio-left-pane-fr/);
+  assert.match(css, /body\[data-studio-layout="editor-top"\] \.pane-resize-handle,[\s\S]*?cursor: row-resize/);
+  assert.match(css, /body\[data-studio-layout="response-top"\]\.pane-focus-right main[\s\S]*?grid-template-rows: minmax\(0, 1fr\)/);
+});
+
+test("Studio activity view tracking is explicit, off by default, and event-driven", () => {
+  assert.match(indexSource, /id="activityTrackingSelect"/);
+  const selectStart = indexSource.indexOf('id="activityTrackingSelect"');
+  const selectEnd = indexSource.indexOf("</select>", selectStart);
+  assert.ok(selectStart >= 0 && selectEnd > selectStart);
+  const selectSource = indexSource.slice(selectStart, selectEnd);
+  assert.ok(selectSource.indexOf('value="off"') < selectSource.indexOf('value="on"'), "Off must be the default option.");
+  assert.match(selectSource, /value="off">Follow activity: Off/);
+  assert.match(selectSource, /value="on">Follow activity: On/);
+  assert.match(clientSource, /extras\.push\("Following activity"\)/);
+  assert.match(clientSource, /Studio will show Working during main Pi activity, then return to Response Preview\./);
+  assert.match(clientSource, /Activity following disabled\./);
+  assert.match(clientSource, /const ACTIVITY_TRACKING_STORAGE_KEY = "piStudio\.trackActivity"/);
+  assert.match(clientSource, /window\.localStorage\.getItem\(ACTIVITY_TRACKING_STORAGE_KEY\) === "on"/);
+  assert.match(clientSource, /beginTrackedStudioActivity\(pendingRequestId \|\| "active"\)/);
+  assert.match(clientSource, /if \(shouldReturn\) setRightView\("preview", \{ activityTracking: true \}\)/);
+  assert.match(clientSource, /activityTrackingOwnsWorkingView && !automatedActivityChange/);
+  assert.match(clientSource, /activityTrackingEnabled = Boolean\(enabled\) && !isEditorOnlyMode && !isWatchedFilePreview/);
+
+  const start = clientSource.indexOf("      function beginTrackedStudioActivity");
+  const end = clientSource.indexOf("      function clampPaneSplitPercent", start);
+  assert.ok(start >= 0 && end > start, "expected activity transition helpers");
+  const context = {};
+  vm.runInNewContext(`
+    let activityTrackingEnabled = false;
+    let activityTrackingOwnsWorkingView = false;
+    let activityTrackingRequestId = "";
+    let rightView = "preview";
+    const isEditorOnlyMode = false;
+    const isWatchedFilePreview = false;
+    const transitions = [];
+    function setRightView(view, options) { rightView = view; transitions.push([view, options]); }
+    ${clientSource.slice(start, end)}
+    globalThis.activityApi = {
+      enable() { activityTrackingEnabled = true; },
+      begin: beginTrackedStudioActivity,
+      finish: finishTrackedStudioActivity,
+      manual(view) { rightView = view; activityTrackingOwnsWorkingView = false; },
+      state() { return { rightView, activityTrackingOwnsWorkingView, activityTrackingRequestId, transitions }; },
+    };
+  `, context);
+  assert.equal(context.activityApi.begin("request-1"), false, "tracking stays inert until enabled");
+  context.activityApi.enable();
+  assert.equal(context.activityApi.begin("request-1"), true);
+  assert.equal(context.activityApi.state().rightView, "trace");
+  assert.equal(context.activityApi.finish("other-request"), false, "unrelated completion must not steal the view");
+  assert.equal(context.activityApi.finish("request-1"), true);
+  assert.equal(context.activityApi.state().rightView, "preview");
+
+  assert.equal(context.activityApi.begin("active"), true);
+  context.activityApi.manual("repl");
+  assert.equal(context.activityApi.begin("request-2"), false, "resolving an active request ID must preserve a manual view");
+  assert.equal(context.activityApi.state().activityTrackingRequestId, "request-2");
+  assert.equal(context.activityApi.finish("unrelated-request"), false, "unrelated work must not finish tracked activity");
+  assert.equal(context.activityApi.finish("request-2"), false, "completion must not override the manual view");
+  assert.equal(context.activityApi.state().rightView, "repl");
 });
 
 test("Studio editor controls use pane-local component breakpoints", () => {

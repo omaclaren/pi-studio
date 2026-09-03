@@ -97,6 +97,15 @@ A coordinated presentation and future-alignment increment with `pi-repl` 0.4.1:
 
 A separate Derived REPL Transcript can use these anchors later, but it remains outside protocol v1 and outside this release.
 
+## Unreleased 0.9.x — Workspace and REPL interaction refinements
+
+A small interaction increment before the buffer-first architecture:
+
+- add a scoped right-pane Quick send composer that keeps exact-session drafts in memory and uses the existing safe Shared REPL Record send path;
+- add persisted side-by-side and vertical pane arrangements, including either Editor or Response above;
+- add opt-in activity following from Working during main-agent generation to Response Preview on completion, disabled by default and cancelled when the user manually changes views;
+- keep Quick send separate from the durable editor, the raw tmux mirror read-only, and protocol-v1 authority unchanged.
+
 ## 0.10.0 — Buffer-first editing
 
 The first architectural `0.10` release should add:
@@ -108,7 +117,7 @@ The first architectural `0.10` release should add:
 - MRU cycling, next/previous, close, and reopen commands;
 - originating buffer ID and revision targeting for asynchronous Pi work.
 
-PDFs remain preview documents, and conversation history remains session-global. Split panes, arbitrary layouts, project trees, and simultaneous per-buffer Pi conversations are outside the initial `0.10.0` scope.
+PDFs remain preview documents, and conversation history remains session-global. Arbitrary multi-pane layouts, project trees, and simultaneous per-buffer Pi conversations are outside the initial `0.10.0` scope.
 
 ## Validation matrix
 
