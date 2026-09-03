@@ -106,7 +106,7 @@ A small interaction increment before the buffer-first architecture:
 - add opt-in activity following from Working during main-agent generation to Response Preview on completion, disabled by default and cancelled when the user manually changes views;
 - keep Quick send separate from the durable editor, the raw tmux mirror read-only, and protocol-v1 authority unchanged.
 
-## Unreleased 0.9.x — Safe Pi input-draft handoff
+## 0.9.59 — Safe Pi input-draft handoff (shipped 2026-09-03)
 
 A small workflow refinement for moving Neovim-provided context through Pi and Studio:
 

@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.59] — 2026-09-03
+
 ### Added
 - Add `Cmd/Ctrl+Shift+L` for loading the current Pi terminal input draft into Studio without clearing it.
 - Add a confirmed **Clear Pi editor text…** action for removing text waiting in Pi's terminal input editor without changing Studio text or conversation history.
