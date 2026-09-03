@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.57] — 2026-09-03
+
 ### Added
 - Add deterministic raw-pane submission displays and alignment anchors for Studio browser and `studio_repl_send` submissions across Shell, Python/IPython, Julia, R, GHCi, and Clojure.
 - Add a browser-stored **Pane echo** selector with privacy-conscious **Off** default, adaptive **Summary**, and bounded **Full** modes, plus per-tool `echoMode` and `PI_STUDIO_REPL_ECHO_MODE` support.

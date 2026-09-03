@@ -83,9 +83,9 @@ A coordinated interoperability release with `pi-repl` 0.4.0:
 
 This release does not change Studio's single-buffer architecture or move buffer-first work forward from `0.10.0`.
 
-## 0.9.57 — REPL submission display and alignment anchors (in progress)
+## 0.9.57 — REPL submission display and alignment anchors (shipped 2026-09-03)
 
-A coordinated presentation and future-alignment increment with `pi-repl`:
+A coordinated presentation and future-alignment increment with `pi-repl` 0.4.1:
 
 - keep optional pane echo Off by default, with an adaptive Summary that shows short submissions in full and a separately bounded Full choice;
 - derive collision-resistant human-readable anchors from immutable clean-record entry IDs without exposing those IDs in the pane;
