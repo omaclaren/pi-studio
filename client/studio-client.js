@@ -255,6 +255,14 @@
       ) {
         throw new Error("Studio preview resource helpers failed to load.");
       }
+      const editorDraftHelpers = globalThis.PiStudioEditorDraftHelpers;
+      if (!editorDraftHelpers || typeof editorDraftHelpers.createSubmittedEditorDraftTracker !== "function"
+        || typeof editorDraftHelpers.needsDraftReplacementConfirmation !== "function") {
+        throw new Error("Studio editor draft helpers failed to load.");
+      }
+      const submittedEditorDrafts = editorDraftHelpers.createSubmittedEditorDraftTracker();
+      let editorSourceGeneration = 0;
+      let responseReplacementPending = false;
       const showMeHelpers = globalThis.PiStudioShowMeHelpers;
       if (!showMeHelpers || typeof showMeHelpers.chooseStudioShowMeFocus !== "function") {
         throw new Error("Studio Show me helpers failed to load.");
@@ -433,8 +441,8 @@
         rightViewSelect.title = isWatchedFilePreview
           ? "Read-only watched preview follows this file on disk."
           : (isEditorOnlyMode
-          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Alt+3/5/6/7/8 switch directly to numbered right-pane views, and Cmd/Ctrl+Alt+F/R/Q open Files/REPL/Side questions."
-          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Alt+P/E/W/F/R/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, REPL, and Side questions.");
+          ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Option/Alt+3/5/6/7/8 switch directly to numbered right-pane views, and Cmd/Ctrl+Option/Alt+F/R/Q open Files/REPL/Side questions."
+          : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Option/Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Option/Alt+P/E/W/F/R/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, REPL, and Side questions.");
       }
 
       function getInitialRightView(source) {
@@ -4524,6 +4532,11 @@
         return true;
       }
 
+      function getEditorDraftSourceKey() {
+        return JSON.stringify([editorSourceGeneration, sourceState.source, sourceState.path,
+          sourceState.draftId, getCurrentResourceDirValue()]);
+      }
+
       function markFileBackedBaseline(text, diskRevision) {
         fileBackedBaselineText = String(text || "");
         fileBackedDiskRevision = normalizeStudioDiskRevision(diskRevision);
@@ -5096,6 +5109,35 @@
         switchRightPaneToView("editor-preview");
       }
 
+      function studioModalBlocksDraftAction() {
+        return Boolean(studioDecisionState || isScratchpadOpen() || isShortcutsOpen() || isQuizOpen()
+          || isStudioPdfFocusOpen() || isStudioHtmlFocusOpen() || isStudioImageFocusOpen());
+      }
+
+      function triggerLoadResponseShortcut() {
+        if (isEditorOnlyMode || isWatchedFilePreview || studioModalBlocksDraftAction()) return false;
+        if (!loadResponseBtn || loadResponseBtn.hidden || loadResponseBtn.disabled) return false;
+        loadResponseBtn.click();
+        return true;
+      }
+
+      function triggerAnnotateResponseShortcut() {
+        if (isEditorOnlyMode || isWatchedFilePreview || studioModalBlocksDraftAction()) return false;
+        if (!annotateResponseBtn || annotateResponseBtn.hidden || annotateResponseBtn.disabled) return false;
+        annotateResponseBtn.click();
+        return true;
+      }
+
+      function triggerActivityTrackingShortcut() {
+        if (studioModalBlocksDraftAction()) return false;
+        if (isEditorOnlyMode || isWatchedFilePreview) {
+          setStatus("Follow activity is available only in the main editable Studio workspace.", "warning");
+          return false;
+        }
+        setActivityTrackingEnabled(!activityTrackingEnabled);
+        return true;
+      }
+
       function cycleActivePaneView(direction) {
         if (activePane === "right") {
           if (!rightViewSelect || rightViewSelect.disabled) {
@@ -5492,6 +5534,36 @@
         if (isSideQuestionsShortcut) {
           event.preventDefault();
           switchRightPaneToView("side-questions");
+          return;
+        }
+
+        const isLoadResponseShortcut = key === "Enter"
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && event.shiftKey;
+        if (isLoadResponseShortcut) {
+          event.preventDefault();
+          if (!event.repeat && !event.isComposing) triggerLoadResponseShortcut();
+          return;
+        }
+
+        const isAnnotateResponseShortcut = key === "Enter"
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey;
+        if (isAnnotateResponseShortcut) {
+          event.preventDefault();
+          if (!event.repeat && !event.isComposing) triggerAnnotateResponseShortcut();
+          return;
+        }
+
+        const isActivityTrackingShortcut = (key.toLowerCase() === "a" || code === "KeyA")
+          && (event.metaKey || event.ctrlKey)
+          && event.altKey
+          && !event.shiftKey;
+        if (isActivityTrackingShortcut) {
+          event.preventDefault();
+          if (!event.repeat && !event.isComposing) triggerActivityTrackingShortcut();
           return;
         }
 
@@ -7993,7 +8065,7 @@
         refreshBtn.type = "button";
         refreshBtn.className = "studio-pdf-focus-btn studio-pdf-focus-refresh";
         refreshBtn.textContent = "Refresh";
-        refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Alt+Shift+R.";
+        refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Option/Alt+Shift+R.";
         refreshBtn.setAttribute("aria-label", "Refresh PDF preview from disk");
         refreshBtn.addEventListener("click", () => refreshStudioPdfFocusViewer());
         actions.appendChild(refreshBtn);
@@ -9312,7 +9384,7 @@
           refreshBtn.type = "button";
           refreshBtn.className = "studio-pdf-card-action studio-pdf-card-refresh";
           refreshBtn.textContent = "Refresh";
-          refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Alt+Shift+R.";
+          refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Option/Alt+Shift+R.";
           refreshBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -14250,7 +14322,7 @@
         annotateResponseBtn.textContent = annotationWorkspaceReady ? "Response ready to annotate" : "Annotate response";
         annotateResponseBtn.title = annotationWorkspaceReady
           ? "The selected response is exactly in the raw editor with Editor Preview open."
-          : "Load the selected response into the raw editor and show Editor Preview. This replaces the current editor text.";
+          : "Load the selected response into the raw editor and show Editor Preview. Ask before replacing unsubmitted or unsaved work. Shortcut: Cmd/Ctrl+Option/Alt+Enter.";
 
         loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
         loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
@@ -14649,6 +14721,7 @@
           setStatus("This read-only preview remains bound to its watched file.", "warning");
           return false;
         }
+        editorSourceGeneration += 1;
         sourceState = {
           source: next && next.source ? next.source : "blank",
           label: next && next.label ? next.label : "blank",
@@ -23701,6 +23774,11 @@
           return;
         }
 
+        if (message.type === "run_accepted") {
+          submittedEditorDrafts.accept(message.requestId);
+          return;
+        }
+
         if (message.type === "request_started") {
           pendingRequestId = typeof message.requestId === "string" ? message.requestId : pendingRequestId;
           pendingKind = typeof message.kind === "string" ? message.kind : "unknown";
@@ -24157,6 +24235,7 @@
 
         if (message.type === "busy") {
           if (typeof message.requestId === "string") {
+            submittedEditorDrafts.discard(message.requestId);
             restoreReservedPiEditorDraftSnapshot(message.requestId);
             pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not start the companion editor because another request was busy.");
@@ -24181,6 +24260,7 @@
 
         if (message.type === "error") {
           if (typeof message.requestId === "string") {
+            submittedEditorDrafts.discard(message.requestId);
             restoreReservedPiEditorDraftSnapshot(message.requestId);
             pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not prepare the companion editor. Return to the originating Studio page for details.");
@@ -24331,6 +24411,7 @@
           quartoPreviewActionRequestId = null;
           sideQuestionMarkdownExportRequest = null;
           pendingPiEditorDraftSnapshots.clear();
+          submittedEditorDrafts.clearPending();
           failAllPendingCompanionLaunches("The originating Studio connection was lost before the companion editor was ready.");
           if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
           setBusy(true);
@@ -25034,27 +25115,56 @@
       }
 
       async function loadSelectedResponseIntoEditor(options) {
-        if (!latestResponseMarkdown.trim()) {
+        if (isEditorOnlyMode || isWatchedFilePreview || uiBusy || responseReplacementPending
+          || studioModalBlocksDraftAction()) return false;
+        const prepareForAnnotation = Boolean(options && options.annotate);
+        if (prepareForAnnotation && latestResponseIsStructuredCritique) return false;
+        if (!prepareForAnnotation && rightView === "editor-quarto-preview") {
+          setStatus("Choose another right-pane view before loading a response without switching views, or use Annotate response.", "warning");
+          return false;
+        }
+        const responseText = latestResponseMarkdown;
+        if (!responseText.trim()) {
           setStatus("No response available yet.", "warning");
           return false;
         }
-        const prepareForAnnotation = Boolean(options && options.annotate);
         const currentEditorText = String(sourceTextEl.value || "");
-        const replacingEditedResponse = prepareForAnnotation
-          && sourceState.source === "last-response"
-          && Boolean(currentEditorText.trim())
-          && normalizeForCompare(currentEditorText) !== latestResponseNormalized;
-        if (replacingEditedResponse) {
-          const confirmed = await requestStudioConfirmation(
-            "Replace your edited response with a fresh copy? Existing edits and annotations will be lost.",
-            { title: "Replace edited response?", confirmLabel: "Replace", destructive: true },
-          );
+        const sourceKey = getEditorDraftSourceKey();
+        const responseIndex = responseHistoryIndex;
+        const responseTimestamp = latestResponseTimestamp;
+        const diskRevision = fileBackedDiskRevision;
+        const needsConfirmation = editorDraftHelpers.needsDraftReplacementConfirmation({
+          text: currentEditorText,
+          responseText,
+          fileBacked: hasRefreshableFilePath(),
+          dirty: editorDiffersFromFileBackedBaseline(),
+          submitted: submittedEditorDrafts.matches(currentEditorText, sourceKey),
+        });
+        if (needsConfirmation) {
+          responseReplacementPending = true;
+          let confirmed;
+          try {
+            confirmed = await requestStudioConfirmation(
+              "Replace the current editor text with the selected response? Unsubmitted edits or unsaved file changes will be lost. Cancel to save or copy them first.",
+              { title: "Replace editor text?", confirmLabel: "Replace", destructive: true },
+            );
+          } finally {
+            responseReplacementPending = false;
+          }
           if (!confirmed) {
             setStatus("Kept the current editor text.");
             return false;
           }
+          if (uiBusy || studioModalBlocksDraftAction() || currentEditorText !== sourceTextEl.value
+            || sourceKey !== getEditorDraftSourceKey() || diskRevision !== fileBackedDiskRevision
+            || responseText !== latestResponseMarkdown || responseIndex !== responseHistoryIndex
+            || responseTimestamp !== latestResponseTimestamp
+            || (!prepareForAnnotation && rightView === "editor-quarto-preview")) {
+            setStatus("Editor, response, or view changed while confirmation was open. Kept the editor text; try again.", "warning");
+            return false;
+          }
         }
-        setEditorText(latestResponseMarkdown, { preserveScroll: false, preserveSelection: false });
+        setEditorText(responseText, { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "last-response", label: "last model response", path: null });
         if (prepareForAnnotation) {
           if (editorView !== "markdown") setEditorView("markdown");
@@ -25574,6 +25684,7 @@
 
         const requestId = beginUiAction("direct");
         if (!requestId) return;
+        submittedEditorDrafts.remember(requestId, sourceTextEl.value, getEditorDraftSourceKey());
         const piEditorDraftSnapshot = reserveLinkedPiEditorDraftSnapshot(requestId);
 
         const sent = sendMessage({
@@ -25584,6 +25695,7 @@
         });
 
         if (!sent) {
+          submittedEditorDrafts.discard(requestId);
           restoreReservedPiEditorDraftSnapshot(requestId);
           pendingRequestId = null;
           pendingKind = null;
@@ -25605,6 +25717,7 @@
 
           const requestId = makeRequestId();
           clearTitleAttention();
+          submittedEditorDrafts.remember(requestId, sourceTextEl.value, getEditorDraftSourceKey());
           const piEditorDraftSnapshot = reserveLinkedPiEditorDraftSnapshot(requestId);
           const sent = sendMessage({
             type: "send_run_request",
@@ -25613,6 +25726,7 @@
             piEditorDraftSnapshot: piEditorDraftSnapshot || undefined,
           });
           if (!sent) {
+            submittedEditorDrafts.discard(requestId);
             restoreReservedPiEditorDraftSnapshot(requestId);
             return;
           }

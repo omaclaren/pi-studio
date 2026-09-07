@@ -1,6 +1,16 @@
 # TODO
 
-See `ROADMAP.md` for the active `0.9.53` and `0.10.0` release plan. This file retains smaller or unassigned backlog items.
+See [ROADMAP.md](ROADMAP.md) for the active release plan: finish the small `0.9.60` networking/shortcut batch before the `0.10.0` buffer architecture. [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the active-Prompt/editable-document design. This file retains smaller or unassigned backlog items.
+
+## Assigned next work
+
+- [x] Implement and test `Cmd/Ctrl+Option/Alt+A` for Follow activity in `0.9.60`.
+- [x] Implement and test `Cmd/Ctrl+Option/Alt+Enter` for Annotate response in `0.9.60`. Keep unchanged accepted prompts confirmation-free; protect unsubmitted edits and unsaved file changes, including late-acknowledgement and stale-confirmation races. Retain Run's existing shortcut meaning/scope.
+- [x] Add the Shift variant (`Cmd/Ctrl+Option/Alt+Shift+Enter`) for **Load response into editor** without switching views, through the existing guarded action.
+- [x] Validate and prepare the combined `0.9.60` artifact, including the published issue #4 networking fix: 284 tests, type/syntax checks, production audits, byte audit, and fresh-install browser/networking checks pass. Release approved on 2026-09-07; exact `sbx` feedback remains outstanding and the issue stays open.
+- [ ] After that release, implement the `0.10.0` design in store/recovery → document switching → context handoff → parked-prompt order. No buffer implementation has begun.
+
+Do not pull unrelated backlog items below into the quick release merely to fill the batch.
 
 ## Near term
 - [x] Add a simple **Text | Rendered** toggle for the editor/source panel (`View: Markdown | Preview`).

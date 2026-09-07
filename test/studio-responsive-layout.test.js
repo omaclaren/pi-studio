@@ -173,6 +173,90 @@ test("Studio activity view tracking is explicit, off by default, and event-drive
   assert.equal(context.activityApi.state().rightView, "repl");
 });
 
+test("Studio consistently labels Option/Alt without changing standard accessibility key names", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  for (const source of [indexSource, clientSource, readme]) {
+    assert.doesNotMatch(source, /Cmd\/Ctrl\+Alt\+|Alt\/Option/);
+  }
+  const labels = [...indexSource.matchAll(/<dt>([^<]*Alt[^<]*)<\/dt>/g)].map((match) => match[1]);
+  assert.ok(labels.length > 0);
+  for (const label of labels) assert.ok(label.includes("Option/Alt"), label);
+  const accessibilityKeys = [...indexSource.matchAll(/aria-keyshortcuts="([^"]*)"/g)].map((match) => match[1]);
+  assert.ok(accessibilityKeys.some((keys) => keys.includes("Alt+")));
+  for (const keys of accessibilityKeys) assert.doesNotMatch(keys, /Option/);
+});
+
+test("Studio exposes a global mnemonic shortcut for toggling activity following", () => {
+  const selectTag = indexSource.match(/<select id="activityTrackingSelect"[^>]*>/)?.[0] || "";
+  assert.match(selectTag, /aria-keyshortcuts="Meta\+Alt\+A Control\+Alt\+A"/);
+  assert.match(selectTag, /Shortcut: Cmd\/Ctrl\+Option\/Alt\+A\./);
+  assert.match(indexSource, /<dt>Cmd\/Ctrl\+Option\/Alt\+A<\/dt><dd>Toggle Follow activity in the main editable Studio workspace<\/dd>/);
+
+  const shortcutStart = clientSource.indexOf("const isActivityTrackingShortcut");
+  const shortcutEnd = clientSource.indexOf("const isContentFocusShortcut", shortcutStart);
+  assert.ok(shortcutStart >= 0 && shortcutEnd > shortcutStart, "expected Follow activity shortcut handler");
+  const shortcutSource = clientSource.slice(shortcutStart, shortcutEnd);
+  assert.match(shortcutSource, /code === "KeyA"/);
+  assert.match(shortcutSource, /\(event\.metaKey \|\| event\.ctrlKey\)/);
+  assert.match(shortcutSource, /event\.altKey/);
+  assert.match(shortcutSource, /!event\.shiftKey/);
+  assert.match(shortcutSource, /event\.preventDefault\(\)/);
+  assert.match(shortcutSource, /if \(!event\.repeat && !event\.isComposing\) triggerActivityTrackingShortcut\(\)/);
+  assert.doesNotMatch(shortcutSource, /isTextEntryShortcutTarget/, "the workspace shortcut should also work while editing text");
+
+  const triggerStart = clientSource.indexOf("function triggerActivityTrackingShortcut()");
+  const triggerEnd = clientSource.indexOf("function cycleActivePaneView", triggerStart);
+  assert.ok(triggerStart >= 0 && triggerEnd > triggerStart, "expected Follow activity shortcut action");
+  const triggerSource = clientSource.slice(triggerStart, triggerEnd);
+
+  function runTrigger({ editorOnly = false, watched = false, enabled = false, modal = false } = {}) {
+    const context = {};
+    vm.runInNewContext(`
+      const isEditorOnlyMode = ${JSON.stringify(editorOnly)};
+      const isWatchedFilePreview = ${JSON.stringify(watched)};
+      let activityTrackingEnabled = ${JSON.stringify(enabled)};
+      const updates = [];
+      const statuses = [];
+      function studioModalBlocksDraftAction() { return ${JSON.stringify(modal)}; }
+      function setActivityTrackingEnabled(value) {
+        activityTrackingEnabled = Boolean(value);
+        updates.push(activityTrackingEnabled);
+      }
+      function setStatus(message, tone) { statuses.push([message, tone]); }
+      ${triggerSource}
+      globalThis.result = {
+        returned: triggerActivityTrackingShortcut(),
+        enabled: activityTrackingEnabled,
+        updates,
+        statuses,
+      };
+    `, context);
+    return JSON.parse(JSON.stringify(context.result));
+  }
+
+  assert.deepEqual(runTrigger(), {
+    returned: true,
+    enabled: true,
+    updates: [true],
+    statuses: [],
+  });
+  assert.deepEqual(runTrigger({ enabled: true }), {
+    returned: true,
+    enabled: false,
+    updates: [false],
+    statuses: [],
+  });
+  assert.deepEqual(runTrigger({ modal: true }), { returned: false, enabled: false, updates: [], statuses: [] });
+  for (const unavailable of [{ editorOnly: true }, { watched: true }]) {
+    assert.deepEqual(runTrigger(unavailable), {
+      returned: false,
+      enabled: false,
+      updates: [],
+      statuses: [["Follow activity is available only in the main editable Studio workspace.", "warning"]],
+    });
+  }
+});
+
 test("Studio editor controls use pane-local component breakpoints", () => {
   const toolbarBase = css.indexOf("body.studio-ui-refresh .studio-refresh-toolbar-main {");
   const leftHeaderBreakpoint = css.indexOf("@container (max-width: 680px)");

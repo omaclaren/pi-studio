@@ -65,7 +65,7 @@ test("Files has numeric and mnemonic direct-switch shortcuts", () => {
 	assert.match(shortcutSource, /\(event\.metaKey \|\| event\.ctrlKey\)/);
 	assert.match(shortcutSource, /event\.altKey/);
 	assert.match(shortcutSource, /switchRightPaneToView\("files"\)/);
-	assert.match(indexSource, /Cmd\/Ctrl\+Alt\+F<\/dt><dd>Switch the right pane directly to Files/);
+	assert.match(indexSource, /Cmd\/Ctrl\+Option\/Alt\+F<\/dt><dd>Switch the right pane directly to Files/);
 });
 
 test("Files new-tab actions authorize through the local-resource protocol", () => {

@@ -6,7 +6,7 @@ This is the current planning source of truth for Studio work. `NEXT-STAGE.md` is
 
 Studio development follows two tracks:
 
-- **Stable `0.9.x` releases** contain one coherent family of fixes or incremental features and keep `main` releasable.
+- **Stable `0.9.x` releases** contain a bounded, explicitly scoped batch of fixes or incremental features and keep `main` releasable.
 - **`0.10.0`** is reserved for the buffer-first document architecture. Risky prereleases should use the npm `next` tag before replacing `latest`.
 
 Changes should be based on capabilities rather than browser, terminal host, or user-agent detection. Muxy, ordinary Chromium browsers, embedded WebKit views, and SSH/headless use are validation environments, not separate product variants.
@@ -19,7 +19,19 @@ Each release should finish with:
 4. exact package-content and byte-level artifact audit;
 5. a fresh npm installation and naturally rendered Studio smoke test.
 
-Publishing, pushing, and tagging remain explicit release actions rather than automatic consequences of merging work.
+Committing, publishing, pushing, and tagging remain explicit actions rather than automatic consequences of implementation or planning approval.
+
+## Agreed next sequence (2026-09-07)
+
+1. Ship **`0.9.60`** as the bounded networking/shortcut release. Do not start buffer architecture in this batch.
+2. After that release, implement **`0.10.0`** around an explicit active Prompt, independently editable documents, context transfer, and parked prompt drafts. The design is in [`BUFFER-DESIGN.md`](https://github.com/omaclaren/pi-studio/blob/main/BUFFER-DESIGN.md).
+3. Keep Derived REPL Transcript, editor-engine migration, and arbitrary pane arrangements outside both batches.
+
+Current status:
+
+- `0.9.60` combines the networking fix with Follow activity, Annotate response, and view-preserving Load response shortcuts, plus accurate draft-replacement protection. The published networking RC remains unchanged.
+- The reporter has not replied to the RC invitation on [issue #4](https://github.com/omaclaren/pi-studio/issues/4) as of 2026-09-07. Exact `sbx` validation remains outstanding; the release proceeds with that limitation documented and the issue open for confirmation or a follow-up fix.
+- `0.10.0` remains design-only. Approval to release `0.9.60` does not authorize buffer implementation.
 
 ## 0.9.52 — Rendering and media consistency (shipped 2026-08-28)
 
@@ -116,9 +128,13 @@ A small workflow refinement for moving Neovim-provided context through Pi and St
 - provide `Cmd/Ctrl+Shift+L` for loading and a confirmed **Clear Pi editor text…** fallback without changing Studio text or conversation history;
 - keep `pi-nvim-context`, protocol v1, networking, and the buffer-first architecture unchanged.
 
-## 0.9.60 — Opt-in container/network binding (`0.9.60-rc.0` prerelease, 2026-09-03)
+## 0.9.60 — Networking and prompt-workflow shortcuts (2026-09-07)
 
-A bounded implementation of GitHub issue #4, separate from REPL transcript and buffer work:
+This release combines the networking portion shipped as `0.9.60-rc.0` on 2026-09-03 with the small shortcut batch below. The published RC remains a reproducible networking test target.
+
+### Networking
+
+A bounded implementation of GitHub issue #4:
 
 - retain `127.0.0.1` as the default and require explicit `--listen-all` intent before binding to `0.0.0.0`;
 - keep the server-lifetime bearer token mandatory and the generated URL on loopback for same-port container publishing;
@@ -127,18 +143,47 @@ A bounded implementation of GitHub issue #4, separate from REPL transcript and b
 - document loopback-only host publishing, private-network limits, and SSH forwarding as the safer option on untrusted networks;
 - validate both default loopback and opt-in wildcard sockets without changing the buffer model, protocol v1, or `pi-repl`.
 
-## 0.10.0 — Buffer-first editing
+### Shortcut and draft-replacement batch
 
-The first architectural `0.10` release should add:
+The shortcuts and replacement safeguards below are implemented, with focused regression tests and browser workflow checks using controlled model replies. The buffer architecture remains deferred.
 
-- a `StudioBufferStore` with stable document identity;
-- recovery schema v2 with migration from the single-document schema;
-- buffer-specific text/baseline, dirty state, cursor, selection, scroll, preview context, annotations, and resource directory;
-- tabs at ordinary widths and a compact searchable buffer picker at narrow widths;
-- MRU cycling, next/previous, close, and reopen commands;
-- originating buffer ID and revision targeting for asynchronous Pi work.
+- Include `Cmd/Ctrl+Option/Alt+A` **Follow activity** toggle: retain opt-in persistence, full-workspace scope, modal protections, and key-repeat suppression.
+- Add `Cmd/Ctrl+Option/Alt+Enter` for **Annotate response** from either main pane when the existing action is available. Invoke the same action as the button and retain its busy, response-type, and mode guards. Add Shift (`Cmd/Ctrl+Option/Alt+Shift+Enter`) to invoke **Load response into editor** without switching views, with the same replacement safeguards. Do not reinterpret `Cmd/Ctrl+Enter` as the right pane's primary action.
+- Keep Run's existing active-pane behaviour and REPL/Side question submission shortcuts unchanged in this release.
+- Protect **unsubmitted or unsaved work**, not every non-empty editor. The normal write prompt → accepted Run → response → Annotate response loop must remain confirmation-free when the submitted prompt is still unchanged. Ask before replacing post-submission edits, a new unsent draft, edited response annotations, or unsaved file changes; Cancel preserves text, source identity, and view state. Keep the decision/save-or-copy workflow bounded rather than adding a hidden second editor or a new recovery schema to `0.9.60`.
+- Correlate an editor-text/source snapshot with the accepted submission and compare the current editor against that baseline; do not mark later typing as submitted when an acknowledgement or response arrives. Failed submissions do not establish the baseline, and submitting file text does not mark it saved.
+- Capture the intended response and revalidate the editor after an asynchronous replacement decision; later typing or a changed target must not be overwritten by stale consent.
+- Test both modifier variants, option-modified key values, key repeat, modal ownership, unavailable actions, and unchanged Run/REPL/Side question behaviour. Update the shortcut overlay, tooltips, accessibility metadata, and changelog only as behaviour is implemented.
 
-PDFs remain preview documents, and conversation history remains session-global. Arbitrary multi-pane layouts, project trees, and simultaneous per-buffer Pi conversations are outside the initial `0.10.0` scope.
+### Release gate
+
+Run the normal full validation and fresh-package browser smoke over the combined batch, including a confirmation-free submitted-prompt → Annotate response loop and protected replacement/cancellation for genuinely new work. The previous RC verification does not substitute for checking the final artifact.
+
+The networking review and production lifecycle tests support the reported fix; a separate TCP-forward smoke also verified HTML, client JavaScript, and WebSocket state delivery through a non-loopback destination. Neither is an exact `sbx` test. On 2026-09-07, Oliver approved shipping after final validation with this limitation documented and issue #4 left open. Reporter feedback can confirm the fix or lead to a follow-up patch. Any updated prerelease must use a new version, never replace `rc.0`.
+
+Do not include buffer tabs, context-transfer messages, recovery schema v2, or REPL transcript work in this release.
+
+## 0.10.0 — Active Prompt and editable document buffers (planned)
+
+Studio's primary loop is prompt construction and response reading. Documents remain useful editable sources, not implicit submission targets or a replacement for Neovim. The design is **one clearly active Prompt, other prompt drafts that can be parked, and independently editable documents**.
+
+The first architectural release should add:
+
+- a `StudioBufferStore` with stable buffer identity, explicit prompt/document roles, and separate selected-buffer and active-prompt identities;
+- a prominent **Prompt** view with response/Working alongside it, plus editable document tabs with their own previews;
+- recovery schema v2 with non-destructive migration from the single-document schema;
+- buffer-specific text/baseline, dirty state, cursor, selection, scroll, preview context, annotations, and resource directory, preserving existing disk-revision checks;
+- **Add selection to prompt** and **Copy document to prompt**, including an acknowledged handoff from editable companion views to the full workspace's explicit prompt destination;
+- editable context snapshots of the visible text, including unsaved edits and source labels/ranges where known; no automatic submission, replacement, file write, or later live update of the copied text;
+- a lightweight parked-prompt picker, with one active submission draft at a time and no per-draft conversation forks;
+- tabs at ordinary widths, a compact searchable picker at narrow widths, and MRU/next/previous/close/reopen navigation;
+- originating buffer ID, revision, and request ID targeting for asynchronous work, so switching tabs cannot redirect results or destructive actions.
+
+Opening a document never changes the active prompt. Initially, document views should offer a clear return to Prompt rather than implicitly submit the document or send a hidden prompt. Keep Run's precise shortcut behaviour separate from the buffer model; settle it in the interaction tests before shipping.
+
+**Acceptance workflow:** start a prompt → inspect and edit a document with preview → add context to the prompt → annotate that detached copy → inspect another document → return and submit, without losing edits, changing the original through prompt annotations, or changing the submission destination accidentally.
+
+PDFs remain preview documents; watched previews remain disk-authoritative and read-only. Conversation history, resource grants, and the exact-session Shared REPL Record remain outside individual buffers. Arbitrary multi-pane layouts, project trees, simultaneous per-buffer Pi conversations, editor-engine migration, and Derived REPL Transcript are outside the initial scope. See [`BUFFER-DESIGN.md`](https://github.com/omaclaren/pi-studio/blob/main/BUFFER-DESIGN.md) for the state, recovery, handoff, and implementation sequence.
 
 ## Validation matrix
 

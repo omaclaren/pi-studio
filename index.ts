@@ -196,6 +196,7 @@ const STUDIO_NAVIGATION_HELPERS_URL = new URL("./client/studio-navigation-helper
 const STUDIO_PREVIEW_RESOURCE_HELPERS_URL = new URL("./client/studio-preview-resource-helpers.js", import.meta.url);
 const STUDIO_SHOW_ME_HELPERS_URL = new URL("./client/studio-show-me-helpers.js", import.meta.url);
 const STUDIO_SIDE_QUESTION_HELPERS_URL = new URL("./client/studio-side-question-helpers.js", import.meta.url);
+const STUDIO_EDITOR_DRAFT_HELPERS_URL = new URL("./client/studio-editor-draft-helpers.js", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
 
 interface StudioServerState {
@@ -12388,6 +12389,7 @@ function buildStudioHtml(
 	const mermaidHelpersScriptHref = `/studio-mermaid-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const navigationHelpersScriptHref = `/studio-navigation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const previewResourceHelpersScriptHref = `/studio-preview-resource-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
+	const editorDraftHelpersScriptHref = `/studio-editor-draft-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const showMeHelpersScriptHref = `/studio-show-me-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const sideQuestionHelpersScriptHref = `/studio-side-question-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const clientScriptHref = `/studio-client.js?token=${encodeURIComponent(studioToken ?? "")}`;
@@ -12552,7 +12554,7 @@ ${cssVarsBlock}
                 <option value="editor-top">Layout: Editor above</option>
                 <option value="response-top">Layout: Response above</option>
               </select>
-              <select id="activityTrackingSelect" class="studio-flat-select" aria-label="Follow main Pi activity" title="Optionally follow main Pi activity from Working to the response view; off by default.">
+              <select id="activityTrackingSelect" class="studio-flat-select" aria-label="Follow main Pi activity" aria-keyshortcuts="Meta+Alt+A Control+Alt+A" title="Optionally follow main Pi activity from Working to the response view; off by default. Shortcut: Cmd/Ctrl+Option/Alt+A.">
                 <option value="off">Follow activity: Off</option>
                 <option value="on">Follow activity: On</option>
               </select>
@@ -12655,7 +12657,7 @@ ${cssVarsBlock}
       <div id="rightSectionHeader" class="section-header">
         <div class="section-header-main">
           <span id="rightViewSelectWrap" class="studio-header-select-wrap">
-            <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Alt+1–8 switches directly between all right-pane views. Cmd/Ctrl+Alt+P/E/W/F/R/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, REPL, and Side questions.">
+            <select id="rightViewSelect" aria-label="Response view mode" title="Right pane view mode. F7 cycles when the right pane is active; Cmd/Ctrl+Option/Alt+1–8 switches directly between all right-pane views. Cmd/Ctrl+Option/Alt+P/E/W/F/R/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, REPL, and Side questions.">
               <option value="markdown">Response (Raw)</option>
               <option value="preview" selected>Response (Preview)</option>
               <option value="editor-preview">Editor (Preview)</option>
@@ -12730,8 +12732,8 @@ ${cssVarsBlock}
             <button id="historyLastBtn" type="button" title="Jump to the latest loaded response in the current branch history.">Last response ▶|</button>
           </div>
           <div class="response-actions-row response-result-row">
-            <button id="annotateResponseBtn" type="button" title="Load the selected response into the raw editor and show Editor Preview. This replaces the current editor text.">Annotate response</button>
-            <button id="loadResponseBtn" type="button">Load response into editor</button>
+            <button id="annotateResponseBtn" type="button" aria-keyshortcuts="Meta+Alt+Enter Control+Alt+Enter" title="Load the selected response into the raw editor and show Editor Preview. Ask before replacing unsubmitted or unsaved work. Shortcut: Cmd/Ctrl+Option/Alt+Enter.">Annotate response</button>
+            <button id="loadResponseBtn" type="button" aria-keyshortcuts="Meta+Alt+Shift+Enter Control+Alt+Shift+Enter" title="Load the selected response into the editor without switching views. Choose another view first if Quarto Preview is active. Ask before replacing unsubmitted or unsaved work. Shortcut: Cmd/Ctrl+Option/Alt+Shift+Enter.">Load response into editor</button>
             <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
             <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>
             <button id="loadHistoryPromptBtn" type="button" title="Load the prompt that generated the selected response into the editor.">Load response prompt into editor</button>
@@ -12768,13 +12770,13 @@ ${cssVarsBlock}
           <dl>
             <div><dt>F6</dt><dd>Switch between editor and right pane</dd></div>
             <div><dt>F7 / Shift+F7</dt><dd>Cycle the active pane's view</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+1–8</dt><dd>Switch the right pane directly: Response Raw, Response Preview, Editor Preview, Working, Changes, Files, REPL, Side questions</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+P</dt><dd>Switch the right pane directly to Response Preview; in editor-only views, Editor Preview</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+E</dt><dd>Switch the right pane directly to Editor Preview</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+F</dt><dd>Switch the right pane directly to Files</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+R</dt><dd>Switch the right pane directly to REPL and focus Quick send when a session is selected</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+Q</dt><dd>Switch the right pane directly to Side questions</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+1–8</dt><dd>Switch the right pane directly: Response Raw, Response Preview, Editor Preview, Working, Changes, Files, REPL, Side questions</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+P</dt><dd>Switch the right pane directly to Response Preview; in editor-only views, Editor Preview</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+E</dt><dd>Switch the right pane directly to Editor Preview</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+F</dt><dd>Switch the right pane directly to Files</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+R</dt><dd>Switch the right pane directly to REPL and focus Quick send when a session is selected</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+Q</dt><dd>Switch the right pane directly to Side questions</dd></div>
             <div><dt>F8</dt><dd>Focus editor text</dd></div>
             <div><dt>Shift+F8</dt><dd>Focus right-pane content</dd></div>
             <div><dt>F9</dt><dd>Toggle Zen mode and hide or restore the Studio header</dd></div>
@@ -12786,10 +12788,11 @@ ${cssVarsBlock}
         <section class="shortcuts-group">
           <h3>View</h3>
           <dl>
-            <div><dt>Alt/Option+=</dt><dd>Increase the active pane's text size when not editing text</dd></div>
-            <div><dt>Alt/Option+-</dt><dd>Decrease the active pane's text size when not editing text</dd></div>
-            <div><dt>Alt/Option+0</dt><dd>Reset the active pane's text size when not editing text</dd></div>
-            <div><dt>Cmd/Ctrl+Alt+Shift+R</dt><dd>Refresh the focused or visible PDF preview from disk</dd></div>
+            <div><dt>Option/Alt+=</dt><dd>Increase the active pane's text size when not editing text</dd></div>
+            <div><dt>Option/Alt+-</dt><dd>Decrease the active pane's text size when not editing text</dd></div>
+            <div><dt>Option/Alt+0</dt><dd>Reset the active pane's text size when not editing text</dd></div>
+            <div class="shortcuts-full-only"><dt>Cmd/Ctrl+Option/Alt+A</dt><dd>Toggle Follow activity in the main editable Studio workspace</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+Shift+R</dt><dd>Refresh the focused or visible PDF preview from disk</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group">
@@ -12808,9 +12811,11 @@ ${cssVarsBlock}
         <section class="shortcuts-group shortcuts-full-only">
           <h3>Response</h3>
           <dl>
-            <div><dt>Alt/Option+←</dt><dd>Previous response when not editing text</dd></div>
-            <div><dt>Alt/Option+→</dt><dd>Next response when not editing text</dd></div>
-            <div><dt>Alt/Option+l</dt><dd>Latest response when not editing text</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+Enter</dt><dd>Annotate the selected response from either main pane; protect unsubmitted or unsaved work</dd></div>
+            <div><dt>Cmd/Ctrl+Option/Alt+Shift+Enter</dt><dd>Load the selected response into the editor without switching views; same replacement safeguards</dd></div>
+            <div><dt>Option/Alt+←</dt><dd>Previous response when not editing text</dd></div>
+            <div><dt>Option/Alt+→</dt><dd>Next response when not editing text</dd></div>
+            <div><dt>Option/Alt+l</dt><dd>Latest response when not editing text</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group">
@@ -12863,6 +12868,7 @@ ${cssVarsBlock}
   <script src="${mermaidHelpersScriptHref}"></script>
   <script src="${navigationHelpersScriptHref}"></script>
   <script src="${previewResourceHelpersScriptHref}"></script>
+  <script src="${editorDraftHelpersScriptHref}"></script>
   <script src="${showMeHelpersScriptHref}"></script>
   <script src="${sideQuestionHelpersScriptHref}"></script>
   <script src="${clientScriptHref}"></script>
@@ -15790,6 +15796,7 @@ export default function (pi: ExtensionAPI) {
 
 				try {
 					pi.sendUserMessage(msg.text, { deliverAs: "steer" });
+					sendToClient(client, { type: "run_accepted", requestId: msg.requestId });
 					broadcast({
 						type: "request_queued",
 						requestId: msg.requestId,
@@ -15823,6 +15830,7 @@ export default function (pi: ExtensionAPI) {
 
 			try {
 				pi.sendUserMessage(msg.text);
+				sendToClient(client, { type: "run_accepted", requestId: msg.requestId });
 				reportPiEditorDraftDisposition(client, msg.requestId, msg.piEditorDraftSnapshot);
 			} catch (error) {
 				clearStudioDirectRunState();
@@ -17540,6 +17548,7 @@ export default function (pi: ExtensionAPI) {
 			|| requestUrl.pathname === "/studio-preview-resource-helpers.js"
 			|| requestUrl.pathname === "/studio-show-me-helpers.js"
 			|| requestUrl.pathname === "/studio-side-question-helpers.js"
+			|| requestUrl.pathname === "/studio-editor-draft-helpers.js"
 			|| requestUrl.pathname === "/studio-client.js"
 		) {
 			const token = requestUrl.searchParams.get("token") ?? "";
@@ -17567,7 +17576,9 @@ export default function (pi: ExtensionAPI) {
 								? STUDIO_SHOW_ME_HELPERS_URL
 								: requestUrl.pathname === "/studio-side-question-helpers.js"
 									? STUDIO_SIDE_QUESTION_HELPERS_URL
-									: STUDIO_CLIENT_URL;
+									: requestUrl.pathname === "/studio-editor-draft-helpers.js"
+										? STUDIO_EDITOR_DRAFT_HELPERS_URL
+										: STUDIO_CLIENT_URL;
 			const targetLabel = requestUrl.pathname === "/studio-annotation-helpers.js"
 				? "studio annotation helper script"
 				: requestUrl.pathname === "/studio-mermaid-helpers.js"
@@ -17580,7 +17591,9 @@ export default function (pi: ExtensionAPI) {
 								? "studio Show me helper script"
 								: requestUrl.pathname === "/studio-side-question-helpers.js"
 									? "studio side-question helper script"
-									: "studio client script";
+									: requestUrl.pathname === "/studio-editor-draft-helpers.js"
+										? "studio editor draft helper script"
+										: "studio client script";
 
 			try {
 				const clientScript = readFileSync(targetUrl, "utf-8");

@@ -78,14 +78,14 @@ test("PDF manual refresh uses the shifted REPL mnemonic", () => {
   const shortcutEnd = clientSource.indexOf("function syncStudioPdfFocusFullscreenButton", shortcutStart);
   assert.ok(shortcutStart >= 0 && shortcutEnd > shortcutStart);
   const shortcutSource = clientSource.slice(shortcutStart, shortcutEnd);
-  assert.match(clientSource, /Cmd\/Ctrl\+Alt\+Shift\+R/);
+  assert.match(clientSource, /Cmd\/Ctrl\+Option\/Alt\+Shift\+R/);
   assert.match(shortcutSource, /code === "KeyR"/);
   assert.match(shortcutSource, /\(event\.metaKey \|\| event\.ctrlKey\)/);
   assert.match(shortcutSource, /event\.altKey/);
   assert.match(shortcutSource, /&& event\.shiftKey/);
   assert.doesNotMatch(shortcutSource, /!event\.shiftKey/);
   assert.match(shortcutSource, /refreshVisibleStudioPdfPreviews\(\)/);
-  assert.match(serverSource, /<dt>Cmd\/Ctrl\+Alt\+Shift\+R<\/dt><dd>Refresh the focused or visible PDF preview from disk<\/dd>/);
+  assert.match(serverSource, /<dt>Cmd\/Ctrl\+Option\/Alt\+Shift\+R<\/dt><dd>Refresh the focused or visible PDF preview from disk<\/dd>/);
 });
 
 test("PDF action rows wrap instead of overflowing narrow preview panes", () => {

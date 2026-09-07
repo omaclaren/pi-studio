@@ -4,6 +4,22 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.60] — 2026-09-07
+
+### Added
+- Promote the opt-in `--listen-all` networking support from `0.9.60-rc.0` to stable: default binding remains localhost, wildcard binding requires explicit intent and token authentication, and status reports the actual bind address. See the RC security notes below for the exposure and Origin-check boundaries.
+- Add `Cmd/Ctrl+Option/Alt+A` to toggle the browser-stored **Follow activity** preference from the main editable Studio workspace.
+- Add `Cmd/Ctrl+Option/Alt+Enter` for **Annotate response** from either main pane, retaining the existing action's availability and modal guards without changing Run, REPL, or Side question shortcuts. Add Shift (`Cmd/Ctrl+Option/Alt+Shift+Enter`) for **Load response into editor** without switching views, through the existing button and the same replacement safeguards. All three shortcuts ignore held-key repeats and text composition. View-preserving Load refuses to detach the file required by Quarto Preview; choose another view first or use Annotate response.
+
+### Changed
+- Use **Option/Alt** consistently in current shortcut labels, tooltips, and documentation. Keyboard behavior and standard accessibility key names are unchanged.
+
+### Fixed
+- Protect unsubmitted editor changes and unsaved file edits before **Annotate response** or **Load response into editor** replaces them. Keep unchanged accepted prompts confirmation-free using bounded, page-memory-only request-correlated snapshots; failed submissions and late acknowledgements cannot mark newer edits as submitted, and submission never marks file text saved. Cancel preserves text, source identity, and view; confirmation is revalidated against the editor and selected response before replacement. Pi-terminal draft-cleanup provenance remains separate.
+
+### Validation note
+- Production network lifecycle and TCP-forwarding checks pass, but exact `sbx` confirmation from the issue #4 reporter is still outstanding. The issue remains open for confirmation or a follow-up fix; this release does not claim that environment has been tested directly.
+
 ## [0.9.60-rc.0] — 2026-09-03
 
 ### Added

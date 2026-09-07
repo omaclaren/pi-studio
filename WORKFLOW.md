@@ -1,5 +1,7 @@
 # pi-studio workflow/spec note
 
+This note describes the original single-editor workflow; it is not the current release backlog. See [ROADMAP.md](ROADMAP.md) for the active `0.9.60` networking/shortcut batch and planned `0.10.0` work. The future active-Prompt/editable-document model is recorded in [BUFFER-DESIGN.md](https://github.com/omaclaren/pi-studio/blob/main/BUFFER-DESIGN.md); buffer tabs and context transfer are not implemented yet.
+
 ## Goal
 
 Keep Studio simple while supporting both loops:
@@ -117,8 +119,8 @@ Rules of thumb:
 
 ---
 
-## Non-goals (for now)
+## Non-goals for the single-editor `0.9.x` workflow
 
-- Multi-document tabs
+- Multi-document tabs (planned separately for `0.10.0`)
 - Multi-user collaboration
 - Heavy schema validation

@@ -87,7 +87,7 @@ test("Studio has numeric and mnemonic direct-switch shortcuts for REPL", () => {
 	assert.match(shortcutSource, /event\.altKey/);
 	assert.match(shortcutSource, /!event\.shiftKey/);
 	assert.match(shortcutSource, /switchRightPaneToView\("repl", \{ focusReplComposer: true \}\)/);
-	assert.match(serverSource, /Cmd\/Ctrl\+Alt\+R<\/dt><dd>Switch the right pane directly to REPL/);
+	assert.match(serverSource, /Cmd\/Ctrl\+Option\/Alt\+R<\/dt><dd>Switch the right pane directly to REPL/);
 });
 
 test("Studio REPL Quick send keeps exact-lifetime drafts until acknowledgement", () => {
