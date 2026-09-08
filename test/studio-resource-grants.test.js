@@ -206,7 +206,7 @@ test("cross-boundary local links require an explicit file or folder grant", () =
 	assert.match(clientSource, /secondaryLabel: "Allow this folder for this Studio session"/);
 	assert.match(clientSource, /secondaryValue: "directory"/);
 	assert.match(clientSource, /fetchStudioJson\("\/resource-grants"/);
-	assert.match(clientSource, /if \(!\(await requestStudioResourceGrant\(grantRequest\)\)\)/);
+	assert.match(clientSource, /await requestStudioResourceGrant\(grantRequest, \{ isCurrent \}\)/);
 	const menuStart = clientSource.indexOf("async function showPreviewLinkMenu");
 	const grantRequestStart = clientSource.indexOf("function getStudioResourceGrantRequest", menuStart);
 	assert.ok(menuStart >= 0 && grantRequestStart > menuStart);
@@ -215,13 +215,15 @@ test("cross-boundary local links require an explicit file or folder grant", () =
 	const firstMenuAction = menuSource.indexOf("appendPreviewLinkMenuButton", menuPreflight);
 	assert.ok(menuPreflight >= 0 && firstMenuAction > menuPreflight, "Local-link access must be decided before an action menu can create a pending tab.");
 	assert.match(menuSource, /const menuRequestId = \+\+previewLinkMenuRequestId/);
-	assert.match(menuSource, /if \(menuRequestId !== previewLinkMenuRequestId\) return false/);
-	assert.match(menuSource, /if \(!\(error && error\.studioCancelled\)\)/);
+	assert.match(menuSource, /menuRequestId !== previewLinkMenuRequestId \|\| !studioPreviewInteractionIsCurrent\(nextContext\)/);
+	assert.match(menuSource, /!\(error && error\.studioCancelled\) && studioPreviewInteractionIsCurrent\(nextContext\)/);
+	assert.match(clientSource, /if \(previewLinkDecisionOwnsClick\(target\)\) return;\s*closePreviewLinkMenu\(\)/,
+		"grant-dialog clicks must not invalidate the link-menu request awaiting that decision");
 
 	const previewClickStart = clientSource.indexOf("function handlePreviewLocalLinkClick");
 	const previewContextMenuStart = clientSource.indexOf("function handlePreviewLocalLinkContextMenu", previewClickStart);
 	const previewClickSource = clientSource.slice(previewClickStart, previewContextMenuStart);
-	assert.match(previewClickSource, /kind === "text" \|\| kind === "office"[\s\S]*void showPreviewLinkMenu\(anchor, event\)/);
+	assert.match(previewClickSource, /kind === "text" \|\| kind === "office"[\s\S]*void showPreviewLinkMenu\(anchor, event, context\)/);
 	assert.doesNotMatch(previewClickSource, /openPreviewDocumentInNewEditor/);
 
 	const htmlLinkStart = clientSource.indexOf("function handleHtmlArtifactFrameLocalLinkMessage");

@@ -83,6 +83,8 @@ import {
 	isValidStudioLaunchId,
 	normalizeStudioPendingKind,
 } from "./shared/studio-tab-launcher.js";
+import { createStudioBufferServerStore, STUDIO_BUFFER_REQUEST_MAX_BYTES } from "./shared/studio-buffer-server.js";
+import { createStudioMetadataWriteOrderTracker } from "./shared/studio-metadata-write-order.js";
 import {
 	createStudioWorkspaceStateStore,
 	isValidStudioTabStateId,
@@ -198,6 +200,15 @@ const STUDIO_SHOW_ME_HELPERS_URL = new URL("./client/studio-show-me-helpers.js",
 const STUDIO_SIDE_QUESTION_HELPERS_URL = new URL("./client/studio-side-question-helpers.js", import.meta.url);
 const STUDIO_EDITOR_DRAFT_HELPERS_URL = new URL("./client/studio-editor-draft-helpers.js", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
+// Experimental, process-scoped opt-in; stable/default browser workflows remain on v1.
+const STUDIO_BUFFER_RECOVERY_ENABLED = process.env.PI_STUDIO_BUFFER_RECOVERY === "1";
+const STUDIO_BUFFER_MODULE_URLS = new Map([
+	["studio-buffer-store.js", new URL("./shared/studio-buffer-store.js", import.meta.url)],
+	["studio-buffer-recovery.js", new URL("./shared/studio-buffer-recovery.js", import.meta.url)],
+	["studio-buffer-client.js", new URL("./shared/studio-buffer-client.js", import.meta.url)],
+	["studio-buffer-decisions.js", new URL("./shared/studio-buffer-decisions.js", import.meta.url)],
+	["studio-buffer-recovery-panel.js", new URL("./shared/studio-buffer-recovery-panel.js", import.meta.url)],
+]);
 
 interface StudioServerState {
 	server: Server;
@@ -1302,6 +1313,9 @@ $body$
 
 let studioPersistentStateCache: StudioPersistentState | null = null;
 let studioPersistentStateQueue: Promise<void> = Promise.resolve();
+const studioMetadataWriteOrder = createStudioMetadataWriteOrderTracker();
+type StudioMetadataWriteOwnership = { writerId: string; writeVersion: number };
+type StudioMetadataWriteOrderClaim = { commit(): void };
 let transientStudioDocuments: Map<string, { document: InitialStudioDocument; createdAt: number }> = new Map();
 let studioReplJournalEntries: StudioReplJournalEntry[] = [];
 const studioReplUnsyncedJournalEntryIds = new Set<string>();
@@ -1430,11 +1444,30 @@ async function saveStudioPersistentState(state: StudioPersistentState): Promise<
 	studioPersistentStateCache = state;
 }
 
-async function mutateStudioPersistentState(mutator: (state: StudioPersistentState) => void): Promise<void> {
+function parseStudioMetadataWriteOwnership(value: unknown): { ok: true; ownership: StudioMetadataWriteOwnership | null } | { ok: false } {
+	if (!value || typeof value !== "object") return { ok: true, ownership: null };
+	const candidate = value as { metadataWriterId?: unknown; metadataWriteVersion?: unknown };
+	const hasWriter = Object.prototype.hasOwnProperty.call(candidate, "metadataWriterId");
+	const hasVersion = Object.prototype.hasOwnProperty.call(candidate, "metadataWriteVersion");
+	if (!hasWriter && !hasVersion) return { ok: true, ownership: null };
+	if (!hasWriter || !hasVersion || typeof candidate.metadataWriterId !== "string"
+		|| !isValidStudioTabStateId(candidate.metadataWriterId)
+		|| !Number.isSafeInteger(candidate.metadataWriteVersion)
+		|| Number(candidate.metadataWriteVersion) <= 0) return { ok: false };
+	return { ok: true, ownership: { writerId: candidate.metadataWriterId, writeVersion: Number(candidate.metadataWriteVersion) } };
+}
+
+function prepareStudioMetadataWrite(kind: "scratchpad" | "review-notes", documentKey: string, ownership: StudioMetadataWriteOwnership | null): StudioMetadataWriteOrderClaim | null {
+	return studioMetadataWriteOrder.prepare(kind, documentKey, ownership);
+}
+
+async function mutateStudioPersistentState(mutator: (state: StudioPersistentState) => void | false | (() => void)): Promise<void> {
 	const run = studioPersistentStateQueue.catch(() => undefined).then(async () => {
 		const state = normalizeStudioPersistentState(await loadStudioPersistentState());
-		mutator(state);
+		const onPersisted = mutator(state);
+		if (onPersisted === false) return;
 		await saveStudioPersistentState(state);
+		if (typeof onPersisted === "function") onPersisted();
 	});
 	studioPersistentStateQueue = run.then(() => undefined, () => undefined);
 	await run;
@@ -1476,15 +1509,17 @@ async function listRecentPersistedStudioScratchpads(limit = 20): Promise<Array<{
 		.slice(0, Math.max(1, Math.min(100, Math.floor(limit) || 20)));
 }
 
-async function writePersistedStudioScratchpadText(documentKey: string, text: string, label?: string): Promise<void> {
+async function writePersistedStudioScratchpadText(documentKey: string, text: string, label?: string, ownership: StudioMetadataWriteOwnership | null = null): Promise<void> {
 	const key = String(documentKey ?? "").trim();
 	if (!key) return;
 	await mutateStudioPersistentState((state) => {
+		const orderClaim = prepareStudioMetadataWrite("scratchpad", key, ownership);
+		if (!orderClaim) return false;
 		const normalized = String(text ?? "");
 		if (normalized.length === 0) {
 			delete state.scratchpadsByDocument[key];
 			delete state.scratchpadMetadataByDocument[key];
-			return;
+			return () => orderClaim.commit();
 		}
 		state.scratchpadsByDocument[key] = normalized;
 		state.scratchpadMetadataByDocument[key] = {
@@ -1492,6 +1527,7 @@ async function writePersistedStudioScratchpadText(documentKey: string, text: str
 			label: typeof label === "string" && label.trim() ? label.trim() : state.scratchpadMetadataByDocument[key]?.label,
 			updatedAt: Date.now(),
 		};
+		return () => orderClaim.commit();
 	});
 }
 
@@ -1507,7 +1543,7 @@ async function readPersistedStudioReviewNotes(documentKey: string): Promise<Pers
 	return Array.isArray(notes) ? clonePersistedStudioReviewNotes(notes) : [];
 }
 
-async function writePersistedStudioReviewNotes(documentKey: string, notes: PersistedStudioReviewNote[]): Promise<void> {
+async function writePersistedStudioReviewNotes(documentKey: string, notes: PersistedStudioReviewNote[], ownership: StudioMetadataWriteOwnership | null = null): Promise<void> {
 	const key = String(documentKey ?? "").trim();
 	if (!key) return;
 	const normalizedNotes = Array.isArray(notes)
@@ -1516,11 +1552,14 @@ async function writePersistedStudioReviewNotes(documentKey: string, notes: Persi
 			.filter((note): note is PersistedStudioReviewNote => Boolean(note))
 		: [];
 	await mutateStudioPersistentState((state) => {
+		const orderClaim = prepareStudioMetadataWrite("review-notes", key, ownership);
+		if (!orderClaim) return false;
 		if (normalizedNotes.length === 0) {
 			delete state.reviewNotesByDocument[key];
-			return;
+			return () => orderClaim.commit();
 		}
 		state.reviewNotesByDocument[key] = clonePersistedStudioReviewNotes(normalizedNotes);
+		return () => orderClaim.commit();
 	});
 }
 
@@ -12328,6 +12367,7 @@ function buildStudioHtml(
 	initialTerminalDetail?: string,
 	initialContextUsage?: StudioContextUsageSnapshot,
 	studioMode: StudioUiMode = "full",
+	bufferRecovery: { workspaceId: string; capability: string } | null = null,
 ): string {
 	const initialText = escapeHtmlForInline(initialDocument?.text ?? "");
 	const initialSource = initialDocument?.source ?? "blank";
@@ -12414,7 +12454,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
+<body data-buffer-workspace-id="${escapeHtmlForInline(bufferRecovery?.workspaceId ?? "")}" data-buffer-capability="${escapeHtmlForInline(bufferRecovery?.capability ?? "")}" data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
   <header id="studioHeader">
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -12879,6 +12919,7 @@ ${cssVarsBlock}
 export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
 	const studioWorkspaceStateStore = createStudioWorkspaceStateStore();
+	const studioBufferStateStore = createStudioBufferServerStore({ legacyState: (id: string) => studioWorkspaceStateStore.get(id) });
 	const studioResourceGrantRegistry = createStudioResourceGrantRegistry();
 	const studioFileWatchers = new Map<WebSocket, ReturnType<typeof createStudioFileWatcher>>();
 	const studioWatchedClientPaths = new Map<WebSocket, string>();
@@ -16920,7 +16961,12 @@ export default function (pi: ExtensionAPI) {
 				? (parsedBody as { label: string }).label
 				: undefined;
 
-		await writePersistedStudioScratchpadText(documentKey, text, label);
+		const writeOwnership = parseStudioMetadataWriteOwnership(parsedBody);
+		if (!writeOwnership.ok) {
+			respondJson(res, 400, { ok: false, error: "Invalid metadata write ownership." });
+			return;
+		}
+		await writePersistedStudioScratchpadText(documentKey, text, label, writeOwnership.ownership);
 		respondJson(res, 200, { ok: true });
 	};
 
@@ -17025,7 +17071,12 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		await writePersistedStudioReviewNotes(documentKey, notes);
+		const writeOwnership = parseStudioMetadataWriteOwnership(parsedBody);
+		if (!writeOwnership.ok) {
+			respondJson(res, 400, { ok: false, error: "Invalid metadata write ownership." });
+			return;
+		}
+		await writePersistedStudioReviewNotes(documentKey, notes, writeOwnership.ownership);
 		respondJson(res, 200, { ok: true });
 	};
 
@@ -17610,6 +17661,62 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname.startsWith("/buffer-modules/")) {
+			if (!STUDIO_BUFFER_RECOVERY_ENABLED || requestUrl.searchParams.get("token") !== serverState.token) {
+				respondText(res, 403, "Buffer module authorization unavailable.");
+				return;
+			}
+			const name = requestUrl.pathname.slice("/buffer-modules/".length);
+			const sourceUrl = STUDIO_BUFFER_MODULE_URLS.get(name);
+			if (!sourceUrl) { respondText(res, 404, "Not found"); return; }
+			try {
+				let source = readFileSync(sourceUrl, "utf8");
+				// Module imports do not inherit query parameters: authorize each fixed graph edge.
+				for (const moduleName of STUDIO_BUFFER_MODULE_URLS.keys()) {
+					source = source.replaceAll(JSON.stringify("./" + moduleName), JSON.stringify("/buffer-modules/" + moduleName + "?token=" + encodeURIComponent(serverState.token)));
+				}
+				res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Cross-Origin-Resource-Policy": "same-origin" });
+				res.end(source);
+			} catch { respondText(res, 500, "Could not load buffer module."); }
+			return;
+		}
+
+		if (requestUrl.pathname === "/tab-buffer-state") {
+			if (!STUDIO_BUFFER_RECOVERY_ENABLED || requestUrl.searchParams.get("token") !== serverState.token) {
+				respondJson(res, 403, { ok: false, reason: "forbidden", message: "Buffer recovery authorization unavailable." });
+				return;
+			}
+			const capability = req.headers["x-studio-buffer-capability"];
+			if (typeof capability !== "string" || capability.length !== 48) {
+				respondJson(res, 403, { ok: false, reason: "forbidden", message: "An editable page recovery capability is required." });
+				return;
+			}
+			void (async () => {
+				const method = (req.method ?? "GET").toUpperCase();
+				// Releasing a page capability never deletes its workspace recovery.
+				if (method === "DELETE") { respondJson(res, 200, studioBufferStateStore.release(capability)); return; }
+				if (method === "GET" && requestUrl.searchParams.get("inspect") === "1") {
+					const result = studioBufferStateStore.inspect(capability);
+					respondJson(res, result.ok ? 200 : ("reason" in result && result.reason === "forbidden" ? 403 : 409), result); return;
+				}
+				const current = studioBufferStateStore.read(capability);
+				if (!current.ok) { respondJson(res, "reason" in current && current.reason === "forbidden" ? 403 : 409, current); return; }
+				if (method === "GET") { respondJson(res, 200, current); return; }
+				if (method !== "POST") { res.setHeader("Allow", "GET, POST, DELETE"); respondJson(res, 405, { ok: false, message: "Use GET, POST, or DELETE (release page authorization only)." }); return; }
+				let raw: string;
+				try { raw = await readRequestBody(req, STUDIO_BUFFER_REQUEST_MAX_BYTES); }
+				catch { respondJson(res, 413, { ok: false, reason: "limit-exceeded", message: "Buffer request exceeds its limit; recovery was retained." }); return; }
+				let body: Record<string, unknown>;
+				try {
+					body = JSON.parse(raw);
+					if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => !["state", "expectedRevision"].includes(key))) throw new Error();
+				} catch { respondJson(res, 400, { ok: false, reason: "invalid-request", message: "Invalid buffer request." }); return; }
+				const result = studioBufferStateStore.write(capability, body.expectedRevision, body.state);
+				respondJson(res, result.ok ? 200 : 409, result);
+			})().catch(() => respondJson(res, 500, { ok: false, reason: "unavailable", message: "Buffer recovery failed; keep the current editor text." }));
+			return;
+		}
+
 		if (requestUrl.pathname === "/tab-workspace-state") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
@@ -18048,6 +18155,17 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		refreshContextUsage();
+		const studioMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
+		const requestInitialDocument = resolveRequestedStudioDocumentFromUrl(requestUrl, initialStudioDocument, studioCwd, lastStudioResponse);
+		let bufferRecovery: { workspaceId: string; capability: string } | null = null;
+		if (STUDIO_BUFFER_RECOVERY_ENABLED && !requestInitialDocument?.watchFile && requestUrl.searchParams.get("watchedFile") !== "1") {
+			const requestedId = requestUrl.searchParams.get("studioTabState") ?? "";
+			const workspaceId = requestUrl.searchParams.get("skipWorkspaceRestore") !== "1" && isValidStudioTabStateId(requestedId) ? requestedId : "tab_" + createSessionToken().slice(0, 40);
+			const issued = studioBufferStateStore.issue({ workspaceId, mode: studioMode });
+			if (!("capability" in issued)) { respondText(res, 503, "Buffer recovery page capacity reached. Existing recovery was retained; close unused test pages before retrying."); return; }
+			bufferRecovery = { workspaceId, capability: issued.capability };
+		}
 		res.writeHead(200, {
 			"Content-Type": "text/html; charset=utf-8",
 			"Cache-Control": "no-store",
@@ -18056,10 +18174,7 @@ export default function (pi: ExtensionAPI) {
 			"Cross-Origin-Opener-Policy": "same-origin",
 			"Cross-Origin-Resource-Policy": "same-origin",
 		});
-		refreshContextUsage();
-		const studioMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
-		const requestInitialDocument = resolveRequestedStudioDocumentFromUrl(requestUrl, initialStudioDocument, studioCwd, lastStudioResponse);
-		res.end(buildStudioHtml(requestInitialDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, terminalSessionDetail, contextUsageSnapshot, studioMode));
+		res.end(buildStudioHtml(requestInitialDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, terminalSessionDetail, contextUsageSnapshot, studioMode, bufferRecovery));
 	};
 
 	const ensureServer = async (requestedPort?: number, listenAll = false): Promise<StudioServerState> => {
@@ -18309,6 +18424,7 @@ export default function (pi: ExtensionAPI) {
 		studioWatchedClientPaths.clear();
 		studioFileWatchSubscriptionGenerations.clear();
 		studioWorkspaceStateStore.clear();
+		studioBufferStateStore.clear();
 		studioResourceGrantRegistry.clear();
 	};
 

@@ -1,6 +1,6 @@
 # TODO
 
-See [ROADMAP.md](ROADMAP.md) for the active release plan: finish the small `0.9.60` networking/shortcut batch before the `0.10.0` buffer architecture. [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the active-Prompt/editable-document design. This file retains smaller or unassigned backlog items.
+See [ROADMAP.md](ROADMAP.md) for the active release plan: `0.9.60` is shipped; the `0.10.0` buffer foundation is now in progress. [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the active-Prompt/editable-document design. This file retains smaller or unassigned backlog items.
 
 ## Assigned next work
 
@@ -8,11 +8,33 @@ See [ROADMAP.md](ROADMAP.md) for the active release plan: finish the small `0.9.
 - [x] Implement and test `Cmd/Ctrl+Option/Alt+Enter` for Annotate response in `0.9.60`. Keep unchanged accepted prompts confirmation-free; protect unsubmitted edits and unsaved file changes, including late-acknowledgement and stale-confirmation races. Retain Run's existing shortcut meaning/scope.
 - [x] Add the Shift variant (`Cmd/Ctrl+Option/Alt+Shift+Enter`) for **Load response into editor** without switching views, through the existing guarded action.
 - [x] Validate and prepare the combined `0.9.60` artifact, including the published issue #4 networking fix: 284 tests, type/syntax checks, production audits, byte audit, and fresh-install browser/networking checks pass. Release approved on 2026-09-07; exact `sbx` feedback remains outstanding and the issue stays open.
-- [ ] After that release, implement the `0.10.0` design in store/recovery → document switching → context handoff → parked-prompt order. No buffer implementation has begun.
+- [ ] Implement the `0.10.0` design in store/recovery → document switching → context handoff → parked-prompt order. Keep the visible UI unchanged for the foundation; no commit/release without approval.
+  - [x] Stage 1a: pure buffer identities/roles/store, strict v2 codec, non-destructive v1 migration/sessionStorage adapter, bounded updates and async ownership, with unit/native-browser reconstruction tests. See `shared/STUDIO_BUFFER_FOUNDATION.md`.
+  - [x] Stage 1b: complete the single-editor callback/metadata ownership pass, current isolated Brave/Chrome matrix and targeted Safari 26.5 smoke. The Safari rerun passed after Allow Remote Automation was re-enabled. Recovery remains opt-in; activation still requires explicit approval.
+    - [x] Explicit recovery inspection, full raw/text exports, compatible-copy choice, keep-current/reset in verified fresh namespaces, and guarded persistence retry. Corrupt/future/other-source/hidden collections remain export-only; originals are retained.
+    - [x] Manual unsaved-edit browser reload check passed. Per Oliver’s feedback, move recovery to Source & context → Recover unsaved text… (no footer button) and shorten the panel, with technical detail folded away.
+    - [x] Development-only single-editor store binding, persistent recovery warnings, guarded namespace-reset, and separate authenticated/acknowledged v2 server fallback.
+    - [x] Source-owned saves, late-refresh/confirmation guards, TTL-aware navigation consent, retained v1/Save As reconciliation, and isolated production browser regressions.
+    - [x] Finish completion/preview/import/terminal-load ownership and metadata association integration, including focus viewers, Quarto callbacks, failed-write/beacon ordering and recovery/reset lifecycle races. Keep current Run and separate terminal-cleanup authority; no internal tabs yet.
+    - [x] Resolve the independent Codex safety review: metadata now protects unload, commits ordering only after disk persistence, bounds/coalesces stalled writes without cancelling newer timers, preserves grant continuations, and rebuilds editor-preview ownership after reconnect. Focused regressions and the Brave/Chrome native matrix pass.
+    - [x] Resolve the two later Astra findings: require current replacement consent for empty dirty files; block comments/scratchpad mutations and writes until a successful first read, with protected failure and reopen-to-retry. Focused regressions, all 432 tests, static checks and the full Brave/Chrome matrix plus new preservation probes pass.
+  - [ ] Only after that gate: Prompt/document switching, context handoff and parked drafts.
 
 Do not pull unrelated backlog items below into the quick release merely to fill the batch.
 
 ## Near term
+- [ ] Separate annotation-header compatibility batch (requested via `pi-nvim-context`; deferred from the validated buffer-recovery batch): recognise whole leading `annotations below` and `annotations below:` opener lines, case-insensitively, while retaining `annotated reply: below` and `annotated reply below:`. Do not rename Studio's generated default yet; Neovim's emitted wording remains unchanged until compatibility is available.
+  - Apply the same recognition to detection/UI summaries, header toggle/duplicate prevention and header stripping (`stripAnnotationHeader`, `stripAnnotationBoundaryMarker`, `updateAnnotatedReplyHeaderButton`, `toggleAnnotatedReplyHeader`, `getStudioUiRefreshAnnotationHeaderEnabled` in `client/studio-client.js`); audit related annotation-stripping paths too.
+  - Require a real leading header block with its syntax-hint structure and divider, not a prefix match followed by an arbitrary later divider. Preserve body text; reject prose mentions, quoted/fenced examples, missing-divider and malformed blocks.
+  - Keep recognising the minimal Neovim shape below without requiring source/precedence lines or a footer. Its backticked `[an: note]` is a literal hint, not an annotation. Add aliases, backwards compatibility, case/LF/CRLF, toggle/deduplication, stripping/body-preservation and false-positive regressions before changing emitted wording.
+    ```text
+    annotated reply: below
+
+    - user annotation syntax: `[an: note]` (user comments on the accompanying selections)
+
+    ---
+
+    ```
 - [x] Add a simple **Text | Rendered** toggle for the editor/source panel (`View: Markdown | Preview`).
 - [x] Add explicit in-UI WS diagnostics (footer WS phase: Connecting/Ready/Submitting/Disconnected).
 - [x] Add keyboard shortcut(s) to make the active pane full-screen / distraction-free (or similar to Zed `Cmd+Esc`).

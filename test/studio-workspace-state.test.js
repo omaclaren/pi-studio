@@ -108,5 +108,5 @@ test("Studio wires tab recovery through its authenticated server endpoint", () =
 	const serverClose = indexSource.indexOf("state.server.close", stopServerStart);
 	const recoveryClear = indexSource.indexOf("studioWorkspaceStateStore.clear()", stopServerStart);
 	assert.ok(stopServerStart >= 0 && serverClose > stopServerStart && recoveryClear > serverClose, "Workspace recovery should clear only after in-flight HTTP requests finish.");
-	assert.equal(projectRoot.endsWith("pi-studio/"), true);
+	assert.equal(JSON.parse(readFileSync(projectRoot + "package.json", "utf8")).name, "pi-studio");
 });

@@ -72,12 +72,13 @@ test("blocked passive media uses an explicit allow affordance without opening a 
   assert.match(blockedNotice, /studioBlockedMediaPath/);
 
   const allowHandler = functionBlock(clientSource, "handleStudioBlockedMediaAllowButton", "hasMeaningfulPreviewContent");
-  assert.match(allowHandler, /await requestStudioResourceGrant\(request\)/);
+  assert.match(allowHandler, /await requestStudioResourceGrant\(request, \{ isCurrent \}\)/);
+  assert.match(allowHandler, /studioBlockedMediaOwners\.get\(button\)/);
   assert.match(allowHandler, /refreshStudioPassiveMediaAfterGrant\(\)/);
 
   const pdfCard = functionBlock(clientSource, "createStudioPdfCard", "createAuthorizedStudioPdfCard");
   assert.match(pdfCard, /fetchPreviewLocalLink\("resolve", path, resourceQuery, \{ skipGrantPrompt: true \}\)/);
-  assert.match(pdfCard, /createStudioBlockedMediaNotice\(error, "pdf", path\)/);
+  assert.match(pdfCard, /createStudioBlockedMediaNotice\(error, "pdf", path, isCurrent\)/);
   assert.doesNotMatch(pdfCard, /requestStudioResourceGrant/);
 
   assert.match(cssSource, /\.rendered-markdown \.studio-blocked-media\s*\{/);

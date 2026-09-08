@@ -6708,6 +6708,37 @@
       font-weight: 700;
     }
 
+    .studio-buffer-recovery-dialog {
+      width: min(800px, calc(100vw - 32px));
+      max-height: 90vh;
+      overflow: auto;
+      box-sizing: border-box;
+      padding: 20px;
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+    }
+    .studio-buffer-recovery-dialog::backdrop { background: rgba(0, 0, 0, 0.58); }
+    .studio-buffer-recovery-dialog [hidden] { display: none !important; }
+    .studio-buffer-recovery-dialog h2 { margin-top: 0; font-size: 18px; }
+    .studio-buffer-recovery-dialog p { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+    .studio-buffer-recovery-dialog label { display: block; margin: 8px 0; }
+    .studio-buffer-recovery-dialog select { max-width: 100%; }
+    .studio-buffer-recovery-dialog textarea {
+      width: 100%; height: 180px; max-height: 40vh; box-sizing: border-box; resize: vertical;
+      border: 1px solid var(--control-border); border-radius: 8px; padding: 10px;
+      background: var(--panel-2); color: var(--text); font: 12px var(--font-mono);
+    }
+    .studio-buffer-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+    .studio-buffer-recovery-note { color: var(--studio-info-text, var(--muted)); }
+    .studio-buffer-recovery-dialog summary { cursor: pointer; font-size: 13px; }
+    .studio-buffer-recovery-dialog [data-recovery-confirmation] { display: block; border: 1px solid var(--warn-border); border-radius: 8px; padding: 12px; margin-bottom: 14px; }
+    .studio-buffer-recovery-dialog [data-recovery-confirmation] h3 { margin: 0; }
+    .studio-buffer-recovery-dialog [data-recovery-confirmation] button { width: auto; margin-right: 8px; }
+
     .studio-decision-overlay {
       position: fixed;
       inset: 0;

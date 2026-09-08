@@ -1,8 +1,8 @@
 # Active Prompt and editable document buffers
 
-Status: agreed product direction, planned for `0.10.0`; not implemented. Updated 2026-09-07.
+Status: stage 1a implemented; stage 1b single-editor/v2-server recovery and explicit inspection/export/choice/retry are available behind an isolated development flag. The targeted callback/metadata ownership pass is complete locally. Seven Codex safety findings and two later in-session Astra findings are fixed with focused regressions: empty dirty files require comments-prompt replacement consent, and unread saved comments/scratchpads cannot be overwritten. The current isolated Brave/Chrome matrix and targeted Safari 26.5 smoke pass; the Safari rerun completed after remote automation was re-enabled. Recovery remains opt-in pending explicit activation approval, and internal tabs are not implemented. Updated 2026-09-09.
 
-[ROADMAP.md](ROADMAP.md) owns release scope. Finish the small `0.9.60` networking/shortcut release before implementing this architecture. This note records the design and acceptance criteria, not a final wire protocol or authorization to release.
+[ROADMAP.md](ROADMAP.md) owns release scope. `0.9.60` is released; implementation of the store/recovery foundation was approved afterward with the visible UI unchanged. Oliver approved a local checkpoint commit on `feature/buffer-recovery-foundation` on 2026-09-09, without release or default-activation authority. This note records the design and acceptance criteria, not a final wire protocol. The initial module/API boundaries and remaining integration work are in [shared/STUDIO_BUFFER_FOUNDATION.md](shared/STUDIO_BUFFER_FOUNDATION.md).
 
 ## Purpose
 
@@ -71,6 +71,14 @@ Introduce `StudioBufferStore` behind the existing editor/preview surfaces before
 Keep existing canonical file checks and workspace-level resource grants. Two snapshots referring to a file must not bypass disk-revision conflict detection. Closing dirty documents or discarding prompt drafts must require a deliberate choice; reopen/recovery must not silently substitute the current contents of disk for unsaved text.
 
 The full workspace owns its active prompt and draft selection. Companion workspaces retain their own documents; adding context is an explicit operation, not continuous shared-text synchronization. Resource grants and the exact-tmux-lifetime Shared REPL Record do not become buffer-owned.
+
+## Browser-tab continuity
+
+Internal tabs complement, rather than replace, browser tabs/windows. Internal tabs will switch Prompt/documents inside a workspace; browser companions and previews remain useful for simultaneous viewing and other screens. Preserve existing browser-opening actions while implementing the new controls.
+
+Separate browser editors initially remain independent snapshots, not live-synchronized mirrors. Keep canonical-path/disk-revision conflict checks. Future labels such as **Open in Studio tab** and **Open in browser tab** should make the distinction explicit. A true pop-out of an editable buffer must preserve its unsaved text; merely reopening its disk file is not equivalent. Linked pop-outs and live synchronization are not required for the first batch.
+
+The transitional single-editor adapter deliberately keeps Run using the visible editor, even when file migration creates a selected document plus an empty active Prompt. The explicit Prompt/document interaction layer must change that behaviour together; a hidden Prompt must never become the accidental submission destination.
 
 ## Recovery and asynchronous work
 

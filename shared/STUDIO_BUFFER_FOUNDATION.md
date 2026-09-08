@@ -1,0 +1,113 @@
+# Buffer foundation: stage 1a and opt-in stage 1b
+
+The browser-safe store/codec/migration foundation is implemented. A **development-only, process-scoped `PI_STUDIO_BUFFER_RECOVERY=1` opt-in** now connects it to the existing single editor and a separate server fallback. Without that flag the existing v1 recovery path remains the default. This is an unreleased development checkpoint, approved for a local commit on `feature/buffer-recovery-foundation` on 2026-09-09. Test only in the isolated development worktree/runtime; the installed version and default recovery path remain unchanged.
+
+The successful editor layout, Run behaviour and browser-opening actions remain unchanged. There are no internal tabs or context-transfer messages yet. The opt-in build has **Source & context → Recover unsaved text…** for inspection, export, explicit recovery choice and persistence retry; no footer control is added. The targeted single-editor callback/metadata ownership pass and current isolated Brave/Chrome validation are complete locally. The current targeted Safari 26.5 smoke also passes after remote automation was re-enabled. Recovery remains opt-in; default activation still requires explicit approval.
+
+## Model contract
+
+`createStudioBuffer(options)` creates an immutable buffer. `createStudioBufferStore(snapshot)` owns an immutable schema-v2 workspace. `validateStudioBufferWorkspace(value, expected)` validates and copies the complete snapshot, returning `{ ok, state }` or `{ ok: false, reason, message }`. Constructors throw `StudioBufferStateError` for invalid initial input; store actions return result objects.
+
+A workspace contains:
+
+- `version: 2`, `workspaceId` (the existing browser-tab identity), trusted launch `mode` (`full` or `editor-only`), monotonic `revision` and `savedAt`;
+- separate `selectedBufferId` and `activePromptId`, explicit ordering, and the complete buffer collection;
+- per-buffer `id`, explicit `role`, revision, exact text and nullable text baseline;
+- source kind/label/path/draft identity, expected disk revision and resource directory;
+- editor/preview modes, language, selection/direction, editor/preview scroll, and response-reading position;
+- annotation preference and review-note/scratchpad association keys, not copies of their external records.
+
+Conversation contents, resource grants, Shared REPL Record, accepted-submission baselines and Pi-terminal cleanup fingerprints are **not** buffer recovery fields. Unknown fields are rejected, not silently stripped. Resource directories, source paths, disk revisions and metadata keys are claims to be revalidated by existing server authority; this module performs no filesystem I/O and grants no access.
+
+Full workspaces must have an active Prompt. Editor-only workspaces contain documents only and have no active Prompt. Watched previews do not own editable stores. Selecting, opening or closing documents does not activate a different Prompt. A path does not determine role: a Prompt can be saved without turning it into a document.
+
+## Mutations and asynchronous ownership
+
+- `snapshot()` / `get(id)` return immutable state; references cannot mutate the store.
+- `update(id, expectedRevision, patch)` rejects a changed/closed origin. IDs and roles cannot be patched. Changing the file path clears the previous baseline/revision unless explicitly supplied for the new source.
+- `add(buffer)`, `select(id)` and `activatePrompt(id)` are explicit independent operations. Activation does not select the Prompt automatically.
+- `beginOperation(id, requestId, { requireActivePrompt })` returns an opaque, page-memory target containing the originating ID/revision/request ID. Retain that exact handle before beginning asynchronous work or asking for consent.
+- `finishOperation(target, patch)` consumes matching ownership and updates only the origin. It does not select it. Duplicate, forged, reconstructed, closed/reopened or edited targets are rejected. Switching the active destination away and back invalidates active-Prompt-targeted work.
+- `close(target, { discard, replacementPromptId })` uses the same captured ownership, not merely an ID/revision pair. Dirty buffers and nonempty Prompts require `discard: true`; closing the active Prompt requires an explicit replacement Prompt. Confirmation must be captured before the asynchronous decision, not reconstructed afterward.
+- `cancelOperation(target)` / `clearPendingOperations()` release failed/cancelled/disconnected work. Pending ownership is never serialized or restored.
+
+For this first slice **every buffer-local mutation, including view changes, increments its revision**. This deliberately conservative policy prevents stale consent/results; later renderer adapters must decide whether to split view revision from content/identity revision, with tests, rather than bypass stale checks. Workspace selection alone does not change buffer revisions. UI adapters must also clear their transient work when replacing a whole store instance.
+
+A completed operation is not a file save. Updating a disk baseline/revision is an explicit operation following a successful existing server save; it is not a submission side effect. The transitional adapter now tests source-owned save acknowledgements: later typing remains visible and dirty against the exact content actually saved. A changed/reopened source cannot inherit an older save acknowledgement. Detaching a file clears its baseline in the store rather than lending that saved comparison to an unrelated detached document.
+
+The opt-in browser adapter extends that rule to the current single-editor surface. Completion/import/Pi-editor replacements, preview renders and their committed DOM actions, HTML/PDF/image focus controls, Quarto requests, annotations, comments and metadata decisions retain exact origin predicates through asynchronous stages. Replacing a response pane does not clone away those predicates. Resource-grant dialog clicks remain part of the local-link operation they approve, while genuine outside clicks still cancel it. Connection loss revokes editor-preview owners, and the handshake rebuilds each visible editor preview before its DOM can act again. Recovery initialization and Reset use whole-workspace consent covering source/text, disk baseline, view/resource state, selection/scroll and metadata generations; a late continuation cannot silently roll those states back.
+
+## Limits and failure behaviour
+
+- 16 open buffers;
+- 900,000 UTF-16 characters per text or baseline;
+- 3,000,000 aggregate text **including baselines**;
+- 64 pending operations;
+- bounded identity, view and association strings; 20,000,000 serialized recovery characters.
+
+Updates validate the complete candidate before replacing state. No buffer eviction, identity/text truncation, partial normalization or automatic dirty-close occurs. Resource/capacity failures are result objects; the opt-in adapter displays them persistently in the existing status area. These are application limits, not a promise of browser storage capacity: sessionStorage can reject smaller writes.
+
+## V1 migration and storage
+
+`migrateStudioWorkspaceV1(value, { workspaceId, mode, makeBufferId })` is pure. The launch owner supplies mode and workspace identity; migration does not infer new permissions from stored data.
+
+- Detached full-editor state becomes a Prompt, preserving exact text and source identity.
+- File-backed full-editor state becomes the selected document plus an independent empty active Prompt.
+- All editor-only sources remain documents.
+- V1 never persisted a text baseline. File recovery retains its expected disk revision but uses `baselineText: null`, meaning cleanliness is unknown and must be protected. It never rereads disk to guess that the draft is saved.
+- Selections are clamped to the recovered text, as in the old UI. Prose and identities are not truncated or normalized away.
+- Malformed/future payloads and `recovery-cleared` / `recovery-omitted` markers require a recovery decision, rather than becoming an empty draft silently.
+
+`encodeStudioBufferRecovery` and `decodeStudioBufferRecovery` implement the strict v2 codec. `createStudioBufferRecoveryStorage({ storage, workspaceId, mode })` provides a synchronous **same-page sessionStorage adapter**, not server compare-and-swap or a cross-client lease:
+
+1. `read()` distinguishes empty, existing v2, legacy-only, unavailable and invalid/conflicting storage. Missing/unreadable storage is not an empty-editor instruction.
+2. `migrateLegacy({ expectedLegacyRaw, makeBufferId })` checks the exact legacy read, validates the full new state, rechecks both source and destination, writes the new key and verifies it by reading/decoding it back.
+3. `write(snapshot, { expectedRaw })` requires the exact previous v2 read and a newer workspace revision (or an identical retry). It cannot bypass pending legacy migration, overwrite future/malformed data, or hide newer legacy work with a newer candidate timestamp.
+4. `adopt(snapshot, { expectedLegacyRaw })` admits an externally recovered server/v1 candidate only against the exact local legacy read and an absent v2 destination; the ordinary schema/timestamp/readback checks still apply.
+5. No storage method erases old recovery. Failed/quota-limited/unverified writes preserve legacy bytes; the caller retains its live store and expected raw snapshot. No rollback overwrites another writer after a verification mismatch.
+
+Namespace: `piStudio.bufferWorkspace.v2:<tab-id>`. The old per-tab key is misleadingly named `piStudio.workspaceState.v2:<tab-id>` but contains **schema v1**; it remains untouched. The unscoped `piStudio.workspaceState.v1` fallback is not adopted automatically by new tabs. A later UI adapter must retain the existing URL/document-identity gate when offering any older unscoped recovery.
+
+Retained v1 data is validated even when v2 exists. Newer legacy timestamps, corruption or reset/omission markers block automatic restore/write until explicitly resolved. The low-level storage adapter does not itself decide between copies; the explicit choice layer below always prepares a new namespace. Timestamp comparison follows the existing v1 monotonic-write convention; this is not authentication or a multi-client protocol.
+
+## Opt-in single-editor/server integration
+
+`studio-buffer-client.js` projects the existing editor into a store. It preserves the selected buffer's role/identity when existing UI actions change its source. A file-backed initial full view has a selected document plus an empty Prompt, but **Run still submits the visible existing editor**, never the hidden Prompt. Explicit Prompt/document controls must change that interaction together, not by quietly changing the submission expression. Collections containing other inaccessible valuable buffers are refused until a compatible UI exists.
+
+`studio-buffer-server.js` supplies a separate `/tab-buffer-state` endpoint. It requires the ordinary session token and a server-issued page capability bound to the HTML workspace ID and launch mode. Watched views receive no capability. The fixed browser-safe module graph is token-authenticated too; neither route grants filesystem access or adds watched-socket mutations.
+
+- GET reads a complete validated workspace. POST requires an opaque previous server revision; divergent/stale updates fail, while exact retries are acknowledged idempotently. Explicit GET with `inspect=1` exposes the retained v2/v1 raw copies even when a legacy conflict blocks normal adoption. It requires the same workspace/mode-bound capability and returns no persistence acknowledgement or extra filesystem authority.
+- Server limits: 16 workspaces, 12,000,000 aggregate text/baseline characters, 256 page capabilities, a 24-hour idle TTL, and a 32,000,000-byte request cap. Capacity failures do not evict another live workspace.
+- Acknowledgements identify the workspace revision and remaining lifetime. They are distinct from Run acceptance, disk-save acknowledgements and terminal cleanup.
+- DELETE releases **only that page capability**, never its recovery. Non-cached page exits send a best-effort release; crashes/cached-page lifetime fall back to TTL. An exhausted capability pool returns HTTP 503 rather than silently serving an unbound editor.
+- Browser writes precede serialized/coalesced server writes. The separate `:serverAck` browser marker records acknowledged ancestry, not copied text or authority. Both v2 candidates are structurally validated first; ancestry chooses a candidate before its URL/source and single-editor compatibility are checked. Thus an older pre-Save-As identity does not veto newer matching recovery. Divergent branches without matching ancestry require a decision.
+- Both legacy layers are fully validated and retained. Newer/reset/corrupt v1 blocks automatic adoption. Older valid v1 identities do not veto newer v2 after Save As; legacy-only adoption first chooses the newest valid candidate and then checks the URL/source identity. Equal-time divergent legacy candidates are refused.
+- Startup editing, disposal or local-storage races abort adoption. The subsequent websocket handshake cannot overwrite the text that an aborted recovery kept.
+- Save As, annotated saving, disk conflicts, refresh, response replacement and reset capture exact relevant ownership. Save results are source-owned; a late refresh cannot overwrite later typing. Completion/import/Pi-editor callbacks, committed preview interactions, focus viewers, Quarto context and review-note prompt replacement are covered by the opt-in ownership regressions. Comments-prompt replacement protects dirty/unknown-baseline file state even when the editor is empty or already equals the generated prompt; baseline/revision changes invalidate pending consent alongside editor/source/comment changes.
+
+Session storage can disappear when its tab closes. Since `beforeunload` cannot distinguish closing from reloading, silent navigation requires the **current, unexpired server acknowledgement**, not merely a local copy or queued POST. Its lifetime is measured from request start, not response receipt. Observed connection loss invalidates it, including acknowledgements arriving late from the previous connection epoch. Dirty or unsynced scratchpad/comment metadata also protects unload even when editor recovery is acknowledged. Otherwise, native navigation consent lets the user cancel and wait/save/copy. Small POSTs use keepalive, but no asynchronous unload delivery guarantee is made. Explicitly confirmed Reset prepares and verifies a canonical blank snapshot under a new namespace, retaining even older unscoped recovery. Recovery navigation consent covers the captured editor, view/resource/selection and metadata generations plus connection, and is consumed by one `beforeunload` event; cancelled navigation does not authorize a later closure.
+
+Scratchpad and review-note records remain external to buffer snapshots, but their association keys are accepted only for the recovered source identity. Reads cannot replace newer page-local edits or interpret failure as an empty record. In the opt-in adapter, comments/scratchpad mutations and all POST/beacon paths require page-local proof of a successful first read for that exact document key, including valid empty records. Loading, failed, malformed and timed-out first reads leave editing paused rather than overwriting unseen saved notes. Reopening an unavailable panel retries; previously loaded page-local records remain editable during refresh. Reads time out after 15 seconds, and stale-source read completions cannot establish that proof. Writes are serialized per document key; failed records remain dirty and retry before a same-key reload. A stalled key retains at most one in-flight request plus its latest unsynced snapshot; intermediate autosaves are coalesced, the request is aborted after 15 seconds, and drain/beacon retries preserve newer or other-document debounce timers. `beforeunload` and `pagehide` beacon every unsynced key, including documents no longer selected. Session-scoped, tab-monotonic write versions let the server's serialized state writer reject an older POST/beacon from the same Studio tab if it arrives after a newer persisted snapshot, including across reload. The ordering marker advances only after the persistent-state write succeeds. A queued beacon is not treated as acknowledgement when recovery is enabled.
+
+## Explicit recovery choices and exports
+
+`studio-buffer-decisions.js` reads browser v2, scoped v1, older unscoped v1 and the authenticated server inspection without adopting them. `studio-buffer-recovery-panel.js` provides a native modal using plain text, not HTML rendering of stored content. Keyboard actions stay inside the modal; queued close events cannot dispose a newly reopened inspection. The action lives in the source menu’s Document section (source actions in the optional classic layout); it is absent in watched/default-v1 views. Menu items other than recovery remain inert during work, so inspection/export stays accessible without unlocking other source actions. Hosts without native inert retain the old busy-menu restriction. Closing the modal returns focus to the visible menu trigger. Short introductory copy leads the modal; storage/privacy/compatibility details are under **About these copies**.
+
+- The **Recheck copies** action refreshes the inspection list. Download the current inspection first if it should be retained separately.
+- **Download recovery archive** writes experimental `pi-studio-recovery-export` JSON with the complete raw recovery strings, channel errors and current editor text. JSON string escaping preserves malformed/future data, including lone UTF-16 surrogates. No transport token, capability or ancestry sidecar is added. User text and recorded paths may be sensitive.
+- **Copy/download selected text** exports a validated buffer's complete text, including buffers that this UI cannot activate. The display preview is explicitly limited to 20,000 characters; exports are not truncated. The text selector is for preview/export, not a change to the stored selected editor.
+- **Use selected copy…** requires a valid same-workspace/mode candidate compatible with the current source and single-editor surface. After confirmation, it rechecks the exact source copy and whole-workspace/connection consent, then verifies a new sessionStorage namespace before navigation. Originals remain untouched; no file is saved, text submitted, or hidden Prompt activated.
+- **Keep current text…** instead captures the live editor and its known baseline. This works even when existing recovery is corrupt; preparation failure or stale consent leaves the editor in place. Reset uses the same verified-fresh-copy principle for an explicitly blank draft.
+- **Retry recovery** preserves the live editor. It retires the old upload epoch, rereads recovery and refuses divergent server revisions or readable changed/corrupt browser copies. Unavailable browser storage does not prevent supported server-only recovery; no new ancestry marker is attached to browser data that could not be read. A failed refresh/disconnect clears its pending refresh ownership so it cannot indefinitely block recovery actions.
+
+Other-source, wrong-mode, future/malformed and inaccessible multi-buffer collections are export-only in this build. They are never relabelled or partially adopted to bypass validation. Archive import, restoring another source directly, durable backup and internal buffer switching are not supplied by this slice.
+
+## Activation boundary (still before tabs)
+
+- All 432 tests and static checks pass. The expanded 20-workflow matrix plus native grant-continuation, reconnect-owner, empty dirty-file consent and unread/failed metadata-preservation probes pass in isolated Brave and Google Chrome. After Safari's **Allow Remote Automation** setting was re-enabled, the current SafariDriver smoke on Safari 26.5 passed acknowledged reload recovery, metadata reload/ordering, resource-grant continuation, PDF focus replacement, stale comments-prompt consent and the native recovery dialog with zero captured page errors. This is the targeted WebKit smoke, not the full Chromium matrix or its new held-first-read/empty-dirty-file probes.
+- An independent Codex review found five actionable P2 issues, then two follow-up autosave-timer interleavings. Each was reproduced before editing, fixed with focused regression coverage, and rechecked. Its final mixed-event and server-ordering probes reported no actionable findings. A later in-session Astra review nevertheless reproduced two further gaps: empty dirty-file prompt replacement and deletion of unread saved comments. Both are now fixed with focused regressions and native Brave/Chrome preservation assertions, including the analogous scratchpad path. The earlier clean review is not a blanket sign-off for subsequent edits.
+- Preserve conservative export-only handling for unsupported states and extend the current origin/association regressions as new callbacks or switching controls are introduced. Do not weaken the separate page-memory submission tracker, terminal fingerprint provenance or file/grant authority.
+- Continue production UI tests under isolated configuration, source paths, browser profiles and disposable files; preserve independent browser companions and watched previews alongside eventual internal tabs.
+- The local foundation checkpoint commit was explicitly approved on 2026-09-09. Enabling v2 by default, exposing Prompt/document switching, switching the installed source, pushing or releasing still requires separate approval. Host validation does not grant that authority.
+
+Recovery remains browser session storage plus bounded **process-memory** server fallback. It is not durable storage, guaranteed tab-close delivery, or guaranteed Pi-restart recovery.

@@ -22,6 +22,8 @@ function harness(overrides = {}) {
     sourceTextEl: { value: "unsent prompt" },
     sourceState: { source: "blank", path: null, draftId: "one" },
     editorSourceGeneration: 0,
+    editorContentGeneration: 0,
+    bufferRecoveryEnabled: false,
     latestResponseMarkdown: "# Model response",
     latestResponseIsStructuredCritique: false,
     latestResponseTimestamp: 123,
@@ -61,6 +63,7 @@ function harness(overrides = {}) {
   c.editorDraftHelpers = c.PiStudioEditorDraftHelpers;
   c.submittedEditorDrafts = c.editorDraftHelpers.createSubmittedEditorDraftTracker();
   vm.runInContext(section(clientSource, "function getEditorDraftSourceKey()", "function markFileBackedBaseline"), c);
+  vm.runInContext(section(clientSource, "function captureEditorConsent()", "function abandonPendingSaveRequest"), c);
   vm.runInContext(section(clientSource, "async function loadSelectedResponseIntoEditor(options)", 'loadResponseBtn.addEventListener'), c);
   return {
     c,
