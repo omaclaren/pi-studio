@@ -23,6 +23,17 @@ function extractRuleBlock(source, marker) {
   throw new Error("Missing closing brace for: " + marker);
 }
 
+test("buffer selection uses a quiet fill distinct from keyboard focus", () => {
+  const selected = extractRuleBlock(css, '.studio-buffer-tabs button[aria-selected="true"] {');
+  assert.match(selected, /background: var\(--accent-soft\);/);
+  assert.match(selected, /border-color: var\(--control-border\);/);
+  assert.doesNotMatch(selected, /box-shadow:|outline:/);
+  const focus = extractRuleBlock(css, 'button:focus-visible,');
+  assert.match(focus, /outline: 2px solid var\(--accent-soft-strong\);/);
+  const highContrast = extractRuleBlock(css, '@media (forced-colors: active) {\n      .studio-buffer-tabs');
+  assert.match(highContrast, /border-style: dashed;/, 'selection remains visible when fills are suppressed');
+});
+
 test("Studio controls use browser-neutral control chrome", () => {
   assert.match(css, /\n\s*button \{\s*-webkit-appearance: none;\s*appearance: none;/);
   const flatSelectRule = extractRuleBlock(css, ".studio-flat-select {");
@@ -145,6 +156,7 @@ test("Studio activity view tracking is explicit, off by default, and event-drive
     let rightView = "preview";
     const isEditorOnlyMode = false;
     const isWatchedFilePreview = false;
+    const bufferSwitchingEnabled = false;
     const transitions = [];
     function setRightView(view, options) { rightView = view; transitions.push([view, options]); }
     ${clientSource.slice(start, end)}

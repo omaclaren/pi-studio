@@ -56,6 +56,11 @@
       let bufferRecoveryPanel = null;
       let bufferRecoveryInitializing = false;
       let bufferRecoveryNavigationConsent = null;
+      let bufferBindingInProgress = false;
+      let bufferSwitcherUi = null;
+      let bufferViewRestore = null;
+      let pendingBufferDocumentOpen = null;
+      const bufferTransientStates = new Map(); // Page-only source epochs/terminal provenance; never recovered.
       let bufferConnectionGeneration = 0;
       let editorContentGeneration = 0;
       let pendingEditorRefresh = null;
@@ -211,6 +216,7 @@
       const isEditorOnlyMode = studioMode === "editor-only";
       const isWatchedFilePreview = Boolean(document.body && document.body.dataset && document.body.dataset.watchedFilePreview === "1");
       const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
+      const bufferSwitchingEnabled = bufferRecoveryEnabled && document.body.dataset.bufferSwitching === "1" && !isEditorOnlyMode && !isWatchedFilePreview;
       const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "editor-quarto-preview", "files", "changes", "repl", "side-questions"]);
       const RIGHT_VIEW_LABELS = {
         markdown: "Response (Raw)",
@@ -426,7 +432,7 @@
         if (normalized === "editor-quarto-preview" && !isCurrentStudioQuartoDocument()) {
           return "editor-preview";
         }
-        if (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized)) {
+        if ((isEditorOnlyMode || (bufferSwitchingEnabled && isStudioDocumentBufferView())) && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized)) {
           return "editor-preview";
         }
         return normalized;
@@ -436,7 +442,7 @@
         const normalized = canonicalRightViewValue(view);
         if (isWatchedFilePreview) return normalized === "editor-preview";
         if (normalized === "editor-quarto-preview" && !isCurrentStudioQuartoDocument()) return false;
-        return !isEditorOnlyMode || EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized);
+        return !(isEditorOnlyMode || (bufferSwitchingEnabled && isStudioDocumentBufferView())) || EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized);
       }
 
       function getRightViewDisplayLabel(view) {
@@ -457,7 +463,7 @@
           if (isWatchedFilePreview && option.value === "editor-preview") option.textContent = "Watched preview";
           if (isQuartoOption) option.hidden = !quartoRelevant;
           option.disabled = (isWatchedFilePreview && option.value !== "editor-preview")
-            || (isEditorOnlyMode && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value))
+            || ((isEditorOnlyMode || (bufferSwitchingEnabled && isStudioDocumentBufferView())) && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value))
             || (isQuartoOption && !quartoRelevant);
         });
         rightViewSelect.title = isWatchedFilePreview
@@ -4587,8 +4593,10 @@
       }
 
       function getEditorDraftSourceKey() {
-        return JSON.stringify([editorSourceGeneration, sourceState.source, sourceState.path,
-          sourceState.draftId, getCurrentResourceDirValue()]);
+        const bufferId = bufferSwitchingEnabled ? bufferRecoveryClient?.snapshot()?.selectedBufferId : null;
+        const sourceGeneration = bufferId ? (bufferTransientStates.get(bufferId)?.sourceGeneration ?? editorSourceGeneration) : editorSourceGeneration;
+        const key = [sourceGeneration, sourceState.source, sourceState.path, sourceState.draftId, getCurrentResourceDirValue()];
+        return JSON.stringify(bufferId ? [bufferId, ...key] : key);
       }
 
       function markFileBackedBaseline(text, diskRevision) {
@@ -4790,7 +4798,7 @@
       }
 
       function beginTrackedStudioActivity(requestId) {
-        if (!activityTrackingEnabled || isEditorOnlyMode || isWatchedFilePreview) return false;
+        if (!activityTrackingEnabled || isEditorOnlyMode || isWatchedFilePreview || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
         const normalizedRequestId = String(requestId || "active");
         if (!activityTrackingOwnsWorkingView && activityTrackingRequestId
           && (activityTrackingRequestId === normalizedRequestId || activityTrackingRequestId === "active")) {
@@ -4810,7 +4818,8 @@
         if (!activityTrackingRequestId && !activityTrackingOwnsWorkingView) return false;
         const normalizedRequestId = String(requestId || "");
         if (normalizedRequestId && activityTrackingRequestId !== normalizedRequestId) return false;
-        const shouldReturn = activityTrackingEnabled && activityTrackingOwnsWorkingView && rightView === "trace";
+        const shouldReturn = activityTrackingEnabled && activityTrackingOwnsWorkingView && rightView === "trace"
+          && !(bufferSwitchingEnabled && isStudioDocumentBufferView());
         activityTrackingOwnsWorkingView = false;
         activityTrackingRequestId = "";
         if (shouldReturn) setRightView("preview", { activityTracking: true });
@@ -5749,6 +5758,7 @@
           && activePane === "left"
           && !isEditorOnlyMode
         ) {
+          if (bufferSwitchingEnabled && event.repeat) { event.preventDefault(); return; }
           if (queueSteerBtn && !queueSteerBtn.disabled) {
             event.preventDefault();
             queueSteerBtn.click();
@@ -6010,7 +6020,7 @@
         const selectedItem = getSelectedHistoryItem();
         const hasPrompt = Boolean(selectedItem && typeof selectedItem.prompt === "string" && selectedItem.prompt.trim());
         if (loadHistoryPromptBtn) {
-          loadHistoryPromptBtn.disabled = uiBusy || !hasPrompt;
+          loadHistoryPromptBtn.disabled = uiBusy || !hasPrompt || (bufferSwitchingEnabled && isStudioDocumentBufferView());
           loadHistoryPromptBtn.textContent = getHistoryPromptButtonLabel(selectedItem);
           const promptSourceLabel = getHistoryPromptSourceLabel(selectedItem);
           loadHistoryPromptBtn.title = hasPrompt
@@ -10452,6 +10462,7 @@
         }
         targetEl.classList.remove("preview-pending");
         bindStudioPreviewElementOwner(targetEl, owner);
+        if (bufferSwitchingEnabled) scheduleStudioBufferScrollRestore(targetEl);
       }
 
       function scheduleResponsePaneRepaintNudge() {
@@ -10814,7 +10825,7 @@
       }
 
       function applyPendingResponseScrollReset() {
-        if (!pendingResponseScrollReset || !critiqueViewEl) return false;
+        if (!pendingResponseScrollReset || !critiqueViewEl || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
         if (rightView === "editor-preview" || rightView === "editor-quarto-preview" || rightView === "side-questions") return false;
 
         pendingResponseScrollReset = false;
@@ -10822,8 +10833,9 @@
         const schedule = typeof window.requestAnimationFrame === "function"
           ? window.requestAnimationFrame.bind(window)
           : (cb) => window.setTimeout(cb, 16);
+        const bufferConsent = bufferSwitchingEnabled ? captureEditorAsyncConsent() : null;
         const resetScroll = () => {
-          if (!targetEl || !targetEl.isConnected) return;
+          if (!targetEl || !targetEl.isConnected || (bufferSwitchingEnabled && !editorAsyncConsentIsCurrent(bufferConsent))) return;
           if (rightView === "editor-preview" || rightView === "editor-quarto-preview" || rightView === "side-questions") return;
           targetEl.scrollTop = 0;
           targetEl.scrollLeft = 0;
@@ -12933,6 +12945,7 @@
           + "<span class='files-meta'>" + escapeHtml(metaParts.filter(Boolean).join(" · ")) + "</span>"
           + "</button>"
           + "<span class='files-actions'>"
+          + (bufferSwitchingEnabled && (kind === "text" || kind === "office") ? "<button type='button' data-files-action='open-prompt' data-files-path='" + escapeHtml(path) + "' data-files-kind='" + escapeHtml(kind) + "' title='Explicitly replace the Prompt with this file text; keep the separate Document.'>Use as Prompt…</button>" : "")
           + watchButton
           + newTabButton
           + "<button type='button' data-files-action='copy-path' data-files-path='" + escapeHtml(path) + "'>Copy path</button>"
@@ -13120,6 +13133,10 @@
 
       async function openFileBrowserEntry(path, kind) {
         const context = getFileBrowserLocalLinkContext();
+        if (bufferSwitchingEnabled && (kind === "text" || kind === "office")) {
+          await openStudioBufferDocument(path, context);
+          return;
+        }
         if (kind === "text") {
           const opened = await openPreviewDocumentHere(path, context, { fallbackPath: path, fileBackedIntent: true });
           if (!opened) return;
@@ -13250,6 +13267,10 @@
           }
           if (action === "open") {
             await openFileBrowserEntry(path, kind);
+            return;
+          }
+          if (action === "open-prompt" && bufferSwitchingEnabled) {
+            await openStudioBufferDocument(path, getFileBrowserLocalLinkContext(), "prompt");
             return;
           }
           if (action === "open-new") {
@@ -14633,23 +14654,23 @@
         loadCritiqueNotesBtn.hidden = !isCritiqueResponse;
         loadCritiqueFullBtn.hidden = !isCritiqueResponse;
 
-        loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse;
+        loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse || (bufferSwitchingEnabled && isStudioDocumentBufferView());
         loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
 
         const annotationWorkspaceReady = responseLoaded
           && editorView === "markdown"
           && rightView === "editor-preview"
           && paneFocusTarget === "off";
-        annotateResponseBtn.disabled = uiBusy || !hasResponse || isCritiqueResponse || annotationWorkspaceReady;
+        annotateResponseBtn.disabled = uiBusy || !hasResponse || isCritiqueResponse || annotationWorkspaceReady || (bufferSwitchingEnabled && isStudioDocumentBufferView());
         annotateResponseBtn.textContent = annotationWorkspaceReady ? "Response ready to annotate" : "Annotate response";
         annotateResponseBtn.title = annotationWorkspaceReady
           ? "The selected response is exactly in the raw editor with Editor Preview open."
           : "Load the selected response into the raw editor and show Editor Preview. Ask before replacing unsubmitted or unsaved work. Shortcut: Cmd/Ctrl+Option/Alt+Enter.";
 
-        loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded;
+        loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded || (bufferSwitchingEnabled && isStudioDocumentBufferView());
         loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
 
-        loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded;
+        loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded || (bufferSwitchingEnabled && isStudioDocumentBufferView());
         loadCritiqueFullBtn.textContent = responseLoaded ? "Full critique already in editor" : "Load full critique into editor";
 
         copyResponseBtn.disabled = uiBusy || !hasResponse;
@@ -15004,6 +15025,7 @@
         }
         if (suggestCompletionOptionsBtn) suggestCompletionOptionsBtn.disabled = uiBusy || completionSuggestionInFlight;
         syncBufferRecoveryMenuAccess();
+        if (bufferSwitchingEnabled) syncStudioBufferSwitcher();
         if (completionModelSelect) completionModelSelect.disabled = uiBusy || completionSuggestionInFlight;
         if (completionSuggestionRegenerateBtn) completionSuggestionRegenerateBtn.disabled = completionSuggestionInFlight || !completionSuggestionState;
         syncCompletionSuggestionContextUi();
@@ -15017,7 +15039,7 @@
         editorViewSelect.disabled = isEditorOnlyMode;
         syncRightViewModeOptions();
         rightViewSelect.disabled = isWatchedFilePreview;
-        followSelect.disabled = isEditorOnlyMode || uiBusy;
+        followSelect.disabled = isEditorOnlyMode || uiBusy || (bufferSwitchingEnabled && isStudioDocumentBufferView());
         if (responseHighlightSelect) responseHighlightSelect.disabled = isEditorOnlyMode || rightView !== "markdown";
         insertHeaderBtn.disabled = uiBusy || isWatchedFilePreview;
         lensSelect.disabled = uiBusy || isEditorOnlyMode;
@@ -15045,6 +15067,10 @@
           return false;
         }
         editorSourceGeneration += 1;
+        if (bufferSwitchingEnabled && !bufferBindingInProgress && bufferRecoveryClient) {
+          const id = bufferRecoveryClient.snapshot().selectedBufferId;
+          bufferTransientStates.set(id, { ...bufferTransientStates.get(id), sourceGeneration: editorSourceGeneration });
+        }
         sourceState = {
           source: next && next.source ? next.source : "blank",
           label: next && next.label ? next.label : "blank",
@@ -15179,6 +15205,7 @@
 
       function buildWorkspacePersistencePayload() {
         lastWorkspacePersistenceSavedAt = Math.max(Date.now(), lastWorkspacePersistenceSavedAt + 1);
+        const pendingEditorView = bufferSwitchingEnabled ? pendingStudioBufferEditorView() : null;
         return {
           version: 1,
           savedAt: lastWorkspacePersistenceSavedAt,
@@ -15190,9 +15217,9 @@
           editorLanguage,
           followLatest,
           responseHistoryIndex,
-          selectionStart: typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : 0,
-          selectionEnd: typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : 0,
-          scrollTop: typeof sourceTextEl.scrollTop === "number" ? sourceTextEl.scrollTop : 0,
+          selectionStart: pendingEditorView?.selectionStart ?? (typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : 0),
+          selectionEnd: pendingEditorView?.selectionEnd ?? (typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : 0),
+          scrollTop: pendingEditorView?.scrollTop ?? (typeof sourceTextEl.scrollTop === "number" ? sourceTextEl.scrollTop : 0),
           text: String(sourceTextEl.value || ""),
         };
       }
@@ -15219,14 +15246,15 @@
       }
 
       function persistWorkspaceStateNow(options) {
-        if (!workspacePersistenceReady || isWatchedFilePreview) return;
+        if (!workspacePersistenceReady || isWatchedFilePreview || bufferBindingInProgress) return;
         if (bufferRecoveryEnabled) {
           if (bufferRecoveryClient) {
-            bufferRecoveryClient.persist(buildWorkspacePersistencePayload(), fileBackedBaselineText, {
+            bufferRecoveryClient.persist(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferSwitchingEnabled ? bufferRecoveryExtra() : {
               view: { selectionDirection: sourceTextEl.selectionDirection || "none",
                 ...(editorView === "preview" ? { previewScrollTop: sourcePreviewEl.scrollTop } : {}) },
               metadata: { annotationsEnabled, ...getCurrentMetadataAssociationSnapshot() },
             });
+            if (bufferSwitchingEnabled) syncStudioBufferSwitcher();
           }
           return;
         }
@@ -15251,10 +15279,11 @@
       }
 
       function scheduleWorkspacePersistence() {
-        if (!workspacePersistenceReady || isWatchedFilePreview) return;
+        if (!workspacePersistenceReady || isWatchedFilePreview || bufferBindingInProgress) return;
         if (bufferRecoveryClient) {
-          const result = bufferRecoveryClient.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText);
+          const result = bufferRecoveryClient.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferSwitchingEnabled ? bufferRecoveryExtra() : undefined);
           if (!result.ok) { bufferRecoveryIssue = result.message; renderStatus(); }
+          if (bufferSwitchingEnabled) syncStudioBufferSwitcher();
         }
         if (workspacePersistTimer !== null) return;
         workspacePersistTimer = window.setTimeout(() => {
@@ -15399,9 +15428,277 @@
       }
       function bufferRecoveryExtra() {
         return {
-          view: { selectionDirection: sourceTextEl.selectionDirection, previewScrollTop: sourcePreviewEl.scrollTop },
+          view: { selectionDirection: (bufferSwitchingEnabled ? pendingStudioBufferEditorView()?.selectionDirection : null) ?? sourceTextEl.selectionDirection, previewScrollTop: bufferSwitchingEnabled ? studioBufferScrollPosition("source", sourcePreviewEl.scrollTop) : sourcePreviewEl.scrollTop,
+            ...(bufferSwitchingEnabled ? { rightScrollTop: studioBufferScrollPosition("right", critiqueViewEl.scrollTop) } : {}) },
           metadata: { annotationsEnabled, ...getCurrentMetadataAssociationSnapshot() },
         };
+      }
+      function getStudioSelectedBuffer() {
+        const state = bufferSwitchingEnabled ? bufferRecoveryClient?.snapshot() : null;
+        return state?.buffers.find(entry => entry.id === state.selectedBufferId) || null;
+      }
+      function isStudioDocumentBufferView() {
+        return getStudioSelectedBuffer()?.role === "document";
+      }
+      function studioBuffersCanSwitch(ignoreModal = false) {
+        // First prototype: do not move a local operation's live editor out from
+        // under it. Passive preview/metadata reads remain protected by ownership.
+        return Boolean(bufferSwitchingEnabled && bufferRecoveryClient && workspacePersistenceReady && !bufferBindingInProgress && !bufferRecoveryInitializing
+          && !bufferPageClosed && !uiBusy && !replBusy && !completionSuggestionInFlight && !pendingEditorRefresh
+          && !responseReplacementPending && !pendingSaveOperations.size && !pendingPiEditorDraftSnapshots.size
+          && (ignoreModal || !studioModalBlocksDraftAction()));
+      }
+      function studioBufferScrollPosition(pane, fallback) {
+        const state = bufferRecoveryClient?.snapshot();
+        return bufferViewRestore?.bufferId === state?.selectedBufferId && typeof bufferViewRestore[pane] === "number"
+          ? bufferViewRestore[pane] : fallback;
+      }
+      function pendingStudioBufferEditorView() {
+        return bufferViewRestore?.bufferId === bufferRecoveryClient?.snapshot()?.selectedBufferId ? bufferViewRestore?.editor : null;
+      }
+      function scheduleStudioBufferEditorRestore() {
+        const pending = bufferViewRestore;
+        if (!pending?.editor) return;
+        const consent = captureEditorAsyncConsent();
+        window.requestAnimationFrame(() => {
+          if (bufferViewRestore !== pending || !pending.editor) return;
+          const view = pending.editor;
+          pending.editor = null;
+          if (!editorAsyncConsentIsCurrent(consent)) return;
+          // Native unfocused-textarea selection can settle after the tab click's
+          // synchronous value binding. Restore once after that dispatch, unless
+          // a newer editor/source or direct user interaction has taken ownership.
+          sourceTextEl.setSelectionRange(view.selectionStart, view.selectionEnd, view.selectionDirection);
+          sourceTextEl.scrollTop = view.scrollTop;
+          syncEditorHighlightScroll();
+          scheduleWorkspacePersistence();
+        });
+      }
+      function scheduleStudioBufferScrollRestore(targetEl) {
+        const pending = bufferViewRestore;
+        const pane = targetEl === sourcePreviewEl ? "source" : (targetEl === critiqueViewEl ? "right" : null);
+        if (!pending || !pane || typeof pending[pane] !== "number") return;
+        const consent = captureEditorAsyncConsent(), view = pane === "source" ? editorView : rightView;
+        window.requestAnimationFrame(() => {
+          if (bufferViewRestore !== pending || typeof pending[pane] !== "number" || !editorAsyncConsentIsCurrent(consent)
+              || (pane === "source" ? editorView : rightView) !== view || !studioPreviewNodeOwnerIsCurrent(targetEl)) return;
+          targetEl.scrollTop = pending[pane];
+          pending[pane] = null;
+        });
+      }
+      function captureStudioBufferTransientState() {
+        const current = getStudioSelectedBuffer();
+        if (!current) return;
+        bufferTransientStates.set(current.id, {
+          sourceGeneration: bufferTransientStates.get(current.id)?.sourceGeneration ?? editorSourceGeneration,
+          linkedPiEditorDraftSnapshot: normalizePiEditorDraftSnapshot(linkedPiEditorDraftSnapshot),
+        });
+      }
+      function bindSelectedStudioBuffer(options) {
+        const entry = getStudioSelectedBuffer();
+        if (!entry) return false;
+        bufferBindingInProgress = true;
+        bufferViewRestore = null;
+        try {
+          clearEditorAsyncOperations();
+          activityTrackingOwnsWorkingView = false;
+          activityTrackingRequestId = "";
+          pendingResponseScrollReset = false;
+          fileBrowserLoadNonce++; // Late lists must not repaint another buffer's Files view.
+          fileBrowserState = { ...fileBrowserState, contextKey: "", loaded: false, loading: false };
+          if (resourceDirInput) resourceDirInput.value = entry.resourceDir;
+          setEditorText(entry.text, { preserveScroll: false, preserveSelection: false, updatePreview: false });
+          setSourceState(entry.sourceState, { metadataAssociations: entry.metadata });
+          fileBackedBaselineText = entry.sourceState.path ? entry.baselineText : null;
+          fileBackedDiskRevision = entry.sourceState.path ? entry.diskRevision : null;
+          if (!bufferTransientStates.has(entry.id)) bufferTransientStates.set(entry.id, { sourceGeneration: editorSourceGeneration, linkedPiEditorDraftSnapshot: null });
+          linkedPiEditorDraftSnapshot = normalizePiEditorDraftSnapshot(bufferTransientStates.get(entry.id).linkedPiEditorDraftSnapshot);
+          setEditorLanguage(entry.view.editorLanguage);
+          setAnnotationsEnabled(typeof entry.metadata.annotationsEnabled === "boolean" ? entry.metadata.annotationsEnabled : initialAnnotationsEnabled, { silent: true });
+          followLatest = entry.role === "prompt" && entry.view.followLatest;
+          if (followSelect) followSelect.value = followLatest ? "on" : "off";
+          const resumeQueuedResponse = entry.role === "prompt" && followLatest && queuedLatestResponse;
+          let appliedQueuedResponse = false;
+          if (entry.role === "prompt" && responseHistory.length) {
+            responseHistoryIndex = resumeQueuedResponse ? responseHistory.length - 1
+              : Math.max(0, Math.min(responseHistory.length - 1, entry.view.responseHistoryIndex < 0 ? responseHistory.length - 1 : entry.view.responseHistoryIndex));
+            const applied = applySelectedHistoryItem({ resetScroll: Boolean(resumeQueuedResponse) });
+            if (resumeQueuedResponse && applied) { queuedLatestResponse = null; appliedQueuedResponse = true; }
+            syncTraceForSelectedHistoryItem();
+          } else if (resumeQueuedResponse && applyLatestPayload(resumeQueuedResponse, { resetScroll: true })) {
+            queuedLatestResponse = null;
+            appliedQueuedResponse = true;
+          }
+          setEditorView(entry.view.editorView);
+          setRightView(entry.view.rightView, { bufferSwitch: true });
+          sourceTextEl.setSelectionRange(entry.view.selectionStart, entry.view.selectionEnd, entry.view.selectionDirection);
+          sourceTextEl.scrollTop = entry.view.scrollTop;
+          syncEditorHighlightScroll();
+          // A queued response is new reading content, not the response whose old
+          // offset was saved. Match the ordinary response-reset view exclusions.
+          const restoreRightScroll = appliedQueuedResponse && !["editor-preview", "editor-quarto-preview", "side-questions"].includes(rightView)
+            ? 0 : (entry.view.rightScrollTop ?? 0);
+          bufferViewRestore = { bufferId: entry.id, editor: entry.view, source: entry.view.previewScrollTop, right: restoreRightScroll };
+          scheduleStudioBufferEditorRestore();
+          scheduleStudioBufferScrollRestore(sourcePreviewEl);
+          scheduleStudioBufferScrollRestore(critiqueViewEl);
+          if (options?.focusEditor) { setActivePane("left"); if (editorView === "markdown") sourceTextEl.focus({ preventScroll: true }); }
+        } finally { bufferBindingInProgress = false; }
+        persistWorkspaceStateNow();
+        syncActionButtons();
+        return true;
+      }
+      function selectStudioBuffer(id, options) {
+        if (!studioBuffersCanSwitch()) {
+          setStatus("Wait for the current action or decision before switching buffers. Both texts are kept.", "warning");
+          return false;
+        }
+        if (bufferRecoveryClient.snapshot().selectedBufferId === id) return true;
+        const captured = bufferRecoveryClient.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferRecoveryExtra());
+        if (!captured.ok) { setStatus(captured.message, "warning"); return false; }
+        captureStudioBufferTransientState();
+        flushScratchpadPersistence(); flushReviewNotesPersistence();
+        const result = bufferRecoveryClient.select(id);
+        if (!result.ok) { setStatus(result.message, "warning"); return false; }
+        bindSelectedStudioBuffer(options);
+        setStatus(isStudioDocumentBufferView() ? "Document selected. The Prompt is kept separately; nothing was sent." : "Returned to the same Prompt. Review it before Run.");
+        return true;
+      }
+      function requireStudioPromptForSend() {
+        if (!bufferSwitchingEnabled) return true;
+        const state = bufferRecoveryClient?.snapshot(), selected = getStudioSelectedBuffer();
+        if (!state || !selected) { setStatus("The experimental switcher is not ready. Resolve recovery before using Run.", "warning"); return false; }
+        if (selected.role === "prompt" && selected.id === state.activePromptId) return true;
+        selectStudioBuffer(state.activePromptId, { focusEditor: true });
+        return false; // Returning is never a submission, including keyboard/steering paths.
+      }
+      function syncStudioBufferSwitcher() {
+        // Binding is synchronous. Do not transiently disable (and blur) the clicked
+        // tab midway through restoring the textarea's selection.
+        if (!bufferSwitcherUi || bufferBindingInProgress) return;
+        const state = bufferRecoveryClient?.snapshot();
+        // Keep underlying controls available for modal focus return. The overlay
+        // blocks interaction; every action still checks the modal at execution.
+        const canSwitch = studioBuffersCanSwitch(true);
+        for (const [role, button] of [["prompt", bufferSwitcherUi.prompt], ["document", bufferSwitcherUi.document]]) {
+          const entry = state?.buffers.find(b => b.role === role);
+          const name = entry?.sourceState.path ? basenameForStudioPath(entry.sourceState.path) : (entry?.sourceState.label || "");
+          const base = role === "prompt" ? "Prompt" : "Document";
+          const labelled = name && !["Prompt", "Document", "blank", "draft"].includes(name) ? base + " · " + name : base;
+          const dirty = entry && entry.sourceState.path && (entry.baselineText === null || entry.text !== entry.baselineText);
+          const text = labelled + (dirty ? " •" : "");
+          if (button.textContent !== text) button.textContent = text;
+          button.title = entry ? base + (entry.sourceState.path ? ": " + entry.sourceState.path : ": independent draft") + (dirty ? " · unsaved file edits" : "") : "Waiting for buffer recovery";
+          button.disabled = !canSwitch || !entry;
+          button.setAttribute("aria-selected", String(entry?.id === state?.selectedBufferId && Boolean(entry)));
+          button.tabIndex = entry?.id === state?.selectedBufferId ? 0 : -1;
+        }
+        bufferSwitcherUi.open.disabled = !canSwitch;
+        const active = state?.buffers.find(b => b.id === state.activePromptId);
+        bufferSwitcherUi.target.textContent = active ? "Run: Prompt" + (active.sourceState.path ? " · " + basenameForStudioPath(active.sourceState.path) : "") : "Switcher waiting for recovery";
+        bufferSwitcherUi.target.title = "One Pi conversation. Selecting Document never sends it or changes the active Prompt.";
+      }
+      function setupStudioBufferSwitcher() {
+        if (!bufferSwitchingEnabled || bufferSwitcherUi) return;
+        const strip = document.createElement("div"); strip.className = "studio-buffer-switcher"; strip.id = "studioBufferSwitcher";
+        const tabs = document.createElement("div"); tabs.className = "studio-buffer-tabs"; tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Prompt and document buffers");
+        const makeButton = (id, text) => { const button = document.createElement("button"); button.id = id; button.type = "button"; button.textContent = text; return button; };
+        const prompt = makeButton("studioPromptBufferBtn", "Prompt"), documentButton = makeButton("studioDocumentBufferBtn", "Document");
+        for (const button of [prompt, documentButton]) { button.setAttribute("role", "tab"); button.setAttribute("aria-controls", "sourceEditorWrap sourcePreview"); tabs.appendChild(button); }
+        const open = makeButton("studioOpenDocumentBtn", "Open document…");
+        const target = document.createElement("span"); target.className = "studio-buffer-target";
+        strip.append(tabs, open, target); leftPaneEl.querySelector(".source-wrap").prepend(strip);
+        bufferSwitcherUi = { strip, prompt, document: documentButton, open, target };
+        if (clearWorkspaceBtn) { clearWorkspaceBtn.textContent = "Reset both buffers"; clearWorkspaceBtn.title = "Reset Prompt and Document together after confirmation. Saved files are not changed."; }
+        const selectRole = role => { const entry = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.role === role); if (entry) selectStudioBuffer(entry.id); };
+        prompt.addEventListener("click", () => selectRole("prompt")); documentButton.addEventListener("click", () => selectRole("document"));
+        tabs.addEventListener("keydown", event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || event.altKey || event.ctrlKey || event.metaKey) return;
+          event.preventDefault();
+          const role = event.key === "Home" ? "prompt" : (event.key === "End" ? "document" : (isStudioDocumentBufferView() ? "prompt" : "document"));
+          selectRole(role); (role === "prompt" ? prompt : documentButton).focus();
+        });
+        open.addEventListener("click", () => { void promptStudioBufferDocumentPath().catch(error => setStatus(error.message || "Could not open the document. Both buffers were kept.", "warning")); });
+        for (const type of ["pointerdown", "keydown", "wheel", "touchstart", "input"]) sourceTextEl.addEventListener(type, () => {
+          if (bufferViewRestore) bufferViewRestore.editor = null;
+        }, { passive: true, capture: true });
+        for (const [element, pane] of [[sourcePreviewEl, "source"], [critiqueViewEl, "right"]]) {
+          for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) element.addEventListener(type, () => { if (bufferViewRestore) bufferViewRestore[pane] = null; }, { passive: true });
+          element.addEventListener("scroll", () => scheduleWorkspacePersistence(), { passive: true });
+        }
+        syncStudioBufferSwitcher();
+      }
+      function captureStudioBufferOpenConsent() {
+        const consent = captureRecoveryConsent();
+        // A path/replace dialog may move the native textarea selection merely by
+        // focusing its input. That is not permission to change text, source,
+        // baseline, metadata or connection; those owners are still rechecked.
+        for (const key of ["selectionStart", "selectionEnd", "selectionDirection", "scrollTop", "previewScrollTop"]) delete consent.workspace[key];
+        return consent;
+      }
+      async function promptStudioBufferDocumentPath() {
+        if (!studioBuffersCanSwitch()) return false;
+        const consent = captureStudioBufferOpenConsent();
+        const existing = bufferRecoveryClient.snapshot().buffers.find(b => b.role === "document");
+        const suggested = existing?.sourceState.path || (getCurrentResourceDirValue() ? getCurrentResourceDirValue().replace(/\/$/, "") + "/" : "./");
+        const path = await requestStudioTextInput("Open a file as the separate Document buffer. The Prompt is kept. Paths are on the computer running Pi.", suggested,
+          { title: "Open document", confirmLabel: "Open document", inputLabel: "File path" });
+        if (!path) return false;
+        if (!recoveryConsentIsCurrent(consent) || !studioBuffersCanSwitch()) { setStatus("The workspace changed. Both buffers were kept; try opening the document again.", "warning"); return false; }
+        return openStudioBufferDocument(path, getHtmlPreviewResourceContextOptions());
+      }
+      async function openStudioBufferDocument(href, context, role = "document") {
+        if (!studioBuffersCanSwitch()) { setStatus("Wait for the current action before opening a buffer.", "warning"); return false; }
+        const captured = bufferRecoveryClient.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferRecoveryExtra());
+        if (!captured.ok) { setStatus(captured.message, "warning"); return false; }
+        const client = bufferRecoveryClient;
+        const target = client.snapshot().buffers.find(b => b.role === role);
+        if (!target) return false;
+        const operation = { consent: captureStudioBufferOpenConsent(), id: target.id, revision: target.revision };
+        pendingBufferDocumentOpen = operation;
+        const isCurrent = () => pendingBufferDocumentOpen === operation && client === bufferRecoveryClient
+          && recoveryConsentIsCurrent(operation.consent) && studioPreviewInteractionIsCurrent(context)
+          && client.snapshot().buffers.find(b => b.id === target.id)?.revision === target.revision;
+        try {
+          // An already-open canonical path keeps its in-memory edits; explicit
+          // Refresh from disk is still the way to replace it with disk contents.
+          if (target.sourceState.path && stripPreviewLocalLinkUrlSuffix(href) === target.sourceState.path) {
+            return selectStudioBuffer(target.id, { focusEditor: true });
+          }
+          if (!await confirmPreviewOfficeConversion(href, "here", { isCurrent }) || !isCurrent()) return false;
+          const needsConfirmation = target.role === "prompt" ? target.text.length > 0 || (target.sourceState.path && (target.baselineText === null || target.text !== target.baselineText))
+            : (target.sourceState.path ? target.baselineText === null || target.text !== target.baselineText : target.text.length > 0);
+          if (needsConfirmation) {
+            const confirmed = await requestStudioConfirmation("Replace the " + (role === "prompt" ? "Prompt" : "Document")
+              + " buffer's current text and origin? Save or copy any work you need first. The other buffer and saved files are not changed.",
+              { title: "Replace " + (role === "prompt" ? "Prompt" : "Document") + "?", confirmLabel: "Replace", destructive: true });
+            if (!confirmed || !isCurrent()) return false;
+          }
+          const payload = await fetchPreviewLocalLink("document", href, context);
+          if (!isCurrent() || !studioBuffersCanSwitch()) return false;
+          if (typeof payload.text !== "string") throw new Error("Studio did not return document text.");
+          const converted = payload.converted === true;
+          const path = !converted && typeof payload.path === "string" && payload.path ? payload.path : null;
+          if (!converted && !path) throw new Error("Studio did not return a canonical file identity. Both buffers were kept.");
+          if (path && path === target.sourceState.path) return selectStudioBuffer(target.id, { focusEditor: true });
+          const next = { ...buildWorkspacePersistencePayload(), text: payload.text,
+            sourceState: { source: path ? "file" : "blank", path, label: typeof payload.label === "string" && payload.label ? payload.label : (path || "converted document"), draftId: path ? null : makeStudioDraftId() },
+            diskRevision: path ? normalizeStudioDiskRevision(payload.diskRevision) : null,
+            resourceDir: normalizeStudioResourceDirValue(typeof payload.resourceDir === "string" ? payload.resourceDir : ""),
+            editorLanguage: converted ? "markdown" : (detectLanguageFromName(path) || "markdown"),
+            editorView: "markdown", rightView: "editor-preview", followLatest: role === "prompt" && target.view.followLatest,
+            responseHistoryIndex: target.view.responseHistoryIndex, selectionStart: 0, selectionEnd: 0, scrollTop: 0 };
+          captureStudioBufferTransientState();
+          const replaced = client.replace(target.id, target.revision, next, path ? payload.text : null);
+          if (!replaced.ok) { setStatus(replaced.message, "warning"); return false; }
+          // This is a replacement, not a transfer of terminal cleanup authority.
+          bufferTransientStates.delete(target.id);
+          const selected = client.select(target.id);
+          if (!selected.ok) { setStatus(selected.message, "warning"); return false; }
+          bindSelectedStudioBuffer({ focusEditor: true });
+          setStatus(role === "prompt" ? "Loaded file text as the Prompt. Review it before Run; the Document was kept." : "Opened the separate Document. The Prompt was kept; nothing was sent.", "success");
+          return true;
+        } finally { if (pendingBufferDocumentOpen === operation) pendingBufferDocumentOpen = null; }
       }
       function syncBufferRecoveryMenuAccess() {
         if (!bufferRecoveryEnabled) return;
@@ -15451,7 +15748,7 @@
             document,
             createDecisions: () => {
               let storage = null; try { storage = window.sessionStorage; } catch {}
-              return decisions.createStudioBufferRecoveryDecisions({ storage, workspaceId: studioTabStateId, mode: isEditorOnlyMode ? "editor-only" : "full",
+              return decisions.createStudioBufferRecoveryDecisions({ storage, workspaceId: studioTabStateId, mode: isEditorOnlyMode ? "editor-only" : "full", switching: bufferSwitchingEnabled,
                 readRemote: () => requestBufferRecovery("GET", null, true),
                 canRestore: state => getWorkspaceStateIdentity(state.sourceState) === getWorkspaceStateIdentity(sourceState),
                 makeWorkspaceId: () => "tab_" + crypto.randomUUID().replaceAll("-", ""),
@@ -15504,8 +15801,10 @@
         }
         const resetConsent = captureRecoveryConsent();
         const confirmed = await requestStudioConfirmation(
-          "Reset the editor to a fresh blank draft in this browser tab? Saved files and responses are not changed.",
-          { title: "Reset editor?", confirmLabel: "Reset editor", destructive: true },
+          bufferSwitchingEnabled
+            ? "Reset both Prompt and Document to fresh blank buffers in this browser tab? Save or export any text you need first. Saved files and responses are not changed."
+            : "Reset the editor to a fresh blank draft in this browser tab? Saved files and responses are not changed.",
+          { title: bufferSwitchingEnabled ? "Reset both buffers?" : "Reset editor?", confirmLabel: bufferSwitchingEnabled ? "Reset both buffers" : "Reset editor", destructive: true },
         );
         if (!confirmed) return;
         if (bufferRecoveryEnabled) {
@@ -16237,13 +16536,15 @@
 
         refreshResponseUi();
         syncActionButtons();
-        if (rightView === "side-questions" && previousView !== "side-questions") {
+        if (rightView === "side-questions" && previousView !== "side-questions" && !options?.bufferSwitch) {
+          const bufferConsent = bufferSwitchingEnabled ? captureEditorAsyncConsent() : null;
           window.setTimeout(() => {
+            if (bufferSwitchingEnabled && !editorAsyncConsentIsCurrent(bufferConsent)) return;
             const composer = critiqueViewEl && critiqueViewEl.querySelector("[data-side-question-field='draft']");
             if (composer instanceof HTMLTextAreaElement) composer.focus({ preventScroll: true });
           }, 0);
         }
-        if (rightView === "repl" && (previousView !== "repl" || (options && options.focusReplComposer))) {
+        if (rightView === "repl" && !options?.bufferSwitch && (previousView !== "repl" || (options && options.focusReplComposer))) {
           focusReplQuickComposer();
         }
         scheduleWorkspacePersistence();
@@ -17087,6 +17388,7 @@
       }
 
       async function openPreviewDocumentHere(href, contextOverride, options) {
+        if (bufferSwitchingEnabled) return openStudioBufferDocument(href, contextOverride);
         if (isWatchedFilePreview) {
           throw new Error("This preview follows one disk file and cannot open another document here. Open a new file tab instead.");
         }
@@ -24084,6 +24386,9 @@
       function syncRunAndCritiqueButtons() {
         const activeKind = getAbortablePendingKind();
         const directIsStop = activeKind === "direct";
+        const selectedBuffer = bufferSwitchingEnabled ? getStudioSelectedBuffer() : null;
+        const documentView = selectedBuffer?.role === "document";
+        const promptReady = !bufferSwitchingEnabled || Boolean(selectedBuffer?.role === "prompt" && selectedBuffer.id === bufferRecoveryClient?.snapshot()?.activePromptId);
         const critiqueIsStop = activeKind === "critique";
         const canQueueSteering = studioRunChainActive && !critiqueIsStop;
         const hasReplSession = Boolean(getActiveReplSessionForCurrentRuntime());
@@ -24141,10 +24446,11 @@
         }
 
         if (sendRunBtn) {
-          sendRunBtn.textContent = directIsStop ? "Stop" : (rightView === "repl" ? withStudioShortcutLabel("Run editor text", "run") : "Run editor text");
+          sendRunBtn.textContent = directIsStop ? "Stop" : (documentView ? "Return to Prompt" : (bufferSwitchingEnabled ? "Run Prompt" : (rightView === "repl" ? withStudioShortcutLabel("Run editor text", "run") : "Run editor text")));
           sendRunBtn.classList.toggle("request-stop-active", directIsStop);
           sendRunBtn.classList.toggle("repl-secondary-action", rightView === "repl" && !directIsStop);
-          sendRunBtn.disabled = wsState === "Disconnected" || (!directIsStop && (uiBusy || critiqueIsStop));
+          sendRunBtn.disabled = documentView && !directIsStop ? !studioBuffersCanSwitch(true)
+            : wsState === "Disconnected" || (!directIsStop && (uiBusy || critiqueIsStop || !promptReady));
           const replHint = rightView === "repl" && getActiveReplSessionForCurrentRuntime()
             ? " Sends text to Pi, not the REPL; use Send chunk/selection or Send to REPL to execute code in the active REPL."
             : "";
@@ -24156,11 +24462,12 @@
             : (annotationsEnabled
               ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + piEditorDraftHint + replHint
               : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + piEditorDraftHint + replHint);
+          if (documentView && !directIsStop) sendRunBtn.title = "Return to the preserved Prompt for review. This does not send this document or a hidden Prompt. Press Run separately after returning.";
         }
 
         if (queueSteerBtn) {
           queueSteerBtn.hidden = false;
-          queueSteerBtn.disabled = wsState === "Disconnected" || !canQueueSteering;
+          queueSteerBtn.disabled = wsState === "Disconnected" || !canQueueSteering || !promptReady;
           queueSteerBtn.classList.remove("request-stop-active");
           queueSteerBtn.title = canQueueSteering
             ? (annotationsEnabled
@@ -26434,7 +26741,7 @@
 
       async function loadSelectedResponseIntoEditor(options) {
         if (isEditorOnlyMode || isWatchedFilePreview || uiBusy || responseReplacementPending
-          || studioModalBlocksDraftAction()) return false;
+          || studioModalBlocksDraftAction() || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
         const prepareForAnnotation = Boolean(options && options.annotate);
         if (prepareForAnnotation && latestResponseIsStructuredCritique) return false;
         if (!prepareForAnnotation && rightView === "editor-quarto-preview") {
@@ -26709,6 +27016,7 @@
       function clearEditorAsyncOperations() {
         if (!bufferRecoveryEnabled) return;
         activeFileImport = null;
+        pendingBufferDocumentOpen = null;
         pendingPiEditorLoad = pendingPiEditorLink = pendingPiEditorClear = pendingTerminalDocument = null;
         completionSuggestionInFlight = false;
         completionSuggestionRequestId = null;
@@ -27117,12 +27425,20 @@
         });
       }
 
-      sendRunBtn.addEventListener("click", () => {
+      sendRunBtn.addEventListener("keydown", (event) => {
+        // Native held-Enter activations have click.detail === 0. Prevent their
+        // default click so one held key cannot cross Return → Run (or Run → Stop).
+        // This is button-local: textarea repeats and a fresh key press still work.
+        if (bufferSwitchingEnabled && event.key === "Enter" && event.repeat) event.preventDefault();
+      });
+      sendRunBtn.addEventListener("click", (event) => {
+        if (bufferSwitchingEnabled && event.detail > 1) return;
         if (getAbortablePendingKind() === "direct") {
           requestCancelForPendingRequest("direct");
           return;
         }
 
+        if (!requireStudioPromptForSend()) return;
         const prepared = prepareEditorTextForRunRequest(sourceTextEl.value);
         if (!prepared.trim()) {
           setStatus("Editor is empty. Nothing to run.", "warning");
@@ -27152,6 +27468,7 @@
 
       if (queueSteerBtn) {
         queueSteerBtn.addEventListener("click", () => {
+          if (!requireStudioPromptForSend()) return;
           const prepared = prepareEditorTextForRunRequest(sourceTextEl.value);
           if (!prepared.trim()) {
             setStatus("Editor is empty. Nothing to queue.", "warning");
@@ -27898,6 +28215,7 @@
       if (bufferRecoveryEnabled) {
         bufferRecoveryInitializing = true;
         setupBufferRecoveryAction();
+        if (bufferSwitchingEnabled) setupStudioBufferSwitcher();
         // HTML already supplied this launch's source. Even failed/aborted recovery must
         // not let the later websocket handshake overwrite intervening local typing.
         initialDocumentApplied = true;
@@ -27909,6 +28227,14 @@
           const bufferRequest = requestBufferRecovery;
           const client = helpers.createStudioBufferClient({
             workspaceId: studioTabStateId, mode: isEditorOnlyMode ? "editor-only" : "full", storage: recoveryStorage,
+            switching: bufferSwitchingEnabled,
+            decideLegacyPromptRole: async state => {
+              const entry = state.buffers.find(b => b.id === state.selectedBufferId);
+              const choice = await openStudioDecision({ mode: "confirm", title: "Which text should be the Prompt?",
+                message: "This older copy keeps " + entry.sourceState.label + " as a document beside an unused empty Prompt. Previously, Run sent the visible file. Choose its role for the switcher; text and saved files are not changed.",
+                confirmLabel: "Use file as Prompt", secondaryLabel: "Keep separate Prompt", secondaryValue: "keep-roles", cancelLabel: "Cancel recovery" });
+              return choice === true ? "visible-prompt" : (choice === "keep-roles" ? choice : null);
+            },
             makeBufferId: makeStudioDraftId,
             canRestore: (state) => skipInitialWorkspaceRestore
               ? getWorkspaceStateIdentity(state.sourceState) === getWorkspaceStateIdentity(initialSourceState)
@@ -27943,6 +28269,10 @@
               }
             }
             bufferRecoveryClient = client;
+            if (bufferSwitchingEnabled) {
+              const state = client.snapshot(), entry = state.buffers.find(b => b.id === state.selectedBufferId);
+              bufferViewRestore = { bufferId: entry.id, source: entry.view.previewScrollTop, right: entry.view.rightScrollTop ?? 0 };
+            }
           }
         } catch (error) { bufferRecoveryIssue = "Buffer recovery could not initialize. Existing snapshots were retained. " + (error.message || ""); }
         finally { bufferRecoveryInitializing = false; }
@@ -27971,7 +28301,7 @@
       workspacePersistenceReady = true;
       persistWorkspaceStateNow({ skipServer: serverWorkspaceRecovery.status === "unavailable" });
       if (workspaceRestoredFromBrowser) {
-        setStatus("Restored editor workspace from this browser tab. Use Reset editor to discard it.", "success");
+        setStatus(bufferSwitchingEnabled ? "Restored Prompt and Document in this browser tab. Both texts were kept." : "Restored editor workspace from this browser tab. Use Reset editor to discard it.", "success");
       }
       connect();
       } catch (error) {

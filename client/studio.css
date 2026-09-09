@@ -681,6 +681,57 @@
       min-height: 0;
     }
 
+    /* Development-only two-buffer switcher; no layout change when it is absent. */
+    .studio-buffer-switcher {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+      flex: 0 0 auto;
+      min-width: 0;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    .studio-buffer-tabs {
+      display: flex;
+      flex: 1 1 220px;
+      min-width: 0;
+      gap: 4px;
+    }
+
+    .studio-buffer-tabs button {
+      flex: 1 1 0;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: left;
+    }
+
+    /* Selection is a quiet fill; the shared :focus-visible rule marks keyboard focus. */
+    .studio-buffer-tabs button[aria-selected="true"] {
+      border-color: var(--control-border);
+      background: var(--accent-soft);
+      color: var(--text);
+    }
+
+    @media (forced-colors: active) {
+      .studio-buffer-tabs button[aria-selected="true"] {
+        border-style: dashed;
+      }
+    }
+
+    .studio-buffer-target {
+      flex: 1 1 100%;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
     .source-body {
       display: flex;
       gap: 12px;

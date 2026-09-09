@@ -202,10 +202,12 @@ const STUDIO_EDITOR_DRAFT_HELPERS_URL = new URL("./client/studio-editor-draft-he
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
 // Experimental, process-scoped opt-in; stable/default browser workflows remain on v1.
 const STUDIO_BUFFER_RECOVERY_ENABLED = process.env.PI_STUDIO_BUFFER_RECOVERY === "1";
+const STUDIO_BUFFER_SWITCHING_ENABLED = STUDIO_BUFFER_RECOVERY_ENABLED && process.env.PI_STUDIO_BUFFER_SWITCHING === "1";
 const STUDIO_BUFFER_MODULE_URLS = new Map([
 	["studio-buffer-store.js", new URL("./shared/studio-buffer-store.js", import.meta.url)],
 	["studio-buffer-recovery.js", new URL("./shared/studio-buffer-recovery.js", import.meta.url)],
 	["studio-buffer-client.js", new URL("./shared/studio-buffer-client.js", import.meta.url)],
+	["studio-buffer-switching.js", new URL("./shared/studio-buffer-switching.js", import.meta.url)],
 	["studio-buffer-decisions.js", new URL("./shared/studio-buffer-decisions.js", import.meta.url)],
 	["studio-buffer-recovery-panel.js", new URL("./shared/studio-buffer-recovery-panel.js", import.meta.url)],
 ]);
@@ -12454,7 +12456,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-buffer-workspace-id="${escapeHtmlForInline(bufferRecovery?.workspaceId ?? "")}" data-buffer-capability="${escapeHtmlForInline(bufferRecovery?.capability ?? "")}" data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
+<body data-buffer-switching="${STUDIO_BUFFER_SWITCHING_ENABLED && bufferRecovery && studioMode === "full" && initialWatchFile !== "1" ? "1" : "0"}" data-buffer-workspace-id="${escapeHtmlForInline(bufferRecovery?.workspaceId ?? "")}" data-buffer-capability="${escapeHtmlForInline(bufferRecovery?.capability ?? "")}" data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
   <header id="studioHeader">
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">

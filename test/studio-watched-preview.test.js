@@ -23,7 +23,7 @@ test("watched preview documents are server-created, transient, and read-only", (
   assert.match(clientSource, /function applySourceTextEdit\([\s\S]*?if \(isWatchedFilePreview\)[\s\S]*?read-only/);
   assert.match(clientSource, /function setSourceState\([\s\S]*?isWatchedFilePreview[\s\S]*?remains bound to its watched file/);
   assert.match(clientSource, /function setEditorLanguage\([\s\S]*?isWatchedFilePreview[\s\S]*?language follows its file path/);
-  assert.match(clientSource, /if \(!workspacePersistenceReady \|\| isWatchedFilePreview\) return/);
+  assert.match(clientSource, /if \(!workspacePersistenceReady \|\| isWatchedFilePreview \|\| bufferBindingInProgress\) return/);
   assert.match(cssSource, /body\[data-watched-file-preview="1"\] #saveOverBtn/);
 });
 

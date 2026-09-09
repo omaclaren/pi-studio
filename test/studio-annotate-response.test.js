@@ -24,6 +24,7 @@ function harness(overrides = {}) {
     editorSourceGeneration: 0,
     editorContentGeneration: 0,
     bufferRecoveryEnabled: false,
+    bufferSwitchingEnabled: false,
     latestResponseMarkdown: "# Model response",
     latestResponseIsStructuredCritique: false,
     latestResponseTimestamp: 123,

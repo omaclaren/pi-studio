@@ -60,7 +60,7 @@ function buffer(value) {
 	requireState(value.diskRevision === null || (typeof value.diskRevision === "string" && DISK_REVISION.test(value.diskRevision)), "invalid-state", "Invalid disk revision.");
 	requireState(sourceState.path !== null || value.diskRevision === null, "invalid-state", "Detached buffers cannot carry a disk revision.");
 	const v = value.view;
-	object(v, ["editorView", "rightView", "editorLanguage", "selectionStart", "selectionEnd", "selectionDirection", "scrollTop", "previewScrollTop", "followLatest", "responseHistoryIndex"], "Buffer view");
+	object(v, ["editorView", "rightView", "editorLanguage", "selectionStart", "selectionEnd", "selectionDirection", "scrollTop", "previewScrollTop", "rightScrollTop", "followLatest", "responseHistoryIndex"], "Buffer view");
 	const start = integer(v.selectionStart, "Selection start");
 	const end = integer(v.selectionEnd, "Selection end");
 	requireState(start <= end && end <= text.length, "invalid-state", "Selection lies outside the buffer.");
@@ -75,6 +75,7 @@ function buffer(value) {
 			editorView: string(v.editorView, 100, "Editor view"), rightView: string(v.rightView, 100, "Right view"),
 			editorLanguage: string(v.editorLanguage, 100, "Editor language"), selectionStart: start, selectionEnd: end,
 			selectionDirection: v.selectionDirection, scrollTop: scroll(v.scrollTop), previewScrollTop: scroll(v.previewScrollTop),
+			...(Object.prototype.hasOwnProperty.call(v, "rightScrollTop") ? { rightScrollTop: scroll(v.rightScrollTop) } : {}),
 			followLatest: v.followLatest, responseHistoryIndex: integer(v.responseHistoryIndex, "Response position", -1),
 		},
 		metadata: { annotationsEnabled: m.annotationsEnabled, reviewNotesKey: string(m.reviewNotesKey, 24_000, "Review association", true), scratchpadKey: string(m.scratchpadKey, 24_000, "Scratchpad association", true) },

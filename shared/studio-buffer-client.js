@@ -1,5 +1,6 @@
 import { createStudioBuffer, createStudioBufferStore, validateStudioBufferWorkspace } from "./studio-buffer-store.js";
 import { createStudioBufferRecoveryStorage, migrateStudioWorkspaceV1 } from "./studio-buffer-recovery.js";
+import { isStudioPromptDocumentBufferState, needsStudioLegacyPromptChoice, prepareStudioPromptDocumentWorkspace } from "./studio-buffer-switching.js";
 
 const fail = (reason, message) => ({ ok: false, reason, message });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -20,11 +21,12 @@ export function isStudioSingleEditorBufferState(state) {
 		&& hidden[0].metadata.reviewNotesKey === null && hidden[0].metadata.scratchpadKey === null);
 }
 
-// Transitional single-editor adapter. This does not select/submit a hidden Prompt,
-// park drafts, change roles when a file path changes, or alter browser tab navigation.
+// Single-editor adapter by default. The separate full-view switching opt-in binds
+// two buffers to that surface; it never submits text or changes browser navigation.
 export function createStudioBufferClient(options) {
 	const { workspaceId, mode, storage, makeBufferId, canRestore, readRemote, writeRemote, readLegacyRemote } = options;
 	const expected = { workspaceId, mode };
+	const switching = options.switching === true && mode === "full";
 	const now = options.now ?? Date.now;
 	const expiry = (result, startedAt) => Number.isSafeInteger(result.expiresInMs) && result.expiresInMs > 0
 		? startedAt + Math.min(result.expiresInMs, 24 * 60 * 60 * 1000) : 0;
@@ -57,7 +59,9 @@ export function createStudioBufferClient(options) {
 	function validate(state, checkCompatibility = true) {
 		const checked = validateStudioBufferWorkspace(state, expected);
 		if (!checked.ok) return checked;
-		if (checkCompatibility && !isStudioSingleEditorBufferState(checked.state)) return fail("unsupported-collection", "Recovery contains other buffers that this single-editor build cannot display. They were retained; use a compatible build or copy them before starting fresh.");
+		if (checkCompatibility && !(switching ? isStudioPromptDocumentBufferState(checked.state) : isStudioSingleEditorBufferState(checked.state))) return fail("unsupported-collection", switching
+			? "This prototype displays one Prompt and one document. Other buffers were retained; export them or use a compatible build."
+			: "Recovery contains other buffers that this single-editor build cannot display. They were retained; use a compatible build or copy them before starting fresh.");
 		if (checkCompatibility && !canRestore(projectStudioBufferEditor(checked.state))) return fail("wrong-document", "Recovery belongs to another document. It was retained; open a fresh browser tab for this document.");
 		return checked;
 	}
@@ -182,7 +186,18 @@ export function createStudioBufferClient(options) {
 				if (!migrated.ok) return migrated;
 				chosen = migrated.state; fromInitial = true;
 			}
-			const checked = validate(chosen); if (!checked.ok) return checked;
+			let checked = validate(chosen); if (!checked.ok) return checked;
+			if (switching) {
+				let roleChoice = !localState && !remoteState ? "visible-prompt" : undefined;
+				if ((localState || remoteState) && needsStudioLegacyPromptChoice(checked.state)) {
+					if (typeof options.decideLegacyPromptRole !== "function") return fail("role-decision-required", "Choose whether the recovered file is the Prompt or a separate document. No roles or text were changed.");
+					roleChoice = await options.decideLegacyPromptRole(checked.state);
+					if (!["visible-prompt", "keep-roles"].includes(roleChoice)) return fail("role-decision-cancelled", "Recovery role choice cancelled. Existing text and copies were kept.");
+				}
+				checked = prepareStudioPromptDocumentWorkspace(checked.state, { makeBufferId, roleChoice, now });
+				if (!checked.ok) return checked;
+			}
+			if (disposed || !isStillCurrent()) return fail("editor-changed", "The editor changed while recovery was loading. Current text and recovery were kept; save or copy before reloading.");
 			store = createStudioBufferStore(checked.state);
 			if (fromInitial && initialEditor.sourceState.path) {
 				const result = capture(initialEditor, baselineText); if (!result.ok) { store = null; return result; }
@@ -203,6 +218,33 @@ export function createStudioBufferClient(options) {
 			return { ok: true, restored: !fromInitial, editor: projectStudioBufferEditor(state), baselineText: selected.baselineText };
 		},
 		capture,
+		select(id) {
+			if (!switching) return fail("switching-disabled", "Internal switching is not enabled in this view.");
+			if (disposed || !store || unrepresentedEditor) return fail("not-ready", "Keep the current editor visible until it can be represented safely in recovery.");
+			const result = store.select(id);
+			if (result.ok) { saveLocal(store.snapshot()); publish(store.snapshot()); }
+			return result;
+		},
+		replace(id, expectedRevision, editor, baselineText, extra = {}) {
+			if (!switching) return fail("switching-disabled", "Internal switching is not enabled in this view.");
+			if (disposed || !store || unrepresentedEditor) return fail("not-ready", "Keep the current editor visible until it can be represented safely in recovery.");
+			const current = store.get(id);
+			if (!current || current.revision !== expectedRevision) return fail("stale-buffer", "The destination changed. Both buffers were kept; retry explicitly.");
+			let next;
+			try {
+				next = createStudioBuffer({ ...current, text: editor.text, sourceState: editor.sourceState,
+					baselineText: editor.sourceState.path ? baselineText : "", diskRevision: editor.diskRevision, resourceDir: editor.resourceDir,
+					view: { ...current.view, editorView: editor.editorView, rightView: editor.rightView, editorLanguage: editor.editorLanguage,
+						followLatest: editor.followLatest, responseHistoryIndex: editor.responseHistoryIndex,
+						selectionStart: editor.selectionStart, selectionEnd: editor.selectionEnd, selectionDirection: "none", scrollTop: editor.scrollTop,
+						previewScrollTop: 0, rightScrollTop: 0, ...extra.view },
+					metadata: { annotationsEnabled: null, reviewNotesKey: null, scratchpadKey: null, ...extra.metadata } });
+			} catch (error) { return fail(error.reason || "invalid-state", error.message); }
+			const { id: nextId, role, revision, ...patch } = next;
+			const result = store.update(id, expectedRevision, patch);
+			if (result.ok) { saveLocal(store.snapshot()); publish(store.snapshot()); }
+			return result;
+		},
 		persist(editor, baselineText, extra) {
 			const result = capture(editor, baselineText, extra);
 			if (!result.ok) { issue("capture", result); return result; }

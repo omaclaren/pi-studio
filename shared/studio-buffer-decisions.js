@@ -2,6 +2,7 @@ import { createStudioBuffer, validateStudioBufferWorkspace } from "./studio-buff
 import { STUDIO_BUFFER_RECOVERY_PREFIX, STUDIO_BUFFER_LEGACY_TAB_PREFIX, STUDIO_BUFFER_RECOVERY_MAX_SERIALIZED_CHARS,
 	decodeStudioBufferRecovery, migrateStudioWorkspaceV1, createStudioBufferRecoveryStorage } from "./studio-buffer-recovery.js";
 import { isStudioSingleEditorBufferState, projectStudioBufferEditor } from "./studio-buffer-client.js";
+import { isStudioPromptDocumentBufferState } from "./studio-buffer-switching.js";
 
 const fail = (reason, message) => ({ ok: false, reason, message });
 
@@ -39,7 +40,7 @@ export function createStudioBufferRecoveryDecisions(options) {
 		return migrateStudioWorkspaceV1(value, { ...expected, makeBufferId: () => "recovered-" + ++id });
 	}
 	function compatible(state) {
-		if (!isStudioSingleEditorBufferState(state)) return fail("unsupported-collection", "This copy contains other buffers. Export them or use a build that can display the whole collection.");
+		if (!(options.switching === true && mode === "full" ? isStudioPromptDocumentBufferState(state) : isStudioSingleEditorBufferState(state))) return fail("unsupported-collection", "This copy contains other buffers. Export them or use a build that can display the whole collection.");
 		if (!canRestore(projectStudioBufferEditor(state))) return fail("wrong-document", "This copy belongs to another source. Export its text; it cannot replace this document.");
 		return { ok: true };
 	}
