@@ -25844,31 +25844,64 @@
         return header;
       }
 
+      function matchAnnotationHeaderOpener(text) {
+        return /^(?:annotations below:?|annotated reply: below|annotated reply below:)(?:\r?\n|$)/i.exec(String(text || ""));
+      }
+
+      function readAnnotationHeader(text) {
+        const source = String(text || "");
+        const opener = matchAnnotationHeaderOpener(source);
+        if (!opener) return null;
+        const newline = "\\r?\\n";
+        const sample = "(?:\\[an: (?:your )?note\\]|`\\[an: (?:your )?note\\]`(?: \\(user comments on the accompanying selections\\))?)";
+        const precedence = "precedence: later messages supersede these annotations unless user explicitly references them";
+        const divider = newline + "---" + newline + newline;
+        // Known leading blocks only: minimal Neovim, full Studio, and older plain metadata.
+        // Full legacy blocks can have an empty hint after the existing Strip annotations action.
+        const formats = [
+          { pattern: newline + "- user annotation syntax: " + sample + newline + divider, hasSource: false },
+          { pattern: newline + "- original source: [^\\r\\n]+" + newline
+            + "- user annotation syntax: (?:" + sample + ")?" + newline
+            + "(?:- " + precedence + newline + ")?" + divider, hasSource: true },
+          { pattern: "original source: [^\\r\\n]+" + newline
+            + "user annotation syntax: (?:" + sample + ")?" + newline
+            + "(?:" + precedence + newline + ")?" + divider, hasSource: true },
+        ];
+        for (const format of formats) {
+          const block = new RegExp("^" + format.pattern, "i").exec(source.slice(opener[0].length));
+          if (block) return { length: opener[0].length + block[0].length, hasSource: format.hasSource };
+        }
+        return null;
+      }
+
       function stripAnnotationBoundaryMarker(text) {
-        return String(text || "").replace(/\n{0,2}--- end annotations ---\s*$/i, "");
+        const source = String(text || "");
+        // Only the exact legacy wrapper suffix is a footer, never a prose suffix or indented quote.
+        const footer = /(?:\n\n--- end annotations ---\n\n|\r\n\r\n--- end annotations ---\r\n\r\n)(?![\s\S])/i.exec(source);
+        if (!footer) return source;
+        let fenceChar = "";
+        let fenceLength = 0;
+        for (const line of source.slice(0, footer.index).split(/\r?\n/)) {
+          const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+          if (!fence) continue;
+          const marker = fence[1];
+          if (fenceChar) {
+            if (marker[0] === fenceChar && marker.length >= fenceLength && /^[ \t]*$/.test(fence[2])) fenceChar = "";
+          } else if (marker[0] !== "`" || !fence[2].includes("`")) {
+            fenceChar = marker[0];
+            fenceLength = marker.length;
+          }
+        }
+        return fenceChar ? source : source.slice(0, footer.index);
       }
 
       function stripAnnotationHeader(text) {
-        const normalized = String(text || "").replace(/\r\n/g, "\n");
-        const lower = normalized.toLowerCase();
-        if (!lower.startsWith("annotated reply: below") && !lower.startsWith("annotated reply below:")) {
-          return { hadHeader: false, body: normalized };
-        }
-
-        const dividerIndex = normalized.indexOf("\n---");
-        if (dividerIndex < 0) {
-          return { hadHeader: false, body: normalized };
-        }
-
-        let cursor = dividerIndex + 4;
-        while (cursor < normalized.length && normalized[cursor] === "\n") {
-          cursor += 1;
-        }
-
-        return {
-          hadHeader: true,
-          body: stripAnnotationBoundaryMarker(normalized.slice(cursor)),
-        };
+        const source = String(text || "");
+        const header = readAnnotationHeader(source);
+        if (!header) return { hadHeader: false, body: source };
+        const body = source.slice(header.length);
+        // The minimal Neovim block has no footer contract; everything after its divider is body.
+        return { hadHeader: true, body: header.hasSource ? stripAnnotationBoundaryMarker(body) : body };
       }
 
       function updateAnnotatedReplyHeaderButton() {
@@ -25896,8 +25929,14 @@
           return;
         }
 
-        const cleanedBody = stripAnnotationBoundaryMarker(stripped.body);
-        const updated = buildAnnotationHeader() + cleanedBody + "\n\n--- end annotations ---\n\n";
+        if (matchAnnotationHeaderOpener(stripped.body)) {
+          setStatus("Unrecognised annotation header. Kept the editor unchanged; edit the header manually.", "warning");
+          return;
+        }
+        // Preserve unrelated trailing markers. Omit our footer when it would fall inside an unclosed fence.
+        const framedBody = stripped.body + "\n\n--- end annotations ---\n\n";
+        const updated = buildAnnotationHeader()
+          + (stripAnnotationBoundaryMarker(framedBody) === stripped.body ? framedBody : stripped.body);
         if (isTextEquivalent(sourceTextEl.value, updated)) {
           setStatus("Annotated reply header already present.");
           return;

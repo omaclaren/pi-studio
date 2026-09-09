@@ -19,7 +19,7 @@ Studio uses a **single workspace**:
 
 ## 1) Insert annotated reply header (optional prep)
 
-Adds/updates an `annotated-reply` compatible scaffold in the editor:
+Toggles an `annotated-reply` compatible scaffold in the editor. Studio's generated opener and metadata wording remain unchanged:
 
 ```md
 annotated reply: below
@@ -34,6 +34,36 @@ annotated reply: below
 ```
 
 Studio does **not** auto-send this scaffold; it is an explicit editor transform.
+
+### Header recognition contract (local compatibility work; not yet released)
+
+The parser accepts these **whole first lines**, case-insensitively:
+
+- `annotations below`
+- `annotations below:`
+- `annotated reply: below`
+- `annotated reply below:`
+
+Each opener works with the known minimal Neovim block, the full Studio bullet metadata above, or the older plain metadata layout (`original source`, `user annotation syntax`, optional `precedence`, without bullet prefixes or a blank line after the opener). Bullet layouts require a blank line after the opener. Metadata order and the known syntax/precedence wording must match; arbitrary edited instructions are not silently consumed. The accepted syntax examples are `[an: note]` / `[an: your note]`, optionally backticked; the backticked form may carry Neovim's parenthetical below. Full legacy headers remain recognisable when **Strip annotations…** has removed their unbackticked hint.
+
+The minimal Neovim block is:
+
+```md
+annotations below
+
+- user annotation syntax: `[an: note]` (user comments on the accompanying selections)
+
+---
+
+```
+
+All layouts require a blank line before the exact `---` divider and a blank line after it. LF and CRLF are accepted without normalising or trimming the remaining body. Source/precedence lines and a footer are not required for the minimal form, whose entire remaining text is body. A backticked syntax example is not an annotation.
+
+Detection, toolbar summaries, toggling and header removal share the same parser. Prose mentions, opener prefixes, quoted/indented/fenced examples, and arbitrary later dividers do not count. An exact opener with an unknown or malformed following block prompts a warning and leaves the editor unchanged rather than adding a duplicate header.
+
+Full source-bearing legacy wrappers retain their optional footer convention: only the exact terminal `\n\n--- end annotations ---\n\n` suffix (or its all-CRLF equivalent), outside a Markdown backtick/tilde fence, is removed. Quoted/indented/prose marker text and extra trailing whitespace are preserved. Minimal headers never remove a footer. Inserting Studio's usual wrapper preserves any pre-existing body marker; its generated footer is omitted if it would fall inside an unclosed fence, so toggling still preserves the body.
+
+This compatibility change does not switch the installed Studio version or change Neovim's emitted wording. Deployment/release is a separate decision.
 
 ## 2) Run editor text (plain send)
 
@@ -111,7 +141,7 @@ Rules of thumb:
 
 1. `/studio --last` opens with editor loaded and no required mode selection.
 2. **Run editor text** respects annotation mode (`On` send as-is, `Off` strip `[an: ...]`) and returns response to right pane.
-3. **Insert annotation header** updates the scaffold source metadata without duplicating headers.
+3. **Annotation header** recognises all supported openers without duplication; toggling preserves the body and refuses malformed leading header blocks.
 4. **Critique editor text** runs on current editor text and returns structured package when model complies.
 5. Structured critique helpers (`Load critique (notes)` / `Load critique (full)`) enable only when critique structure is present.
 6. Loading response/critique back into editor never loses draft unexpectedly.
