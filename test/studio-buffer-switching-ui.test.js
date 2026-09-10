@@ -38,7 +38,7 @@ test("Run from Document returns without sending; unresolved recovery cannot expo
 
 test("local mutations and dialogs fence switching without blocking passive metadata reads", () => {
   const c = context({ bufferSwitchingEnabled: true, bufferRecoveryClient: {}, workspacePersistenceReady: true,
-    bufferBindingInProgress: false, bufferRecoveryInitializing: false, bufferPageClosed: false, uiBusy: false, replBusy: false,
+    bufferBindingInProgress: false, bufferRecoveryInitializing: false, bufferPageClosed: false, uiBusy: false, pendingKind: null, replBusy: false,
     completionSuggestionInFlight: false, pendingEditorRefresh: null, responseReplacementPending: false,
     pendingSaveOperations: new Map(), pendingPiEditorDraftSnapshots: new Map(), modal: false, studioModalBlocksDraftAction: () => c.modal });
   load(c, "function studioBuffersCanSwitch(", "function studioBufferScrollPosition(");
@@ -106,7 +106,7 @@ test("binding does not transiently disable the focused tab and modal guards do n
   assert.doesNotThrow(() => c.syncStudioBufferSwitcher(), "no intermediate snapshot, disabled state or focus mutation during binding");
   assert.match(section("function syncStudioBufferSwitcher()", "function setupStudioBufferSwitcher()"), /const canSwitch = studioBuffersCanSwitch\(true\)/);
   assert.match(section("function selectStudioBuffer(", "function requireStudioPromptForSend()"), /if \(!studioBuffersCanSwitch\(\)\)/);
-  assert.match(section("async function promptStudioBufferDocumentPath()", "function syncBufferRecoveryMenuAccess()"), /if \(!studioBuffersCanSwitch\(\)\)/);
+  assert.match(section("async function promptStudioBufferDocumentPath()", "function syncBufferRecoveryMenuAccess()"), /if \(!studioBuffersCanOpenDocument\(\)\)/);
 });
 
 test("a double-click continuation cannot turn Return to Prompt into Run", () => {
@@ -143,6 +143,7 @@ function bindingHarness({ role = "prompt", follow = true, queued = true, history
   const c = context({ getStudioSelectedBuffer: () => entry, bufferBindingInProgress: false, bufferViewRestore: null,
     clearEditorAsyncOperations: () => {}, fileBrowserLoadNonce: 0, fileBrowserState: {}, resourceDirInput: null,
     bufferTransientStates: new Map([[role, { sourceGeneration: 1, linkedPiEditorDraftSnapshot: null }]]), editorSourceGeneration: 1,
+    activityTrackingEnabled: true, uiBusy: false, pendingRequestId: null,
     normalizePiEditorDraftSnapshot: value => value, setEditorText: () => {}, setSourceState: () => {}, setEditorLanguage: () => {},
     setAnnotationsEnabled: () => {}, initialAnnotationsEnabled: false, followLatest: false, followSelect: { value: "off" },
     responseHistory: history ? [{ markdown: "R1" }, { markdown: "R2" }] : [], responseHistoryIndex: 0,
@@ -207,6 +208,122 @@ test("catching up a response does not reset editor-preview or side-discussion re
   }
 });
 
+test("returning during the same Run resumes only its captured activity owner, including manual opt-out", () => {
+  for (const ownsWorkingView of [true, false]) {
+    const f = bindingHarness({ rightView: ownsWorkingView ? "trace" : "preview", queued: false });
+    f.c.bufferTransientStates.get("prompt").activityTracking = { requestId: "run-1", ownsWorkingView };
+    f.c.uiBusy = true; f.c.pendingRequestId = "run-1"; f.bind();
+    assert.equal(f.c.activityTrackingRequestId, "run-1"); assert.equal(f.c.activityTrackingOwnsWorkingView, ownsWorkingView);
+    assert.equal(f.c.rightView, ownsWorkingView ? "trace" : "preview");
+  }
+});
+
+test("completion while Document is selected retires automatic Working, not manually chosen views", () => {
+  for (const ownsWorkingView of [true, false]) {
+    const f = bindingHarness({ rightView: "trace", queued: false });
+    f.c.bufferTransientStates.get("prompt").activityTracking = { requestId: "run-1", ownsWorkingView };
+    f.bind();
+    assert.equal(f.c.rightView, ownsWorkingView ? "preview" : "trace");
+    assert.equal(f.c.activityTrackingOwnsWorkingView, false);
+    assert.equal(f.c.bufferViewRestore.right, ownsWorkingView ? 0 : 480);
+  }
+});
+
+test("a different Run and the Document cannot inherit Prompt activity ownership", () => {
+  for (const role of ["prompt", "document"]) {
+    const f = bindingHarness({ role, rightView: role === "prompt" ? "trace" : "editor-preview", queued: false });
+    f.c.bufferTransientStates.get(role).activityTracking = { requestId: "old-run", ownsWorkingView: true };
+    f.c.uiBusy = true; f.c.pendingRequestId = "new-run"; f.bind();
+    assert.equal(f.c.activityTrackingRequestId, ""); assert.equal(f.c.activityTrackingOwnsWorkingView, false);
+  }
+});
+
+function activityPolicyHarness() {
+  const f = bindingHarness({ rightView: "trace", queued: false });
+  let document = true;
+  Object.assign(f.c, { bufferSwitchingEnabled: true, isEditorOnlyMode: false, isWatchedFilePreview: false,
+    bufferRecoveryClient: { snapshot: () => ({ activePromptId: "prompt" }) },
+    isStudioDocumentBufferView: () => document, activityTrackingSelect: {},
+    activityTrackingRequestId: "", activityTrackingOwnsWorkingView: false,
+    window: { localStorage: { setItem() {} } }, ACTIVITY_TRACKING_STORAGE_KEY: "activity",
+    syncStudioUiRefreshSummaries() {}, setStatus() {}, agentBusyFromServer: true, uiBusy: true, pendingRequestId: "run-1", rightView: "editor-preview" });
+  f.c.bufferTransientStates.get("prompt").activityTracking = { requestId: "run-1", ownsWorkingView: true };
+  load(f.c, "function setActivityTrackingEnabled(", "function clampPaneSplitPercent(");
+  return { ...f, showPrompt() { document = false; f.bind(); }, complete() {
+    f.c.uiBusy = false; f.c.agentBusyFromServer = false; f.c.pendingRequestId = null;
+    f.c.finishTrackedStudioActivity("run-1");
+  } };
+}
+
+test("disabling activity following revokes live and saved ownership without changing source or terminal provenance", () => {
+  const f = activityPolicyHarness(), saved = f.c.bufferTransientStates.get("prompt");
+  const terminal = { fingerprint: "kept" }; saved.linkedPiEditorDraftSnapshot = terminal;
+  f.c.activityTrackingRequestId = "run-1"; f.c.activityTrackingOwnsWorkingView = true;
+  f.c.setActivityTrackingEnabled(false);
+  assert.equal(f.c.activityTrackingRequestId, ""); assert.equal(f.c.activityTrackingOwnsWorkingView, false);
+  const next = f.c.bufferTransientStates.get("prompt");
+  assert.equal(next.activityTracking?.requestId || "", ""); assert.equal(Boolean(next.activityTracking?.ownsWorkingView), false);
+  assert.equal(next.sourceGeneration, saved.sourceGeneration); assert.equal(next.linkedPiEditorDraftSnapshot, terminal);
+});
+
+test("disabling in Document then completing cannot retire Prompt's saved Working view or scroll", () => {
+  const f = activityPolicyHarness(); f.c.setActivityTrackingEnabled(false); f.complete(); f.showPrompt();
+  assert.equal(f.c.rightView, "trace"); assert.equal(f.c.bufferViewRestore.right, 480);
+  assert.equal(f.c.activityTrackingRequestId, ""); assert.equal(f.c.activityTrackingOwnsWorkingView, false);
+});
+
+test("returning with activity disabled cannot restore a latch that blocks explicit re-enabling", () => {
+  const f = activityPolicyHarness(); f.c.setActivityTrackingEnabled(false); f.showPrompt();
+  assert.equal(f.c.activityTrackingRequestId, "");
+  f.c.setActivityTrackingEnabled(true);
+  assert.equal(f.c.activityTrackingOwnsWorkingView, true); assert.equal(f.c.rightView, "trace");
+  f.complete(); assert.equal(f.c.rightView, "preview");
+});
+
+test("explicit re-enabling while Document is selected arms only the exact ongoing Prompt request", () => {
+  for (const beforeReturn of [true, false]) {
+    const f = activityPolicyHarness(); f.entry.view.rightView = "preview";
+    f.c.setActivityTrackingEnabled(false); f.c.setActivityTrackingEnabled(true);
+    assert.equal(f.c.rightView, "editor-preview", "policy changes must not move Document into Working");
+    if (beforeReturn) f.complete();
+    f.showPrompt();
+    assert.equal(f.c.rightView, beforeReturn ? "preview" : "trace");
+    if (!beforeReturn) {
+      assert.equal(f.c.activityTrackingOwnsWorkingView, true);
+      assert.equal(f.c.bufferViewRestore.right, 0, "new Working content cannot inherit the previous response's scroll");
+      f.complete(); assert.equal(f.c.rightView, "preview");
+    }
+  }
+});
+
+test("hidden off/on retains completion return, but enabling only after completion does not revive an old owner", () => {
+  for (const enableBeforeCompletion of [true, false]) {
+    const f = activityPolicyHarness(); f.c.setActivityTrackingEnabled(false);
+    if (enableBeforeCompletion) f.c.setActivityTrackingEnabled(true);
+    f.complete();
+    if (!enableBeforeCompletion) f.c.setActivityTrackingEnabled(true);
+    f.showPrompt(); assert.equal(f.c.rightView, enableBeforeCompletion ? "preview" : "trace");
+  }
+});
+
+test("redundantly enabling an already-enabled policy preserves hidden manual opt-out", () => {
+  const f = activityPolicyHarness(); f.entry.view.rightView = "preview";
+  f.c.bufferTransientStates.get("prompt").activityTracking.ownsWorkingView = false;
+  f.c.setActivityTrackingEnabled(true); f.showPrompt();
+  assert.equal(f.c.rightView, "preview"); assert.equal(f.c.activityTrackingOwnsWorkingView, false);
+  f.complete(); assert.equal(f.c.rightView, "preview");
+});
+
+test("newer requests cannot inherit hidden re-enable intent, and foundation-only setters leave buffer state alone", () => {
+  const f = activityPolicyHarness(); f.c.setActivityTrackingEnabled(false); f.c.setActivityTrackingEnabled(true);
+  f.c.pendingRequestId = "new-run"; f.showPrompt();
+  assert.equal(f.c.activityTrackingRequestId, ""); assert.equal(f.c.activityTrackingOwnsWorkingView, false);
+  const legacy = activityPolicyHarness(); legacy.c.bufferSwitchingEnabled = false;
+  const saved = legacy.c.bufferTransientStates.get("prompt"); legacy.c.setActivityTrackingEnabled(false);
+  assert.equal(legacy.c.bufferTransientStates.get("prompt"), saved);
+  assert.equal(saved.activityTracking.ownsWorkingView, true);
+});
+
 test("a queued payload that could not be applied is not discarded or treated as a new response", () => {
   const f = bindingHarness({ history: false, applyPayload: false }); f.bind();
   assert.equal(f.c.queuedLatestResponse, f.pending);
@@ -240,14 +357,15 @@ test("file-dialog focus changes are not editor mutations; all semantic ownership
 });
 
 test("file opening checks captured origin, destination revision and authorized preview ownership before replacement", async () => {
-  for (const change of ["origin", "revision", "owner", "operation"]) {
+  for (const change of ["origin", "revision", "owner", "operation", "run"]) {
     const calls = []; let resolveFetch, current = true, previewCurrent = true;
     const target = { id: "document", role: "document", revision: 1, text: "", baselineText: "", sourceState: { path: null }, view: {} };
     let destination = target;
-    const c = context({ studioBuffersCanSwitch: () => true, bufferRecoveryClient: { capture: () => ({ ok: true }), snapshot: () => ({ buffers: [destination] }), replace: () => calls.push("replace") },
+    const c = context({ uiBusy: false, studioBuffersCanSwitch: () => true, bufferRecoveryClient: { capture: () => ({ ok: true }), snapshot: () => ({ buffers: [destination] }), replace: () => calls.push("replace") },
       buildWorkspacePersistencePayload: () => ({}), fileBackedBaselineText: null, bufferRecoveryExtra: () => ({}), captureStudioBufferOpenConsent: () => ({}),
       recoveryConsentIsCurrent: () => current, studioPreviewInteractionIsCurrent: () => previewCurrent, pendingBufferDocumentOpen: null,
       confirmPreviewOfficeConversion: async () => true, fetchPreviewLocalLink: () => new Promise(resolve => { resolveFetch = resolve; }), setStatus: () => {} });
+    load(c, "function studioBuffersCanOpenDocument(", "function studioBufferScrollPosition(");
     load(c, "async function openStudioBufferDocument(", "function syncBufferRecoveryMenuAccess()");
     const pending = c.openStudioBufferDocument("/other.md", {});
     await new Promise(resolve => setImmediate(resolve)); assert(resolveFetch);
@@ -255,6 +373,7 @@ test("file opening checks captured origin, destination revision and authorized p
     if (change === "revision") destination = { ...target, revision: target.revision + 1 };
     if (change === "owner") previewCurrent = false;
     if (change === "operation") c.pendingBufferDocumentOpen = null;
+    if (change === "run") c.uiBusy = true;
     resolveFetch({ text: "Fetched file", path: "/other.md" });
     assert.equal(await pending, false, change); assert.deepEqual(calls, [], change);
   }

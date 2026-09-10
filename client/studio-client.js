@@ -4769,6 +4769,7 @@
       }
 
       function setActivityTrackingEnabled(enabled, options) {
+        const wasEnabled = activityTrackingEnabled;
         activityTrackingEnabled = Boolean(enabled) && !isEditorOnlyMode && !isWatchedFilePreview;
         if (activityTrackingSelect) {
           activityTrackingSelect.value = activityTrackingEnabled ? "on" : "off";
@@ -4777,6 +4778,14 @@
         if (!activityTrackingEnabled) {
           activityTrackingOwnsWorkingView = false;
           activityTrackingRequestId = "";
+          if (bufferSwitchingEnabled) {
+            // The policy is global; a hidden buffer must not restore an old
+            // automatic owner or a manual-opt-out latch after it was disabled.
+            for (const [id, saved] of bufferTransientStates) {
+              if (saved.activityTracking) bufferTransientStates.set(id, { ...saved,
+                activityTracking: { requestId: "", ownsWorkingView: false } });
+            }
+          }
         }
         if (!options || options.persist !== false) {
           try {
@@ -4787,6 +4796,15 @@
         }
         syncStudioUiRefreshSummaries();
         if (activityTrackingEnabled && agentBusyFromServer) {
+          if (bufferSwitchingEnabled && !wasEnabled && isStudioDocumentBufferView() && uiBusy
+              && typeof pendingRequestId === "string" && pendingRequestId.length > 0) {
+            // Explicit re-enabling may follow this exact Run on return, without
+            // changing Document's view or reviving an already finished request.
+            const promptId = bufferRecoveryClient?.snapshot()?.activePromptId;
+            const saved = bufferTransientStates.get(promptId);
+            if (saved) bufferTransientStates.set(promptId, { ...saved,
+              activityTracking: { requestId: pendingRequestId, ownsWorkingView: true } });
+          }
           beginTrackedStudioActivity(pendingRequestId || "active");
         }
         if (!options || !options.silent) {
@@ -5759,6 +5777,11 @@
           && !isEditorOnlyMode
         ) {
           if (bufferSwitchingEnabled && event.repeat) { event.preventDefault(); return; }
+          if (bufferSwitchingEnabled && isStudioDocumentBufferView()) {
+            event.preventDefault();
+            requireStudioPromptForSend();
+            return; // Reviewing Prompt is neither steering nor the global Stop action.
+          }
           if (queueSteerBtn && !queueSteerBtn.disabled) {
             event.preventDefault();
             queueSteerBtn.click();
@@ -5984,7 +6007,7 @@
         sendMessage({ type: "get_trace_snapshot", responseHistoryId: item.id });
       }
 
-      function clearActiveResponseView() {
+      function clearActiveResponseView(options) {
         pendingResponseScrollReset = false;
         latestResponseMarkdown = "";
         latestResponseThinking = "";
@@ -5996,7 +6019,8 @@
         latestResponseThinkingNormalized = "";
         latestCritiqueNotes = "";
         latestCritiqueNotesNormalized = "";
-        refreshResponseUi();
+        if (options?.render === false) updateResultActionButtons();
+        else refreshResponseUi();
       }
 
       function updateHistoryControls() {
@@ -6084,10 +6108,11 @@
         const previousId = previousItem && typeof previousItem.id === "string" ? previousItem.id : null;
 
         responseHistory = normalized;
+        const documentView = bufferSwitchingEnabled && isStudioDocumentBufferView();
 
         if (!responseHistory.length) {
           responseHistoryIndex = -1;
-          clearActiveResponseView();
+          clearActiveResponseView({ render: !documentView });
           updateHistoryControls();
           return false;
         }
@@ -6109,6 +6134,14 @@
           targetIndex = responseHistoryIndex;
         }
 
+        if (documentView) {
+          // Cache conversation events without rebuilding a live Document preview
+          // (including its iframe state). Prompt binding applies its reading policy.
+          responseHistoryIndex = targetIndex;
+          applySelectedHistoryItem({ resetScroll: false, render: false });
+          updateHistoryControls();
+          return true;
+        }
         return selectHistoryIndex(targetIndex, { silent: Boolean(options && options.silent) });
       }
 
@@ -15441,12 +15474,20 @@
         return getStudioSelectedBuffer()?.role === "document";
       }
       function studioBuffersCanSwitch(ignoreModal = false) {
-        // First prototype: do not move a local operation's live editor out from
-        // under it. Passive preview/metadata reads remain protected by ownership.
+        // Run already owns a submitted text snapshot; selecting another existing
+        // buffer does not move that request. Other busy/local operations keep their
+        // live-editor fence, including unresolved Pi terminal-draft disposition.
+        const directRun = bufferSwitchingEnabled && uiBusy && pendingKind === "direct"
+          && typeof pendingRequestId === "string" && pendingRequestId.length > 0
+          && ws && ws.readyState === WebSocket.OPEN && wsState === "Submitting";
         return Boolean(bufferSwitchingEnabled && bufferRecoveryClient && workspacePersistenceReady && !bufferBindingInProgress && !bufferRecoveryInitializing
-          && !bufferPageClosed && !uiBusy && !replBusy && !completionSuggestionInFlight && !pendingEditorRefresh
+          && !bufferPageClosed && (!uiBusy || directRun) && !replBusy && !completionSuggestionInFlight && !pendingEditorRefresh
           && !responseReplacementPending && !pendingSaveOperations.size && !pendingPiEditorDraftSnapshots.size
           && (ignoreModal || !studioModalBlocksDraftAction()));
+      }
+      function studioBuffersCanOpenDocument(ignoreModal = false) {
+        // Opening/replacing is a mutation, not merely selecting a kept buffer.
+        return !uiBusy && studioBuffersCanSwitch(ignoreModal);
       }
       function studioBufferScrollPosition(pane, fallback) {
         const state = bufferRecoveryClient?.snapshot();
@@ -15492,6 +15533,7 @@
         bufferTransientStates.set(current.id, {
           sourceGeneration: bufferTransientStates.get(current.id)?.sourceGeneration ?? editorSourceGeneration,
           linkedPiEditorDraftSnapshot: normalizePiEditorDraftSnapshot(linkedPiEditorDraftSnapshot),
+          activityTracking: { requestId: activityTrackingRequestId, ownsWorkingView: activityTrackingOwnsWorkingView },
         });
       }
       function bindSelectedStudioBuffer(options) {
@@ -15529,14 +15571,23 @@
             queuedLatestResponse = null;
             appliedQueuedResponse = true;
           }
+          const savedActivity = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.activityTracking : null;
+          const resumeActivity = savedActivity?.requestId && uiBusy && savedActivity.requestId === pendingRequestId;
+          const retiredWorkingView = savedActivity?.ownsWorkingView && !resumeActivity && entry.view.rightView === "trace";
+          const resumedWorkingView = resumeActivity && savedActivity.ownsWorkingView;
           setEditorView(entry.view.editorView);
-          setRightView(entry.view.rightView, { bufferSwitch: true });
+          setRightView(retiredWorkingView ? "preview" : (resumedWorkingView ? "trace" : entry.view.rightView), { bufferSwitch: true });
+          if (resumeActivity) {
+            activityTrackingRequestId = savedActivity.requestId;
+            activityTrackingOwnsWorkingView = activityTrackingEnabled && savedActivity.ownsWorkingView;
+          }
           sourceTextEl.setSelectionRange(entry.view.selectionStart, entry.view.selectionEnd, entry.view.selectionDirection);
           sourceTextEl.scrollTop = entry.view.scrollTop;
           syncEditorHighlightScroll();
           // A queued response is new reading content, not the response whose old
           // offset was saved. Match the ordinary response-reset view exclusions.
-          const restoreRightScroll = appliedQueuedResponse && !["editor-preview", "editor-quarto-preview", "side-questions"].includes(rightView)
+          const restoreRightScroll = (appliedQueuedResponse || retiredWorkingView || (resumedWorkingView && entry.view.rightView !== "trace"))
+            && !["editor-preview", "editor-quarto-preview", "side-questions"].includes(rightView)
             ? 0 : (entry.view.rightScrollTop ?? 0);
           bufferViewRestore = { bufferId: entry.id, editor: entry.view, source: entry.view.previewScrollTop, right: restoreRightScroll };
           scheduleStudioBufferEditorRestore();
@@ -15593,7 +15644,7 @@
           button.setAttribute("aria-selected", String(entry?.id === state?.selectedBufferId && Boolean(entry)));
           button.tabIndex = entry?.id === state?.selectedBufferId ? 0 : -1;
         }
-        bufferSwitcherUi.open.disabled = !canSwitch;
+        bufferSwitcherUi.open.disabled = !studioBuffersCanOpenDocument(true);
         const active = state?.buffers.find(b => b.id === state.activePromptId);
         bufferSwitcherUi.target.textContent = active ? "Run: Prompt" + (active.sourceState.path ? " · " + basenameForStudioPath(active.sourceState.path) : "") : "Switcher waiting for recovery";
         bufferSwitcherUi.target.title = "One Pi conversation. Selecting Document never sends it or changes the active Prompt.";
@@ -15637,18 +15688,18 @@
         return consent;
       }
       async function promptStudioBufferDocumentPath() {
-        if (!studioBuffersCanSwitch()) return false;
+        if (!studioBuffersCanOpenDocument()) return false;
         const consent = captureStudioBufferOpenConsent();
         const existing = bufferRecoveryClient.snapshot().buffers.find(b => b.role === "document");
         const suggested = existing?.sourceState.path || (getCurrentResourceDirValue() ? getCurrentResourceDirValue().replace(/\/$/, "") + "/" : "./");
         const path = await requestStudioTextInput("Open a file as the separate Document buffer. The Prompt is kept. Paths are on the computer running Pi.", suggested,
           { title: "Open document", confirmLabel: "Open document", inputLabel: "File path" });
         if (!path) return false;
-        if (!recoveryConsentIsCurrent(consent) || !studioBuffersCanSwitch()) { setStatus("The workspace changed. Both buffers were kept; try opening the document again.", "warning"); return false; }
+        if (!recoveryConsentIsCurrent(consent) || !studioBuffersCanOpenDocument()) { setStatus("The workspace changed. Both buffers were kept; try opening the document again.", "warning"); return false; }
         return openStudioBufferDocument(path, getHtmlPreviewResourceContextOptions());
       }
       async function openStudioBufferDocument(href, context, role = "document") {
-        if (!studioBuffersCanSwitch()) { setStatus("Wait for the current action before opening a buffer.", "warning"); return false; }
+        if (!studioBuffersCanOpenDocument()) { setStatus("Wait for the current action before opening a buffer.", "warning"); return false; }
         const captured = bufferRecoveryClient.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferRecoveryExtra());
         if (!captured.ok) { setStatus(captured.message, "warning"); return false; }
         const client = bufferRecoveryClient;
@@ -15675,7 +15726,7 @@
             if (!confirmed || !isCurrent()) return false;
           }
           const payload = await fetchPreviewLocalLink("document", href, context);
-          if (!isCurrent() || !studioBuffersCanSwitch()) return false;
+          if (!isCurrent() || !studioBuffersCanOpenDocument()) return false;
           if (typeof payload.text !== "string") throw new Error("Studio did not return document text.");
           const converted = payload.converted === true;
           const path = !converted && typeof payload.path === "string" && payload.path ? payload.path : null;
@@ -24637,7 +24688,8 @@
           latestCritiqueNotesNormalized = "";
         }
 
-        refreshResponseUi();
+        if (options?.render === false) updateResultActionButtons();
+        else refreshResponseUi();
       }
 
       function applyLatestPayload(payload, options) {
@@ -25000,6 +25052,7 @@
             compactInProgress = false;
           }
 
+          if (bufferSwitchingEnabled) syncActionButtons(); // Busy reconnect identity is now authoritative.
           let loadedInitialDocument = false;
           if (
             !explicitDocumentIdentityFromUrl &&
@@ -25353,27 +25406,31 @@
               ? message.kind
               : normalizeHistoryKind(pendingKind);
 
+          const deferToPrompt = bufferSwitchingEnabled && isStudioDocumentBufferView();
           stickyStudioKind = responseKind;
           pendingRequestId = null;
           pendingKind = null;
-          queuedLatestResponse = null;
+          queuedLatestResponse = deferToPrompt && typeof message.markdown === "string"
+            ? { kind: normalizeHistoryKind(responseKind), markdown: message.markdown, thinking: message.thinking, timestamp: message.timestamp }
+            : null;
           agentBusyFromServer = false;
           setBusy(false);
           setWsState("Ready");
 
-          pendingResponseScrollReset = true;
+          pendingResponseScrollReset = !deferToPrompt;
           let appliedFromHistory = false;
           if (Array.isArray(message.responseHistory)) {
             appliedFromHistory = setResponseHistory(message.responseHistory, {
-              autoSelectLatest: true,
-              preserveSelection: false,
+              autoSelectLatest: !deferToPrompt,
+              preserveSelection: deferToPrompt,
               silent: true,
             });
           }
 
-          if (!appliedFromHistory && typeof message.markdown === "string") {
+          if (!deferToPrompt && !appliedFromHistory && typeof message.markdown === "string") {
             handleIncomingResponse(message.markdown, responseKind, message.timestamp, message.thinking);
           }
+          if (deferToPrompt) { pendingResponseScrollReset = false; updateResultActionButtons(); }
           finishTrackedStudioActivity(completedRequestId || "");
 
           if (responseKind === "critique") {
@@ -25435,6 +25492,9 @@
 
         if (message.type === "response_history") {
           const isTreeSync = message.reason === "tree";
+          // A tree change replaces branch authority, even when its history is
+          // empty. Ordinary empty history can still accompany a valid payload.
+          if (bufferSwitchingEnabled && isTreeSync) queuedLatestResponse = null;
           setResponseHistory(message.items, {
             autoSelectLatest: isTreeSync ? true : followLatest,
             preserveSelection: isTreeSync ? true : !followLatest,
@@ -25740,10 +25800,11 @@
         }
 
         if (message.type === "busy") {
+          let rejectedSubmission = false;
           clearPiEditorOperations(message.requestId);
           if (pendingEditorRefresh && message.requestId === pendingEditorRefresh.requestId) pendingEditorRefresh = null;
           if (typeof message.requestId === "string") {
-            submittedEditorDrafts.discard(message.requestId);
+            rejectedSubmission = submittedEditorDrafts.discard(message.requestId);
             restoreReservedPiEditorDraftSnapshot(message.requestId);
             pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not start the companion editor because another request was busy.");
@@ -25758,6 +25819,13 @@
           if (typeof message.requestId === "string") {
             clearArmedTitleAttention(message.requestId);
           }
+          if (bufferSwitchingEnabled && pendingKind === "direct" && pendingRequestId
+              && typeof message.requestId === "string" && message.requestId !== pendingRequestId) {
+            // Retire this rejected snapshot, not the different Run still owning Stop.
+            if (rejectedSubmission) setStatus(typeof message.message === "string" ? message.message : "Steering request was rejected.", "warning");
+            syncActionButtons();
+            return;
+          }
           stickyStudioKind = null;
           finishTrackedStudioActivity(typeof message.requestId === "string" ? message.requestId : "");
           setBusy(false);
@@ -25767,10 +25835,11 @@
         }
 
         if (message.type === "error") {
+          let rejectedSubmission = false;
           clearPiEditorOperations(message.requestId);
           if (pendingEditorRefresh && message.requestId === pendingEditorRefresh.requestId) pendingEditorRefresh = null;
           if (typeof message.requestId === "string") {
-            submittedEditorDrafts.discard(message.requestId);
+            rejectedSubmission = submittedEditorDrafts.discard(message.requestId);
             restoreReservedPiEditorDraftSnapshot(message.requestId);
             pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not prepare the companion editor. Return to the originating Studio page for details.");
@@ -25798,6 +25867,12 @@
               persistReplJournalEntries();
             }
             renderReplViewIfActive({ force: true });
+          }
+          if (bufferSwitchingEnabled && pendingKind === "direct" && pendingRequestId
+              && typeof message.requestId === "string" && message.requestId !== pendingRequestId) {
+            if (rejectedSubmission) setStatus(typeof message.message === "string" ? message.message : "Steering request failed.", "error");
+            syncActionButtons();
+            return;
           }
           stickyStudioKind = null;
           finishTrackedStudioActivity(typeof message.requestId === "string" ? message.requestId : "");

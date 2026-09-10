@@ -9,7 +9,7 @@ function section(start, end) {
 }
 function harness() {
 	let next = 0, decide;
-	const c = { bufferRecoveryEnabled: true, editorContentGeneration: 0, origin: "original", sourceTextEl: { value: "saved snapshot" },
+	const c = { bufferRecoveryEnabled: true, bufferSwitchingEnabled: false, editorContentGeneration: 0, origin: "original", sourceTextEl: { value: "saved snapshot" },
 		sourceState: { path: "/original.md", label: "original.md" }, fileBackedBaselineText: "disk", fileBackedDiskRevision: "old-revision",
 		pendingSaveOperations: new Map(), pendingEditorRefresh: null, pendingRequestId: null, pendingKind: null, stickyStudioKind: null, uiBusy: false,
 		pendingPiEditorLoad: null, pendingPiEditorLink: null, pendingPiEditorClear: null,

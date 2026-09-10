@@ -22,7 +22,11 @@ See [ROADMAP.md](ROADMAP.md) for the active release plan: `0.9.60` is shipped; t
   - [x] Complete the first isolated hands-on trial with Oliver and settle the theme-aware selection styling. This was not a live-model trial or exhaustive manual validation of every file-open scenario.
   - [x] Independently review the switching increment, reproduce both findings, and apply the separately approved fixes: native held Enter cannot cross Return/Run; Follow-on catches queued responses on Prompt return without losing paused reading positions. Add failing unit/native regressions first and rerun both browser matrices.
   - [x] Approve the local prototype checkpoint; no push, installation switch or default activation.
-  - [ ] Arrange a separately approved live-model trial before expanding the UI. General creation/closing, more documents, context handoff and parked drafts remain separate work.
+  - [x] Complete the separately approved isolated live-model/hands-on trial; Oliver confirmed the round trip worked, then approved stopping it. Preserve its files, recovery and profile.
+  - [x] Implement the separately approved existing-buffer switching during direct Run: retain save/open/recovery and terminal-disposition locks, Prompt submission identity, global Stop, Follow/manual activity ownership and live Document previews. Stale failures cannot unlock a newer Run. 490 tests and new Brave/Chrome regressions pass; the bounded live Run/Stop check also passed.
+  - [x] Complete the fresh read-only Run-switching review, reproduce its two P2 findings, and apply the separately approved fixes: authoritative tree changes discard stale response queues; disabling activity following clears hidden ownership/latches, and explicit re-enabling can follow the same ongoing Run without stealing Document. 500 tests and focused native regressions pass; no new live-provider check or independent post-fix sign-off is claimed.
+  - [x] Approve the local Run-switching checkpoint, including its two review fixes; no push, installation switch or default activation.
+  - [ ] Decide separately on a fresh hands-on trial of that checkpoint before broader adoption. General creation/closing, more documents, context handoff and parked drafts remain separate work.
 
 Do not pull unrelated backlog items below into the quick release merely to fill the batch.
 
