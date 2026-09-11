@@ -58,6 +58,8 @@
       let bufferRecoveryNavigationConsent = null;
       let bufferBindingInProgress = false;
       let bufferSwitcherUi = null;
+      let studioSelectionAppendSourceActive = false;
+      let studioSelectionAppendOwnerGeneration = 0;
       let bufferViewRestore = null;
       let pendingBufferDocumentOpen = null;
       const bufferTransientStates = new Map(); // Page-only source epochs/terminal provenance; never recovered.
@@ -15623,6 +15625,116 @@
         selectStudioBuffer(state.activePromptId, { focusEditor: true });
         return false; // Returning is never a submission, including keyboard/steering paths.
       }
+      function studioBuffersCanAddSelection(ignoreModal = false) {
+        // A local append can prepare the next draft during an identified Run, but
+        // cannot cross an unsafe local operation or use an invisible selection.
+        return Boolean(bufferSwitchingEnabled && studioSelectionAppendSourceActive && studioBuffersCanSwitch(ignoreModal) && isStudioDocumentBufferView()
+          && editorView === "markdown" && !sourceTextEl.readOnly && !sourceTextEl.disabled && !pendingStudioBufferEditorView()
+          && !pendingBufferDocumentOpen && !pendingPiEditorLoad && !pendingPiEditorLink && !pendingPiEditorClear
+          && !pendingTerminalDocument && !activeFileImport
+          && ws && ws.readyState === WebSocket.OPEN && (wsState === "Ready" || (uiBusy && wsState === "Submitting"))
+          && (!agentBusyFromServer || uiBusy)
+          && Number.isSafeInteger(sourceTextEl.selectionStart) && Number.isSafeInteger(sourceTextEl.selectionEnd)
+          && sourceTextEl.selectionStart >= 0 && sourceTextEl.selectionEnd > sourceTextEl.selectionStart
+          && sourceTextEl.selectionEnd <= sourceTextEl.value.length);
+      }
+      function captureStudioSelectionAppend() {
+        if (!studioBuffersCanAddSelection()) {
+          setStatus("Select text in the Document editor after the current action finishes. Preview selections are not copied.", "warning");
+          return null;
+        }
+        const client = bufferRecoveryClient;
+        const captured = client.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferRecoveryExtra());
+        if (!captured.ok) { setStatus(captured.message, "warning"); return null; }
+        const state = client.snapshot(), source = getStudioSelectedBuffer(), prompt = state.buffers.find(b => b.id === state.activePromptId);
+        if (!source || !prompt) return null;
+        return { client, consent: captureRecoveryConsent(), selectionOwner: studioSelectionAppendOwnerGeneration, sourceId: source.id, sourceRevision: source.revision,
+          promptId: prompt.id, promptRevision: prompt.revision, start: sourceTextEl.selectionStart, end: sourceTextEl.selectionEnd };
+      }
+      function appendStudioSelectionToPrompt(intent) {
+        if (!intent || !studioBuffersCanAddSelection() || intent.selectionOwner !== studioSelectionAppendOwnerGeneration
+            || intent.client !== bufferRecoveryClient || !recoveryConsentIsCurrent(intent.consent)
+            || intent.start !== sourceTextEl.selectionStart || intent.end !== sourceTextEl.selectionEnd) {
+          setStatus("Selection or workspace changed. Nothing was added; select text in the Document editor and try again.", "warning");
+          return false;
+        }
+        const result = intent.client.appendSelectionToPrompt(intent);
+        if (!result.ok) { setStatus(result.message, "warning"); return false; }
+        // Keep Document's live editor/preview DOM, metadata and page-only owners.
+        // Ordinary recovery persistence is the only I/O; no Run, steering or Save.
+        syncStudioBufferSwitcher();
+        setStatus("Selection added to Prompt. Nothing sent.", "success");
+        return true;
+      }
+      function syncStudioSelectionAppendAction() {
+        const button = bufferSwitcherUi?.addSelection;
+        if (!button || bufferBindingInProgress) return;
+        button.disabled = !studioBuffersCanAddSelection(true);
+        button.title = "Append selected Document editor text to Prompt with its source label. Keeps both drafts; does not save or send. Preview selections are not used.";
+      }
+      function setupStudioSelectionAppendAction(button) {
+        const setSourceActive = active => {
+          if (studioSelectionAppendSourceActive !== active) studioSelectionAppendOwnerGeneration++;
+          studioSelectionAppendSourceActive = active;
+          syncStudioSelectionAppendAction();
+        };
+        const selectionKey = () => [sourceTextEl.selectionStart, sourceTextEl.selectionEnd, sourceTextEl.selectionDirection].join(":");
+        let observedSelection = selectionKey();
+        const observeSelection = (renewed = false) => {
+          const next = selectionKey();
+          // Equality at release cannot reveal A→B→A. Record observed range
+          // changes and explicit source gestures even while ownership stays true.
+          if (renewed || next !== observedSelection) studioSelectionAppendOwnerGeneration++;
+          observedSelection = next;
+        };
+        // A textarea keeps its range after blur. Do not mistake it for a later
+        // preview, iframe or other field's selection. Toolbar keyboard focus is OK.
+        const sourceSelection = (renewed = false) => {
+          observeSelection(renewed);
+          if (document.activeElement === sourceTextEl) setSourceActive(true);
+          else syncStudioSelectionAppendAction();
+        };
+        for (const type of ["select", "keyup", "mouseup"]) sourceTextEl.addEventListener(type, () => sourceSelection());
+        for (const type of ["focus", "pointerdown", "keydown"]) sourceTextEl.addEventListener(type, () => sourceSelection(true));
+        document.addEventListener("pointerdown", event => {
+          if (event.target !== sourceTextEl && event.target !== button) setSourceActive(false);
+        }, true);
+        document.addEventListener("focusin", event => {
+          if (event.target !== sourceTextEl && (event.target.matches?.("input, textarea, iframe, [contenteditable='true']")
+              || getPreviewSelectionPaneIdForNode(event.target))) setSourceActive(false);
+        });
+        // DOM selections can also collapse the textarea's range. Refresh even
+        // when no textarea select event fires; do not infer ownership from the
+        // DOM range (Chromium can retain its old anchor while selecting an input).
+        document.addEventListener("selectionchange", () => {
+          observeSelection();
+          syncStudioSelectionAppendAction(); // Observation alone cannot reclaim source ownership.
+        });
+        // Focus/selection inside a sandboxed preview iframe does not bubble.
+        window.addEventListener("blur", () => setSourceActive(false));
+        let intent = null, armed = false;
+        const arm = () => {
+          // Adopt the current range before capture so a delayed notification of
+          // that same range after button focus does not cancel a valid press.
+          observeSelection(); armed = true; intent = captureStudioSelectionAppend();
+        };
+        const clear = () => { armed = false; intent = null; };
+        button.addEventListener("pointerdown", event => { if (event.button === 0) arm(); });
+        button.addEventListener("pointercancel", () => { armed = true; intent = null; });
+        button.addEventListener("keydown", event => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          if (event.repeat) { event.preventDefault(); return; }
+          arm();
+        });
+        button.addEventListener("click", event => {
+          if (event.detail > 1) { clear(); return; }
+          // Native pointer/keyboard activation owns its original selection. An
+          // assistive click without those events captures at that explicit click.
+          const captured = armed ? intent : captureStudioSelectionAppend();
+          clear();
+          if (captured) appendStudioSelectionToPrompt(captured);
+        });
+      }
       function syncStudioBufferSwitcher() {
         // Binding is synchronous. Do not transiently disable (and blur) the clicked
         // tab midway through restoring the textarea's selection.
@@ -15645,6 +15757,7 @@
           button.tabIndex = entry?.id === state?.selectedBufferId ? 0 : -1;
         }
         bufferSwitcherUi.open.disabled = !studioBuffersCanOpenDocument(true);
+        syncStudioSelectionAppendAction();
         const active = state?.buffers.find(b => b.id === state.activePromptId);
         bufferSwitcherUi.target.textContent = active ? "Run: Prompt" + (active.sourceState.path ? " · " + basenameForStudioPath(active.sourceState.path) : "") : "Switcher waiting for recovery";
         bufferSwitcherUi.target.title = "One Pi conversation. Selecting Document never sends it or changes the active Prompt.";
@@ -15657,9 +15770,11 @@
         const prompt = makeButton("studioPromptBufferBtn", "Prompt"), documentButton = makeButton("studioDocumentBufferBtn", "Document");
         for (const button of [prompt, documentButton]) { button.setAttribute("role", "tab"); button.setAttribute("aria-controls", "sourceEditorWrap sourcePreview"); tabs.appendChild(button); }
         const open = makeButton("studioOpenDocumentBtn", "Open document…");
+        const addSelection = makeButton("studioAddSelectionBtn", "Add selection to Prompt");
         const target = document.createElement("span"); target.className = "studio-buffer-target";
-        strip.append(tabs, open, target); leftPaneEl.querySelector(".source-wrap").prepend(strip);
-        bufferSwitcherUi = { strip, prompt, document: documentButton, open, target };
+        strip.append(tabs, open, addSelection, target); leftPaneEl.querySelector(".source-wrap").prepend(strip);
+        bufferSwitcherUi = { strip, prompt, document: documentButton, open, addSelection, target };
+        setupStudioSelectionAppendAction(addSelection);
         if (clearWorkspaceBtn) { clearWorkspaceBtn.textContent = "Reset both buffers"; clearWorkspaceBtn.title = "Reset Prompt and Document together after confirmation. Saved files are not changed."; }
         const selectRole = role => { const entry = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.role === role); if (entry) selectStudioBuffer(entry.id); };
         prompt.addEventListener("click", () => selectRole("prompt")); documentButton.addEventListener("click", () => selectRole("document"));
@@ -15707,6 +15822,7 @@
         if (!target) return false;
         const operation = { consent: captureStudioBufferOpenConsent(), id: target.id, revision: target.revision };
         pendingBufferDocumentOpen = operation;
+        syncStudioSelectionAppendAction();
         const isCurrent = () => pendingBufferDocumentOpen === operation && client === bufferRecoveryClient
           && recoveryConsentIsCurrent(operation.consent) && studioPreviewInteractionIsCurrent(context)
           && client.snapshot().buffers.find(b => b.id === target.id)?.revision === target.revision;
@@ -15749,7 +15865,10 @@
           bindSelectedStudioBuffer({ focusEditor: true });
           setStatus(role === "prompt" ? "Loaded file text as the Prompt. Review it before Run; the Document was kept." : "Opened the separate Document. The Prompt was kept; nothing was sent.", "success");
           return true;
-        } finally { if (pendingBufferDocumentOpen === operation) pendingBufferDocumentOpen = null; }
+        } finally {
+          if (pendingBufferDocumentOpen === operation) pendingBufferDocumentOpen = null;
+          syncStudioSelectionAppendAction();
+        }
       }
       function syncBufferRecoveryMenuAccess() {
         if (!bufferRecoveryEnabled) return;
@@ -16545,6 +16664,7 @@
         updateEditorSelectionCommentUi();
         updateOutlineUi();
         scheduleWorkspacePersistence();
+        if (bufferSwitchingEnabled) syncStudioSelectionAppendAction();
       }
 
       function setRightView(nextView, options) {

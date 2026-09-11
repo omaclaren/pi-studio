@@ -1,6 +1,6 @@
 # Active Prompt and editable document buffers
 
-Status: the foundation and annotation-header compatibility checkpoints are locally committed. A subsequent **one Prompt ↔ one document prototype** is implemented and tested as a local, unreleased checkpoint. It requires both `PI_STUDIO_BUFFER_RECOVERY=1` and `PI_STUDIO_BUFFER_SWITCHING=1`, in a full editable workspace. A separately approved local checkpoint allows switching during an identified direct Run, with 500 passing tests and isolated Brave/Chrome regressions, including the separately approved fixes for stale branch responses and hidden activity-follow state. The earlier live-provider Run/Stop check predates these two fixes. The earlier Safari evidence covers the foundation, not this switcher. Installed Studio, package version and defaults remain unchanged. Updated 2026-09-10.
+Status: the foundation and annotation-header compatibility checkpoints are locally committed. A subsequent **one Prompt ↔ one document prototype** is implemented and tested as a local, unreleased checkpoint. It requires both `PI_STUDIO_BUFFER_RECOVERY=1` and `PI_STUDIO_BUFFER_SWITCHING=1`, in a full editable workspace. A separately approved local checkpoint allows switching during an identified direct Run, with 500 passing tests and isolated Brave/Chrome regressions, including the separately approved fixes for stale branch responses and hidden activity-follow state. That checkpoint subsequently passed an isolated live-model hands-on trial. A separately approved **Add selection to Prompt** slice is now a local, unreleased checkpoint: 522 tests and isolated, credential-free Brave/Chrome checks pass after an independent read-only review and separately approved fixes for literal-label boundaries and stale selection presses. No live-provider trial or independent post-fix sign-off is claimed for the selection slice. The earlier Safari evidence covers the foundation, not this switcher. Installed Studio, package version and defaults remain unchanged. Updated 2026-09-11.
 
 [ROADMAP.md](ROADMAP.md) owns release scope. `0.9.60` is released; implementation of the store/recovery foundation was approved afterward with the visible UI unchanged. Oliver approved a local checkpoint commit on `feature/buffer-recovery-foundation` on 2026-09-09, without release or default-activation authority. This note records the design and acceptance criteria, not a final wire protocol. The initial module/API boundaries and remaining integration work are in [shared/STUDIO_BUFFER_FOUNDATION.md](shared/STUDIO_BUFFER_FOUNDATION.md).
 
@@ -26,6 +26,18 @@ Oliver approved continuing from the visual guide with a small switching prototyp
 
 There is no create/close/park manager, automatic context copying, companion transfer, or non-destructive annotation parking yet. Editing Document does **not** add its edits to the Prompt when returning. Ordinary manual copy/paste remains available. The prototype tests the interaction and preservation boundary; its two-entry strip is not a settled design for many documents. Recovery remains temporary, not a durable draft library.
 
+## Local editor-selection slice
+
+**Add selection to Prompt** is an explicit action in the two-buffer strip, available for selected text in Document's editor. It appends the exact in-memory substring, with a literal source label and editor-line range, to the existing Prompt. It does not reread disk, trim the selection, replace the Prompt, switch buffers, save a file, or submit/steer a Run. Document stays selected. Normal recovery persistence still applies to the pair.
+
+The addition is ordinary editable Prompt text; it can be revised or removed there. Each buffer retains its own source, baseline/disk revision, metadata, annotation policy, resources and reading positions. No terminal fingerprint or submission authority comes from Document. During an identified connected Run, an addition prepares the **next** draft; it does not change the already submitted snapshot. Unsafe local work, recovery/modal ownership, unresolved terminal disposition and disconnected/reconnecting states block copying.
+
+The action captures pointer/keyboard intent and rechecks the source, selection owner/range, connection and destination revision. A stale press is not recaptured against a new buffer; held Enter/Space and double-click continuation do not duplicate the addition. Observed range/direction changes and new source focus, pointer or key gestures advance a monotonic owner, so selection A→B→A cannot revive a held press. Preview/iframe/other-field interactions retire the old editor selection as a copy source; select in the editor again. Keyboard focus on the action itself and delayed notifications of its unchanged captured range remain valid.
+
+Source labels are literal code spans, not links or new file grants. Boundary backticks are separated from the delimiters with paired padding, including names supplied through Import file copy, so filename syntax does not become rendered media or links. Line numbers refer to the selected **editor snapshot**, including unsaved edits. Only text is copied: relative resources still use Prompt's own resource context. Existing per-buffer and aggregate limits include the addition and its label; overflow is rejected without partial insertion or eviction. Recovery errors do not roll back or discard an accepted in-memory addition, and existing recovery warnings remain.
+
+Whole-document actions, preview selections, companion transfers, a new undo/history library and general tabs remain outside this slice.
+
 ## Intended interaction model
 
 An illustrative later tab strip:
@@ -47,10 +59,10 @@ Response history remains session-global. Restore the prompt's response position 
 
 ## Context transfer
 
-Two explicit actions:
+Two explicit actions in the wider design:
 
-- **Add selection to prompt:** append the exact selected text with its source label and line/range information where reliable.
-- **Copy document to prompt:** append a snapshot of the full visible document text, subject to a visible size limit. Despite the word Copy, this must not replace an existing prompt.
+- **Add selection to prompt:** the local slice above implements exact editor-selected text with its source label and editor-line range. Preview extraction is not implemented.
+- **Copy document to prompt** (future): append a snapshot of the full visible document text, subject to a visible size limit. Despite the word Copy, this must not replace an existing prompt.
 
 Use ordinary editable text rather than a new opaque attachment format. Capture the displayed in-memory text, including unsaved edits, rather than rereading disk. Detached sources need a useful label but must not invent a file path or line range. Source labels describe provenance; they do not imply that the copy remains synchronized or grant new file access.
 

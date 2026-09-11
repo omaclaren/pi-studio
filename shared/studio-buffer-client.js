@@ -245,6 +245,42 @@ export function createStudioBufferClient(options) {
 			if (result.ok) { saveLocal(store.snapshot()); publish(store.snapshot()); }
 			return result;
 		},
+		appendSelectionToPrompt({ sourceId, sourceRevision, promptId, promptRevision, start, end } = {}) {
+			if (!switching) return fail("switching-disabled", "Internal selection copying is not enabled in this view.");
+			if (disposed || !store || unrepresentedEditor) return fail("not-ready", "Keep the current editor visible until it can be represented safely in recovery.");
+			const state = store.snapshot(), source = store.get(sourceId), prompt = store.get(promptId);
+			if (state.selectedBufferId !== sourceId || source?.role !== "document" || source.revision !== sourceRevision
+				|| state.activePromptId !== promptId || prompt?.role !== "prompt" || prompt.revision !== promptRevision) {
+				return fail("stale-buffer", "The Document or Prompt changed. Nothing was added; select and retry explicitly.");
+			}
+			if (source.view.editorView !== "markdown" || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+				|| start < 0 || end <= start || end > source.text.length || start !== source.view.selectionStart || end !== source.view.selectionEnd) {
+				return fail("invalid-selection", "Select text in the Document editor. Hidden or stale selections were not copied.");
+			}
+			// Labels are provenance, not links or resource/terminal authority. Keep
+			// arbitrary filenames/labels literal, even with Markdown or backticks.
+			const name = (source.sourceState.path?.split(/[/\\]/).at(-1) || source.sourceState.label || "Document");
+			const label = JSON.stringify(name).slice(1, -1).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+			const ticks = "`".repeat(1 + Math.max(0, ...(label.match(/`+/g) || []).map(run => run.length)));
+			// Separate delimiter runs from boundary backticks. Markdown removes
+			// this paired padding while keeping the label's own backticks literal.
+			const padding = label.startsWith("`") || label.endsWith("`") ? " " : "";
+			const literalLabel = ticks + padding + label + padding + ticks;
+			const lineAt = offset => {
+				let line = 1;
+				for (const match of source.text.matchAll(/\r\n|\r|\n/g)) { if (match.index + match[0].length > offset) break; line++; }
+				return line;
+			};
+			const first = lineAt(start), last = lineAt(end - 1);
+			const header = "From " + literalLabel + " (editor " + (first === last ? "line " + first : "lines " + first + "–" + last) + ", snapshot):\n\n";
+			const selection = source.text.slice(start, end);
+			// Text-only update: never use replace(), select(), copy source metadata,
+			// move views/carets or confer a submitted/terminal-cleanup baseline.
+			const result = store.update(promptId, promptRevision, { text: prompt.text + (prompt.text ? "\n\n" : "") + header + selection });
+			if (!result.ok) return result; // Strict per-buffer/aggregate bounds; no partial insertion.
+			saveLocal(store.snapshot()); publish(store.snapshot());
+			return { ok: true, characters: selection.length };
+		},
 		persist(editor, baselineText, extra) {
 			const result = capture(editor, baselineText, extra);
 			if (!result.ok) { issue("capture", result); return result; }
