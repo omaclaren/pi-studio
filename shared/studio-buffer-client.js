@@ -1,9 +1,19 @@
-import { createStudioBuffer, createStudioBufferStore, validateStudioBufferWorkspace } from "./studio-buffer-store.js";
+import { STUDIO_BUFFER_LIMITS, createStudioBuffer, createStudioBufferStore, validateStudioBufferWorkspace } from "./studio-buffer-store.js";
 import { createStudioBufferRecoveryStorage, migrateStudioWorkspaceV1 } from "./studio-buffer-recovery.js";
 import { isStudioPromptDocumentBufferState, needsStudioLegacyPromptChoice, prepareStudioPromptDocumentWorkspace } from "./studio-buffer-switching.js";
 
 const fail = (reason, message) => ({ ok: false, reason, message });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+function literalStudioBufferLabel(source) {
+	// Provenance is not a link or a resource/terminal grant. Separate boundary
+	// backticks from delimiters; Markdown removes the paired padding.
+	const name = source.sourceState.path?.split(/[/\\]/).at(-1) || source.sourceState.label || "Document";
+	const label = JSON.stringify(name).slice(1, -1).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+	const ticks = "`".repeat(1 + Math.max(0, ...(label.match(/`+/g) || []).map(run => run.length)));
+	const padding = label.startsWith("`") || label.endsWith("`") ? " " : "";
+	return ticks + padding + label + padding + ticks;
+}
 
 export function projectStudioBufferEditor(state) {
 	const b = state.buffers.find((entry) => entry.id === state.selectedBufferId);
@@ -124,6 +134,21 @@ export function createStudioBufferClient(options) {
 		const result = store.update(current.id, current.revision, patch);
 		unrepresentedEditor = !result.ok;
 		return result;
+	}
+	function documentAppendPlan() {
+		if (!switching) return fail("switching-disabled", "Internal document copying is not enabled in this view.");
+		if (disposed || !store || unrepresentedEditor) return fail("not-ready", "Keep the current editor visible until it can be represented safely in recovery.");
+		const state = store.snapshot(), source = store.get(state.selectedBufferId), prompt = store.get(state.activePromptId);
+		if (source?.role !== "document" || prompt?.role !== "prompt") return fail("wrong-buffer", "Select Document to add its full editor text to Prompt.");
+		if (source.view.editorView !== "markdown") return fail("wrong-view", "Switch Document to Editor to add its source text. Preview content is not copied.");
+		if (!source.text.length) return fail("empty-document", "Document is empty. Nothing to add.");
+		const separator = prompt.text ? "\n\n" : "", header = "From " + literalStudioBufferLabel(source) + " (whole document, snapshot):\n\n";
+		const addedCharacters = separator.length + header.length + source.text.length;
+		const total = state.buffers.reduce((sum, b) => sum + b.text.length + (b.baselineText?.length || 0), 0);
+		const availableCharacters = Math.min(STUDIO_BUFFER_LIMITS.textChars - prompt.text.length, STUDIO_BUFFER_LIMITS.totalTextChars - total);
+		const size = { characters: source.text.length, addedCharacters, availableCharacters };
+		if (addedCharacters > availableCharacters) return { ...size, ...fail("limit-exceeded", "The full document and label exceed the remaining capacity. Nothing was added or truncated.") };
+		return { ok: true, ...size, source, prompt, separator, header };
 	}
 	return Object.freeze({
 		async initialize(initialEditor, baselineText, isStillCurrent = () => true) {
@@ -257,15 +282,7 @@ export function createStudioBufferClient(options) {
 				|| start < 0 || end <= start || end > source.text.length || start !== source.view.selectionStart || end !== source.view.selectionEnd) {
 				return fail("invalid-selection", "Select text in the Document editor. Hidden or stale selections were not copied.");
 			}
-			// Labels are provenance, not links or resource/terminal authority. Keep
-			// arbitrary filenames/labels literal, even with Markdown or backticks.
-			const name = (source.sourceState.path?.split(/[/\\]/).at(-1) || source.sourceState.label || "Document");
-			const label = JSON.stringify(name).slice(1, -1).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
-			const ticks = "`".repeat(1 + Math.max(0, ...(label.match(/`+/g) || []).map(run => run.length)));
-			// Separate delimiter runs from boundary backticks. Markdown removes
-			// this paired padding while keeping the label's own backticks literal.
-			const padding = label.startsWith("`") || label.endsWith("`") ? " " : "";
-			const literalLabel = ticks + padding + label + padding + ticks;
+			const literalLabel = literalStudioBufferLabel(source);
 			const lineAt = offset => {
 				let line = 1;
 				for (const match of source.text.matchAll(/\r\n|\r|\n/g)) { if (match.index + match[0].length > offset) break; line++; }
@@ -280,6 +297,27 @@ export function createStudioBufferClient(options) {
 			if (!result.ok) return result; // Strict per-buffer/aggregate bounds; no partial insertion.
 			saveLocal(store.snapshot()); publish(store.snapshot());
 			return { ok: true, characters: selection.length };
+		},
+		documentAppendInfo() {
+			// Read-only size/eligibility check; never capture or expose source text.
+			const { source, prompt, separator, header, ...info } = documentAppendPlan();
+			return info;
+		},
+		appendDocumentToPrompt(intent) {
+			const plan = documentAppendPlan();
+			if (!plan.ok) return plan;
+			const { source, prompt, separator, header } = plan;
+			if (!intent || intent.sourceId !== source.id || intent.sourceRevision !== source.revision
+				|| intent.promptId !== prompt.id || intent.promptRevision !== prompt.revision) {
+				return fail("stale-buffer", "The Document or Prompt changed. Nothing was added; retry explicitly.");
+			}
+			// Separate from selection copying: no temporary range, disk read,
+			// source metadata adoption, binding or submission. Store bounds recheck
+			// the complete resulting workspace before its single text-only update.
+			const result = store.update(prompt.id, prompt.revision, { text: prompt.text + separator + header + source.text });
+			if (!result.ok) return result;
+			saveLocal(store.snapshot()); publish(store.snapshot());
+			return { ok: true, characters: plan.characters, addedCharacters: plan.addedCharacters };
 		},
 		persist(editor, baselineText, extra) {
 			const result = capture(editor, baselineText, extra);

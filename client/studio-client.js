@@ -60,6 +60,7 @@
       let bufferSwitcherUi = null;
       let studioSelectionAppendSourceActive = false;
       let studioSelectionAppendOwnerGeneration = 0;
+      let studioDocumentAppendOwnerGeneration = 0;
       let bufferViewRestore = null;
       let pendingBufferDocumentOpen = null;
       const bufferTransientStates = new Map(); // Page-only source epochs/terminal provenance; never recovered.
@@ -15735,6 +15736,114 @@
           if (captured) appendStudioSelectionToPrompt(captured);
         });
       }
+      function studioDocumentAppendAvailability(ignoreModal = false) {
+        const unavailable = message => ({ ok: false, message });
+        if (!bufferSwitchingEnabled || !bufferRecoveryClient) return unavailable("Document copying is not enabled in this workspace.");
+        if (!isStudioDocumentBufferView()) return unavailable("Select Document to add its full editor text to Prompt.");
+        if (editorView !== "markdown") return unavailable("Switch Document to Editor to add its source text. Preview content is not copied.");
+        if (!studioBuffersCanSwitch(ignoreModal) || sourceTextEl.readOnly || sourceTextEl.disabled || pendingStudioBufferEditorView()
+            || pendingBufferDocumentOpen || pendingPiEditorLoad || pendingPiEditorLink || pendingPiEditorClear || pendingTerminalDocument || activeFileImport
+            || !ws || ws.readyState !== WebSocket.OPEN || !(wsState === "Ready" || (uiBusy && wsState === "Submitting"))
+            || (agentBusyFromServer && !uiBusy)) {
+          return unavailable("Wait for the current action or connection before adding Document. Both drafts are kept.");
+        }
+        if (getStudioSelectedBuffer()?.text !== sourceTextEl.value) return unavailable("Wait until the current Document editor can be represented safely in recovery.");
+        return bufferRecoveryClient.documentAppendInfo();
+      }
+      function studioBuffersCanAddDocument(ignoreModal = false) {
+        return studioDocumentAppendAvailability(ignoreModal).ok;
+      }
+      function captureStudioDocumentAppend() {
+        const available = studioDocumentAppendAvailability();
+        if (!available.ok) { setStatus(available.message, "warning"); return null; }
+        const client = bufferRecoveryClient;
+        const captured = client.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferRecoveryExtra());
+        if (!captured.ok) { setStatus(captured.message, "warning"); return null; }
+        const state = client.snapshot(), source = getStudioSelectedBuffer(), prompt = state.buffers.find(b => b.id === state.activePromptId);
+        if (!source || !prompt) return null;
+        return { client, consent: captureRecoveryConsent(), ownerGeneration: studioDocumentAppendOwnerGeneration,
+          sourceId: source.id, sourceRevision: source.revision, promptId: prompt.id, promptRevision: prompt.revision };
+      }
+      function appendStudioDocumentToPrompt(intent) {
+        if (!intent || intent.client !== bufferRecoveryClient || intent.ownerGeneration !== studioDocumentAppendOwnerGeneration
+            || !studioBuffersCanAddDocument() || !recoveryConsentIsCurrent(intent.consent)) {
+          setStatus("Document, Prompt or interaction changed. Nothing was added; try again explicitly.", "warning");
+          return false;
+        }
+        const result = intent.client.appendDocumentToPrompt(intent);
+        if (!result.ok) { setStatus(result.message, "warning"); return false; }
+        syncStudioBufferSwitcher();
+        setStatus("Document added to Prompt. Nothing sent.", "success");
+        return true;
+      }
+      function syncStudioDocumentAppendAction() {
+        if (!bufferSwitcherUi?.addDocument || bufferBindingInProgress) return;
+        const available = studioDocumentAppendAvailability(true), button = bufferSwitcherUi.addDocument;
+        button.disabled = !available.ok;
+        button.title = available.ok ? "Append the full in-memory Document editor text, including unsaved edits. Keeps both drafts; does not save or send." : available.message;
+        const size = Number.isSafeInteger(available.addedCharacters) && Number.isSafeInteger(available.availableCharacters)
+          ? "Document: " + available.addedCharacters.toLocaleString() + " to add / " + available.availableCharacters.toLocaleString() + " available (UTF-16 units, label included)."
+          : "";
+        const description = size + (available.ok ? "" : (size ? " " : "") + available.message);
+        if (bufferSwitcherUi.documentInfo.textContent !== description) bufferSwitcherUi.documentInfo.textContent = description;
+      }
+      function setupStudioDocumentAppendAction(button) {
+        // Keep native pointer and keyboard continuations separate. Undefined
+        // means no pending gesture; null is a retired gesture, not fresh consent.
+        // A click-only assistive activation must not consume a cancelled pointer
+        // lease, nor let its later native click borrow that fresh activation.
+        let pointerIntent, keyboardIntent, keyboardKey = null, keyboardGeneration = 0;
+        const retire = () => {
+          studioDocumentAppendOwnerGeneration++;
+          if (pointerIntent !== undefined) pointerIntent = null;
+          if (keyboardIntent !== undefined) keyboardIntent = null;
+        };
+        // Full-document intent is independent of the selection action's range
+        // owner. But a held press cannot survive intervening interactions, even
+        // if edit/undo, focus or a buffer round trip returns to equal final state.
+        for (const type of ["pointerdown", "pointerup", "keydown", "focusin"]) document.addEventListener(type, event => {
+          if (event.target !== button) retire();
+        }, true);
+        document.addEventListener("input", retire, true);
+        window.addEventListener("blur", retire);
+        document.addEventListener("keyup", event => {
+          if (event.key !== keyboardKey) return;
+          const generation = keyboardGeneration;
+          // Keep the retired lease through keyup's native click. That click may
+          // also be cancelled by the browser, so do not retain it for a later
+          // assistive activation. A newer press, even a refused one, owns itself.
+          window.setTimeout(() => {
+            if (keyboardGeneration === generation) { keyboardIntent = undefined; keyboardKey = null; }
+          }, 0);
+        }, true);
+        button.addEventListener("pointerdown", event => {
+          if (event.button !== 0) return;
+          if (keyboardIntent !== undefined) keyboardIntent = null;
+          pointerIntent = captureStudioDocumentAppend();
+        });
+        button.addEventListener("pointercancel", () => { pointerIntent = null; retire(); });
+        button.addEventListener("keydown", event => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          if (event.repeat) { event.preventDefault(); return; }
+          if (pointerIntent !== undefined) pointerIntent = null;
+          keyboardKey = event.key; keyboardGeneration++;
+          keyboardIntent = captureStudioDocumentAppend();
+        });
+        button.addEventListener("click", event => {
+          if (event.detail > 1) { pointerIntent = undefined; return; }
+          const keyboard = event.detail === 0;
+          const pending = keyboard ? keyboardIntent : pointerIntent;
+          const captured = pending === undefined ? captureStudioDocumentAppend() : pending;
+          if (keyboard) {
+            keyboardIntent = undefined;
+            if (pointerIntent !== undefined) pointerIntent = null;
+          } else {
+            pointerIntent = undefined;
+            if (keyboardIntent !== undefined) keyboardIntent = null;
+          }
+          if (captured) appendStudioDocumentToPrompt(captured);
+        });
+      }
       function syncStudioBufferSwitcher() {
         // Binding is synchronous. Do not transiently disable (and blur) the clicked
         // tab midway through restoring the textarea's selection.
@@ -15758,6 +15867,7 @@
         }
         bufferSwitcherUi.open.disabled = !studioBuffersCanOpenDocument(true);
         syncStudioSelectionAppendAction();
+        syncStudioDocumentAppendAction();
         const active = state?.buffers.find(b => b.id === state.activePromptId);
         bufferSwitcherUi.target.textContent = active ? "Run: Prompt" + (active.sourceState.path ? " · " + basenameForStudioPath(active.sourceState.path) : "") : "Switcher waiting for recovery";
         bufferSwitcherUi.target.title = "One Pi conversation. Selecting Document never sends it or changes the active Prompt.";
@@ -15771,10 +15881,14 @@
         for (const button of [prompt, documentButton]) { button.setAttribute("role", "tab"); button.setAttribute("aria-controls", "sourceEditorWrap sourcePreview"); tabs.appendChild(button); }
         const open = makeButton("studioOpenDocumentBtn", "Open document…");
         const addSelection = makeButton("studioAddSelectionBtn", "Add selection to Prompt");
+        const addDocument = makeButton("studioAddDocumentBtn", "Add document to Prompt");
+        const documentInfo = document.createElement("span"); documentInfo.className = "studio-buffer-document-info"; documentInfo.id = "studioAddDocumentInfo";
+        addDocument.setAttribute("aria-describedby", documentInfo.id);
         const target = document.createElement("span"); target.className = "studio-buffer-target";
-        strip.append(tabs, open, addSelection, target); leftPaneEl.querySelector(".source-wrap").prepend(strip);
-        bufferSwitcherUi = { strip, prompt, document: documentButton, open, addSelection, target };
+        strip.append(tabs, open, addSelection, addDocument, documentInfo, target); leftPaneEl.querySelector(".source-wrap").prepend(strip);
+        bufferSwitcherUi = { strip, prompt, document: documentButton, open, addSelection, addDocument, documentInfo, target };
         setupStudioSelectionAppendAction(addSelection);
+        setupStudioDocumentAppendAction(addDocument);
         if (clearWorkspaceBtn) { clearWorkspaceBtn.textContent = "Reset both buffers"; clearWorkspaceBtn.title = "Reset Prompt and Document together after confirmation. Saved files are not changed."; }
         const selectRole = role => { const entry = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.role === role); if (entry) selectStudioBuffer(entry.id); };
         prompt.addEventListener("click", () => selectRole("prompt")); documentButton.addEventListener("click", () => selectRole("document"));
@@ -15823,6 +15937,7 @@
         const operation = { consent: captureStudioBufferOpenConsent(), id: target.id, revision: target.revision };
         pendingBufferDocumentOpen = operation;
         syncStudioSelectionAppendAction();
+        syncStudioDocumentAppendAction();
         const isCurrent = () => pendingBufferDocumentOpen === operation && client === bufferRecoveryClient
           && recoveryConsentIsCurrent(operation.consent) && studioPreviewInteractionIsCurrent(context)
           && client.snapshot().buffers.find(b => b.id === target.id)?.revision === target.revision;
@@ -15868,6 +15983,7 @@
         } finally {
           if (pendingBufferDocumentOpen === operation) pendingBufferDocumentOpen = null;
           syncStudioSelectionAppendAction();
+          syncStudioDocumentAppendAction();
         }
       }
       function syncBufferRecoveryMenuAccess() {

@@ -363,7 +363,7 @@ test("file opening checks captured origin, destination revision and authorized p
     let destination = target;
     const c = context({ uiBusy: false, studioBuffersCanSwitch: () => true, bufferRecoveryClient: { capture: () => ({ ok: true }), snapshot: () => ({ buffers: [destination] }), replace: () => calls.push("replace") },
       buildWorkspacePersistencePayload: () => ({}), fileBackedBaselineText: null, bufferRecoveryExtra: () => ({}), captureStudioBufferOpenConsent: () => ({}),
-      recoveryConsentIsCurrent: () => current, studioPreviewInteractionIsCurrent: () => previewCurrent, pendingBufferDocumentOpen: null, syncStudioSelectionAppendAction: () => {},
+      recoveryConsentIsCurrent: () => current, studioPreviewInteractionIsCurrent: () => previewCurrent, pendingBufferDocumentOpen: null, syncStudioSelectionAppendAction: () => {}, syncStudioDocumentAppendAction: () => {},
       confirmPreviewOfficeConversion: async () => true, fetchPreviewLocalLink: () => new Promise(resolve => { resolveFetch = resolve; }), setStatus: () => {} });
     load(c, "function studioBuffersCanOpenDocument(", "function studioBufferScrollPosition(");
     load(c, "async function openStudioBufferDocument(", "function syncBufferRecoveryMenuAccess()");

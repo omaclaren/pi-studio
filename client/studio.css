@@ -722,6 +722,14 @@
       }
     }
 
+    .studio-buffer-document-info {
+      flex: 1 1 100%;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
     .studio-buffer-target {
       flex: 1 1 100%;
       min-width: 0;
