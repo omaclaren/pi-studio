@@ -27124,32 +27124,78 @@
         void loadSelectedResponseIntoEditor({ annotate: true });
       });
 
-      loadCritiqueNotesBtn.addEventListener("click", () => {
+      async function loadSelectedCritiqueIntoEditor(mode) {
+        if (mode !== "notes" && mode !== "full") return false;
+        if (isEditorOnlyMode || isWatchedFilePreview || uiBusy || responseReplacementPending
+          || studioModalBlocksDraftAction() || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
         if (!latestResponseIsStructuredCritique || !latestResponseMarkdown.trim()) {
           setStatus("Latest response is not a structured critique response.", "warning");
-          return;
+          return false;
         }
-
-        const notes = buildCritiqueNotesMarkdown(latestResponseMarkdown);
-        if (!notes) {
+        if (rightView === "editor-quarto-preview") {
+          setStatus("Choose another right-pane view before loading critique text without switching views.", "warning");
+          return false;
+        }
+        const responseText = latestResponseMarkdown;
+        const editorText = mode === "notes" ? buildCritiqueNotesMarkdown(responseText) : responseText;
+        if (!editorText) {
           setStatus("No critique notes (Assessment/Critiques) found in latest response.", "warning");
-          return;
+          return false;
         }
+        const label = mode === "notes" ? "critique notes" : "full critique";
+        const currentEditorText = String(sourceTextEl.value || "");
+        const replacementConsent = captureEditorConsent();
+        const sourceKey = getEditorDraftSourceKey();
+        const responseIndex = responseHistoryIndex;
+        const responseTimestamp = latestResponseTimestamp;
+        const diskRevision = fileBackedDiskRevision;
+        // Match ordinary response loading: accepted raw text is not permission
+        // to discard later edits, and sending file text never makes it saved.
+        const needsConfirmation = editorDraftHelpers.needsDraftReplacementConfirmation({
+          text: currentEditorText,
+          responseText: editorText,
+          fileBacked: hasRefreshableFilePath(),
+          dirty: editorDiffersFromFileBackedBaseline(),
+          submitted: submittedEditorDrafts.matches(currentEditorText, sourceKey),
+        });
+        if (needsConfirmation) {
+          responseReplacementPending = true;
+          let confirmed;
+          try {
+            confirmed = await requestStudioConfirmation(
+              "Replace the current editor text with the selected " + label + "? Unsubmitted edits or unsaved file changes will be lost. Cancel to save or copy them first.",
+              { title: "Replace editor text?", confirmLabel: "Replace", destructive: true },
+            );
+          } finally {
+            responseReplacementPending = false;
+          }
+          if (!confirmed) {
+            setStatus("Kept the current editor text.");
+            return false;
+          }
+          // Compare the whole selected critique, even when its notes excerpt
+          // happens to be unchanged in a newer response.
+          if (!editorConsentIsCurrent(replacementConsent) || uiBusy || studioModalBlocksDraftAction()
+            || currentEditorText !== sourceTextEl.value || sourceKey !== getEditorDraftSourceKey()
+            || diskRevision !== fileBackedDiskRevision || responseText !== latestResponseMarkdown
+            || responseIndex !== responseHistoryIndex || responseTimestamp !== latestResponseTimestamp
+            || !latestResponseIsStructuredCritique || rightView === "editor-quarto-preview") {
+            setStatus("Editor, critique, or view changed while confirmation was open. Kept the editor text; try again.", "warning");
+            return false;
+          }
+        }
+        setEditorText(editorText, { preserveScroll: false, preserveSelection: false });
+        setSourceState({ source: "blank", label: label, path: null });
+        setStatus("Loaded " + label + " into editor.", "success");
+        return true;
+      }
 
-        setEditorText(notes, { preserveScroll: false, preserveSelection: false });
-        setSourceState({ source: "blank", label: "critique notes", path: null });
-        setStatus("Loaded critique notes into editor.", "success");
+      loadCritiqueNotesBtn.addEventListener("click", () => {
+        void loadSelectedCritiqueIntoEditor("notes");
       });
 
       loadCritiqueFullBtn.addEventListener("click", () => {
-        if (!latestResponseIsStructuredCritique || !latestResponseMarkdown.trim()) {
-          setStatus("Latest response is not a structured critique response.", "warning");
-          return;
-        }
-
-        setEditorText(latestResponseMarkdown, { preserveScroll: false, preserveSelection: false });
-        setSourceState({ source: "blank", label: "full critique", path: null });
-        setStatus("Loaded full critique into editor.", "success");
+        void loadSelectedCritiqueIntoEditor("full");
       });
 
       copyResponseBtn.addEventListener("click", async () => {
