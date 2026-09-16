@@ -74,6 +74,12 @@ Tools such as [`pi-nvim-context`](https://github.com/omaclaren/pi-nvim-context) 
 
 When Pi accepts **Run editor text**, Studio clears the linked terminal draft only if its current fingerprint and byte length still match those captured at load time. Terminal typing, additional Neovim context, or another client changing the draft causes Studio to preserve it silently. A failed or rejected run also leaves it intact. **Send current text to Pi editor** establishes the same safe link, while **Clear Pi editor text…** provides a separate confirmed, unconditional cleanup action. Studio never clears terminal history or its own editor through this handoff.
 
+### Experimental Prompt header behaviour
+
+In the local, unreleased Prompt/Document prototype (`PI_STUDIO_BUFFER_RECOVERY=1` and `PI_STUDIO_BUFFER_SWITCHING=1`, full editable workspace), Prompt's **Annotation header** button adds or removes only the recognised leading explanation. It does not add an `--- end annotations ---` marker or remove any existing end markers. All text following the header—including copied headers, source labels and whitespace—stays unchanged. The header's source metadata, syntax hint and precedence wording are unchanged.
+
+Use an ordinary heading such as `## Notes` if you want to separate additional material, or move an excerpt into `[an: …]` manually. Studio does not insert/manage Notes sections or remember reply ranges; imported or recovered text needs no section re-selection. Selection/document copying and the Prompt's existing inline-annotation policy are unchanged. Default/foundation-only views, Document and companion editors retain their existing header/footer behaviour.
+
 ## Commands
 
 | Command | Description |

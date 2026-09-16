@@ -26513,31 +26513,42 @@
         return fenceChar ? source : source.slice(0, footer.index);
       }
 
-      function stripAnnotationHeader(text) {
+      function stripAnnotationHeader(text, { preserveBody = false } = {}) {
         const source = String(text || "");
         const header = readAnnotationHeader(source);
         if (!header) return { hadHeader: false, body: source };
         const body = source.slice(header.length);
-        // The minimal Neovim block has no footer contract; everything after its divider is body.
-        return { hadHeader: true, body: header.hasSource ? stripAnnotationBoundaryMarker(body) : body };
+        // Prompt's opt-in preamble owns only the leading block, never a body/footer.
+        // Minimal Neovim headers also have no footer contract in any view.
+        return { hadHeader: true, body: header.hasSource && !preserveBody ? stripAnnotationBoundaryMarker(body) : body };
+      }
+
+      function usesPromptAnnotationHeaderOnly() {
+        return bufferSwitchingEnabled && getStudioSelectedBuffer()?.role === "prompt";
       }
 
       function updateAnnotatedReplyHeaderButton() {
         if (!insertHeaderBtn) return;
+        const headerOnly = usesPromptAnnotationHeaderOnly();
         const hasHeader = stripAnnotationHeader(sourceTextEl.value).hadHeader;
         if (hasHeader) {
           insertHeaderBtn.textContent = "Annotation header: On";
-          insertHeaderBtn.title = "Remove annotated-reply protocol header while keeping body text.";
+          insertHeaderBtn.title = headerOnly
+            ? "Remove only the leading annotation header; keep all following text, including existing end markers."
+            : "Remove annotated-reply protocol header while keeping body text.";
           syncStudioUiRefreshSummaries();
           return;
         }
         insertHeaderBtn.textContent = "Annotation header: Off";
-        insertHeaderBtn.title = "Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).";
+        insertHeaderBtn.title = headerOnly
+          ? "Insert the annotation explanation at the top of Prompt. No end marker is added."
+          : "Insert annotated-reply protocol header (source metadata, [an: ...] syntax hint, precedence note, and end marker).";
         syncStudioUiRefreshSummaries();
       }
 
       function toggleAnnotatedReplyHeader() {
-        const stripped = stripAnnotationHeader(sourceTextEl.value);
+        const headerOnly = usesPromptAnnotationHeaderOnly();
+        const stripped = stripAnnotationHeader(sourceTextEl.value, { preserveBody: headerOnly });
 
         if (stripped.hadHeader) {
           const updated = stripped.body;
@@ -26551,10 +26562,15 @@
           setStatus("Unrecognised annotation header. Kept the editor unchanged; edit the header manually.", "warning");
           return;
         }
-        // Preserve unrelated trailing markers. Omit our footer when it would fall inside an unclosed fence.
-        const framedBody = stripped.body + "\n\n--- end annotations ---\n\n";
-        const updated = buildAnnotationHeader()
-          + (stripAnnotationBoundaryMarker(framedBody) === stripped.body ? framedBody : stripped.body);
+        // Prompt uses a leading explanation, not a managed reply section. Notes,
+        // copied headers and old end markers stay literal, including after reload.
+        let body = stripped.body;
+        if (!headerOnly) {
+          // Preserve legacy behaviour elsewhere, including unclosed fences.
+          const framedBody = body + "\n\n--- end annotations ---\n\n";
+          if (stripAnnotationBoundaryMarker(framedBody) === body) body = framedBody;
+        }
+        const updated = buildAnnotationHeader() + body;
         if (isTextEquivalent(sourceTextEl.value, updated)) {
           setStatus("Annotated reply header already present.");
           return;
