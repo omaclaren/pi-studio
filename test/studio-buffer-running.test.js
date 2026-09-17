@@ -135,6 +135,7 @@ test("recovery choices/reset stay locked throughout model activity, not just loc
 function historyHarness(switching, document) {
   const rendered = [];
   const c = vm.createContext({ bufferSwitchingEnabled: switching, isStudioDocumentBufferView: () => document,
+    bufferRecoveryClient: { snapshot: () => ({ activePromptId: "prompt" }) }, bufferTransientStates: new Map(),
     responseHistory: [{ id: "r1", markdown: "R1" }], responseHistoryIndex: 0, normalizeHistoryItem: item => item,
     normalizeHistoryKind: value => value || "annotation", normalizeForCompare: value => String(value || "").trim(),
     getSelectedHistoryItem: () => c.responseHistory[c.responseHistoryIndex], updateHistoryControls() {},

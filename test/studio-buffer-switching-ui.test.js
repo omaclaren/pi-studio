@@ -141,14 +141,18 @@ function bindingHarness({ role = "prompt", follow = true, queued = true, history
       selectionStart: 2, selectionEnd: 4, selectionDirection: "backward", scrollTop: 70, previewScrollTop: 90, rightScrollTop: 480 } };
   const pending = { markdown: "R2", kind: "direct", timestamp: 2000 };
   const c = context({ getStudioSelectedBuffer: () => entry, bufferBindingInProgress: false, bufferViewRestore: null,
+    bufferSwitchingEnabled: true, bufferRecoveryClient: { snapshot: () => ({ activePromptId: "prompt" }) },
+    isStudioDocumentBufferView: () => entry.role === "document", getSelectedHistoryItem: () => c.responseHistory[c.responseHistoryIndex] || null,
+    linkedPiEditorDraftSnapshot: null, activityTrackingRequestId: "", activityTrackingOwnsWorkingView: false,
     clearEditorAsyncOperations: () => {}, fileBrowserLoadNonce: 0, fileBrowserState: {}, resourceDirInput: null,
     bufferTransientStates: new Map([[role, { sourceGeneration: 1, linkedPiEditorDraftSnapshot: null }]]), editorSourceGeneration: 1,
     activityTrackingEnabled: true, uiBusy: false, pendingRequestId: null,
     normalizePiEditorDraftSnapshot: value => value, setEditorText: () => {}, setSourceState: () => {}, setEditorLanguage: () => {},
     setAnnotationsEnabled: () => {}, initialAnnotationsEnabled: false, followLatest: false, followSelect: { value: "off" },
-    responseHistory: history ? [{ markdown: "R1" }, { markdown: "R2" }] : [], responseHistoryIndex: 0,
+    responseHistory: history ? [{ id: "r1", markdown: "R1" }, { id: "r2", markdown: "R2" }] : [], responseHistoryIndex: 0,
     queuedLatestResponse: queued ? pending : null,
-    applySelectedHistoryItem: options => { calls.push({ type: "history", index: c.responseHistoryIndex, reset: options.resetScroll }); return true; },
+    applySelectedHistoryItem: options => { calls.push({ type: "history", index: c.responseHistoryIndex, reset: options.resetScroll,
+      ...(options.render === false ? { render: false } : {}) }); return true; },
     applyLatestPayload: (payload, options) => { calls.push({ type: "payload", payload, reset: options.resetScroll }); return applyPayload; },
     syncTraceForSelectedHistoryItem: () => calls.push({ type: "trace" }),
     setEditorView: view => { c.editorView = view; }, setRightView: view => { c.rightView = view; },
@@ -185,6 +189,132 @@ test("Follow off retains both the previous response reading position and the que
   assert.equal(f.c.queuedLatestResponse, f.pending);
   assert.deepEqual(f.calls, [{ type: "history", index: 0, reset: false }, { type: "trace" }]);
   assert.equal(f.c.bufferViewRestore.right, 480);
+});
+
+function historyBindingHarness({ follow = false, rightView = "preview" } = {}) {
+  const f = bindingHarness({ follow, rightView, queued: false });
+  f.c.responseHistory = Array.from({ length: 30 }, (_, i) => ({ id: "r" + (i + 1), markdown: "R" + (i + 1) }));
+  f.c.responseHistoryIndex = f.entry.view.responseHistoryIndex = 9;
+  Object.assign(f.c, { normalizeHistoryItem: item => item, updateHistoryControls() {},
+    clearActiveResponseView: options => f.calls.push({ type: "clear", render: options.render }),
+    selectHistoryIndex: index => { f.c.responseHistoryIndex = index; return true; } });
+  load(f.c, "function captureStudioBufferTransientState()", "function bindSelectedStudioBuffer(");
+  load(f.c, "function setResponseHistory(", "function getTraceHistoryContextLabel()");
+  f.c.captureStudioBufferTransientState();
+  f.c.isStudioDocumentBufferView = () => true;
+  return { ...f, deliver(items, options = {}) {
+    f.c.setResponseHistory(items, { preserveSelection: true, autoSelectLatest: false, ...options });
+  }, returnToPrompt() { f.c.isStudioDocumentBufferView = () => false; f.calls.length = 0; f.bind(); } };
+}
+const shiftedHistory = start => Array.from({ length: 30 }, (_, i) => ({ id: "r" + (i + start), markdown: "R" + (i + start) }));
+
+for (const follow of [false, true]) {
+  test(`surviving history identity retains response and scroll after rollover with Follow ${follow}`, () => {
+    const f = historyBindingHarness({ follow }), original = structuredClone(f.entry);
+    f.deliver(shiftedHistory(2)); assert.equal(f.c.responseHistoryIndex, 8);
+    assert(f.calls.every(c => c.type !== "history" || c.render === false), "hidden updates cannot render over Document");
+    f.returnToPrompt();
+    assert.equal(f.c.responseHistoryIndex, 8); assert.equal(f.c.getSelectedHistoryItem().id, "r10");
+    assert.equal(f.c.bufferViewRestore.right, 480); assert.deepEqual(f.entry, original);
+    assert.equal(f.calls[0].reset, false);
+  });
+}
+
+for (const rollover of [false, true]) {
+  test(`Document-side history browsing cannot replace Prompt's saved identity on an update (rollover ${rollover})`, () => {
+    const f = historyBindingHarness();
+    f.c.responseHistoryIndex = 7; // Explicit Document-side browsing to R8; Prompt left at R10.
+    f.deliver(shiftedHistory(rollover ? 2 : 1));
+    assert.equal(f.c.getSelectedHistoryItem().id, "r8", "the live Document-side selection is independent");
+    f.returnToPrompt(); assert.equal(f.c.getSelectedHistoryItem().id, "r10");
+    assert.equal(f.c.responseHistoryIndex, rollover ? 8 : 9); assert.equal(f.c.bufferViewRestore.right, 480);
+  });
+}
+
+test("a pruned Prompt response uses its own prior position, not a Document-side selection's fallback", () => {
+  const f = historyBindingHarness(); f.c.responseHistoryIndex = 7;
+  f.deliver(shiftedHistory(11)); assert.equal(f.c.getSelectedHistoryItem().id, "r18");
+  f.returnToPrompt(); assert.equal(f.c.getSelectedHistoryItem().id, "r20");
+  assert.equal(f.c.responseHistoryIndex, 9); assert.equal(f.c.bufferViewRestore.right, 0);
+});
+
+test("an explicit non-preserving history policy still selects latest rather than reviving a surviving saved ID", () => {
+  const f = historyBindingHarness();
+  f.deliver(shiftedHistory(1), { preserveSelection: false, autoSelectLatest: true });
+  f.returnToPrompt(); assert.equal(f.c.getSelectedHistoryItem().id, "r30"); assert.equal(f.c.bufferViewRestore.right, 0);
+});
+
+test("history identity follows multiple rollovers and the selected entry's return point, not just one index adjustment", () => {
+  const f = historyBindingHarness(); f.deliver(shiftedHistory(2)); f.deliver(shiftedHistory(5));
+  f.returnToPrompt(); assert.equal(f.c.responseHistoryIndex, 5); assert.equal(f.c.getSelectedHistoryItem().id, "r10");
+  assert.equal(f.c.bufferViewRestore.right, 480);
+  // A new user reading selection replaces the previous page-only identity.
+  f.c.responseHistoryIndex = f.entry.view.responseHistoryIndex = 7; f.c.captureStudioBufferTransientState();
+  f.c.isStudioDocumentBufferView = () => true; f.deliver(shiftedHistory(6)); f.returnToPrompt();
+  assert.equal(f.c.getSelectedHistoryItem().id, "r12"); assert.equal(f.c.bufferViewRestore.right, 480);
+});
+
+for (const replacement of ["pruned selection", "tree replacement", "empty then same IDs"]) {
+  test(`${replacement} obeys the new history decision and cannot restore an old response scroll owner`, () => {
+    const f = historyBindingHarness(); let expected;
+    if (replacement === "pruned selection") {
+      f.deliver(shiftedHistory(11)); expected = f.c.getSelectedHistoryItem().id;
+    } else if (replacement === "tree replacement") {
+      f.deliver([{ id: "other1", markdown: "Other1" }, { id: "other2", markdown: "Other2" }], { autoSelectLatest: true }); expected = "other2";
+    } else {
+      f.deliver([]); f.deliver([{ id: "r10", markdown: "R10" }]); expected = "r10";
+    }
+    f.returnToPrompt(); assert.equal(f.c.getSelectedHistoryItem().id, expected);
+    assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.calls[0].reset, true);
+    // The one-shot reset cannot destroy a later user reading position.
+    f.entry.view.rightScrollTop = 125; f.c.captureStudioBufferTransientState(); f.bind();
+    assert.equal(f.c.bufferViewRestore.right, 125);
+  });
+}
+
+test("missing history clears its page-only reading owner without discarding a payload-only queue", () => {
+  const f = historyBindingHarness(); f.c.queuedLatestResponse = f.pending; f.deliver([]); f.returnToPrompt();
+  assert.equal(f.c.queuedLatestResponse, f.pending); assert.equal(f.c.bufferViewRestore.right, 0);
+  assert.equal(f.c.getSelectedHistoryItem(), null);
+});
+
+test("following a queued response still overrides the saved history identity and resets only response reading", () => {
+  const f = historyBindingHarness({ follow: true }); f.c.queuedLatestResponse = f.pending;
+  f.deliver(shiftedHistory(2)); f.returnToPrompt();
+  assert.equal(f.c.getSelectedHistoryItem().id, "r31"); assert.equal(f.c.queuedLatestResponse, null); assert.equal(f.c.bufferViewRestore.right, 0);
+});
+
+test("history identity changes never reset independent editor/Quarto/side-question reading positions", () => {
+  for (const rightView of ["editor-preview", "editor-quarto-preview", "side-questions"]) {
+    const f = historyBindingHarness({ rightView }); f.deliver([{ id: "other", markdown: "Other" }], { autoSelectLatest: true });
+    f.returnToPrompt(); assert.equal(f.c.getSelectedHistoryItem().id, "other"); assert.equal(f.c.bufferViewRestore.right, 480);
+  }
+});
+
+test("history updates before any page-local Prompt selection do not invent one from Document or alter terminal/source ownership", () => {
+  const f = historyBindingHarness(), saved = { sourceGeneration: 7, linkedPiEditorDraftSnapshot: { fingerprint: "kept" }, activityTracking: { requestId: "run", ownsWorkingView: false } };
+  f.c.bufferTransientStates.set("prompt", saved); f.deliver(shiftedHistory(2));
+  assert.equal(f.c.bufferTransientStates.get("prompt"), saved);
+  f.returnToPrompt(); assert.equal(f.c.responseHistoryIndex, 9, "first binding retains the existing recovered-index fallback");
+  assert.equal(f.c.bufferTransientStates.get("prompt").sourceGeneration, 7);
+  assert.equal(f.c.linkedPiEditorDraftSnapshot, saved.linkedPiEditorDraftSnapshot);
+});
+
+test("hidden reading updates preserve source/terminal/activity fields and do not add a persisted response-parent schema", () => {
+  const f = historyBindingHarness(), before = structuredClone(f.entry), saved = f.c.bufferTransientStates.get("prompt");
+  const terminal = { fingerprint: "keep" }, activity = { requestId: "run", ownsWorkingView: false };
+  saved.linkedPiEditorDraftSnapshot = terminal; saved.activityTracking = activity;
+  f.deliver(shiftedHistory(2)); const after = f.c.bufferTransientStates.get("prompt");
+  assert.equal(after.sourceGeneration, saved.sourceGeneration); assert.equal(after.linkedPiEditorDraftSnapshot, terminal); assert.equal(after.activityTracking, activity);
+  assert.deepEqual(f.entry, before); assert.equal(after.historySelection?.id, "r10");
+});
+
+test("default-mode and visible-Prompt history updates cannot rewrite hidden buffer reading state", () => {
+  for (const defaultMode of [false, true]) {
+    const f = historyBindingHarness(), saved = f.c.bufferTransientStates.get("prompt");
+    f.c.bufferSwitchingEnabled = !defaultMode; f.c.isStudioDocumentBufferView = () => defaultMode;
+    f.deliver(shiftedHistory(2)); assert.equal(f.c.bufferTransientStates.get("prompt"), saved);
+  }
 });
 
 test("without a queued update, Follow on does not steal a manually selected older response", () => {

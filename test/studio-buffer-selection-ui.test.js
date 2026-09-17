@@ -5,7 +5,8 @@ import vm from "node:vm";
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 function load(c, start, end) { const a = source.indexOf(start), b = source.indexOf(end, a); assert(a >= 0 && b > a, start); vm.runInContext(source.slice(a, b), c); }
 function setup() {
-  const calls = [], handlers = {}, documentHandlers = {}, fieldHandlers = {}, windowHandlers = {};
+  const calls = [], timers = [], handlers = {}, documentHandlers = {}, fieldHandlers = {}, windowHandlers = {};
+  const listen = (target, type, fn) => { const previous = target[type]; target[type] = event => { previous?.(event); fn(event); }; };
   const doc = { id: "doc", role: "document", revision: 4, text: "selected Document", view: {} };
   const prompt = { id: "prompt", role: "prompt", revision: 7, text: "keep Prompt", view: {} };
   const state = { selectedBufferId: "doc", activePromptId: "prompt", buffers: [doc, prompt] };
@@ -16,8 +17,9 @@ function setup() {
     pendingTerminalDocument: null, activeFileImport: null, editorView: "markdown", pendingStudioBufferEditorView: () => null,
     sourceTextEl: { value: doc.text, selectionStart: 0, selectionEnd: 8, selectionDirection: "forward", readOnly: false, disabled: false,
       addEventListener(type, fn) { fieldHandlers[type] = fn; } }, editorViewSelect: { addEventListener() {} },
-    document: { activeElement: null, addEventListener(type, fn) { documentHandlers[type] = fn; } },
-    window: { getSelection: () => null, addEventListener(type, fn) { windowHandlers[type] = fn; } }, getPreviewSelectionPaneIdForNode: () => "critiqueView",
+    document: { activeElement: null, addEventListener(type, fn) { listen(documentHandlers, type, fn); } },
+    window: { getSelection: () => null, addEventListener(type, fn) { listen(windowHandlers, type, fn); }, setTimeout: fn => timers.push(fn) },
+    getPreviewSelectionPaneIdForNode: node => node?.preview ? "critiqueView" : null,
     bufferRecoveryClient: { snapshot: () => state, capture: () => ({ ok: true }), appendSelectionToPrompt: request => {
       if (request.sourceRevision !== doc.revision || request.promptRevision !== prompt.revision) return { ok: false, message: "stale" };
       calls.push("append"); prompt.revision++; prompt.text += " appended"; return { ok: true, characters: 8 };
@@ -30,7 +32,8 @@ function setup() {
   load(c, "function studioBuffersCanAddSelection(", "function syncStudioBufferSwitcher()");
   const button = { addEventListener: (type, fn) => { handlers[type] = fn; } };
   c.document.activeElement = c.sourceTextEl;
-  return { c, calls, state, doc, prompt, button, handlers, documentHandlers, fieldHandlers, windowHandlers };
+  return { c, calls, timers, state, doc, prompt, button, handlers, documentHandlers, fieldHandlers, windowHandlers,
+    get appends() { return calls.filter(x => x === "append"); } };
 }
 
 test("editor selection appends without binding, focusing, rendering, saving, sending or transferring ownership", () => {
@@ -93,7 +96,7 @@ test("native button activation is captured before focus changes, single-use and 
 
 test("preview/iframe/other-field selection revokes the retained textarea range; source refocus cannot revive a pressed-button intent", () => {
   for (const revoke of [f => f.documentHandlers.pointerdown({ target: {} }), f => f.documentHandlers.focusin({ target: { matches: () => true } }),
-    f => f.windowHandlers.blur(), f => f.documentHandlers.focusin({ target: { matches: () => false } })]) {
+    f => f.windowHandlers.blur(), f => f.documentHandlers.focusin({ target: { matches: () => false, preview: true } })]) {
     const f = setup(); f.c.setupStudioSelectionAppendAction(f.button); f.handlers.pointerdown({ button: 0 });
     revoke(f); assert.equal(f.c.studioBuffersCanAddSelection(), false);
     f.fieldHandlers.focus(); assert.equal(f.c.studioBuffersCanAddSelection(), true);
@@ -153,4 +156,66 @@ test("Enter/Space repeats cannot duplicate additions; fresh keyboard and assisti
   }
   assert.equal(f.calls.filter(x => x === "append").length, 2);
   f.handlers.click({ detail: 0 }); assert.equal(f.calls.filter(x => x === "append").length, 3);
+});
+
+// The existing whole-document action is the template for independent leases.
+for (const cancel of ["outside-release", "pointercancel"]) {
+  test(`selection's fresh click-only activation after ${cancel} is not a retired pointer continuation`, () => {
+    const f = setup(); f.c.setupStudioSelectionAppendAction(f.button);
+    f.handlers.pointerdown({ button: 0 });
+    if (cancel === "pointercancel") f.handlers.pointercancel();
+    else f.documentHandlers.pointerup?.({ target: f.c.sourceTextEl });
+    assert.equal(f.appends.length, 0);
+    f.handlers.click({ detail: 0 }); assert.equal(f.appends.length, 1);
+    f.handlers.click({ detail: 1 }); assert.equal(f.appends.length, 1, "old pointer click cannot borrow the fresh activation");
+    f.handlers.pointerdown({ button: 0 }); f.handlers.click({ detail: 1 }); assert.equal(f.appends.length, 2);
+  });
+}
+
+for (const first of ["pointer", "keyboard"]) {
+  test(`selection ${first}-first overlapping input consumes only its newer modality's lease`, () => {
+    const f = setup(); f.c.setupStudioSelectionAppendAction(f.button);
+    if (first === "pointer") {
+      f.handlers.pointerdown({ button: 0 }); f.handlers.keydown({ key: " ", repeat: false });
+      f.handlers.click({ detail: 0 }); assert.equal(f.appends.length, 1); f.handlers.click({ detail: 1 });
+    } else {
+      f.handlers.keydown({ key: " ", repeat: false }); f.handlers.pointerdown({ button: 0 });
+      f.handlers.click({ detail: 1 }); assert.equal(f.appends.length, 1); f.handlers.click({ detail: 0 });
+    }
+    assert.equal(f.appends.length, 1);
+    f.handlers.click({ detail: 0 }); assert.equal(f.appends.length, 2, "a later explicit click remains usable");
+  });
+}
+
+test("selection's cancelled Space keyup retires after its native activation, without swallowing fresh AT clicks", () => {
+  const f = setup(); f.c.setupStudioSelectionAppendAction(f.button);
+  f.handlers.keydown({ key: " ", repeat: false }); f.handlers.pointerdown({ button: 0 }); f.handlers.click({ detail: 1 });
+  assert.equal(f.appends.length, 1);
+  f.documentHandlers.keyup?.({ key: " ", target: f.button }); f.timers.splice(0).forEach(fn => fn());
+  f.handlers.click({ detail: 0 }); assert.equal(f.appends.length, 2);
+});
+
+test("selection keyup cleanup cannot revive a retired key or clear a newer refused key lease", () => {
+  for (const newer of [false, true]) {
+    const f = setup(); f.c.setupStudioSelectionAppendAction(f.button);
+    f.handlers.keydown({ key: " ", repeat: false }); f.documentHandlers.input?.({ target: f.c.sourceTextEl });
+    f.documentHandlers.keyup?.({ key: " ", target: f.button });
+    if (newer) {
+      f.c.canSwitch = false; f.handlers.keydown({ key: " ", repeat: false }); f.c.canSwitch = true;
+      f.timers.splice(0).forEach(fn => fn());
+    }
+    f.handlers.click({ detail: 0 }); assert.equal(f.appends.length, 0);
+    f.timers.splice(0).forEach(fn => fn()); f.handlers.click({ detail: 0 }); assert.equal(f.appends.length, 1);
+  }
+});
+
+test("selection's own button focus is safe but a different action's key/focus retires held selection intent", () => {
+  for (const type of ["keydown", "focusin"]) {
+    const f = setup(); f.c.setupStudioSelectionAppendAction(f.button);
+    f.handlers.pointerdown({ button: 0 }); f.documentHandlers.focusin({ target: f.button });
+    f.handlers.click({ detail: 1 }); assert.equal(f.appends.length, 1);
+    f.handlers.pointerdown({ button: 0 }); f.documentHandlers[type]?.({ target: { matches: () => false }, key: " " });
+    f.handlers.click({ detail: 1 }); assert.equal(f.appends.length, 1);
+    f.handlers.pointerdown({ button: 0 }); f.handlers.click({ detail: 1 }); assert.equal(f.appends.length, 2);
+  }
 });

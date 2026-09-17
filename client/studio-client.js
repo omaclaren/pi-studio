@@ -63,7 +63,7 @@
       let studioDocumentAppendOwnerGeneration = 0;
       let bufferViewRestore = null;
       let pendingBufferDocumentOpen = null;
-      const bufferTransientStates = new Map(); // Page-only source epochs/terminal provenance; never recovered.
+      const bufferTransientStates = new Map(); // Page-only source epochs, terminal provenance and reading identities; never recovered.
       let bufferConnectionGeneration = 0;
       let editorContentGeneration = 0;
       let pendingEditorRefresh = null;
@@ -6116,36 +6116,52 @@
         if (!responseHistory.length) {
           responseHistoryIndex = -1;
           clearActiveResponseView({ render: !documentView });
+          syncStudioPromptHistorySelection(options);
           updateHistoryControls();
           return false;
         }
 
-        let targetIndex = responseHistory.length - 1;
-        const preserveSelection = Boolean(options && options.preserveSelection);
-        const autoSelectLatest = options && Object.prototype.hasOwnProperty.call(options, "autoSelectLatest")
-          ? Boolean(options.autoSelectLatest)
-          : true;
-
-        if (preserveSelection && previousId) {
-          const preservedIndex = responseHistory.findIndex((item) => item.id === previousId);
-          if (preservedIndex >= 0) {
-            targetIndex = preservedIndex;
-          } else if (!autoSelectLatest && responseHistoryIndex >= 0 && responseHistoryIndex < responseHistory.length) {
-            targetIndex = responseHistoryIndex;
-          }
-        } else if (!autoSelectLatest && responseHistoryIndex >= 0 && responseHistoryIndex < responseHistory.length) {
-          targetIndex = responseHistoryIndex;
-        }
+        const targetIndex = responseHistorySelectionIndex(responseHistory, previousId, responseHistoryIndex, options);
 
         if (documentView) {
           // Cache conversation events without rebuilding a live Document preview
           // (including its iframe state). Prompt binding applies its reading policy.
           responseHistoryIndex = targetIndex;
+          syncStudioPromptHistorySelection(options);
           applySelectedHistoryItem({ resetScroll: false, render: false });
           updateHistoryControls();
           return true;
         }
         return selectHistoryIndex(targetIndex, { silent: Boolean(options && options.silent) });
+      }
+
+      function responseHistorySelectionIndex(items, previousId, previousIndex, options) {
+        if (!items.length) return -1;
+        const autoSelectLatest = options && Object.prototype.hasOwnProperty.call(options, "autoSelectLatest")
+          ? Boolean(options.autoSelectLatest) : true;
+        if (options?.preserveSelection && previousId) {
+          const preservedIndex = items.findIndex(item => item.id === previousId);
+          if (preservedIndex >= 0) return preservedIndex;
+        }
+        return !autoSelectLatest && previousIndex >= 0 && previousIndex < items.length
+          ? previousIndex : items.length - 1;
+      }
+
+      function syncStudioPromptHistorySelection(options) {
+        if (!bufferSwitchingEnabled || !isStudioDocumentBufferView()) return;
+        const promptId = bufferRecoveryClient?.snapshot()?.activePromptId;
+        const saved = bufferTransientStates.get(promptId);
+        // Only a Prompt actually visited on this page owns a reading identity.
+        // Apply the same history policy to its own ID/fallback position, not a
+        // response browsed in Document. Empty history retires the old scroll even
+        // if equal IDs return later. None of this page-only state is recovered.
+        if (!saved?.historySelection) return;
+        const previous = saved.historySelection;
+        const index = responseHistorySelectionIndex(responseHistory, previous.id, previous.index, options);
+        const id = responseHistory[index]?.id ?? null;
+        bufferTransientStates.set(promptId, { ...saved, historySelection: {
+          id, index, resetScroll: previous.resetScroll || previous.id !== id,
+        } });
       }
 
       function getTraceHistoryContextLabel() {
@@ -15537,6 +15553,7 @@
           sourceGeneration: bufferTransientStates.get(current.id)?.sourceGeneration ?? editorSourceGeneration,
           linkedPiEditorDraftSnapshot: normalizePiEditorDraftSnapshot(linkedPiEditorDraftSnapshot),
           activityTracking: { requestId: activityTrackingRequestId, ownsWorkingView: activityTrackingOwnsWorkingView },
+          ...(current.role === "prompt" ? { historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false } } : {}),
         });
       }
       function bindSelectedStudioBuffer(options) {
@@ -15563,17 +15580,23 @@
           followLatest = entry.role === "prompt" && entry.view.followLatest;
           if (followSelect) followSelect.value = followLatest ? "on" : "off";
           const resumeQueuedResponse = entry.role === "prompt" && followLatest && queuedLatestResponse;
+          const savedHistory = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.historySelection : null;
+          let changedHistory = savedHistory?.resetScroll === true;
           let appliedQueuedResponse = false;
           if (entry.role === "prompt" && responseHistory.length) {
-            responseHistoryIndex = resumeQueuedResponse ? responseHistory.length - 1
-              : Math.max(0, Math.min(responseHistory.length - 1, entry.view.responseHistoryIndex < 0 ? responseHistory.length - 1 : entry.view.responseHistoryIndex));
-            const applied = applySelectedHistoryItem({ resetScroll: Boolean(resumeQueuedResponse) });
+            const savedIndex = savedHistory?.id ? responseHistory.findIndex(item => item.id === savedHistory.id) : -1;
+            responseHistoryIndex = resumeQueuedResponse ? responseHistory.length - 1 : (savedIndex >= 0 ? savedIndex
+              : Math.max(0, Math.min(responseHistory.length - 1, entry.view.responseHistoryIndex < 0 ? responseHistory.length - 1 : entry.view.responseHistoryIndex)));
+            if (savedHistory && savedHistory.id !== getSelectedHistoryItem()?.id) changedHistory = true;
+            const applied = applySelectedHistoryItem({ resetScroll: Boolean(resumeQueuedResponse) || changedHistory });
             if (resumeQueuedResponse && applied) { queuedLatestResponse = null; appliedQueuedResponse = true; }
             syncTraceForSelectedHistoryItem();
           } else if (resumeQueuedResponse && applyLatestPayload(resumeQueuedResponse, { resetScroll: true })) {
             queuedLatestResponse = null;
             appliedQueuedResponse = true;
           }
+          if (savedHistory) bufferTransientStates.set(entry.id, { ...bufferTransientStates.get(entry.id),
+            historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false } });
           const savedActivity = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.activityTracking : null;
           const resumeActivity = savedActivity?.requestId && uiBusy && savedActivity.requestId === pendingRequestId;
           const retiredWorkingView = savedActivity?.ownsWorkingView && !resumeActivity && entry.view.rightView === "trace";
@@ -15587,9 +15610,9 @@
           sourceTextEl.setSelectionRange(entry.view.selectionStart, entry.view.selectionEnd, entry.view.selectionDirection);
           sourceTextEl.scrollTop = entry.view.scrollTop;
           syncEditorHighlightScroll();
-          // A queued response is new reading content, not the response whose old
-          // offset was saved. Match the ordinary response-reset view exclusions.
-          const restoreRightScroll = (appliedQueuedResponse || retiredWorkingView || (resumedWorkingView && entry.view.rightView !== "trace"))
+          // Queued/replaced history is not the response whose old offset was
+          // saved. Match the ordinary response-reset view exclusions.
+          const restoreRightScroll = (appliedQueuedResponse || changedHistory || retiredWorkingView || (resumedWorkingView && entry.view.rightView !== "trace"))
             && !["editor-preview", "editor-quarto-preview", "side-questions"].includes(rightView)
             ? 0 : (entry.view.rightScrollTop ?? 0);
           bufferViewRestore = { bufferId: entry.id, editor: entry.view, source: entry.view.previewScrollTop, right: restoreRightScroll };
@@ -15713,26 +15736,57 @@
         });
         // Focus/selection inside a sandboxed preview iframe does not bubble.
         window.addEventListener("blur", () => setSourceActive(false));
-        let intent = null, armed = false;
-        const arm = () => {
-          // Adopt the current range before capture so a delayed notification of
-          // that same range after button focus does not cancel a valid press.
-          observeSelection(); armed = true; intent = captureStudioSelectionAppend();
+        // Use the whole-document action's separate modality leases, while
+        // retaining selection-specific range/direction and source ownership.
+        let pointerIntent, keyboardIntent, keyboardKey = null, keyboardGeneration = 0;
+        const capture = () => {
+          // A delayed notification of this same range must not cancel a press.
+          observeSelection(); return captureStudioSelectionAppend();
         };
-        const clear = () => { armed = false; intent = null; };
-        button.addEventListener("pointerdown", event => { if (event.button === 0) arm(); });
-        button.addEventListener("pointercancel", () => { armed = true; intent = null; });
+        const retire = () => {
+          studioSelectionAppendOwnerGeneration++;
+          if (pointerIntent !== undefined) pointerIntent = null;
+          if (keyboardIntent !== undefined) keyboardIntent = null;
+        };
+        for (const type of ["pointerdown", "pointerup", "keydown", "focusin"]) document.addEventListener(type, event => {
+          if (event.target !== button) retire();
+        }, true);
+        document.addEventListener("input", retire, true);
+        window.addEventListener("blur", retire);
+        document.addEventListener("keyup", event => {
+          if (event.key !== keyboardKey) return;
+          const generation = keyboardGeneration;
+          // Retain a retired key through its native click, but not indefinitely
+          // if the browser cancels that click. Never clear a newer key's lease.
+          window.setTimeout(() => {
+            if (keyboardGeneration === generation) { keyboardIntent = undefined; keyboardKey = null; }
+          }, 0);
+        }, true);
+        button.addEventListener("pointerdown", event => {
+          if (event.button !== 0) return;
+          if (keyboardIntent !== undefined) keyboardIntent = null;
+          pointerIntent = capture();
+        });
+        button.addEventListener("pointercancel", () => { pointerIntent = null; retire(); });
         button.addEventListener("keydown", event => {
           if (event.key !== "Enter" && event.key !== " ") return;
           if (event.repeat) { event.preventDefault(); return; }
-          arm();
+          if (pointerIntent !== undefined) pointerIntent = null;
+          keyboardKey = event.key; keyboardGeneration++;
+          keyboardIntent = capture();
         });
         button.addEventListener("click", event => {
-          if (event.detail > 1) { clear(); return; }
-          // Native pointer/keyboard activation owns its original selection. An
-          // assistive click without those events captures at that explicit click.
-          const captured = armed ? intent : captureStudioSelectionAppend();
-          clear();
+          if (event.detail > 1) { pointerIntent = undefined; return; }
+          const keyboard = event.detail === 0;
+          const pending = keyboard ? keyboardIntent : pointerIntent;
+          const captured = pending === undefined ? capture() : pending;
+          if (keyboard) {
+            keyboardIntent = undefined;
+            if (pointerIntent !== undefined) pointerIntent = null;
+          } else {
+            pointerIntent = undefined;
+            if (keyboardIntent !== undefined) keyboardIntent = null;
+          }
           if (captured) appendStudioSelectionToPrompt(captured);
         });
       }
@@ -15939,6 +15993,7 @@
         syncStudioSelectionAppendAction();
         syncStudioDocumentAppendAction();
         const isCurrent = () => pendingBufferDocumentOpen === operation && client === bufferRecoveryClient
+          && studioBuffersCanOpenDocument(true) // Its own grant/replace modal is allowed; unsafe activity is not.
           && recoveryConsentIsCurrent(operation.consent) && studioPreviewInteractionIsCurrent(context)
           && client.snapshot().buffers.find(b => b.id === target.id)?.revision === target.revision;
         try {
@@ -15956,7 +16011,9 @@
               { title: "Replace " + (role === "prompt" ? "Prompt" : "Document") + "?", confirmLabel: "Replace", destructive: true });
             if (!confirmed || !isCurrent()) return false;
           }
-          const payload = await fetchPreviewLocalLink("document", href, context);
+          // The same operation must own permission prompts, grants and retries,
+          // not merely the final replacement. Compose the caller's preview owner.
+          const payload = await fetchPreviewLocalLink("document", href, { ...context, isCurrent });
           if (!isCurrent() || !studioBuffersCanOpenDocument()) return false;
           if (typeof payload.text !== "string") throw new Error("Studio did not return document text.");
           const converted = payload.converted === true;
@@ -15980,6 +16037,9 @@
           bindSelectedStudioBuffer({ focusEditor: true });
           setStatus(role === "prompt" ? "Loaded file text as the Prompt. Review it before Run; the Document was kept." : "Opened the separate Document. The Prompt was kept; nothing was sent.", "success");
           return true;
+        } catch (error) {
+          if (error?.studioStale) return false;
+          throw error;
         } finally {
           if (pendingBufferDocumentOpen === operation) pendingBufferDocumentOpen = null;
           syncStudioSelectionAppendAction();
