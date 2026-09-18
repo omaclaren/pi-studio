@@ -181,7 +181,7 @@ test("returning to a following Prompt applies queued history and discards the ol
 test("a following Prompt also consumes a queued payload when branch history is unavailable", () => {
   const f = bindingHarness({ history: false }); f.bind();
   assert.equal(f.c.queuedLatestResponse, null);
-  assert.deepEqual(f.calls, [{ type: "payload", payload: f.pending, reset: true }]);
+  assert.deepEqual(f.calls, [{ type: "payload", payload: f.pending, reset: true }, { type: "trace" }]);
   assert.equal(f.c.bufferViewRestore.right, 0);
 });
 
@@ -209,6 +209,17 @@ function historyBindingHarness({ follow = false, rightView = "preview" } = {}) {
   }, returnToPrompt() { f.c.isStudioDocumentBufferView = () => false; f.calls.length = 0; f.bind(); } };
 }
 const shiftedHistory = start => Array.from({ length: 30 }, (_, i) => ({ id: "r" + (i + start), markdown: "R" + (i + start) }));
+
+function consumeResponseScrollReset(f) {
+  const c = f.c;
+  Object.assign(c, { window: { requestAnimationFrame: fn => fn() }, responsePreviewRenderNonce: 0,
+    captureEditorAsyncConsent: () => ({}), editorAsyncConsentIsCurrent: () => true,
+    critiqueViewEl: { isConnected: true, scrollTop: 0, classList: { add() {}, remove() {} } },
+    replaceResponsePaneWithClone: () => c.critiqueViewEl });
+  load(c, "function applyPendingResponseScrollReset()", "async function getMermaidApi()");
+  assert.equal(c.applyPendingResponseScrollReset(), true, "the response renderer, not binding alone, consumes retirement");
+  assert.equal(c.pendingResponseScrollReset, false);
+}
 
 for (const follow of [false, true]) {
   test(`surviving history identity retains response and scroll after rollover with Follow ${follow}`, () => {
@@ -268,7 +279,8 @@ for (const replacement of ["pruned selection", "tree replacement", "empty then s
     }
     f.returnToPrompt(); assert.equal(f.c.getSelectedHistoryItem().id, expected);
     assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.calls[0].reset, true);
-    // The one-shot reset cannot destroy a later user reading position.
+    // Model the actual response render before a later user reading position.
+    consumeResponseScrollReset(f);
     f.entry.view.rightScrollTop = 125; f.c.captureStudioBufferTransientState(); f.bind();
     assert.equal(f.c.bufferViewRestore.right, 125);
   });
@@ -324,7 +336,7 @@ for (const variant of ["same", "empty", "empty then same", "new latest response"
 
 test("a new live trace run retires its scroll even if response history has not changed", () => {
   const f = traceReadingHarness(); f.c.liveTraceState = { runId: "run-2", requestId: "request-2" };
-  f.returnToPrompt(); assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.c.pendingResponseScrollReset, true);
+  f.returnToPrompt(); assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.c.pendingResponseScrollReset, false, "trace restoration does not retire response reading");
 });
 
 test("trace retirement is consumed once, without erasing a subsequent reading position", () => {
@@ -343,7 +355,7 @@ test("a historical trace keeps its scroll when only its history index rolls over
 test("historical-to-live trace changes retire scroll even when the response ID survives", () => {
   const f = traceReadingHarness(9), item = f.c.responseHistory[9]; f.deliver([item]); f.returnToPrompt();
   assert.equal(f.c.getSelectedHistoryItem().id, "r10"); assert.equal(f.c.traceDisplayContext.mode, "live");
-  assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.c.pendingResponseScrollReset, true);
+  assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.c.pendingResponseScrollReset, false, "unchanged response identity keeps independent reading");
 });
 
 test("history trace loading for a different response cannot inherit the previous trace offset", () => {

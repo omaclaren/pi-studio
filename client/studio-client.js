@@ -4447,7 +4447,11 @@
         if (bufferOpenOperation && (pendingBufferDocumentOpen !== bufferOpenOperation || !bufferOpenOperation.isCurrent())) return Promise.resolve(null);
         // A different decision is a new user intent, even if it is cancelled
         // before an older file GET finishes. Only the exact owner's modal is exempt.
-        if (pendingBufferDocumentOpen && pendingBufferDocumentOpen !== bufferOpenOperation) pendingBufferDocumentOpen = null;
+        if (pendingBufferDocumentOpen && pendingBufferDocumentOpen !== bufferOpenOperation) {
+          pendingBufferDocumentOpen = null;
+          syncStudioSelectionAppendAction();
+          syncStudioDocumentAppendAction();
+        }
         ensureStudioDecisionDialog();
         if (studioDecisionState) finishStudioDecision(null, false);
         const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -10886,17 +10890,26 @@
       }
 
       function applyPendingResponseScrollReset() {
-        if (!pendingResponseScrollReset || !critiqueViewEl || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
+        if (!critiqueViewEl || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
+        // A buffer return may restore another view first. Only actual response
+        // rendering consumes that Prompt's deferred response retirement.
+        const responseBuffer = bufferSwitchingEnabled && (rightView === "preview" || rightView === "markdown") ? getStudioSelectedBuffer() : null;
+        const reading = responseBuffer?.role === "prompt" ? bufferTransientStates.get(responseBuffer.id) : null;
+        if (reading?.responseScrollPending) pendingResponseScrollReset = true;
+        if (!pendingResponseScrollReset) return false;
         if (rightView === "editor-preview" || rightView === "editor-quarto-preview" || rightView === "side-questions") return false;
 
+        if (reading?.responseScrollPending) bufferTransientStates.set(responseBuffer.id, { ...reading, responseScrollPending: false });
         pendingResponseScrollReset = false;
         let targetEl = replaceResponsePaneWithClone();
         const schedule = typeof window.requestAnimationFrame === "function"
           ? window.requestAnimationFrame.bind(window)
           : (cb) => window.setTimeout(cb, 16);
         const bufferConsent = bufferSwitchingEnabled ? captureEditorAsyncConsent() : null;
+        const resetView = rightView, resetNonce = bufferSwitchingEnabled ? responsePreviewRenderNonce : null;
         const resetScroll = () => {
-          if (!targetEl || !targetEl.isConnected || (bufferSwitchingEnabled && !editorAsyncConsentIsCurrent(bufferConsent))) return;
+          if (!targetEl || !targetEl.isConnected || (bufferSwitchingEnabled && (!editorAsyncConsentIsCurrent(bufferConsent)
+              || rightView !== resetView || responsePreviewRenderNonce !== resetNonce))) return;
           if (rightView === "editor-preview" || rightView === "editor-quarto-preview" || rightView === "side-questions") return;
           targetEl.scrollTop = 0;
           targetEl.scrollLeft = 0;
@@ -15566,6 +15579,7 @@
           ...(current.role === "prompt" ? {
             historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false },
             traceScrollOwner: studioBufferTraceScrollOwner(),
+            responseScrollPending: bufferTransientStates.get(current.id)?.responseScrollPending === true,
           } : {}),
         });
       }
@@ -15602,6 +15616,7 @@
           const resumeQueuedResponse = entry.role === "prompt" && followLatest && queuedLatestResponse;
           const savedHistory = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.historySelection : null;
           const savedTraceOwner = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.traceScrollOwner : null;
+          const savedResponseScrollPending = entry.role === "prompt" && bufferTransientStates.get(entry.id)?.responseScrollPending === true;
           // Trace has its own content owner. Do not schedule response-reset frames
           // over it before resolving that owner below.
           const resetResponseReading = entry.view.rightView !== "trace";
@@ -15614,24 +15629,30 @@
             if (savedHistory && savedHistory.id !== getSelectedHistoryItem()?.id) changedHistory = true;
             const applied = applySelectedHistoryItem({ resetScroll: resetResponseReading && (Boolean(resumeQueuedResponse) || changedHistory) });
             if (resumeQueuedResponse && applied) { queuedLatestResponse = null; appliedQueuedResponse = true; }
-            syncTraceForSelectedHistoryItem();
           } else if (resumeQueuedResponse && applyLatestPayload(resumeQueuedResponse, { resetScroll: resetResponseReading })) {
             queuedLatestResponse = null;
             appliedQueuedResponse = true;
           }
-          if (savedHistory || savedTraceOwner != null) bufferTransientStates.set(entry.id, { ...bufferTransientStates.get(entry.id),
-            ...(savedHistory ? { historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false } } : {}),
-            traceScrollOwner: studioBufferTraceScrollOwner() });
+          // Empty history must also resolve the live fallback, rather than adopt
+          // a historical context browsed while Document was selected.
+          if (entry.role === "prompt") syncTraceForSelectedHistoryItem();
           const savedActivity = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.activityTracking : null;
           const resumeActivity = savedActivity?.requestId && uiBusy && savedActivity.requestId === pendingRequestId;
           const retiredWorkingView = savedActivity?.ownsWorkingView && !resumeActivity && entry.view.rightView === "trace";
           const resumedWorkingView = resumeActivity && savedActivity.ownsWorkingView;
           const nextRightView = retiredWorkingView ? "preview" : (resumedWorkingView ? "trace" : entry.view.rightView);
           const changedTrace = savedTraceOwner != null ? savedTraceOwner !== studioBufferTraceScrollOwner() : appliedQueuedResponse || changedHistory;
+          const resetResponseScroll = Boolean(savedResponseScrollPending || appliedQueuedResponse || changedHistory || retiredWorkingView);
+          const responseView = nextRightView === "preview" || nextRightView === "markdown";
           const resetRightScroll = !["editor-preview", "editor-quarto-preview", "side-questions"].includes(nextRightView)
-            && ((nextRightView === "trace" ? changedTrace : appliedQueuedResponse || changedHistory)
+            && ((nextRightView === "trace" ? changedTrace : (responseView ? resetResponseScroll : appliedQueuedResponse || changedHistory))
               || retiredWorkingView || (resumedWorkingView && entry.view.rightView !== "trace"));
-          pendingResponseScrollReset = Boolean(resetRightScroll);
+          if (entry.role === "prompt") bufferTransientStates.set(entry.id, { ...bufferTransientStates.get(entry.id),
+            ...(savedHistory ? { historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false } } : {}),
+            traceScrollOwner: studioBufferTraceScrollOwner(), responseScrollPending: resetResponseScroll });
+          // Trace resets are handled by the buffer restoration below, not by a
+          // response reset that could later discard unrelated response reading.
+          pendingResponseScrollReset = nextRightView !== "trace" && Boolean(resetRightScroll);
           setEditorView(entry.view.editorView);
           setRightView(nextRightView, { bufferSwitch: true });
           if (resumeActivity) {
@@ -16080,6 +16101,8 @@
         // Restoring the same fields after failure/cancellation cannot revive it.
         pendingBufferDocumentOpen = null;
         if (operation.decision && studioDecisionState === operation.decision) finishStudioDecision(null, false);
+        syncStudioSelectionAppendAction();
+        syncStudioDocumentAppendAction();
       }
       function syncBufferRecoveryMenuAccess() {
         if (!bufferRecoveryEnabled) return;
