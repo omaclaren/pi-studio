@@ -151,6 +151,7 @@ function bindingHarness({ role = "prompt", follow = true, queued = true, history
     setAnnotationsEnabled: () => {}, initialAnnotationsEnabled: false, followLatest: false, followSelect: { value: "off" },
     responseHistory: history ? [{ id: "r1", markdown: "R1" }, { id: "r2", markdown: "R2" }] : [], responseHistoryIndex: 0,
     queuedLatestResponse: queued ? pending : null,
+    traceDisplayContext: { mode: "live", responseId: null }, liveTraceState: { runId: "run-1", requestId: "request-1" },
     applySelectedHistoryItem: options => { calls.push({ type: "history", index: c.responseHistoryIndex, reset: options.resetScroll,
       ...(options.render === false ? { render: false } : {}) }); return true; },
     applyLatestPayload: (payload, options) => { calls.push({ type: "payload", payload, reset: options.resetScroll }); return applyPayload; },
@@ -159,6 +160,7 @@ function bindingHarness({ role = "prompt", follow = true, queued = true, history
     sourceTextEl: { setSelectionRange: () => {}, scrollTop: 0 }, sourcePreviewEl: {}, critiqueViewEl: {}, syncEditorHighlightScroll: () => {},
     scheduleStudioBufferEditorRestore: () => {}, scheduleStudioBufferScrollRestore: () => {},
     persistWorkspaceStateNow: () => assert.equal(c.bufferBindingInProgress, false), syncActionButtons: () => {} });
+  load(c, "function captureStudioBufferTransientState()", "function bindSelectedStudioBuffer(");
   load(c, "function bindSelectedStudioBuffer(", "function selectStudioBuffer(");
   return { c, calls, entry, pending, bind: () => c.bindSelectedStudioBuffer() };
 }
@@ -289,6 +291,71 @@ test("history identity changes never reset independent editor/Quarto/side-questi
     const f = historyBindingHarness({ rightView }); f.deliver([{ id: "other", markdown: "Other" }], { autoSelectLatest: true });
     f.returnToPrompt(); assert.equal(f.c.getSelectedHistoryItem().id, "other"); assert.equal(f.c.bufferViewRestore.right, 480);
   }
+});
+
+function traceReadingHarness(index = 29, rightView = "trace") {
+  const f = historyBindingHarness({ rightView });
+  Object.assign(f.c, {
+    setTraceDisplayContext: value => { f.c.traceDisplayContext = value; },
+    replaceTraceState: value => { f.c.traceState = value; }, createEmptyTraceState: () => ({ entries: [] }), sendMessage() {},
+    traceSnapshotCache: new Map(f.c.responseHistory.map(item => [item.id, { runId: item.id, entries: [item.id] }])),
+  });
+  load(f.c, "function syncTraceForSelectedHistoryItem()", "function clearActiveResponseView(");
+  for (const item of f.c.responseHistory) item.traceSummary = { hasTrace: true };
+  f.c.responseHistoryIndex = f.entry.view.responseHistoryIndex = index;
+  f.c.syncTraceForSelectedHistoryItem(); f.c.captureStudioBufferTransientState();
+  const apply = f.c.applySelectedHistoryItem;
+  f.c.applySelectedHistoryItem = options => { f.c.pendingResponseScrollReset = options.resetScroll; return apply(options); };
+  return f;
+}
+
+for (const variant of ["same", "empty", "empty then same", "new latest response"]) {
+  test(`unchanged live trace keeps its own scroll across ${variant} history`, () => {
+    const f = traceReadingHarness(), items = f.c.responseHistory.slice(), before = structuredClone(f.entry);
+    if (variant.startsWith("empty")) f.deliver([]);
+    if (variant === "same" || variant === "empty then same") f.deliver(items);
+    if (variant === "new latest response") f.deliver([{ id: "other", markdown: "Other" }]);
+    f.returnToPrompt();
+    assert.equal(f.c.rightView, "trace"); assert.equal(f.c.bufferViewRestore.right, 480);
+    assert.equal(f.c.pendingResponseScrollReset, false, "no deferred response reset may undo trace restoration");
+    assert.deepEqual(f.entry, before); assert.equal(f.c.traceState, f.c.liveTraceState);
+  });
+}
+
+test("a new live trace run retires its scroll even if response history has not changed", () => {
+  const f = traceReadingHarness(); f.c.liveTraceState = { runId: "run-2", requestId: "request-2" };
+  f.returnToPrompt(); assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.c.pendingResponseScrollReset, true);
+});
+
+test("trace retirement is consumed once, without erasing a subsequent reading position", () => {
+  const f = traceReadingHarness(); f.c.liveTraceState = { runId: "run-2", requestId: "request-2" };
+  f.returnToPrompt(); assert.equal(f.c.bufferViewRestore.right, 0);
+  f.entry.view.rightScrollTop = 125; f.bind();
+  assert.equal(f.c.bufferViewRestore.right, 125); assert.equal(f.c.pendingResponseScrollReset, false);
+});
+
+test("a historical trace keeps its scroll when only its history index rolls over", () => {
+  const f = traceReadingHarness(9); f.deliver(f.c.responseHistory.slice(1)); f.returnToPrompt();
+  assert.equal(f.c.traceDisplayContext.responseId, "r10"); assert.equal(f.c.bufferViewRestore.right, 480);
+  assert.equal(f.c.pendingResponseScrollReset, false);
+});
+
+test("historical-to-live trace changes retire scroll even when the response ID survives", () => {
+  const f = traceReadingHarness(9), item = f.c.responseHistory[9]; f.deliver([item]); f.returnToPrompt();
+  assert.equal(f.c.getSelectedHistoryItem().id, "r10"); assert.equal(f.c.traceDisplayContext.mode, "live");
+  assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.c.pendingResponseScrollReset, true);
+});
+
+test("history trace loading for a different response cannot inherit the previous trace offset", () => {
+  const f = traceReadingHarness(9); f.deliver([{ id: "new", markdown: "New", traceSummary: { hasTrace: true } }, { id: "last", markdown: "Last" }]);
+  f.c.bufferTransientStates.get("prompt").historySelection = { id: "new", index: 0, resetScroll: true };
+  f.returnToPrompt(); assert.equal(f.c.traceDisplayContext.mode, "loading"); assert.equal(f.c.bufferViewRestore.right, 0);
+});
+
+test("response scroll still retires when the independent live trace is unchanged", () => {
+  const f = traceReadingHarness(29, "preview"), items = f.c.responseHistory.slice();
+  f.deliver([]); f.deliver(items); f.returnToPrompt();
+  assert.equal(f.c.bufferViewRestore.right, 0); assert.equal(f.c.pendingResponseScrollReset, true);
 });
 
 test("history updates before any page-local Prompt selection do not invent one from Document or alter terminal/source ownership", () => {
@@ -493,6 +560,7 @@ test("file opening checks captured origin, destination revision and authorized p
     let destination = target;
     const c = context({ uiBusy: false, studioBuffersCanSwitch: () => true, bufferRecoveryClient: { capture: () => ({ ok: true }), snapshot: () => ({ buffers: [destination] }), replace: () => calls.push("replace") },
       buildWorkspacePersistencePayload: () => ({}), fileBackedBaselineText: null, bufferRecoveryExtra: () => ({}), captureStudioBufferOpenConsent: () => ({}),
+      studioModalBlocksDraftAction: () => false,
       recoveryConsentIsCurrent: () => current, studioPreviewInteractionIsCurrent: () => previewCurrent, pendingBufferDocumentOpen: null, syncStudioSelectionAppendAction: () => {}, syncStudioDocumentAppendAction: () => {},
       confirmPreviewOfficeConversion: async () => true, fetchPreviewLocalLink: () => new Promise(resolve => { resolveFetch = resolve; }), setStatus: () => {} });
     load(c, "function studioBuffersCanOpenDocument(", "function studioBufferScrollPosition(");

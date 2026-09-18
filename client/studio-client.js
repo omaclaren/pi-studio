@@ -4443,6 +4443,11 @@
       function openStudioDecision(options) {
         const settings = options && typeof options === "object" ? options : {};
         const mode = settings.mode === "prompt" ? "prompt" : "confirm";
+        const bufferOpenOperation = settings.bufferOpenOperation;
+        if (bufferOpenOperation && (pendingBufferDocumentOpen !== bufferOpenOperation || !bufferOpenOperation.isCurrent())) return Promise.resolve(null);
+        // A different decision is a new user intent, even if it is cancelled
+        // before an older file GET finishes. Only the exact owner's modal is exempt.
+        if (pendingBufferDocumentOpen && pendingBufferDocumentOpen !== bufferOpenOperation) pendingBufferDocumentOpen = null;
         ensureStudioDecisionDialog();
         if (studioDecisionState) finishStudioDecision(null, false);
         const returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -4482,6 +4487,7 @@
             secondaryValue: settings.secondaryValue,
           };
           studioDecisionState = decisionState;
+          if (bufferOpenOperation) bufferOpenOperation.decision = decisionState;
           const schedule = typeof window.requestAnimationFrame === "function"
             ? window.requestAnimationFrame.bind(window)
             : (callback) => window.setTimeout(callback, 16);
@@ -5201,8 +5207,8 @@
         switchRightPaneToView("editor-preview");
       }
 
-      function studioModalBlocksDraftAction() {
-        return Boolean((bufferRecoveryEnabled && bufferRecoveryPanel?.isOpen()) || studioDecisionState || isScratchpadOpen() || isShortcutsOpen() || isQuizOpen()
+      function studioModalBlocksDraftAction(allowedDecision = null) {
+        return Boolean((bufferRecoveryEnabled && bufferRecoveryPanel?.isOpen()) || (studioDecisionState && studioDecisionState !== allowedDecision) || isScratchpadOpen() || isShortcutsOpen() || isQuizOpen()
           || isStudioPdfFocusOpen() || isStudioHtmlFocusOpen() || isStudioImageFocusOpen());
       }
 
@@ -7788,6 +7794,7 @@
           studioHtmlFocusOverlayEl.hidden = false;
           studioHtmlFocusOverlayEl.setAttribute("aria-hidden", "false");
         }
+        syncStudioBufferOpenOperation();
         syncStudioHtmlFocusFullscreenButton();
         closeStudioUiRefreshMenus();
         closeExportPreviewMenu();
@@ -8338,6 +8345,7 @@
         setStudioPdfFocusFrameSource(src, title, sourceFrame);
         if (document.body) document.body.classList.add("studio-pdf-focus-open");
         if (studioPdfFocusOverlayEl) studioPdfFocusOverlayEl.hidden = false;
+        syncStudioBufferOpenOperation();
         syncStudioPdfFocusFullscreenButton();
         closeStudioUiRefreshMenus();
         closeExportPreviewMenu();
@@ -9353,6 +9361,7 @@
         syncStudioImageFocusZoom();
         if (document.body) document.body.classList.add("studio-image-focus-open");
         if (studioImageFocusOverlayEl) studioImageFocusOverlayEl.hidden = false;
+        syncStudioBufferOpenOperation();
         syncStudioImageFocusFullscreenButton();
         closeStudioUiRefreshMenus();
         closeExportPreviewMenu();
@@ -15038,6 +15047,7 @@
       }
 
       function syncActionButtons() {
+        syncStudioBufferOpenOperation();
         const canSaveOver = hasRefreshableFilePath();
         const canRefreshFromDisk = hasRefreshableFilePath();
 
@@ -15553,8 +15563,18 @@
           sourceGeneration: bufferTransientStates.get(current.id)?.sourceGeneration ?? editorSourceGeneration,
           linkedPiEditorDraftSnapshot: normalizePiEditorDraftSnapshot(linkedPiEditorDraftSnapshot),
           activityTracking: { requestId: activityTrackingRequestId, ownsWorkingView: activityTrackingOwnsWorkingView },
-          ...(current.role === "prompt" ? { historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false } } : {}),
+          ...(current.role === "prompt" ? {
+            historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false },
+            traceScrollOwner: studioBufferTraceScrollOwner(),
+          } : {}),
         });
+      }
+      function studioBufferTraceScrollOwner() {
+        // Page-local reading identity, not persisted response provenance. Growing
+        // entries within one run do not invalidate a manual reading position.
+        return JSON.stringify(traceDisplayContext.mode === "live"
+          ? ["live", liveTraceState?.runId ?? null, liveTraceState?.requestId ?? null]
+          : ["history", traceDisplayContext.responseId ?? null]);
       }
       function bindSelectedStudioBuffer(options) {
         const entry = getStudioSelectedBuffer();
@@ -15581,6 +15601,10 @@
           if (followSelect) followSelect.value = followLatest ? "on" : "off";
           const resumeQueuedResponse = entry.role === "prompt" && followLatest && queuedLatestResponse;
           const savedHistory = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.historySelection : null;
+          const savedTraceOwner = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.traceScrollOwner : null;
+          // Trace has its own content owner. Do not schedule response-reset frames
+          // over it before resolving that owner below.
+          const resetResponseReading = entry.view.rightView !== "trace";
           let changedHistory = savedHistory?.resetScroll === true;
           let appliedQueuedResponse = false;
           if (entry.role === "prompt" && responseHistory.length) {
@@ -15588,21 +15612,28 @@
             responseHistoryIndex = resumeQueuedResponse ? responseHistory.length - 1 : (savedIndex >= 0 ? savedIndex
               : Math.max(0, Math.min(responseHistory.length - 1, entry.view.responseHistoryIndex < 0 ? responseHistory.length - 1 : entry.view.responseHistoryIndex)));
             if (savedHistory && savedHistory.id !== getSelectedHistoryItem()?.id) changedHistory = true;
-            const applied = applySelectedHistoryItem({ resetScroll: Boolean(resumeQueuedResponse) || changedHistory });
+            const applied = applySelectedHistoryItem({ resetScroll: resetResponseReading && (Boolean(resumeQueuedResponse) || changedHistory) });
             if (resumeQueuedResponse && applied) { queuedLatestResponse = null; appliedQueuedResponse = true; }
             syncTraceForSelectedHistoryItem();
-          } else if (resumeQueuedResponse && applyLatestPayload(resumeQueuedResponse, { resetScroll: true })) {
+          } else if (resumeQueuedResponse && applyLatestPayload(resumeQueuedResponse, { resetScroll: resetResponseReading })) {
             queuedLatestResponse = null;
             appliedQueuedResponse = true;
           }
-          if (savedHistory) bufferTransientStates.set(entry.id, { ...bufferTransientStates.get(entry.id),
-            historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false } });
+          if (savedHistory || savedTraceOwner != null) bufferTransientStates.set(entry.id, { ...bufferTransientStates.get(entry.id),
+            ...(savedHistory ? { historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false } } : {}),
+            traceScrollOwner: studioBufferTraceScrollOwner() });
           const savedActivity = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.activityTracking : null;
           const resumeActivity = savedActivity?.requestId && uiBusy && savedActivity.requestId === pendingRequestId;
           const retiredWorkingView = savedActivity?.ownsWorkingView && !resumeActivity && entry.view.rightView === "trace";
           const resumedWorkingView = resumeActivity && savedActivity.ownsWorkingView;
+          const nextRightView = retiredWorkingView ? "preview" : (resumedWorkingView ? "trace" : entry.view.rightView);
+          const changedTrace = savedTraceOwner != null ? savedTraceOwner !== studioBufferTraceScrollOwner() : appliedQueuedResponse || changedHistory;
+          const resetRightScroll = !["editor-preview", "editor-quarto-preview", "side-questions"].includes(nextRightView)
+            && ((nextRightView === "trace" ? changedTrace : appliedQueuedResponse || changedHistory)
+              || retiredWorkingView || (resumedWorkingView && entry.view.rightView !== "trace"));
+          pendingResponseScrollReset = Boolean(resetRightScroll);
           setEditorView(entry.view.editorView);
-          setRightView(retiredWorkingView ? "preview" : (resumedWorkingView ? "trace" : entry.view.rightView), { bufferSwitch: true });
+          setRightView(nextRightView, { bufferSwitch: true });
           if (resumeActivity) {
             activityTrackingRequestId = savedActivity.requestId;
             activityTrackingOwnsWorkingView = activityTrackingEnabled && savedActivity.ownsWorkingView;
@@ -15610,11 +15641,7 @@
           sourceTextEl.setSelectionRange(entry.view.selectionStart, entry.view.selectionEnd, entry.view.selectionDirection);
           sourceTextEl.scrollTop = entry.view.scrollTop;
           syncEditorHighlightScroll();
-          // Queued/replaced history is not the response whose old offset was
-          // saved. Match the ordinary response-reset view exclusions.
-          const restoreRightScroll = (appliedQueuedResponse || changedHistory || retiredWorkingView || (resumedWorkingView && entry.view.rightView !== "trace"))
-            && !["editor-preview", "editor-quarto-preview", "side-questions"].includes(rightView)
-            ? 0 : (entry.view.rightScrollTop ?? 0);
+          const restoreRightScroll = resetRightScroll ? 0 : (entry.view.rightScrollTop ?? 0);
           bufferViewRestore = { bufferId: entry.id, editor: entry.view, source: entry.view.previewScrollTop, right: restoreRightScroll };
           scheduleStudioBufferEditorRestore();
           scheduleStudioBufferScrollRestore(sourcePreviewEl);
@@ -15988,32 +16015,32 @@
         const client = bufferRecoveryClient;
         const target = client.snapshot().buffers.find(b => b.role === role);
         if (!target) return false;
-        const operation = { consent: captureStudioBufferOpenConsent(), id: target.id, revision: target.revision };
+        const operation = { consent: captureStudioBufferOpenConsent(), id: target.id, revision: target.revision, decision: null, isCurrent: null };
+        const isCurrent = operation.isCurrent = () => pendingBufferDocumentOpen === operation && client === bufferRecoveryClient
+          && studioBuffersCanOpenDocument(true) && !studioModalBlocksDraftAction(operation.decision)
+          && recoveryConsentIsCurrent(operation.consent) && studioPreviewInteractionIsCurrent(context)
+          && client.snapshot().buffers.find(b => b.id === target.id)?.revision === target.revision;
         pendingBufferDocumentOpen = operation;
         syncStudioSelectionAppendAction();
         syncStudioDocumentAppendAction();
-        const isCurrent = () => pendingBufferDocumentOpen === operation && client === bufferRecoveryClient
-          && studioBuffersCanOpenDocument(true) // Its own grant/replace modal is allowed; unsafe activity is not.
-          && recoveryConsentIsCurrent(operation.consent) && studioPreviewInteractionIsCurrent(context)
-          && client.snapshot().buffers.find(b => b.id === target.id)?.revision === target.revision;
         try {
           // An already-open canonical path keeps its in-memory edits; explicit
           // Refresh from disk is still the way to replace it with disk contents.
           if (target.sourceState.path && stripPreviewLocalLinkUrlSuffix(href) === target.sourceState.path) {
             return selectStudioBuffer(target.id, { focusEditor: true });
           }
-          if (!await confirmPreviewOfficeConversion(href, "here", { isCurrent }) || !isCurrent()) return false;
+          if (!await confirmPreviewOfficeConversion(href, "here", { isCurrent, bufferOpenOperation: operation }) || !isCurrent()) return false;
           const needsConfirmation = target.role === "prompt" ? target.text.length > 0 || (target.sourceState.path && (target.baselineText === null || target.text !== target.baselineText))
             : (target.sourceState.path ? target.baselineText === null || target.text !== target.baselineText : target.text.length > 0);
           if (needsConfirmation) {
             const confirmed = await requestStudioConfirmation("Replace the " + (role === "prompt" ? "Prompt" : "Document")
               + " buffer's current text and origin? Save or copy any work you need first. The other buffer and saved files are not changed.",
-              { title: "Replace " + (role === "prompt" ? "Prompt" : "Document") + "?", confirmLabel: "Replace", destructive: true });
+              { title: "Replace " + (role === "prompt" ? "Prompt" : "Document") + "?", confirmLabel: "Replace", destructive: true, bufferOpenOperation: operation });
             if (!confirmed || !isCurrent()) return false;
           }
           // The same operation must own permission prompts, grants and retries,
           // not merely the final replacement. Compose the caller's preview owner.
-          const payload = await fetchPreviewLocalLink("document", href, { ...context, isCurrent });
+          const payload = await fetchPreviewLocalLink("document", href, { ...context, isCurrent }, { bufferOpenOperation: operation });
           if (!isCurrent() || !studioBuffersCanOpenDocument()) return false;
           if (typeof payload.text !== "string") throw new Error("Studio did not return document text.");
           const converted = payload.converted === true;
@@ -16045,6 +16072,14 @@
           syncStudioSelectionAppendAction();
           syncStudioDocumentAppendAction();
         }
+      }
+      function syncStudioBufferOpenOperation() {
+        const operation = pendingBufferDocumentOpen;
+        if (!operation || operation.isCurrent()) return;
+        // Observe unavailability when it begins, not just when a late GET returns.
+        // Restoring the same fields after failure/cancellation cannot revive it.
+        pendingBufferDocumentOpen = null;
+        if (operation.decision && studioDecisionState === operation.decision) finishStudioDecision(null, false);
       }
       function syncBufferRecoveryMenuAccess() {
         if (!bufferRecoveryEnabled) return;
@@ -16137,7 +16172,9 @@
             },
           });
         }
-        await bufferRecoveryPanel.open();
+        const opening = bufferRecoveryPanel.open();
+        syncStudioBufferOpenOperation();
+        await opening;
       }
 
       async function clearStudioWorkspace() {
@@ -17594,6 +17631,7 @@
           secondaryLabel: "Allow this folder for this Studio session",
           secondaryValue: "directory",
           confirmLabel: "Allow this file",
+          bufferOpenOperation: config.bufferOpenOperation,
         });
         if (!isCurrent()) return false;
         const grantKind = choice === true ? "file" : choice === "directory" ? "directory" : "";
@@ -17638,7 +17676,7 @@
           if (error && error.studioStale) throw error;
           const grantRequest = getStudioResourceGrantRequest(error);
           if (!grantRequest || (options && options.skipGrantPrompt === true)) throw error;
-          if (!isCurrent() || !(await requestStudioResourceGrant(grantRequest, { isCurrent }))) {
+          if (!isCurrent() || !(await requestStudioResourceGrant(grantRequest, { isCurrent, bufferOpenOperation: options?.bufferOpenOperation }))) {
             if (!isCurrent()) throw cancelledError();
             const cancelled = new Error("Local resource access cancelled.");
             cancelled.studioCancelled = true;
@@ -17722,7 +17760,7 @@
           "Convert " + label + " to Markdown?\n\n"
           + "Studio will use Pandoc to " + target + ". Some layout or formatting may change. "
           + "The original DOCX/ODT file will not be overwritten, and edits will not round-trip back to it.",
-          { title: "Convert document?", confirmLabel: "Convert" },
+          { title: "Convert document?", confirmLabel: "Convert", bufferOpenOperation: options?.bufferOpenOperation },
         );
         if (!isCurrent()) return false;
         if (!confirmed) setStatus("Document conversion cancelled.", "warning");
@@ -18330,6 +18368,7 @@
           quizState.open = true;
         }
         quizOverlayEl.hidden = false;
+        syncStudioBufferOpenOperation();
         document.body.classList.add("studio-quiz-open");
         renderQuizOverlay();
       }
@@ -19465,6 +19504,7 @@
       }
 
       function syncModalOpenState() {
+        syncStudioBufferOpenOperation();
         document.body.classList.toggle("scratchpad-open", isScratchpadOpen() || isShortcutsOpen());
       }
 

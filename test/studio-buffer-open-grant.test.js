@@ -25,7 +25,8 @@ function fixture() {
   const requests = [], dialogs = [], replacements = [], statuses = [];
   let destination = { id: "document", role: "document", revision: 1, text: "", baselineText: "", sourceState: { path: null }, view: {} };
   const c = vm.createContext({
-    bufferRecoveryEnabled: true, uiBusy: false, modal: false, generation: 1, previewCurrent: true,
+    bufferRecoveryEnabled: true, uiBusy: false, modal: false, studioDecisionState: null, generation: 1, previewCurrent: true,
+    studioModalBlocksDraftAction: allowed => c.modal && (!allowed || c.studioDecisionState !== allowed),
     pendingBufferDocumentOpen: null, fileBackedBaselineText: null, bufferTransientStates: new Map(), fileBrowserState: {},
     studioBuffersCanOpenDocument: (ignoreModal = false) => !c.uiBusy && (ignoreModal || !c.modal),
     bufferRecoveryClient: { capture: () => ({ ok: true }), snapshot: () => ({ buffers: [destination] }),
@@ -40,8 +41,9 @@ function fixture() {
     getPreviewLinkResourceQuery: (path, context) => ({ path, sourcePath: context.sourcePath, resourceDir: context.resourceDir }),
     fetchStudioJson(path, options) { const request = { path, options, ...deferred() }; requests.push(request); return request.promise; },
     openStudioDecision(options) {
-      const decision = deferred(); c.modal = true;
-      dialogs.push({ options, resolve(value) { c.modal = false; decision.resolve(value); } }); return decision.promise;
+      const decision = deferred(); c.modal = true; c.studioDecisionState = decision;
+      if (options.bufferOpenOperation) options.bufferOpenOperation.decision = decision;
+      dialogs.push({ options, resolve(value) { c.modal = false; c.studioDecisionState = null; decision.resolve(value); } }); return decision.promise;
     },
   });
   load(c, "function studioPreviewInteractionIsCurrent(", "function refreshEditorPreviewOwnersAfterReconnect(");

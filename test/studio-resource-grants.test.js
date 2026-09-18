@@ -206,7 +206,7 @@ test("cross-boundary local links require an explicit file or folder grant", () =
 	assert.match(clientSource, /secondaryLabel: "Allow this folder for this Studio session"/);
 	assert.match(clientSource, /secondaryValue: "directory"/);
 	assert.match(clientSource, /fetchStudioJson\("\/resource-grants"/);
-	assert.match(clientSource, /await requestStudioResourceGrant\(grantRequest, \{ isCurrent \}\)/);
+	assert.match(clientSource, /await requestStudioResourceGrant\(grantRequest, \{ isCurrent, bufferOpenOperation: options\?\.bufferOpenOperation \}\)/);
 	const menuStart = clientSource.indexOf("async function showPreviewLinkMenu");
 	const grantRequestStart = clientSource.indexOf("function getStudioResourceGrantRequest", menuStart);
 	assert.ok(menuStart >= 0 && grantRequestStart > menuStart);

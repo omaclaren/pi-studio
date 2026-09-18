@@ -192,6 +192,7 @@ function openFixture() {
     captureStudioBufferOpenConsent: f.c.captureRecoveryConsent,
     studioPreviewInteractionIsCurrent: () => true,
     studioBuffersCanOpenDocument: () => f.c.canSwitch && !f.c.uiBusy,
+    studioModalBlocksDraftAction: () => false,
     confirmPreviewOfficeConversion: async () => true,
     requestStudioConfirmation: async () => true,
     fetchPreviewLocalLink: () => new Promise((resolve, reject) => { resolveFetch = resolve; rejectFetch = reject; }),
