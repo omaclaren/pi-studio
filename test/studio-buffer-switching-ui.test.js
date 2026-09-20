@@ -142,6 +142,9 @@ function bindingHarness({ role = "prompt", follow = true, queued = true, history
   const pending = { markdown: "R2", kind: "direct", timestamp: 2000 };
   const c = context({ getStudioSelectedBuffer: () => entry, bufferBindingInProgress: false, bufferViewRestore: null,
     bufferSwitchingEnabled: true, bufferRecoveryClient: { snapshot: () => ({ activePromptId: "prompt" }) },
+    pendingResponseScrollReset: false, latestResponseMarkdown: "R1", annotationsEnabled: false, editorLanguage: "markdown",
+    captureEditorAsyncConsent: () => ({}), editorAsyncConsentIsCurrent: () => true,
+    getHtmlPreviewResourceContextOptions: () => ({}), previewResourceHelpers: { areStudioPreviewResourceContextsEqual: () => true },
     isStudioDocumentBufferView: () => entry.role === "document", getSelectedHistoryItem: () => c.responseHistory[c.responseHistoryIndex] || null,
     linkedPiEditorDraftSnapshot: null, activityTrackingRequestId: "", activityTrackingOwnsWorkingView: false,
     clearEditorAsyncOperations: () => {}, fileBrowserLoadNonce: 0, fileBrowserState: {}, resourceDirInput: null,

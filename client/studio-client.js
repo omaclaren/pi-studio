@@ -14602,6 +14602,9 @@
       }
 
       function renderActiveResult() {
+        // Retire before rendering starts, including view/content ABA while an
+        // earlier Markdown render is still pending. A later finish cannot adopt it.
+        if (bufferSwitchingEnabled) studioBufferScrollRestoreIsCurrent("right");
         if (bufferRecoveryEnabled) responsePreviewRenderNonce++;
         if (critiqueViewEl) {
           critiqueViewEl.classList.toggle("git-changes-host", rightView === "changes");
@@ -15560,11 +15563,11 @@
       function scheduleStudioBufferScrollRestore(targetEl) {
         const pending = bufferViewRestore;
         const pane = targetEl === sourcePreviewEl ? "source" : (targetEl === critiqueViewEl ? "right" : null);
-        if (!pending || !pane || typeof pending[pane] !== "number") return;
-        const consent = captureEditorAsyncConsent(), view = pane === "source" ? editorView : rightView;
+        if (!pending || !pane || !studioBufferScrollRestoreIsCurrent(pane)) return;
         window.requestAnimationFrame(() => {
-          if (bufferViewRestore !== pending || typeof pending[pane] !== "number" || !editorAsyncConsentIsCurrent(consent)
-              || (pane === "source" ? editorView : rightView) !== view || !studioPreviewNodeOwnerIsCurrent(targetEl)) return;
+          if (bufferViewRestore !== pending || targetEl.isConnected === false
+              || targetEl !== (pane === "source" ? sourcePreviewEl : critiqueViewEl)
+              || !studioBufferScrollRestoreIsCurrent(pane) || !studioPreviewNodeOwnerIsCurrent(targetEl)) return;
           targetEl.scrollTop = pending[pane];
           pending[pane] = null;
         });
@@ -15579,7 +15582,8 @@
           ...(current.role === "prompt" ? {
             historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false },
             traceScrollOwner: studioBufferTraceScrollOwner(),
-            responseScrollPending: bufferTransientStates.get(current.id)?.responseScrollPending === true,
+            // An arrival while Prompt is active may not have rendered yet.
+            responseScrollPending: pendingResponseScrollReset || bufferTransientStates.get(current.id)?.responseScrollPending === true,
           } : {}),
         });
       }
@@ -15589,6 +15593,32 @@
         return JSON.stringify(traceDisplayContext.mode === "live"
           ? ["live", liveTraceState?.runId ?? null, liveTraceState?.requestId ?? null]
           : ["history", traceDisplayContext.responseId ?? null]);
+      }
+      function captureStudioBufferScrollOwner(pane) {
+        const view = pane === "source" ? editorView : rightView;
+        const response = pane === "right" && (view === "preview" || view === "markdown");
+        const editor = pane === "source" || view === "editor-preview" || view === "editor-quarto-preview";
+        return {
+          view, consent: captureEditorAsyncConsent(),
+          responseId: response ? getSelectedHistoryItem()?.id ?? null : null,
+          responseText: response ? latestResponseMarkdown : null,
+          traceOwner: pane === "right" && view === "trace" ? studioBufferTraceScrollOwner() : null,
+          annotations: editor || response ? annotationsEnabled : null,
+          language: editor ? editorLanguage : null,
+          resource: editor || response ? { ...getHtmlPreviewResourceContextOptions() } : null,
+        };
+      }
+      function studioBufferScrollRestoreIsCurrent(pane) {
+        const pending = bufferViewRestore;
+        if (!pending || typeof pending[pane] !== "number") return false;
+        const owner = pending.owners?.[pane], current = captureStudioBufferScrollOwner(pane);
+        if (!owner || !editorAsyncConsentIsCurrent(owner.consent)
+            || ["view", "responseId", "responseText", "traceOwner", "annotations", "language"].some(key => owner[key] !== current[key])
+            || (owner.resource && !previewResourceHelpers.areStudioPreviewResourceContextsEqual(owner.resource, current.resource))) {
+          pending[pane] = null;
+          return false;
+        }
+        return true;
       }
       function bindSelectedStudioBuffer(options) {
         const entry = getStudioSelectedBuffer();
@@ -15663,7 +15693,10 @@
           sourceTextEl.scrollTop = entry.view.scrollTop;
           syncEditorHighlightScroll();
           const restoreRightScroll = resetRightScroll ? 0 : (entry.view.rightScrollTop ?? 0);
-          bufferViewRestore = { bufferId: entry.id, editor: entry.view, source: entry.view.previewScrollTop, right: restoreRightScroll };
+          // Numeric offsets belong to the intended view/content at binding, not
+          // whichever renderer eventually calls finishPreviewRender.
+          bufferViewRestore = { bufferId: entry.id, editor: entry.view, source: entry.view.previewScrollTop, right: restoreRightScroll,
+            owners: { source: captureStudioBufferScrollOwner("source"), right: captureStudioBufferScrollOwner("right") } };
           scheduleStudioBufferEditorRestore();
           scheduleStudioBufferScrollRestore(sourcePreviewEl);
           scheduleStudioBufferScrollRestore(critiqueViewEl);
@@ -16868,6 +16901,7 @@
       function setEditorView(nextView) {
         if (bufferRecoveryEnabled) sourcePreviewRenderNonce++;
         editorView = nextView === "preview" ? "preview" : "markdown";
+        if (bufferSwitchingEnabled) studioBufferScrollRestoreIsCurrent("source");
         editorViewSelect.value = editorView;
 
         const showPreview = editorView === "preview";
@@ -28767,7 +28801,8 @@
             bufferRecoveryClient = client;
             if (bufferSwitchingEnabled) {
               const state = client.snapshot(), entry = state.buffers.find(b => b.id === state.selectedBufferId);
-              bufferViewRestore = { bufferId: entry.id, source: entry.view.previewScrollTop, right: entry.view.rightScrollTop ?? 0 };
+              bufferViewRestore = { bufferId: entry.id, source: entry.view.previewScrollTop, right: entry.view.rightScrollTop ?? 0,
+                owners: { source: captureStudioBufferScrollOwner("source"), right: captureStudioBufferScrollOwner("right") } };
             }
           }
         } catch (error) { bufferRecoveryIssue = "Buffer recovery could not initialize. Existing snapshots were retained. " + (error.message || ""); }
