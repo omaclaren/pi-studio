@@ -23,6 +23,7 @@ function lifecycle(view='preview'){
  let selected=prompt,generation=1,delay=false;
  Object.assign(c,{
   bufferRecoveryEnabled:true,bufferPageClosed:false,editorView:'markdown',rightView:view,sourcePreviewRenderNonce:0,responsePreviewRenderNonce:0,
+  studioEditorViewGeneration:0,studioRightViewGeneration:0,
   pendingResponseScrollReset:false,latestResponseMarkdown:'R30',latestResponseKind:'direct',latestResponseTimestamp:1,latestResponseNormalized:'R30',latestResponseThinkingNormalized:'',
   annotationsEnabled:false,editorLanguage:'markdown',sourceTextEl:{value:prompt.text,scrollTop:0,setSelectionRange(){}},sourcePreviewEl:new Pane(),critiqueViewEl:new Pane('OLD CONTENT'),
   Element:Pane,previewPendingTimers:new Map(),studioPreviewElementOwners:new WeakMap(),PREVIEW_PENDING_BADGE_DELAY_MS:200,

@@ -483,6 +483,8 @@
 
       let editorView = "markdown";
       let rightView = getInitialRightView(initialSourceState.source);
+      let studioEditorViewGeneration = 0;
+      let studioRightViewGeneration = 0;
       let followLatest = !isEditorOnlyMode;
       let queuedLatestResponse = null;
       let latestResponseMarkdown = "";
@@ -5052,16 +5054,34 @@
       }
 
       function snapshotStudioScrollablePositions() {
+        const consent = bufferRecoveryEnabled ? captureEditorAsyncConsent() : null;
         return [sourceTextEl, sourcePreviewEl, critiqueViewEl]
           .filter((el) => el && typeof el.scrollTop === "number" && typeof el.scrollLeft === "number")
-          .map((el) => ({ el, top: el.scrollTop, left: el.scrollLeft }));
+          .map((el) => {
+            const right = el === critiqueViewEl, editor = el === sourceTextEl;
+            const view = right ? rightView : editorView;
+            const generation = right ? studioRightViewGeneration : studioEditorViewGeneration;
+            return {
+              el, top: el.scrollTop, left: el.scrollLeft,
+              isCurrent: () => el === (right ? critiqueViewEl : (editor ? sourceTextEl : sourcePreviewEl))
+                && view === (right ? rightView : editorView)
+                && generation === (right ? studioRightViewGeneration : studioEditorViewGeneration)
+                && (!consent || editorAsyncConsentIsCurrent(consent)),
+            };
+          });
       }
 
       function restoreStudioScrollablePositions(snapshot) {
         if (!Array.isArray(snapshot)) return;
         snapshot.forEach((entry) => {
           const el = entry && entry.el;
-          if (!el || !el.isConnected) return;
+          if (!el || !el.isConnected || entry.retired) return;
+          // Pane activation can finish after a view/buffer switch. Connectivity
+          // alone does not make the old offset belong to the reused DOM node.
+          if (typeof entry.isCurrent !== "function" || !entry.isCurrent()) {
+            entry.retired = true;
+            return;
+          }
           if (typeof entry.top === "number") el.scrollTop = entry.top;
           if (typeof entry.left === "number") el.scrollLeft = entry.left;
         });
@@ -16900,7 +16920,9 @@
 
       function setEditorView(nextView) {
         if (bufferRecoveryEnabled) sourcePreviewRenderNonce++;
-        editorView = nextView === "preview" ? "preview" : "markdown";
+        const normalizedView = nextView === "preview" ? "preview" : "markdown";
+        if (editorView !== normalizedView) studioEditorViewGeneration++;
+        editorView = normalizedView;
         if (bufferSwitchingEnabled) studioBufferScrollRestoreIsCurrent("source");
         editorViewSelect.value = editorView;
 
@@ -16944,6 +16966,7 @@
         }
         const previousView = rightView;
         rightView = normalizeRightViewValue(nextView);
+        if (rightView !== previousView) studioRightViewGeneration++;
         if (rightView !== "repl") replQuickFocusRequested = false;
         syncRightViewModeOptions();
         rightViewSelect.value = rightView;
