@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.61] — 2026-09-30
+
+### Fixed
+- Declare Pi-provided modules as wildcard peer dependencies rather than runtime dependencies, resolving Pi 0.99.1's extension-package warnings and avoiding separately installed runtime copies.
+- Keep these modules as development dependencies for typechecking, update the Pi development packages to 0.99.1, and add regression checks for the manifest and lockfile.
+
 ## [0.9.60] — 2026-09-07
 
 ### Added
