@@ -4,6 +4,14 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.62] — 2026-10-08
+
+### Fixed
+- With syntax highlighting on, the cursor could end up several characters away from the text being typed, mostly in Safari and other WebKit browsers such as Muxy and cmux. It happened when an edit let a word move back up a line. The editor now re-lays out its text after each edit, so the cursor and text stay together. A line that is exactly full can still show a brief mismatch, which corrects itself on the next key.
+
+### Added
+- `Ctrl+Shift+H` toggles syntax highlighting without leaving the editor.
+
 ## [0.9.61] — 2026-09-30
 
 ### Fixed

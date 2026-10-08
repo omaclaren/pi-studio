@@ -2587,6 +2587,7 @@
       let pendingResponseScrollReset = false;
       let editorMetaUpdateRaf = null;
       let editorHighlightEnabled = false;
+      let editorWrapCompositionActive = false;
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
       let completionSuggestionState = null;
@@ -17999,6 +18000,40 @@
         return EXT_TO_LANG[ext] || "";
       }
 
+      function repairEditorTextareaWrap(event) {
+        if (!editorHighlightEnabled || editorView !== "markdown" || editorWrapCompositionActive || event?.isComposing) return false;
+        // WebKit can keep the previous soft-wrap layout after a native edit,
+        // while the rebuilt overlay has already moved a word onto its prior line.
+        // Force both layouts without replacing text or touching native undo/IME.
+        const width = sourceTextEl.style.width;
+        const priority = sourceTextEl.style.getPropertyPriority("width");
+        const top = sourceTextEl.scrollTop, left = sourceTextEl.scrollLeft;
+        try {
+          sourceTextEl.style.setProperty("width", "calc(" + (width || "100%") + " - 1px)", priority);
+          void sourceTextEl.offsetWidth;
+        } finally {
+          if (width) sourceTextEl.style.setProperty("width", width, priority);
+          else sourceTextEl.style.removeProperty("width");
+          void sourceTextEl.offsetWidth;
+          sourceTextEl.scrollTop = top; sourceTextEl.scrollLeft = left;
+        }
+        syncEditorHighlightScroll();
+        return true;
+      }
+
+      function handleEditorHighlightShortcut(event) {
+        if (!event || event.defaultPrevented || event.isComposing || editorWrapCompositionActive || event.target !== sourceTextEl
+            || editorView !== "markdown" || sourceTextEl.disabled || sourceTextEl.readOnly || studioModalBlocksDraftAction()
+            || !event.ctrlKey || !event.shiftKey || event.metaKey || event.altKey
+            || !(event.code === "KeyH" || String(event.key || "").toLowerCase() === "h")) return false;
+        event.preventDefault(); event.stopPropagation();
+        if (!event.repeat) {
+          setEditorHighlightEnabled(!editorHighlightEnabled);
+          repairEditorTextareaWrap();
+        }
+        return true;
+      }
+
       function renderEditorHighlightNow() {
         if (!sourceHighlightEl) return;
         if (!editorHighlightEnabled || editorView !== "markdown") {
@@ -24944,8 +24979,15 @@
       });
 
       sourceTextEl.addEventListener("keydown", handleSourceTextTabKey);
+      sourceTextEl.addEventListener("keydown", handleEditorHighlightShortcut);
+      sourceTextEl.addEventListener("compositionstart", () => { editorWrapCompositionActive = true; });
+      sourceTextEl.addEventListener("compositionend", () => {
+        editorWrapCompositionActive = false;
+        repairEditorTextareaWrap();
+      });
 
-      sourceTextEl.addEventListener("input", () => {
+      sourceTextEl.addEventListener("input", event => {
+        repairEditorTextareaWrap(event);
         if (completionSuggestionState && sourceTextEl.value !== completionSuggestionState.baseText) {
           hideCompletionSuggestion();
         }

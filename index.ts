@@ -12515,7 +12515,7 @@ ${cssVarsBlock}
               <button id="showMeResponseBtn" type="button" hidden title="Explain the response displayed in the right pane using the smallest useful visual or structural representation.">Explain displayed response</button>
               <button id="askAsideBtn" type="button" title="Open a separate side-question thread without adding it to the main Pi conversation.">Side question</button>
               <button id="quizBtn" type="button" title="Open an active quiz for the current editor selection or document.">Quiz me</button>
-              <select id="highlightSelect" class="studio-flat-select" aria-label="Editor syntax highlighting">
+              <select id="highlightSelect" class="studio-flat-select" aria-label="Editor syntax highlighting" aria-keyshortcuts="Control+Shift+H">
                 <option value="off">Syntax highlight: Off</option>
                 <option value="bash">Syntax highlight: Bash</option>
                 <option value="c">Syntax highlight: C</option>
@@ -12806,6 +12806,7 @@ ${cssVarsBlock}
             <div><dt>Tab</dt><dd>Insert a visible completion suggestion; otherwise indent selected editor text</dd></div>
             <div><dt>Esc</dt><dd>Dismiss a visible completion suggestion, close overlays, exit pane focus, or stop an active request</dd></div>
             <div><dt>Shift+Tab</dt><dd>Unindent selected editor text</dd></div>
+            <div><dt>Ctrl+Shift+H</dt><dd>Toggle editor syntax highlighting</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group shortcuts-full-only">
