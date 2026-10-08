@@ -6,10 +6,11 @@ const source=readFileSync(new URL('../client/studio-client.js',import.meta.url),
 const html=readFileSync(new URL('../index.ts',import.meta.url),'utf8');
 function section(name){const start=source.indexOf('      function '+name+'(');if(start<0)return '';const end=source.indexOf('\n      function ',start+10);return source.slice(start,end);}
 function harness(overrides={}){
- const widths=[],calls={sync:0,toggle:0,prevent:0,stop:0},style={width:'',priority:'',getPropertyPriority(){return this.priority;},setProperty(_k,v,p){this.width=v;this.priority=p||'';},removeProperty(){this.width='';this.priority='';}};
+ // widths records the inline padding-right seen at each forced layout.
+ const widths=[],calls={sync:0,toggle:0,prevent:0,stop:0},style={padding:'',priority:'',getPropertyValue(k){return k==='padding-right'?this.padding:'';},getPropertyPriority(k){return k==='padding-right'?this.priority:'';},setProperty(k,v,p){assert.equal(k,'padding-right');this.padding=v;this.priority=p||'';},removeProperty(k){assert.equal(k,'padding-right');this.padding='';this.priority='';}};
  const el={style,value:'# Text\nA wrapped line.',selectionStart:12,selectionEnd:16,selectionDirection:'backward',scrollTop:80,scrollLeft:3,disabled:false,readOnly:false};
- Object.defineProperty(el,'offsetWidth',{get(){widths.push(style.width);el.scrollTop=0;return 500;}});
- const c={sourceTextEl:el,editorHighlightEnabled:true,editorView:'markdown',editorWrapCompositionActive:false,
+ Object.defineProperty(el,'offsetWidth',{get(){widths.push(style.padding);el.scrollTop=0;return 500;}});
+ const c={sourceTextEl:el,editorHighlightEnabled:true,editorView:'markdown',editorWrapCompositionActive:false,window:{getComputedStyle:()=>({paddingRight:'9px'})},
   syncEditorHighlightScroll:()=>calls.sync++,studioModalBlocksDraftAction:()=>false,
   setEditorHighlightEnabled:v=>{c.editorHighlightEnabled=v;calls.toggle++;},...overrides};
  vm.createContext(c);vm.runInContext(section('repairEditorTextareaWrap')+'\n'+section('handleEditorHighlightShortcut'),c);
@@ -20,13 +21,19 @@ function shortcut(h,event){assert.equal(typeof h.c.handleEditorHighlightShortcut
 
 test('highlighted raw input forces two layouts without altering text, selection, focus or scroll',()=>{
  const h=harness();const before={text:h.el.value,start:h.el.selectionStart,end:h.el.selectionEnd,direction:h.el.selectionDirection};
- assert.equal(repair(h,{}),true);assert.deepEqual(h.widths,['calc(100% - 1px)','']);assert.equal(h.el.scrollTop,80);assert.equal(h.el.scrollLeft,3);assert.equal(h.calls.sync,1);
+ assert.equal(repair(h,{}),true);assert.deepEqual(h.widths,['calc(9px + 1px)','']);assert.equal(h.el.scrollTop,80);assert.equal(h.el.scrollLeft,3);assert.equal(h.calls.sync,1);
  assert.deepEqual({text:h.el.value,start:h.el.selectionStart,end:h.el.selectionEnd,direction:h.el.selectionDirection},before);
 });
 
-test('repair restores an existing inline width and its priority',()=>{
- const h=harness();h.el.style.width='320px';h.el.style.priority='important';repair(h,{});
- assert.deepEqual(h.widths,['calc(320px - 1px)','320px']);assert.equal(h.el.style.width,'320px');assert.equal(h.el.style.priority,'important');
+test('repair restores an existing inline padding and its priority',()=>{
+ const h=harness();h.el.style.padding='12px';h.el.style.priority='important';repair(h,{});
+ assert.deepEqual(h.widths,['calc(9px + 1px)','12px']);assert.equal(h.el.style.padding,'12px');assert.equal(h.el.style.priority,'important');
+});
+
+test('the nudge narrows the text itself: padding, not width, which a growing flex item undoes',()=>{
+ const body=section('repairEditorTextareaWrap');
+ assert.match(body,/setProperty\("padding-right", "calc\(" \+ computed \+ " \+ 1px\)"/);
+ assert.doesNotMatch(body,/setProperty\("width"/);
 });
 
 for(const [label,settings,event] of [['plain',{editorHighlightEnabled:false},{}],['Preview',{editorView:'preview'},{}],['composition event',{}, {isComposing:true}],['active composition',{editorWrapCompositionActive:true},{}]])test(label+' does not force textarea layout',()=>{
@@ -57,4 +64,18 @@ test('native input invokes repair; composition lifecycle defers it until complet
  assert.match(source,/sourceTextEl\.addEventListener\("keydown", handleEditorHighlightShortcut\)/);
  assert.match(html,/<dt>Ctrl\+Shift\+H<\/dt><dd>Toggle editor syntax highlighting/);
  assert.match(html,/id="highlightSelect"[^>]*aria-keyshortcuts="Control\+Shift\+H"/);
+});
+
+test('a composition left open (e.g. by WebKit autocorrect) cannot disable the repair: an ordinary input event clears it',()=>{
+ const h=harness({editorWrapCompositionActive:true});
+ assert.equal(repair(h,{type:'input',isComposing:true}),false,'a real composition input still defers');
+ assert.equal(repair(h,{type:'input',isComposing:false}),true,'an ordinary input proves the composition is over');
+ assert.equal(h.c.editorWrapCompositionActive,false);
+});
+
+test('ordinary keys and blur clear a stale composition flag; typing pauses re-lay out once',()=>{
+ assert.match(source,/addEventListener\("keydown", event => \{ if \(!event\.isComposing && event\.keyCode !== 229\) editorWrapCompositionActive = false; \}\)/);
+ assert.match(source,/addEventListener\("blur", \(\) => \{ editorWrapCompositionActive = false; \}\)/);
+ assert.match(source,/repairEditorTextareaWrap\(event\); scheduleEditorWrapPauseRepair\(\);/);
+ assert.match(source,/function scheduleEditorWrapPauseRepair\(\)[\s\S]{0,260}setTimeout\(\(\) => \{ editorWrapPauseTimer = null; repairEditorTextareaWrap\(\); \}, 300\)/);
 });

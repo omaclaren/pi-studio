@@ -4,6 +4,12 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.9.63] — 2026-10-08
+
+### Fixed
+- The cursor fix in 0.9.62 didn't reach Studio's own editor, so in Safari and other WebKit browsers such as Muxy and cmux the cursor could still drift away from the text after an edit let a word move back up a line. The re-layout now works in Studio's layout.
+- After a macOS autocorrect, that re-layout could switch itself off until you moved to another line. Typing, an ordinary edit or leaving the editor now turns it back on, and the editor also re-lays out once whenever you pause typing.
+
 ## [0.9.62] — 2026-10-08
 
 ### Fixed

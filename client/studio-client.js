@@ -18001,24 +18001,40 @@
       }
 
       function repairEditorTextareaWrap(event) {
+        // A composition can start without a matching end (e.g. macOS autocorrect in WebKit);
+        // an ordinary input event proves it is over, so a stale flag cannot disable the repair.
+        if (event?.type === "input" && event.isComposing === false) editorWrapCompositionActive = false;
         if (!editorHighlightEnabled || editorView !== "markdown" || editorWrapCompositionActive || event?.isComposing) return false;
         // WebKit can keep the previous soft-wrap layout after a native edit,
         // while the rebuilt overlay has already moved a word onto its prior line.
-        // Force both layouts without replacing text or touching native undo/IME.
-        const width = sourceTextEl.style.width;
-        const priority = sourceTextEl.style.getPropertyPriority("width");
+        // Narrow the text by 1px for one forced layout, then restore it, without
+        // replacing text or touching native undo/IME. Nudge the padding, not the
+        // width: the editor is a flex item that grows back to full width, so a
+        // width nudge never reached its text layout (checked in WebKit, 8 Oct).
+        const style = sourceTextEl.style;
+        const padding = style.getPropertyValue("padding-right");
+        const priority = style.getPropertyPriority("padding-right");
+        const computed = window.getComputedStyle(sourceTextEl).paddingRight || "0px";
         const top = sourceTextEl.scrollTop, left = sourceTextEl.scrollLeft;
         try {
-          sourceTextEl.style.setProperty("width", "calc(" + (width || "100%") + " - 1px)", priority);
+          style.setProperty("padding-right", "calc(" + computed + " + 1px)", "important");
           void sourceTextEl.offsetWidth;
         } finally {
-          if (width) sourceTextEl.style.setProperty("width", width, priority);
-          else sourceTextEl.style.removeProperty("width");
+          if (padding) style.setProperty("padding-right", padding, priority);
+          else style.removeProperty("padding-right");
           void sourceTextEl.offsetWidth;
           sourceTextEl.scrollTop = top; sourceTextEl.scrollLeft = left;
         }
         syncEditorHighlightScroll();
         return true;
+      }
+
+      // Catch-all: lay the text out again once typing pauses, covering edits made
+      // outside the ordinary input path (autocorrect, dictation, text replacement).
+      let editorWrapPauseTimer = null;
+      function scheduleEditorWrapPauseRepair() {
+        if (editorWrapPauseTimer !== null) window.clearTimeout(editorWrapPauseTimer);
+        editorWrapPauseTimer = window.setTimeout(() => { editorWrapPauseTimer = null; repairEditorTextareaWrap(); }, 300);
       }
 
       function handleEditorHighlightShortcut(event) {
@@ -24978,6 +24994,8 @@
         requestLatestResponse();
       });
 
+      sourceTextEl.addEventListener("keydown", event => { if (!event.isComposing && event.keyCode !== 229) editorWrapCompositionActive = false; });
+      sourceTextEl.addEventListener("blur", () => { editorWrapCompositionActive = false; });
       sourceTextEl.addEventListener("keydown", handleSourceTextTabKey);
       sourceTextEl.addEventListener("keydown", handleEditorHighlightShortcut);
       sourceTextEl.addEventListener("compositionstart", () => { editorWrapCompositionActive = true; });
@@ -24987,7 +25005,7 @@
       });
 
       sourceTextEl.addEventListener("input", event => {
-        repairEditorTextareaWrap(event);
+        repairEditorTextareaWrap(event); scheduleEditorWrapPauseRepair();
         if (completionSuggestionState && sourceTextEl.value !== completionSuggestionState.baseText) {
           hideCompletionSuggestion();
         }
