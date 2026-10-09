@@ -5186,23 +5186,33 @@
       // File ▾ → New: replace the buffer you're in with an empty Untitled one, through the same
       // guarded route as other replacements, asking first if it holds work (Oliver, 10 Oct).
       async function startNewStudioBuffer() {
-        if (!bufferSwitchingEnabled || uiBusy || studioModalBlocksDraftAction()) return false;
-        const target = getStudioSelectedBuffer();
+        if (!bufferSwitchingEnabled || !bufferRecoveryClient || uiBusy || studioModalBlocksDraftAction()) return false;
+        // Capture what's on screen first, as Open file does, so the question reflects visible text
+        // even when a large paste couldn't be stored for recovery (Sol). No capture, no New.
+        const client = bufferRecoveryClient;
+        const captured = client.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferRecoveryExtra());
+        if (!captured.ok) { setStatus(captured.message || "The current text couldn't be checked. Nothing was replaced.", "warning"); return false; }
+        const snapshot = client.snapshot(), target = snapshot.buffers.find(b => b.id === snapshot.selectedBufferId);
         if (!target) return false;
         const role = target.role === "prompt" ? "Prompt" : "Document";
-        const consent = captureEditorAsyncConsent();
+        // Busy work that starts while asking or preparing stops New for good, even if it has
+        // finished by the time New would apply (Sol; the same epoch Open a copy uses).
+        const consent = captureEditorAsyncConsent(), epoch = studioBusyEpoch;
+        const eligible = () => client === bufferRecoveryClient && editorAsyncConsentIsCurrent(consent) && !uiBusy && studioBusyEpoch === epoch;
+        const refused = () => { setStatus(uiBusy || studioBusyEpoch !== epoch ? "Studio became busy, so nothing was replaced." : "The " + role + " changed. Nothing was replaced; try again.", "warning"); return false; };
         if (studioBufferReplacementNeedsConsent(target)) {
           const agreed = await requestStudioConfirmation("Start a new, empty " + role + "? Save or copy anything you need first. Files on disk aren't changed.",
             { title: "New " + role + "?", confirmLabel: "New " + role, destructive: true });
           if (!agreed) return false;
-          if (!editorAsyncConsentIsCurrent(consent)) { setStatus("The " + role + " changed. Nothing was replaced; try again.", "warning"); return false; }
+          if (!eligible()) return refused();
         }
         return runStudioEditorSourceMutation(() => {
+          if (!eligible()) return refused();
           setEditorText("", { preserveScroll: false, preserveSelection: false });
           setSourceState({ source: "blank", label: "blank", path: null, draftId: makeStudioDraftId() });
           setEditorLanguage("markdown");
           setStatus("New " + role + ".", "success");
-        }, () => editorAsyncConsentIsCurrent(consent));
+        }, eligible);
       }
 
       function normalizeStudioPaneLayout(value) {

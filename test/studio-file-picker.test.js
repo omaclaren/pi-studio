@@ -187,20 +187,36 @@ test("the reader's follow-on routes keep #, ? and % in a canonical name; identit
 test("File → New replaces the buffer you're in with an empty Untitled one, asking first if it holds work", async () => {
   const a = source.indexOf("      async function startNewStudioBuffer()"), b = source.indexOf("      function normalizeStudioPaneLayout(", a);
   assert(a > 0 && b > a, "New block");
-  const run = async ({ needsConsent, agreed = true, changed = false, role = "document" }) => {
+  const run = async ({ needsConsent, agreed = true, changed = false, role = "document", captureOk = true, busyDuringAsk = null }) => {
     const calls = []; let generation = 0;
-    const c = { bufferSwitchingEnabled: true, uiBusy: false, studioModalBlocksDraftAction: () => false,
-      getStudioSelectedBuffer: () => ({ id: role, role }), studioBufferReplacementNeedsConsent: () => needsConsent,
+    const client = { capture: () => (captureOk ? { ok: true } : { ok: false, message: "Recovery can't store this text." }),
+      snapshot: () => ({ selectedBufferId: role, buffers: [{ id: role, role }] }) };
+    const c = { bufferSwitchingEnabled: true, bufferRecoveryClient: client, uiBusy: false, studioBusyEpoch: 0, studioModalBlocksDraftAction: () => false,
+      buildWorkspacePersistencePayload: () => ({}), fileBackedBaselineText: null, bufferRecoveryExtra: () => ({}),
+      studioBufferReplacementNeedsConsent: () => needsConsent,
       captureEditorAsyncConsent: () => ({ generation }), editorAsyncConsentIsCurrent: consent => consent.generation === generation,
-      requestStudioConfirmation: async (message, options) => { calls.push(["ask", options.title]); if (changed) generation++; return agreed; },
+      requestStudioConfirmation: async (message, options) => {
+        calls.push(["ask", options.title]); if (changed) generation++;
+        if (busyDuringAsk === "still") c.uiBusy = true; if (busyDuringAsk === "aba") c.studioBusyEpoch++;
+        return agreed; },
       runStudioEditorSourceMutation: (apply, current) => (current() ? apply() : false),
       setEditorText: text => calls.push(["text", text]), setSourceState: state => calls.push(["source", state.source, state.path]),
       setEditorLanguage: lang => calls.push(["lang", lang]), setStatus: (m, k) => calls.push(["status", m, k]), makeStudioDraftId: () => "draft-1" };
     vm.createContext(c); vm.runInContext(source.slice(a, b), c); await c.startNewStudioBuffer(); return calls;
   };
+  const erased = calls => calls.some(x => x[0] === "text");
   assert.deepEqual(JSON.parse(JSON.stringify(await run({ needsConsent: false }))), [["text", ""], ["source", "blank", null], ["lang", "markdown"], ["status", "New Document.", "success"]]);
   const asked = await run({ needsConsent: true, role: "prompt" });
-  assert.equal(asked[0][1], "New Prompt?"); assert.ok(asked.some(x => x[0] === "text"));
-  assert.equal((await run({ needsConsent: true, agreed: false })).some(x => x[0] === "text"), false, "cancel keeps the text");
-  assert.equal((await run({ needsConsent: true, changed: true })).some(x => x[0] === "text"), false, "a change while asking keeps the text");
+  assert.equal(asked[0][1], "New Prompt?"); assert.ok(erased(asked));
+  assert.equal(erased(await run({ needsConsent: true, agreed: false })), false, "cancel keeps the text");
+  assert.equal(erased(await run({ needsConsent: true, changed: true })), false, "a change while asking keeps the text");
+  // Sol: visible text that recovery can't store is never erased unasked.
+  const oversized = await run({ needsConsent: false, captureOk: false });
+  assert.equal(erased(oversized), false); assert.match(oversized.at(-1)[1], /can't store/);
+  // Sol: busy work starting while asking stops New, whether it is still running or already done.
+  for (const busyDuringAsk of ["still", "aba"]) {
+    const calls = await run({ needsConsent: true, busyDuringAsk });
+    assert.equal(erased(calls), false, busyDuringAsk); assert.match(calls.at(-1)[1], /busy/);
+  }
 });
+
