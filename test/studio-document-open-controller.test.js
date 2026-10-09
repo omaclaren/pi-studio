@@ -9,3 +9,13 @@ test('same-flight presses coalesce; adoption binds before releasing the receipt'
 test('lost reply retains the exact intent for recheck, not a second identity',async()=>{let n=0;const f=await fixture(()=>++n===1?Promise.reject(Error('lost reply')):{ok:true,status:'committed'});assert.equal((await f.controller.open(input)).ok,false);const first=f.record.request;assert(f.controller.active());assert((await f.controller.recheck()).ok);const sent=f.calls.filter(x=>x.operation==='open');assert.equal(sent.length,2);assert.equal(sent[0].operationId,first.operationId);assert.deepEqual(sent[0],sent[1]);});
 test('cancel can overtake a held original response and late completion has no effects',async()=>{const held=deferred(),f=await fixture(b=>b.operation==='open-cancel'?{ok:true,status:'cancelled'}:held.promise),pending=f.controller.open(input);await new Promise(r=>setImmediate(r));assert((await f.controller.cancel()).ok);const effects=f.calls.filter(x=>typeof x==='string');held.resolve({ok:true,status:'committed'});await pending;assert.deepEqual(f.calls.filter(x=>typeof x==='string'),effects);assert(!f.record);});
 test('changed lease or disposal prevents late response adoption',async()=>{for(const disposed of [true,false]){const held=deferred(),f=await fixture(()=>held.promise),pending=f.controller.open(input);await new Promise(r=>setImmediate(r));if(disposed)f.controller.dispose();else f.generation=2;held.resolve({ok:true,status:'committed'});await pending;assert(f.record);assert(!f.calls.includes('finish'));assert(!f.calls.includes('bind'));}});
+test('a final refusal (too large) closes the open through Cancel and says why; an unknown failure keeps it',async()=>{
+ const message='notes.html is too large to edit in Studio (4,141,646 characters; the limit is 900,000). Open it in a browser instead.';
+ const f=await fixture(b=>b.operation==='open-cancel'?{ok:true,status:'cancelled'}:{ok:false,reason:'too-large',message});
+ const result=await f.controller.open(input);
+ assert.equal(result.ok,false);assert.equal(f.record,null,'the open backup is closed');
+ assert.deepEqual(f.calls.filter(c=>typeof c==='object').map(c=>c.operation),['open','open-cancel','open-ack']);
+ assert.deepEqual(f.calls.filter(c=>typeof c==='string'&&!['finish','bind'].includes(c)),[message],'only the reason is shown, not "cancelled"');
+ const g=await fixture(()=>({ok:false,reason:'conflict',message:'The originating checkpoint changed; no file was opened.'}));
+ await g.controller.open(input);assert.notEqual(g.record,null,'other refusals keep the backup for recheck');
+});

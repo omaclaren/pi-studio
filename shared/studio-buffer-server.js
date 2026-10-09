@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { isAbsolute, resolve } from "node:path";
-import { createStudioBuffer } from "./studio-buffer-store.js";
+import { basename, isAbsolute, resolve } from "node:path";
+import { createStudioBuffer, STUDIO_BUFFER_LIMITS } from "./studio-buffer-store.js";
 import { encodeStudioBufferRecovery, migrateStudioWorkspaceV1 } from "./studio-buffer-recovery.js";
 import { createStudioDocumentHostingStore, createStudioDocumentCopy, isStudioPristineWorkspace, studioDocumentAuthorityIdentity, studioDocumentMetadataKey } from "./studio-document-hosting.js";
 import { createStudioDocumentFileClaims } from "./studio-document-file-claims.js";
@@ -382,7 +382,16 @@ export function createStudioBufferServerStore(options = {}) {
 						sourceState: { source: "file", path: canonical, label: file.label, draftId: null },
 						view: { ...old.view, editorView: "markdown", rightView: "editor-preview", editorLanguage: file.editorLanguage || "markdown", selectionStart: 0, selectionEnd: 0, selectionDirection: "none", scrollTop: 0, previewScrollTop: 0, rightScrollTop: 0 },
 						metadata: { ...old.metadata, scratchpadKey: "file:" + canonical, reviewNotesKey: "file:" + canonical } }); }
-					catch { return fail("invalid-document", "The file cannot be represented safely. Nothing was replaced."); }
+					catch {
+						// Say plainly when a file is simply too large to edit (Oliver, 9 Oct). Like the
+						// refusal below, nothing has been recorded yet.
+						if (typeof file.text === "string" && file.text.length > STUDIO_BUFFER_LIMITS.textChars) {
+							// The limit counts text characters, not bytes (Sol).
+							const count = file.text.length.toLocaleString("en-US"), limit = STUDIO_BUFFER_LIMITS.textChars.toLocaleString("en-US");
+							return fail("too-large", (basename(file.path || "") || "That file") + " is too large to edit in Studio (" + count + " characters; the limit is " + limit + "). Open it in a browser instead.");
+						}
+						return fail("invalid-document", "The file cannot be represented safely. Nothing was replaced.");
+					}
 				}
 				status = owner ? "reused" : "committed";
 			}

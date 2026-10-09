@@ -14,7 +14,7 @@ function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve
 const tick=()=>new Promise(r=>setImmediate(r));
 const payload={text:'new document',path:'/outside/next.md',label:'next.md',resourceDir:'/outside'};
 const grantError=()=>Object.assign(new Error('Grant required'),{studioPayload:{code:'studio-resource-grant-required',path:payload.path,directoryPath:'/outside',label:payload.label}});
-const helpers=vm.createContext({assert,vm,load,tick,deferred,payload,grantError,URLSearchParams,context:values=>vm.createContext(values),section,source});
+const helpers=vm.createContext({assert,vm,load,tick,deferred,payload,grantError,URLSearchParams,context:values=>vm.createContext({studioRunFollowingAvailable:()=>false,getStudioRunWorkingOwner:()=>null,pauseStudioRunFollowing(){},...values}),section,source}); // run-following defaults, as in the newer suites
 Object.assign(helpers,{helpers,setTimeout});
 const fixtureFiles=['test/studio-buffer-open-grant.test.js','test/studio-buffer-open-lifecycle.test.js','test/studio-buffer-switching-ui.test.js'];
 const fixtures=fixtureFiles.map(n=>fs.readFileSync(join(repo,n),'utf8'));

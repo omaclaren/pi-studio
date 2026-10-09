@@ -57,10 +57,10 @@ test("raw-editor capability, connection and unsafe-operation fences stay intact"
     assert.equal(f.c.captureStudioDocumentAppend(), null); assert(!f.calls.includes("append")); }
 });
 
-test("size and refusal details remain available in menu help and the action tooltip", () => {
+test("available help is one plain line; refusal details stay in menu help and the tooltip", () => {
+  // Available: one plain line (batch A plain wording); a refusal still carries its full reason.
   const f = setup(); f.c.syncStudioDocumentAppendAction(); assert.equal(f.button.disabled, false);
-  assert.match(f.info.textContent, /60/); assert.match(f.info.textContent, /899,?989/); assert.match(f.info.textContent, /UTF-16/);
-  assert(f.button.title.includes(f.info.textContent), "capacity help is also available on hover");
+  assert.equal(f.info.textContent, "Add the whole Document to the Prompt."); assert.equal(f.button.title, f.info.textContent);
   for (const failure of [{ ok: false, reason: "empty-document", message: "Document is empty." },
     { ok: false, reason: "limit-exceeded", message: "Too large; nothing added.", addedCharacters: 901000, availableCharacters: 899989 }]) {
     f.c.infoFailure = failure; f.c.syncStudioDocumentAppendAction(); assert.equal(f.button.disabled, true); assert(f.info.textContent.includes(failure.message));

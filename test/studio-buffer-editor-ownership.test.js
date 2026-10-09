@@ -9,7 +9,7 @@ function section(start, end) {
 }
 function harness() {
 	let next = 0, decide;
-	const c = { bufferRecoveryEnabled: true, bufferSwitchingEnabled: false, documentHostingEnabled: false, editorContentGeneration: 0, origin: "original", sourceTextEl: { value: "saved snapshot" },
+	const c = { bufferSwitcherUi: null, isWatchedFilePreview: false, bufferPageClosed: false, bufferRecoveryEnabled: true, bufferSwitchingEnabled: false, documentHostingEnabled: false, editorContentGeneration: 0, origin: "original", sourceTextEl: { value: "saved snapshot" },
 		sourceState: { path: "/original.md", label: "original.md" }, fileBackedBaselineText: "disk", fileBackedDiskRevision: "old-revision",
 		pendingSaveOperations: new Map(), pendingEditorRefresh: null, pendingRequestId: null, pendingKind: null, stickyStudioKind: null, uiBusy: false,
 		pendingPiEditorLoad: null, pendingPiEditorLink: null, pendingPiEditorClear: null,
@@ -26,6 +26,9 @@ function harness() {
 		requestStudioConfirmation: () => new Promise(resolve => { decide = resolve; }),
 		openStudioDecision: () => new Promise(resolve => { decide = resolve; }),
 		editorDiffersFromFileBackedBaseline: () => c.sourceTextEl.value !== c.fileBackedBaselineText,
+		// Save As gained these guards after the harness was written; neutral values keep the consent checks under test.
+		studioModalBlocksDraftAction: () => false, hasRefreshableFilePath: () => Boolean(c.sourceState.path),
+		editorDraftHelpers: { buildDraftSaveFilename: () => "draft.md" },
 	};
 	vm.createContext(c);
 	vm.runInContext(section("function setStudioResourceDirValue(", "function getCurrentResourceDirValue("), c);

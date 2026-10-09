@@ -1,4 +1,5 @@
 import test from "node:test";
+import { dedicatedTestBrowser } from "./dedicated-test-browser.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -6,13 +7,10 @@ import puppeteer from "puppeteer-core";
 
 // Native browser-module/sessionStorage harness, not a mock or a new production UI.
 const scripts = new Map(["studio-buffer-store.js", "studio-buffer-recovery.js"].map(name => ["/" + name, readFileSync(new URL("../shared/" + name, import.meta.url), "utf8")]));
-const browserExecutable = [process.env.PUPPETEER_EXECUTABLE_PATH,
-	"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser",
-].filter(Boolean).find(path => existsSync(path));
+const testBrowser = dedicatedTestBrowser(), browserExecutable = testBrowser.path;
 
 test("buffer modules migrate and reconstruct using native sessionStorage without leaking across tabs", { timeout: 30_000 }, async () => {
-	assert(browserExecutable, "Set PUPPETEER_EXECUTABLE_PATH to a Chromium browser.");
+	assert(browserExecutable, testBrowser.message);
 	const server = createServer((req, res) => {
 		const body = scripts.get(req.url);
 		res.writeHead(body || req.url === "/" ? 200 : 404, { "Content-Type": body ? "application/javascript" : "text/html", "Cache-Control": "no-store" });

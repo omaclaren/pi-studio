@@ -42,7 +42,7 @@ function openFixture(){
  Object.defineProperty(c.studioDecisionTitleEl,'textContent',{get:()=>titles.at(-1)||'',set:value=>titles.push(value)});
  load(c,'function studioModalBlocksDraftAction(', 'function triggerLoadResponseShortcut(');
  // Execute the real status-sync entry before unrelated button rendering.
- vm.runInContext(section(source,'function syncActionButtons()', 'const canSaveOver =')+'}',c);
+ vm.runInContext(section(source,'function syncActionButtons()', 'const canRefreshFromDisk =')+'}',c);
  load(c,'function syncModalOpenState()', 'function describeStudioDocument(');
  load(c,'function studioBuffersCanSwitch(', 'function studioBufferScrollPosition(');
  load(c,'function captureBufferRecoveryInitializationOwner()', 'function recoveryCanChangeWorkspace()');

@@ -1,4 +1,5 @@
 import test from "node:test";
+import { dedicatedTestBrowser } from "./dedicated-test-browser.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -20,15 +21,7 @@ assert.ok(helpers, "Studio Mermaid browser helpers should load in tests.");
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function findBrowserExecutable() {
-  const candidates = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-  ].filter(Boolean);
-  return candidates.find((candidate) => existsSync(candidate)) || null;
+  return dedicatedTestBrowser().path; // a dedicated test Chromium, or skip
 }
 
 function hexCssToRgb(value) {

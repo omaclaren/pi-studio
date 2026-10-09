@@ -7722,4 +7722,5 @@
 
     /* A named file's own menu: its full path, then the file actions (Oliver, 9 Oct). */
     body.studio-workspace-layout .studio-file-menu-path { padding: 4px 8px 6px; color: var(--muted); font-size: 0.82rem; font-weight: 400; overflow-wrap: anywhere; user-select: text; }
-    body.studio-workspace-layout #studioWorkspaceFilenameMenu > button { display: block; width: 100%; text-align: left; }
+    /* Small buffer menus (view, file name, Add to Prompt) list their actions vertically. */
+    body.studio-workspace-layout .studio-buffer-menu > button { display: block; width: 100%; text-align: left; }

@@ -95,7 +95,7 @@ function harness({ only = false, watched = false } = {}) {
   c.editorDraftHelpers = c.PiStudioEditorDraftHelpers;
   load(c, "makeStudioUiRefreshElement", "makeStudioUiRefreshSeparator", "makeStudioUiRefreshIcon", "setStudioUiRefreshFocusButtonIcon", "appendStudioUiRefreshMenuSection",
     "closeStudioUiRefreshMenus", "toggleStudioUiRefreshMenu", "placeStudioUiRefreshMenu", "makeStudioUiRefreshMenu", "syncStudioResponseActionLayout", "syncStudioWorkspaceFilename", "setupStudioUiRefreshPrototype",
-    "closeStudioBufferActionMenus", "makeStudioBufferActionMenu", "syncStudioBufferSourceActions", "syncStudioBufferSwitcher", "triggerStudioRoleShortcut", "setupStudioFileNameMenu", "setupStudioBufferSwitcher");
+    "closeStudioBufferActionMenus", "makeStudioBufferActionMenu", "syncStudioBufferSourceActions", "syncStudioBufferSwitcher", "triggerStudioRoleShortcut", "setupStudioFileNameMenu", "syncStudioAddToPromptChoice", "setupStudioBufferSwitcher");
   load(c, "getStudioPaneLayoutLabel", "setStudioPaneLayout");
   const layoutStart = source.indexOf('      if (studioPaneLayoutSelect) {');
   const layoutEnd = source.indexOf('      if (documentPreviewFollowSelect) {', layoutStart);
@@ -139,10 +139,10 @@ test("actual refreshed constructor relocates original controls into two workspac
   assert.equal(c.suggestCompletionBtn.closest(".studio-refresh-menu"), ui.menus.find(item => item.name === "review").menu);
 });
 
-test("File starts with Open, then New; labels stay fixed and act on the buffer you're in; Pi draft only in Prompt", () => {
+test("File starts with New and Open, then New Document window; labels stay fixed and act on the buffer you're in; Pi draft only in Prompt", () => {
   const f = harness(), menu = f.c.studioUiRefreshUi.menus.find(item => item.name === "context").menu;
   const order = () => menu.children[0].querySelectorAll("button").map(button => button.id);
-  const expected = ["studioOpenDocumentBtn", "importFileBtn", "getEditorBtn", "openCompanionBtn"];
+  const expected = ["studioNewBufferBtn", "studioOpenDocumentBtn", "importFileBtn", "getEditorBtn", "openCompanionBtn"];
   assert.deepEqual(order(), expected);
   for (const role of ["prompt", "doc"]) {
     f.c.selectStudioBuffer(role);
@@ -207,6 +207,14 @@ test("workspace Add to Prompt is visible only in Document; hidden handlers retai
   f.c.selectStudioBuffer("prompt"); assert.equal(add.anchor.hidden, true);
   assert.equal(add.button.id, "studioBufferAddBtn");
   f.c.selectStudioBuffer("doc"); assert.equal(add.anchor.hidden, false);
+  // One click (Oliver, 9 Oct): the real buttons sit in the row; only the applicable one shows.
+  const { addSelection, addDocument } = f.c.bufferSwitcherUi;
+  assert.equal(add.button.hidden, true); assert.equal(addSelection.parentElement, add.anchor); assert.equal(addDocument.parentElement, add.anchor);
+  assert.equal(addSelection.textContent, "Add selection to Prompt"); assert.equal(addDocument.textContent, "Add document to Prompt");
+  addSelection.disabled = true; f.c.syncStudioAddToPromptChoice();
+  assert.equal(addSelection.hidden, true); assert.equal(addDocument.hidden, false, "no selection: add the document");
+  addSelection.disabled = false; f.c.syncStudioAddToPromptChoice();
+  assert.equal(addSelection.hidden, false); assert.equal(addDocument.hidden, true, "a selection: add just that");
 });
 
 test("preview options follow the selected buffer role without changing routes or permissions", () => {

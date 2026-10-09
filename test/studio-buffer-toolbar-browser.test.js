@@ -1,4 +1,5 @@
 import test from "node:test";
+import { dedicatedTestBrowser } from "./dedicated-test-browser.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import puppeteer from "puppeteer-core";
@@ -14,7 +15,7 @@ const fixture = `
 const sourceTextEl = document.querySelector('textarea'), leftPaneEl = document.querySelector('#leftPane');
 const sourcePreviewEl = document.querySelector('#sourcePreview'), critiqueViewEl = document.querySelector('#critiqueView');
 const importFileBtn = document.querySelector('#importFileBtn'), getEditorBtn = document.querySelector('#getEditorBtn');
-const clearWorkspaceBtn = null;
+const clearWorkspaceBtn = null, openCompanionBtn = null; // classic strip: no New Document window button here
 let bufferSwitcherUi = null, bufferBindingInProgress = false, bufferSwitchingEnabled = true;
 let studioSelectionAppendSourceActive = false, studioSelectionAppendOwnerGeneration = 0, studioDocumentAppendOwnerGeneration = 0;
 let bufferViewRestore = null, uiBusy = false, agentBusyFromServer = false, editorView = 'markdown', generation = 0;
@@ -46,8 +47,8 @@ sourceTextEl.value=getStudioSelectedBuffer().text;
 `;
 
 test("compact buffer disclosures preserve native selection, keyboard access and source destinations", { timeout: 60_000 }, async t => {
-  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-  assert(executablePath && existsSync(executablePath), "Set PUPPETEER_EXECUTABLE_PATH to a dedicated test Chromium executable; no everyday-browser fallback.");
+  const testBrowser = dedicatedTestBrowser(), executablePath = testBrowser.path;
+  assert(executablePath, testBrowser.message);
   let browser, page;
   const errors = [];
   try {

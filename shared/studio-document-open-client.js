@@ -9,13 +9,21 @@ export function createStudioDocumentOpenController(options) {
 	const notify = (message, severity = "warning") => { if (!closed) options.status?.(message, severity); };
 	const changed = () => { if (!closed) options.changed?.(); };
 	const fail = message => ({ ok: false, message });
-	async function deliver(owner, record, operation) {
+	// Refusals the server makes before recording anything: the open certainly didn't happen, so it
+	// is closed through the ordinary Cancel route and its reason shown, not kept as unknown (Oliver, 9 Oct).
+	const finalOpenRefusals = new Set(["too-large", "invalid-document"]);
+	async function deliver(owner, record, operation, settings = {}) {
 		const generation = options.generation();
 		const current = () => !closed && client() === owner && generation > 0 && generation === options.generation() && pending()?.record === record;
 		try {
 			if (!current()) return fail("Reconnect the owning editor before checking this open request.");
 			const result = await options.request({ ...record.request, operation, generation });
 			if (!current()) return fail("The opening editor changed; its backup was kept.");
+			if (!result?.ok && operation === "open" && finalOpenRefusals.has(result?.reason)) {
+				await deliver(owner, record, "open-cancel", { quiet: true });
+				notify(result.message || "That file can't be opened here. Current work was kept.");
+				return fail(result.message || "The file was not opened.");
+			}
 			if (!result?.ok) throw Error(result?.message || "The file-open outcome is unknown. Keep the backup and recheck.");
 			// Capture pre-debounce Prompt typing, or detect late affected DOM changes.
 			options.capture?.();
@@ -24,7 +32,7 @@ export function createStudioDocumentOpenController(options) {
 			if (result.status === "committed") options.replace?.(record.request.bufferId);
 			if (applied.selectedChanged) options.bind();
 			changed();
-			notify(result.status === "cancelled" ? "File opening cancelled. Current work was kept."
+			if (!settings.quiet) notify(result.status === "cancelled" ? "File opening cancelled. Current work was kept."
 				: result.status === "reused" ? "The file already has an editor. Current work was kept."
 				: "Opened the file in its existing buffer. Other work was kept; nothing was sent.", "success");
 			await owner.settled();

@@ -5183,6 +5183,28 @@
         }, () => !bufferRecoveryEnabled || editorAsyncConsentIsCurrent(consent));
       }
 
+      // File ▾ → New: replace the buffer you're in with an empty Untitled one, through the same
+      // guarded route as other replacements, asking first if it holds work (Oliver, 10 Oct).
+      async function startNewStudioBuffer() {
+        if (!bufferSwitchingEnabled || uiBusy || studioModalBlocksDraftAction()) return false;
+        const target = getStudioSelectedBuffer();
+        if (!target) return false;
+        const role = target.role === "prompt" ? "Prompt" : "Document";
+        const consent = captureEditorAsyncConsent();
+        if (studioBufferReplacementNeedsConsent(target)) {
+          const agreed = await requestStudioConfirmation("Start a new, empty " + role + "? Save or copy anything you need first. Files on disk aren't changed.",
+            { title: "New " + role + "?", confirmLabel: "New " + role, destructive: true });
+          if (!agreed) return false;
+          if (!editorAsyncConsentIsCurrent(consent)) { setStatus("The " + role + " changed. Nothing was replaced; try again.", "warning"); return false; }
+        }
+        return runStudioEditorSourceMutation(() => {
+          setEditorText("", { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label: "blank", path: null, draftId: makeStudioDraftId() });
+          setEditorLanguage("markdown");
+          setStatus("New " + role + ".", "success");
+        }, () => editorAsyncConsentIsCurrent(consent));
+      }
+
       function normalizeStudioPaneLayout(value) {
         const normalized = String(value || "").trim().toLowerCase();
         return normalized === "editor-top" || normalized === "response-top" ? normalized : "side-by-side";
@@ -13967,8 +13989,8 @@
         const mainAction = type === "directory" ? "open-dir" : (kind === "text" ? "read" : "open");
         const mainTitle = type === "directory" ? "Open folder" : (kind === "text" ? "Read" : (kind === "pdf" || kind === "image" ? "Preview" : "Open"));
         const visible = type === "directory" ? "" : editable
-          ? "<button " + attrs("edit", " title='Open in the Document. Save writes the file.'") + ">Edit</button>"
-            + "<button " + attrs("open-prompt", " title='Open as the Prompt. Save writes the file.'") + ">Use as Prompt</button>"
+          ? "<button " + attrs("edit", " title='Edit this file in the Document. Save writes the file.'") + ">Open in Document</button>"
+            + "<button " + attrs("open-prompt", " title='Edit this file as the Prompt. Save writes the file.'") + ">Open in Prompt</button>"
           : (kind === "pdf" || kind === "image" ? "<button " + attrs("open-preview-new") + ">" + (documentHostingEnabled ? "Open separately" : "Preview tab") + "</button>" : "");
         const more = (kind === "text" ? "<button " + attrs("watch-new") + ">Follow changes</button>" : "")
           + (editable ? "<button " + attrs("open-new") + ">" + (kind === "office" ? "Convert in new window" : "Open in new window") + "</button>" : "")
@@ -17461,6 +17483,14 @@
           ? "Select text in the Document first."
           : "Add the selected text to the Prompt.";
         if (bufferSwitcherUi.selectionInfo) bufferSwitcherUi.selectionInfo.textContent = button.title;
+        if (bufferSwitcherUi.workspaceLayout) syncStudioAddToPromptChoice();
+      }
+      // In the new layout only the applicable Add button shows (see the workspace setup).
+      function syncStudioAddToPromptChoice() {
+        const ui = bufferSwitcherUi;
+        if (!ui?.workspaceLayout || !ui.addSelection || !ui.addDocument) return;
+        ui.addSelection.hidden = ui.addSelection.disabled;
+        ui.addDocument.hidden = !ui.addSelection.disabled;
       }
       function setupStudioSelectionAppendAction(button) {
         const setSourceActive = active => {
@@ -17606,6 +17636,7 @@
         const description = available.ok ? "Add the whole Document to the Prompt." : available.message;
         button.title = description;
         if (bufferSwitcherUi.documentInfo.textContent !== description) bufferSwitcherUi.documentInfo.textContent = description;
+        if (bufferSwitcherUi.workspaceLayout) syncStudioAddToPromptChoice();
       }
       function setupStudioDocumentAppendAction(button) {
         // Keep native pointer and keyboard continuations separate. Undefined
@@ -17728,12 +17759,14 @@
           menu.hidden = false; button.setAttribute("aria-expanded", "true");
           // Panes clip overflow. Keep the disclosure inside both its pane and
           // the viewport, including when the compact strip wraps at narrow widths.
+          // It fits its content and starts under its own opener (Oliver, 9 Oct).
           const pane = leftPaneEl.getBoundingClientRect(), origin = anchor.getBoundingClientRect();
           const left = Math.max(8, pane.left + 8), right = Math.min(window.innerWidth - 8, pane.right - 8);
-          const width = Math.min(340, Math.max(0, right - left));
-          menu.style.width = width + "px";
+          const room = Math.max(0, right - left);
+          menu.style.width = "max-content"; menu.style.minWidth = Math.min(160, room) + "px"; menu.style.maxWidth = Math.min(340, room) + "px";
           menu.style.right = "auto";
-          menu.style.left = (Math.max(left, Math.min(origin.right - width, right - width)) - origin.left) + "px";
+          const width = Math.min(menu.getBoundingClientRect().width || Math.min(340, room), room);
+          menu.style.left = (Math.max(left, Math.min(origin.left, right - width)) - origin.left) + "px";
           menu.style.maxHeight = Math.max(0, Math.min(440, window.innerHeight - origin.bottom - 14, pane.bottom - origin.bottom - 14)) + "px";
           const buttons = actions(); (last ? buttons.at(-1) : buttons[0])?.focus({ preventScroll: true });
         };
@@ -17783,6 +17816,7 @@
           if (workspace) getEditorBtn.hidden = destination !== "Prompt";
           if (bufferSwitcherUi.piInfo) bufferSwitcherUi.piInfo.textContent = getEditorBtn.title;
         }
+        if (workspace && bufferSwitcherUi.newBuffer) bufferSwitcherUi.newBuffer.title = "Start a new, empty " + destination + " here. Files on disk aren't changed.";
         if (workspace && bufferSwitcherUi.open) {
           bufferSwitcherUi.open.textContent = "Open file…";
           bufferSwitcherUi.open.title = "Edit a file in the " + destination + ". Save writes the file.";
@@ -17894,6 +17928,9 @@
         const importInfo = importFileBtn ? addItem(loadMenu, importFileBtn, "studioBufferImportInfo") : null;
         const piInfo = getEditorBtn ? addItem(loadMenu, getEditorBtn, "studioBufferPiInfo") : null;
         const open = makeButton("studioOpenDocumentBtn", "Open file in Document…");
+        // File ▾ → New (Oliver, 10 Oct): an empty Untitled buffer here, replacing the one you're in.
+        const newBuffer = workspaceHost ? makeButton("studioNewBufferBtn", "New") : null;
+        newBuffer?.addEventListener("click", () => { void startNewStudioBuffer(); });
         open.title = "Open a file in the Document. Studio asks first if unsaved changes would be replaced.";
         addItem(loadMenu, open, "studioOpenDocumentInfo", open.title);
         const addSelection = makeButton("studioAddSelectionBtn", "Selection");
@@ -17923,7 +17960,7 @@
           // Open folds into File ▾ (trial48 finding 15): opening comes first; Save stays visible.
           const fileMenu = studioUiRefreshUi.menus.find(item => item.name === "context");
           if (fileMenu) {
-            const openItems = [open, importFileBtn, getEditorBtn, openCompanionBtn].filter(Boolean);
+            const openItems = [newBuffer, open, importFileBtn, getEditorBtn, openCompanionBtn].filter(Boolean);
             // Their old description lines stay in the unused Open menu; don't point at them.
             for (const item of openItems) item.removeAttribute?.("aria-describedby");
             const openSection = appendStudioUiRefreshMenuSection(fileMenu.menu, "", openItems);
@@ -17938,12 +17975,17 @@
           }
           studioUiRefreshUi.menus = studioUiRefreshUi.menus.filter(item => item !== studioUiRefreshUi.openMenu);
           studioUiRefreshUi.actionLine.insertBefore(addMenu.anchor, queueSteerBtn?.nextSibling || sendRunBtn?.nextSibling || null);
+          // One click (Oliver, 9 Oct): the real guarded buttons sit in the row and only the one that
+          // applies shows, "Add selection to Prompt" with text selected, else "Add document to Prompt".
+          addMenu.button.hidden = true;
+          addSelection.textContent = "Add selection to Prompt"; addDocument.textContent = "Add document to Prompt";
+          addMenu.anchor.insertBefore(addSelection, addMenu.menu); addMenu.anchor.insertBefore(addDocument, addMenu.menu);
           if (clearWorkspaceBtn) clearWorkspaceBtn.textContent = "Reset Prompt and Document…";
         } else {
           strip.append(tabs, loadMenu.anchor, addMenu.anchor); leftPaneEl.querySelector(".source-wrap").prepend(strip);
         }
         const nameMenu = workspaceHost ? setupStudioFileNameMenu() : null;
-        bufferSwitcherUi = { strip, prompt, document: documentButton, open, addSelection, addDocument, selectionInfo, documentInfo, importInfo, piInfo, addMenu, loadMenu, viewMenus, nameMenu, workspaceLayout: Boolean(workspaceHost) };
+        bufferSwitcherUi = { strip, prompt, document: documentButton, open, newBuffer, addSelection, addDocument, selectionInfo, documentInfo, importInfo, piInfo, addMenu, loadMenu, viewMenus, nameMenu, workspaceLayout: Boolean(workspaceHost) };
         setupStudioSelectionAppendAction(addSelection);
         setupStudioDocumentAppendAction(addDocument);
         // Append consumes its native press before closing/focusing the trigger.
@@ -19684,12 +19726,12 @@
         const state = bufferRecoveryClient?.snapshot();
         const local = state?.buffers.find(entry => entry.sourceState.path === page.path);
         if (!documentHostingEnabled) return local ? { kind: "local", label: local.role === "prompt" ? "Go to Prompt" : "Go to Document", bufferId: local.id, workspaceId: studioTabStateId }
-          : { kind: "new", label: "Open in Document…" };
+          : { kind: "new", label: "Open in Document" };
         if (!documentHostingReady) return { kind: "unavailable", label: "Wait for Document recovery", disabled: true };
         // page.path is canonical and literal; link routes need "#", "?" and "%" kept in the name (Sol).
         const found = await requestDocumentHosting({ operation: "owner", path: studioLiteralPathToLinkRef(page.path), sourcePath: page.path, resourceDir: page.resourceDir, focus: false });
         if (!found.ok) throw new Error(found.message || "The editing owner could not be checked.");
-        if (!found.owner) return { kind: "new", label: isEditorOnlyMode ? "Open in this Document…" : "Open in Document…" };
+        if (!found.owner) return { kind: "new", label: isEditorOnlyMode ? "Open in this Document" : "Open in Document" };
         const owner = found.owner;
         if (owner.workspaceId === studioTabStateId) {
           const entry = state?.buffers.find(buffer => buffer.id === owner.bufferId);
@@ -19697,13 +19739,14 @@
         }
         return { ...owner, kind: "window", label: found.live ? "Show its window" : "Resume its window…" };
       }
-      async function openStudioLinkedReaderForEdit(page, owner, isCurrent) {
+      async function openStudioLinkedReaderForEdit(page, owner, isCurrent, role = "document") {
         const context = { sourcePath: page.path, resourceDir: page.resourceDir, isCurrent };
         if (owner.kind === "window" || (owner.kind === "local" && documentHostingEnabled)) {
           const result = await reuseHostedDocumentOwner(studioLiteralPathToLinkRef(page.path), context, { isCurrent });
           return result.handled && result.ok;
         }
         if (owner.kind === "local") return isCurrent() && selectStudioBuffer(owner.bufferId, { focusEditor: true });
+        if (role === "prompt" && bufferSwitchingEnabled) return openStudioBufferDocument(studioLiteralPathToLinkRef(page.path), context, "prompt");
         return openPreviewDocumentHere(studioLiteralPathToLinkRef(page.path), context);
       }
       async function ensureStudioLinkedReader() {
@@ -19720,6 +19763,7 @@
             read: (href, context) => fetchPreviewLocalLink("reader", href, context),
             originLabel: studioLinkedReaderOriginLabel, originTitle: studioLinkedReaderOriginTitle, returnToOrigin: restoreStudioLinkedReaderOrigin,
             findOwner: findStudioLinkedReaderEditor, openForEdit: openStudioLinkedReaderForEdit,
+            canOpenInPrompt: () => bufferSwitchingEnabled && !isEditorOnlyMode && !isWatchedFilePreview,
             editingBusy: () => bufferPageClosed || uiBusy || wsState !== "Ready",
             report: message => setStatus(message, "warning"),
             changed: syncStudioLinkedReaderChrome,
@@ -31377,9 +31421,9 @@
           return false;
         };
         if (!eligible()) { finishFileImport(operation); return refuse(); }
-        // Ask before replacing work, by the same rule as Open file.
-        const target = getStudioSelectedBuffer();
-        if (!confirmed && studioBufferReplacementNeedsConsent(target)) {
+        // Ask before replacing work, by the same rule as Open file (the dialog route has already asked).
+        const target = confirmed ? null : getStudioSelectedBuffer();
+        if (target && studioBufferReplacementNeedsConsent(target)) {
           const name = basenameForStudioPath(path) || path, destination = target.role === "prompt" ? "Prompt" : "Document";
           const agreed = await requestStudioConfirmation("Replace the " + destination + "'s current text with a copy of " + name
             + "? Save or copy anything you need first. The file itself isn't changed.",

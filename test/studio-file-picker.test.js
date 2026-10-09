@@ -62,11 +62,11 @@ test("Files rows keep the name visible, read on click, and put the rest under �
   vm.createContext(c); vm.runInContext(source.slice(rowStart, rowEnd), c);
   const html = c.buildStudioFilesRowHtml({ type: "file", kind: "text", path: "/n/a.md", name: "a.md", icon: "📝", meta: "document · 1 KB" });
   assert.match(html, /data-files-action='read'[^>]*class='files-open-btn'/); assert.match(html, /<span class='files-name'>a\.md<\/span>/);
-  assert.match(html, />Edit<\/button>/); assert.match(html, />Use as Prompt<\/button>/);
+  assert.match(html, />Open in Document<\/button>/); assert.match(html, />Open in Prompt<\/button>/);
   const more = html.slice(html.indexOf("<details class='files-more'>"));
   for (const label of ["Follow changes", "Open in new window", "Copy path", "Show in folder"]) assert.ok(more.includes(">" + label + "<"), label + " under ⋯");
   const dir = c.buildStudioFilesRowHtml({ type: "directory", kind: "directory", path: "/n/sub", name: "sub", icon: "📁", meta: "folder" });
-  assert.match(dir, /data-files-action='open-dir'/); assert.doesNotMatch(dir, />Edit</);
+  assert.match(dir, /data-files-action='open-dir'/); assert.doesNotMatch(dir, />Open in Document</);
 });
 
 test("a Files listing that arrives while a path is typed keeps the text and caret", () => {
@@ -182,4 +182,25 @@ test("the reader's follow-on routes keep #, ? and % in a canonical name; identit
   assert.match(source, /entry\.sourceState\.path === page\.path/, "local identity comparison stays literal");
   const ui = readFileSync(new URL("../shared/studio-linked-reader-ui.js", import.meta.url), "utf8");
   assert.match(ui, /return read\(String\(page\.path\)\.replace\(\/\[%#\?\]\/g, ch => encodeURIComponent\(ch\)\), context\(\), \{ refresh: true \}\);/);
+});
+
+test("File → New replaces the buffer you're in with an empty Untitled one, asking first if it holds work", async () => {
+  const a = source.indexOf("      async function startNewStudioBuffer()"), b = source.indexOf("      function normalizeStudioPaneLayout(", a);
+  assert(a > 0 && b > a, "New block");
+  const run = async ({ needsConsent, agreed = true, changed = false, role = "document" }) => {
+    const calls = []; let generation = 0;
+    const c = { bufferSwitchingEnabled: true, uiBusy: false, studioModalBlocksDraftAction: () => false,
+      getStudioSelectedBuffer: () => ({ id: role, role }), studioBufferReplacementNeedsConsent: () => needsConsent,
+      captureEditorAsyncConsent: () => ({ generation }), editorAsyncConsentIsCurrent: consent => consent.generation === generation,
+      requestStudioConfirmation: async (message, options) => { calls.push(["ask", options.title]); if (changed) generation++; return agreed; },
+      runStudioEditorSourceMutation: (apply, current) => (current() ? apply() : false),
+      setEditorText: text => calls.push(["text", text]), setSourceState: state => calls.push(["source", state.source, state.path]),
+      setEditorLanguage: lang => calls.push(["lang", lang]), setStatus: (m, k) => calls.push(["status", m, k]), makeStudioDraftId: () => "draft-1" };
+    vm.createContext(c); vm.runInContext(source.slice(a, b), c); await c.startNewStudioBuffer(); return calls;
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(await run({ needsConsent: false }))), [["text", ""], ["source", "blank", null], ["lang", "markdown"], ["status", "New Document.", "success"]]);
+  const asked = await run({ needsConsent: true, role: "prompt" });
+  assert.equal(asked[0][1], "New Prompt?"); assert.ok(asked.some(x => x[0] === "text"));
+  assert.equal((await run({ needsConsent: true, agreed: false })).some(x => x[0] === "text"), false, "cancel keeps the text");
+  assert.equal((await run({ needsConsent: true, changed: true })).some(x => x[0] === "text"), false, "a change while asking keeps the text");
 });

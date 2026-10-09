@@ -1,4 +1,5 @@
 import test from "node:test";
+import { dedicatedTestBrowser } from "./dedicated-test-browser.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -18,15 +19,7 @@ const navigationHelperSource = readFileSync(resolve(projectRoot, "client/studio-
 const token = "browser-test-token";
 
 function findBrowserExecutable() {
-  const candidates = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-  ].filter(Boolean);
-  return candidates.find((candidate) => existsSync(candidate)) || null;
+  return dedicatedTestBrowser().path;
 }
 
 function listen(server) {
@@ -91,7 +84,7 @@ const browserExecutable = findBrowserExecutable();
 test("cross-browser pending launcher opens exactly one useful or informative tab", async () => {
   assert.ok(
     browserExecutable,
-    "A Brave/Chrome/Chromium executable is required. Set PUPPETEER_EXECUTABLE_PATH to run launcher browser tests.",
+    dedicatedTestBrowser().message,
   );
 
   const server = createServer((request, response) => {

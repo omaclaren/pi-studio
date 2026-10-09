@@ -114,6 +114,20 @@ test("editing rechecks the displayed owner and aborts if its meaning changed", a
   assert.equal(h.calls.left, 1); assert.equal(h.calls.returns.length, 0);
 });
 
+test("Open in Prompt sits beside Open in Document for a file open nowhere yet, and passes the Prompt as target", async () => {
+  let owner = { kind: "new", label: "Open in Document" }; const roles = [];
+  const h = harness({ findOwner: async () => owner, canOpenInPrompt: () => true, openForEdit: async (_page, _owner, _current, role) => { roles.push(role); return true; } });
+  await h.ui.read("one.md", {});
+  const find = text => { let found = null; const walk = el => { if (!found && el?.tagName === "button" && el.textContent === text) found = el; (el?.children || []).forEach(walk); }; walk(h.host); return found; };
+  const prompt = find("Open in Prompt");
+  assert.ok(prompt, "the Prompt button exists"); assert.equal(prompt.hidden, false);
+  prompt.listeners.click({});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(roles.slice(-1), ["prompt"]);
+  owner = { kind: "local", label: "Go to Document", bufferId: "doc" }; await h.ui.read("two.md", {});
+  assert.equal(find("Open in Prompt").hidden, true, "already open: just Go to …");
+});
+
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 function section(start, end) { const a = source.indexOf(start), b = source.indexOf(end, a); assert.ok(a >= 0 && b > a); return source.slice(a, b); }
 function owners() {

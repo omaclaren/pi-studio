@@ -20,6 +20,7 @@ function harness() {
 		pendingRequestId: null, pendingKind: null, pendingSaveOperations: new Map(), uiBusy: false,
 		pendingPiEditorLoad: null, pendingPiEditorLink: null, pendingPiEditorClear: null, pendingTerminalDocument: null,
 		activeFileImport: null, studioImportDecisionOpen: false, studioDecisionState: null,
+		studioBusyEpoch: 0, // copies pin how many busy starts they've seen (candidate53)
 		completionSuggestionState: null, completionSuggestionInFlight: false, completionSuggestionRequestId: null,
 		completionSuggestionPendingSnapshot: null, completionSuggestionRefocusEditorOnResult: false,
 		completionSuggestionPanelEl: null, completionSuggestionTextEl: null, completionSuggestionMetaEl: null,

@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+// Later additions with neutral values: no run-following, the Document showing its own preview
+// (responses there arrived in candidate55), and the Prompt run indicator's record.
+const runFollowingDefaults = () => ({ studioRunFollowingAvailable: () => false, getStudioRunWorkingOwner: () => null, studioRuntimeActivity: null, pauseStudioRunFollowing() {},
+  rightView: "editor-preview", rememberPromptRun() {} });
 
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 function section(start, end) {
@@ -9,7 +13,7 @@ function section(start, end) {
   assert(a >= 0 && b > a, start); return source.slice(a, b);
 }
 function gateHarness() {
-  const c = vm.createContext({ bufferSwitchingEnabled: true, bufferRecoveryClient: {}, workspacePersistenceReady: true,
+  const c = vm.createContext({ ...runFollowingDefaults(), bufferSwitchingEnabled: true, bufferRecoveryClient: {}, workspacePersistenceReady: true,
     bufferBindingInProgress: false, bufferRecoveryInitializing: false, bufferPageClosed: false,
     uiBusy: true, pendingKind: "direct", pendingRequestId: "run-1", ws: { readyState: 1 }, WebSocket: { OPEN: 1 }, wsState: "Submitting",
     replBusy: false, completionSuggestionInFlight: false, pendingEditorRefresh: null, responseReplacementPending: false,
@@ -56,7 +60,7 @@ test("opening or replacing a buffer stays fenced during Run even when selecting 
 
 function responseHarness({ document = true, switching = true } = {}) {
   const calls = [], pending = { markdown: "older queued" };
-  const c = vm.createContext({ bufferSwitchingEnabled: switching, isStudioDocumentBufferView: () => document,
+  const c = vm.createContext({ ...runFollowingDefaults(), bufferSwitchingEnabled: switching, isStudioDocumentBufferView: () => document,
     pendingRequestId: "run-1", pendingKind: "direct", pendingPiEditorDraftSnapshots: new Map(), queuedLatestResponse: pending,
     stickyStudioKind: "direct", agentBusyFromServer: true, pendingResponseScrollReset: false,
     normalizeHistoryKind: v => v, setBusy: value => { c.uiBusy = value; }, setWsState: value => { c.wsState = value; }, uiBusy: true,
@@ -134,7 +138,7 @@ test("recovery choices/reset stay locked throughout model activity, not just loc
 
 function historyHarness(switching, document) {
   const rendered = [];
-  const c = vm.createContext({ bufferSwitchingEnabled: switching, isStudioDocumentBufferView: () => document,
+  const c = vm.createContext({ ...runFollowingDefaults(), bufferSwitchingEnabled: switching, isStudioDocumentBufferView: () => document,
     bufferRecoveryClient: { snapshot: () => ({ activePromptId: "prompt" }) }, bufferTransientStates: new Map(),
     responseHistory: [{ id: "r1", markdown: "R1" }], responseHistoryIndex: 0, normalizeHistoryItem: item => item,
     normalizeHistoryKind: value => value || "annotation", normalizeForCompare: value => String(value || "").trim(),
@@ -209,7 +213,7 @@ test("a late response for an older request cannot settle a newer Run after switc
 
 function failureHarness(switching = true) {
   const discarded = [], restored = [];
-  const c = vm.createContext({ bufferSwitchingEnabled: switching, pendingKind: "direct", pendingRequestId: "new-run", uiBusy: true,
+  const c = vm.createContext({ ...runFollowingDefaults(), bufferSwitchingEnabled: switching, pendingKind: "direct", pendingRequestId: "new-run", uiBusy: true,
     stickyStudioKind: "direct", wsState: "Submitting", status: "Running", replPendingRequestId: "", pendingEditorRefresh: null,
     pendingSaveOperations: new Map(), clearPiEditorOperations() {}, clearArmedTitleAttention() {}, failPendingCompanionLaunch() {},
     submittedEditorDrafts: { discard: id => { discarded.push(id); return id === "pending-steer"; } },
@@ -247,7 +251,7 @@ test("owned failure settles Run, while default single-editor failure behavior is
 
 test("Stop acts on the active global Run without returning to or sending a hidden Prompt", () => {
   const calls = []; let click;
-  const c = vm.createContext({ bufferSwitchingEnabled: true, sendRunBtn: { addEventListener: (_type, handler) => { click = handler; } },
+  const c = vm.createContext({ ...runFollowingDefaults(), bufferSwitchingEnabled: true, sendRunBtn: { addEventListener: (_type, handler) => { click = handler; } },
     getAbortablePendingKind: () => "direct", requestCancelForPendingRequest: kind => calls.push(kind),
     requireStudioPromptForSend: () => assert.fail("Stop is not a draft action") });
   vm.runInContext(section('sendRunBtn.addEventListener("click",', "if (queueSteerBtn)"), c);

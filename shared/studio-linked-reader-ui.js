@@ -26,7 +26,9 @@ export function createStudioLinkedReaderUi(options) {
 	const refreshButton = button("Refresh", refresh);
 	refreshButton.title = "Read this file again.";
 	const actions = make("div", "studio-reader-actions"); toolbar.append(actions);
-	const editButton = button("Checking editor…", openForEdit, actions);
+	const editButton = button("Checking editor…", () => openForEdit(), actions);
+	// Matches the Files row (Oliver, 10 Oct): a file open nowhere yet can go to either buffer.
+	const promptButton = button("Open in Prompt", () => openForEdit("prompt"), actions);
 	const returnButton = button("Return", () => close({ restore: true }), actions);
 	const temporaryOption = make("option", "", "");
 	temporaryOption.value = ""; temporaryOption.disabled = true; temporaryOption.dataset.linkedReaderOption = "1";
@@ -91,6 +93,8 @@ export function createStudioLinkedReaderUi(options) {
 		editButton.hidden = !reading;
 		editButton.textContent = ownerPage === page?.id && owner ? owner.label : "Checking editor…";
 		editButton.disabled = !reading || Boolean(state.pending) || ownerPage !== page?.id || !owner || owner.disabled === true || options.editingBusy?.() === true;
+		promptButton.hidden = !reading || ownerPage !== page?.id || owner?.kind !== "new" || options.canOpenInPrompt?.() !== true;
+		promptButton.disabled = editButton.disabled;
 		returnButton.textContent = reading ? "Return to " + rootLabel : "Close";
 		returnButton.title = reading ? "Leave this reading history for " + rootTitle + "." : "Forget this reading history.";
 		snapshotLabel.hidden = !reading; layout();
@@ -192,7 +196,7 @@ export function createStudioLinkedReaderUi(options) {
 		}
 		sync();
 	}
-	async function openForEdit() {
+	async function openForEdit(role = "document") {
 		const page = history.snapshot().current, displayed = owner;
 		if (!page || !displayed || displayed.disabled || history.snapshot().pending || options.editingBusy?.()) return false;
 		try {
@@ -202,7 +206,7 @@ export function createStudioLinkedReaderUi(options) {
 				owner = checked; ownerPage = page.id; sync();
 				warn("The editing destination changed. Check the action and choose it again."); return false;
 			}
-			const opened = await options.openForEdit(page, checked, () => current(page));
+			const opened = await options.openForEdit(page, checked, () => current(page), role);
 			if (opened && current(page)) await close({ restore: false, manual: true });
 			return Boolean(opened);
 		} catch (error) { if (current(page)) warn(error); return false; }

@@ -233,6 +233,7 @@ test("resource-grant decision clicks preserve their pending local-link menu requ
 	let shown = 0;
 	const c = {
 		Element,
+		studioLinkedReaderAvailable: () => false, // the reader option came later; this test covers the plain link menu
 		document: {
 			addEventListener(name, handler, capture) {
 				if (name === "click" && capture === true) clickHandlers.push(handler);
