@@ -37,7 +37,7 @@ async function setup({ promptText = "Kept Prompt\n \t", promptPath = "/prompt/as
 
 test("full document append has a pure exact-size preflight and changes only Prompt text/revision", async () => {
   const f = await setup(), before = f.client.snapshot(), doc = role(f.client, "document"), prompt = role(f.client, "prompt");
-  const addition = "\n\nFrom `notes.md` (whole document, snapshot):\n\n" + doc.text;
+  const addition = "\n\nFrom `notes.md` (whole document):\n\n" + doc.text;
   const info = f.client.documentAppendInfo();
   assert.equal(info.ok, true); assert.equal(info.characters, doc.text.length); assert.equal(info.addedCharacters, addition.length);
   assert.equal(info.availableCharacters, STUDIO_BUFFER_LIMITS.textChars - prompt.text.length);
@@ -58,7 +58,7 @@ test("no selection, a partial/backward range and caller-supplied fake text never
       { view: { selectionDirection: direction } }).ok);
     const before = role(f.client, "document"), prefix = role(f.client, "prompt").text;
     assert(f.client.appendDocumentToPrompt({ ...f.request(), text: "not the document", start: 2, end: 5 }).ok);
-    assert.equal(role(f.client, "prompt").text, prefix + "\n\nFrom `notes.md` (whole document, snapshot):\n\n" + doc.text);
+    assert.equal(role(f.client, "prompt").text, prefix + "\n\nFrom `notes.md` (whole document):\n\n" + doc.text);
     assert.deepEqual(role(f.client, "document"), before); await f.client.settled();
   }
 });
@@ -91,7 +91,7 @@ test("full-document provenance uses the same literal boundary-backtick policy as
     const before = role(f.client, "prompt").text, escaped = JSON.stringify(label).slice(1, -1).replace(/\u2028/g, "\\u2028");
     const ticks = "`".repeat(1 + Math.max(0, ...(escaped.match(/`+/g) || []).map(x => x.length)));
     const pad = escaped.startsWith("`") || escaped.endsWith("`") ? " " : "";
-    const addition = "\n\nFrom " + ticks + pad + escaped + pad + ticks + " (whole document, snapshot):\n\n" + doc.text;
+    const addition = "\n\nFrom " + ticks + pad + escaped + pad + ticks + " (whole document):\n\n" + doc.text;
     assert.equal(f.client.documentAppendInfo().addedCharacters, addition.length);
     assert(f.client.appendDocumentToPrompt(f.request()).ok); assert.equal(role(f.client, "prompt").text, before + addition);
     await f.client.settled();

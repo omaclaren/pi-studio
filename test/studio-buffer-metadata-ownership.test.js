@@ -29,6 +29,7 @@ function baseHarness() {
 	const requests = [];
 	const c = {
 		bufferRecoveryEnabled: true,
+		documentHostingEnabled: false,
 		bufferPageClosed: false,
 		studioTabStateId: "tab_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		studioMetadataWriteClock: 0,
@@ -135,6 +136,55 @@ function assertScratchpadWrite(request, expected) {
 	assert.equal(body.metadataWriterId, "tab_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 	assert.equal(Number.isSafeInteger(body.metadataWriteVersion) && body.metadataWriteVersion > 0, true);
 }
+
+test("pending disk saves pause affected metadata production, not other buffers or draining earlier writes", async () => {
+	for (const kind of ["local", "retained", "preparing", "resolving", "other"]) {
+		for (const notes of [false, true]) {
+			const h = notes ? reviewNotesHarness() : scratchpadHarness(), c = h.c;
+			Object.assign(c, { documentHostingEnabled: true, documentHostingFilePreparationBufferId: kind === "preparing" ? "doc" : null,
+				documentHostingSaveResolutionBufferId: kind === "resolving" ? "doc" : null,
+				pendingSaveOperations: new Map(kind === "local" || kind === "other" ? [["save", { hosting: { bufferId: kind === "other" ? "other" : "doc" } }]] : []),
+				bufferRecoveryClient: { pendingHostingSaves: () => kind === "retained" ? [{ bufferId: "doc" }] : [] },
+				documentHostingMetadataProof: () => ({ ok: true, bufferId: "doc", generation: 1, documentEpoch: 3 }),
+				scratchpadHostingProduction: null, reviewNotesHostingProduction: null });
+			if (source.includes("      function documentHostingSaveAffectsBuffer(")) vm.runInContext(section("      function documentHostingSaveAffectsBuffer(", "      function documentHostingMetadataProof("), c);
+			if (notes) { c.reviewNotesAssociation = c.currentDescriptor; c.reviewNotes = [{ id: "kept", text: "kept" }]; c.setReviewNotes([{ id: "late", text: "late" }]); assert.equal(c.reviewNotes[0].text, kind === "other" ? "late" : "kept"); }
+			else {
+				c.scratchpadAssociation = c.currentDescriptor; c.scratchpadText = "kept"; c.setScratchpadText("late"); assert.equal(c.scratchpadText, kind === "other" ? "late" : "kept");
+				if (kind === "preparing") { c.scratchpadDirty = true; assert.equal(c.flushScratchpadPersistence(), true); assert.equal(h.requests.length, 1); h.requests[0].resolve({ ok: true }); await tick(); }
+			}
+		}
+	}
+});
+
+test("metadata action consent cannot borrow a later save epoch or reconnect generation", () => {
+	for (const notes of [false, true]) for (const field of ["documentEpoch", "generation", "bufferId", "pending"]) {
+		const { c } = notes ? reviewNotesHarness() : scratchpadHarness(); let pending = false;
+		let proof = { ok: true, bufferId: "doc", generation: 1, documentEpoch: 3 };
+		Object.assign(c, { documentHostingEnabled: true, scratchpadAssociation: c.currentDescriptor, reviewNotesAssociation: c.currentDescriptor,
+			documentHostingMetadataProof: () => ({ ...proof }), documentHostingSaveAffectsBuffer: () => pending });
+		const capture = notes ? c.captureReviewNotesMutationConsent : c.captureScratchpadMutationConsent;
+		const current = notes ? c.reviewNotesMutationConsentIsCurrent : c.scratchpadMutationConsentIsCurrent;
+		const consent = capture(); assert.equal(current(consent), true);
+		if (field === "pending") pending = true;
+		else proof[field] = field === "bufferId" ? "different" : proof[field] + 1;
+		assert.equal(current(consent), false, field);
+	}
+});
+
+test("scheduled metadata retains its production epoch rather than borrowing a reconnect's authority", async () => {
+ for (const kind of ["scratchpad", "review-notes"]) {
+  const h = kind === "scratchpad" ? scratchpadHarness() : reviewNotesHarness(), c = h.c;
+  c.documentHostingEnabled = true; c.scratchpadHostingProduction = c.reviewNotesHostingProduction = null;
+  let epoch = 1; c.documentHostingMetadataProof = () => ({ ok: true, bufferId: "doc", generation: epoch, documentEpoch: epoch, capability: "fixture" });
+  if (kind === "scratchpad") c.scheduleScratchpadPersistence("queued note", "file:/a.md", "a");
+  else c.scheduleReviewNotesPersistence([{ id: "note", text: "queued note" }], "file:/a.md");
+  epoch = 2; h.runTimers(delay => delay === 180); await Promise.resolve(); await Promise.resolve();
+  const request = findRequest(h.requests, r => r.options.method === "POST");
+  assert.equal(requestBody(request).hosting.documentEpoch, 1); assert.equal(requestBody(request).hosting.generation, 1);
+  request.resolve({ ok: true });
+ }
+});
 
 test("unread metadata cannot be edited or written, including navigation beacons", async () => {
 	for (const kind of ["scratchpad", "reviewNotes"]) {
@@ -255,7 +305,8 @@ test("server metadata ordering rejects only writes older than a persisted same-t
 
 	assert.match(serverSource, /prepareStudioMetadataWrite\("scratchpad", key, ownership\)/);
 	assert.match(serverSource, /prepareStudioMetadataWrite\("review-notes", key, ownership\)/);
-	assert.match(serverSource, /await saveStudioPersistentState\(state\);\s*if \(typeof onPersisted === "function"\) onPersisted\(\)/);
+	assert.match(serverSource, /persist = saveStudioPersistentState\): Promise<void>/);
+	assert.match(serverSource, /await persist\(state\);\s*if \(typeof onPersisted === "function"\) onPersisted\(\)/);
 	assert.match(serverSource, /Invalid metadata write ownership/);
 });
 
@@ -768,7 +819,7 @@ test("pagehide and beforeunload flush and protect workspace metadata recovery", 
 	assert.match(lifecycle, /for \(const \[key, pending\] of scratchpadUnsyncedRecords\)/);
 	assert.match(lifecycle, /for \(const \[key, pending\] of reviewNotesUnsyncedRecords\)/);
 	assert.match(lifecycle, /window\.addEventListener\("pagehide", \(event\) => \{\n        flushStudioNavigationPersistence\(\)/);
-	assert.match(lifecycle, /window\.addEventListener\("beforeunload", \(event\) => \{\n        flushStudioNavigationPersistence\(\)/);
+	assert.match(lifecycle, /window\.addEventListener\("beforeunload", \(event\) => \{\n        if \(documentHostingEnabled && documentHostingCanCloseRetired\(\)\) return;\n        const unsafeRetirement = documentHostingEnabled && documentHostingRetired;\n        const unresolvedCopy = documentHostingEnabled && documentHostingController\?\.needsUnloadConfirmation\(\);\n        const unresolvedSave = documentHostingEnabled && documentHostingSaveResolution;\n        const unresolvedOpening = documentHostingEnabled && documentOpenController\?\.active\(\);\n        flushStudioNavigationPersistence\(\)/);
 	assert.match(lifecycle, /metadataNeedsUnloadConfirmation = hasUnsyncedStudioMetadata\(\)/);
 	assert.match(lifecycle, /metadataNeedsUnloadConfirmation \|\| recoveryNavigationStale/);
 	assert.match(lifecycle, /Scratchpad or comment changes are not currently acknowledged/);

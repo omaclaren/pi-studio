@@ -295,6 +295,17 @@ function throwStudioDiskConflict(conflict) {
 	throw error;
 }
 
+// Trusted, synchronous host authorization supplements (never replaces) filesystem
+// and revision checks. Run before creating a temporary file and again immediately
+// before commit, with the disk helper's actual canonical destination.
+function authorizeStudioDiskCommit(options, path) {
+	if (typeof options?.authorizeCommit !== "function") return;
+	const result = options.authorizeCommit(path);
+	if (result?.ok !== true) throwStudioDiskConflict(result?.ok === false ? result : {
+		ok: false, reason: "authority-required", message: "Document ownership must be confirmed synchronously before saving.",
+	});
+}
+
 function createStudioNewFileMetadata() {
 	return { mode: 0o666 & ~process.umask() };
 }
@@ -375,6 +386,7 @@ export function saveStudioDiskFileIfRevision(options) {
 	const targetExisted = target.exists;
 	const metadata = targetExisted ? target : createStudioNewFileMetadata();
 	try {
+		authorizeStudioDiskCommit(options, stableTargetPath);
 		const written = writeStudioDiskFileAtomically(stableTargetPath, options?.content, metadata, {
 			replace: targetExisted,
 			beforeCommit: () => {
@@ -414,6 +426,7 @@ export function saveStudioDiskFileIfRevision(options) {
 						"A new file appeared at this path while Studio was preparing to recreate it.",
 					));
 				}
+				authorizeStudioDiskCommit(options, stableTargetPath);
 			},
 		});
 		return { ok: true, ...written };
@@ -497,6 +510,7 @@ export function saveStudioDiskFileAs(options) {
 	const targetExisted = target.exists;
 	const metadata = targetExisted ? target : createStudioNewFileMetadata();
 	try {
+		authorizeStudioDiskCommit(options, stableTargetPath);
 		const written = writeStudioDiskFileAtomically(stableTargetPath, options?.content, metadata, {
 			replace: targetExisted,
 			beforeCommit: () => {
@@ -535,6 +549,7 @@ export function saveStudioDiskFileAs(options) {
 						"A file appeared at this path while Studio was preparing the save.",
 					));
 				}
+				authorizeStudioDiskCommit(options, stableTargetPath);
 			},
 		});
 		return { ok: true, ...written };

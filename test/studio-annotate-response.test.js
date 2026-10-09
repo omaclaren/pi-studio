@@ -24,7 +24,9 @@ function harness(overrides = {}) {
     editorSourceGeneration: 0,
     editorContentGeneration: 0,
     bufferRecoveryEnabled: false,
+    bufferRecoveryClient: null,
     bufferSwitchingEnabled: false,
+    documentHostingEnabled: false,
     latestResponseMarkdown: "# Model response",
     latestResponseIsStructuredCritique: false,
     latestResponseTimestamp: 123,
@@ -105,12 +107,18 @@ test("Load response shortcut delegates to the existing guarded view-preserving b
     { studioModalBlocksDraftAction: () => true }, { loadResponseBtn: null },
     { loadResponseBtn: { hidden: true } }, { loadResponseBtn: { disabled: true } }]) {
     let clicks = 0;
-    const c = { isEditorOnlyMode: false, isWatchedFilePreview: false, studioModalBlocksDraftAction: () => false,
+    const c = { isEditorOnlyMode: false, isWatchedFilePreview: false, studioModalBlocksDraftAction: () => false, bufferSwitchingEnabled: false,
       loadResponseBtn: { hidden: false, disabled: false, click: () => { clicks++; } }, ...overrides };
     const result = vm.runInNewContext(`${trigger}\ntriggerLoadResponseShortcut()`, c);
     assert.equal(result, overrides === null);
     assert.equal(clicks, overrides === null ? 1 : 0);
   }
+  // In the Document the shortcut is consumed with the reason, and nothing loads (Sol, 8 Oct).
+  let clicks = 0; const statuses = [];
+  const c = { isEditorOnlyMode: false, isWatchedFilePreview: false, studioModalBlocksDraftAction: () => false, bufferSwitchingEnabled: true,
+    isStudioDocumentBufferView: () => true, setStatus: (...a) => statuses.push(a), loadResponseBtn: { hidden: false, disabled: true, click: () => { clicks++; } } };
+  assert.equal(vm.runInNewContext(`${trigger}\ntriggerLoadResponseShortcut()`, c), true);
+  assert.equal(clicks, 0); assert.equal(JSON.stringify(statuses), JSON.stringify([["Return to Prompt to load or annotate this response.", "warning"]]));
 });
 
 test("shortcut dispatch distinguishes submission, annotation, load-only, activity, repeat, and composition", () => {
@@ -156,6 +164,26 @@ test("unchanged accepted prompt goes straight to annotation with no confirmation
   assert.equal(h.c.paneFocusTarget, "off");
   const load = section(clientSource, "async function loadSelectedResponseIntoEditor(options)", 'loadResponseBtn.addEventListener');
   assert.doesNotMatch(load, /sendMessage\(|setAnnotationsEnabled|stripAnnotation|toggleAnnotatedReplyHeader/);
+});
+
+test("loaded response provenance pins source identity and position independently of later selection", async () => {
+  const h = harness({ getSelectedHistoryItem: () => ({ id: 'response-two' }) }); h.submitted();
+  assert.equal(await h.run({ annotate: false }), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.c.sourceState.provenance)), { version: 1, kind: 'response', responseId: 'response-two', responseNumber: 2, annotated: false });
+  h.c.responseHistoryIndex = 7;
+  assert.equal(h.c.editorDraftHelpers.buildDraftSaveFilename({ sourceState: h.c.sourceState, text: h.c.sourceTextEl.value }), 'response-2.md');
+});
+
+test("annotation preparation records its response origin without claiming annotation settings or submission", async () => {
+  const h = harness({ getSelectedHistoryItem: () => ({ id: 'response-two' }) }); h.submitted();
+  assert.equal(await h.run(), true); assert.equal(h.c.sourceState.provenance.annotated, true);
+  assert.equal(h.c.editorDraftHelpers.buildDraftSaveFilename({ sourceState: h.c.sourceState, text: h.c.sourceTextEl.value }), 'response-2-annotated.md');
+});
+
+test("same-text replacement response identity changing during consent keeps the current editor", async () => {
+  let id = 'old'; const h = harness({ getSelectedHistoryItem: () => ({ id }) }); const text = h.c.sourceTextEl.value;
+  const pending = h.run(); id = 'replacement'; h.decide(true);
+  assert.equal(await pending, false); assert.equal(h.c.sourceTextEl.value, text); assert(!h.c.sourceState.provenance);
 });
 
 test("new drafts and post-submission edits are protected; cancellation preserves identity and view", async () => {

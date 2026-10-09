@@ -51,6 +51,19 @@
 
       try {
       const bufferRecoveryEnabled = Boolean(document.body.dataset.bufferCapability);
+      const documentHostingEnabled = document.body.dataset.documentHosting === "1" && bufferRecoveryEnabled;
+      let studioLinkedReaderUi = null, studioLinkedReaderFlight = null, studioLinkedReaderRenderNonce = 0;
+      let studioReaderReturnEpoch = 0, pendingStudioReaderReturnScroll = null;
+      let documentHostingGeneration = 0, documentHostingDomId = null, documentHostingController = null, documentOpenController = null, documentHostingLastRemote = null;
+      let documentHostingReady = false, documentHostingPreparingFile = false, documentHostingRetired = false;
+      let documentHostingSaveResolution = null;
+      let documentHostingSaveResolutionBufferId = null, documentHostingFilePreparationBufferId = null;
+      let documentHostingResourceDir = null, documentHostingResourceEditGeneration = 0, documentHostingMetadataLocked = false;
+      const settledHostingSaveRequests = new Map();
+      const documentHostingOwnerFlights = new Map();
+      let documentHostingRetirementAdopted = false, documentHostingCanCloseRetired = () => false;
+      let scratchpadHostingProduction = null, reviewNotesHostingProduction = null;
+      const documentHostingWaiters = new Set();
       let bufferRecoveryClient = null;
       let bufferRecoveryIssue = "";
       let bufferRecoveryPanel = null;
@@ -63,6 +76,7 @@
       let studioDocumentAppendOwnerGeneration = 0;
       let bufferViewRestore = null;
       let pendingBufferDocumentOpen = null;
+      let studioFilePick = null; // the Files "choose a file" mode, when active
       const bufferTransientStates = new Map(); // Page-only source epochs, terminal provenance and reading identities; never recovered.
       let bufferConnectionGeneration = 0;
       let editorContentGeneration = 0;
@@ -118,6 +132,7 @@
       const loadCritiqueNotesBtn = document.getElementById("loadCritiqueNotesBtn");
       const loadCritiqueFullBtn = document.getElementById("loadCritiqueFullBtn");
       const copyResponseBtn = document.getElementById("copyResponseBtn");
+      const copyResponsePromptBtn = document.getElementById("copyResponsePromptBtn");
       const exportPreviewControlsEl = document.getElementById("exportPreviewControls");
       const exportPreviewMenuEl = document.getElementById("exportPreviewMenu");
       const exportSideThreadMarkdownSaveBtn = document.getElementById("exportSideThreadMarkdownSaveBtn");
@@ -169,6 +184,7 @@
       const lineNumbersSelect = document.getElementById("lineNumbersSelect");
       const studioPaneLayoutSelect = document.getElementById("studioPaneLayoutSelect");
       const activityTrackingSelect = document.getElementById("activityTrackingSelect");
+      const documentPreviewFollowSelect = document.getElementById("documentPreviewFollowSelect");
       const editorFontSizeSelect = document.getElementById("editorFontSizeSelect");
       const annotationModeSelect = document.getElementById("annotationModeSelect");
       const compactBtn = document.getElementById("compactBtn");
@@ -221,6 +237,9 @@
       const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
       const bufferSwitchingEnabled = bufferRecoveryEnabled && document.body.dataset.bufferSwitching === "1" && !isEditorOnlyMode && !isWatchedFilePreview;
       const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "editor-quarto-preview", "files", "changes", "repl", "side-questions"]);
+      // In the Document the right pane may also show responses and Working, by explicit choice only:
+      // Follow and new responses never switch it there (Oliver and Sol, 8 Oct).
+      const DOCUMENT_RIGHT_VIEW_ALLOWED = new Set([...EDITOR_ONLY_RIGHT_VIEW_ALLOWED, "markdown", "preview", "trace"]);
       const RIGHT_VIEW_LABELS = {
         markdown: "Response (Raw)",
         preview: "Response (Preview)",
@@ -280,6 +299,8 @@
         throw new Error("Studio editor draft helpers failed to load.");
       }
       const submittedEditorDrafts = editorDraftHelpers.createSubmittedEditorDraftTracker();
+      const promptRunIndicatorTracker = editorDraftHelpers.createPromptRunIndicatorTracker?.() ?? null;
+      let promptRunIndicatorReady = false, promptRunIndicatorFresh = true;
       let editorSourceGeneration = 0;
       let responseReplacementPending = false;
       const showMeHelpers = globalThis.PiStudioShowMeHelpers;
@@ -336,6 +357,10 @@
       let ws = null;
       let wsState = "Connecting";
       let statusMessage = "Connecting · Studio script starting…";
+      let studioOperationNotices = new Map();
+      let studioOperationNoticesEl = null;
+      let studioDocumentDestinationsSection = null;
+      let studioOperationNoticeFingerprint = "";
       let statusLevel = "";
       let reconnectTimer = null;
       let reconnectAttempt = 0;
@@ -435,7 +460,8 @@
         if (normalized === "editor-quarto-preview" && !isCurrentStudioQuartoDocument()) {
           return "editor-preview";
         }
-        if ((isEditorOnlyMode || (bufferSwitchingEnabled && isStudioDocumentBufferView())) && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized)) {
+        const allowed = restrictedStudioRightViews();
+        if (allowed && !allowed.has(normalized)) {
           return "editor-preview";
         }
         return normalized;
@@ -445,7 +471,14 @@
         const normalized = canonicalRightViewValue(view);
         if (isWatchedFilePreview) return normalized === "editor-preview";
         if (normalized === "editor-quarto-preview" && !isCurrentStudioQuartoDocument()) return false;
-        return !(isEditorOnlyMode || (bufferSwitchingEnabled && isStudioDocumentBufferView())) || EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(normalized);
+        const allowed = restrictedStudioRightViews();
+        return !allowed || allowed.has(normalized);
+      }
+
+      // The right views a mode allows, or null for all of them.
+      function restrictedStudioRightViews() {
+        if (isEditorOnlyMode) return EDITOR_ONLY_RIGHT_VIEW_ALLOWED;
+        return bufferSwitchingEnabled && isStudioDocumentBufferView() ? DOCUMENT_RIGHT_VIEW_ALLOWED : null;
       }
 
       function getRightViewDisplayLabel(view) {
@@ -462,11 +495,16 @@
         const quartoRelevant = isCurrentStudioQuartoDocument();
         Array.from(rightViewSelect.options).forEach((option) => {
           if (!option) return;
+          if (option.dataset?.linkedReaderOption === "1") { option.disabled = true; return; }
           const isQuartoOption = option.value === "editor-quarto-preview";
           if (isWatchedFilePreview && option.value === "editor-preview") option.textContent = "Watched preview";
+          else if (option.value === "editor-preview" || isQuartoOption) {
+            const name = bufferSwitchingEnabled ? (isStudioDocumentBufferView() ? "Document" : "Prompt") : (isEditorOnlyMode ? "Document" : "Editor");
+            option.textContent = name + (isQuartoOption ? " (Quarto Preview)" : " (Preview)");
+          }
           if (isQuartoOption) option.hidden = !quartoRelevant;
           option.disabled = (isWatchedFilePreview && option.value !== "editor-preview")
-            || ((isEditorOnlyMode || (bufferSwitchingEnabled && isStudioDocumentBufferView())) && !EDITOR_ONLY_RIGHT_VIEW_ALLOWED.has(option.value))
+            || Boolean(restrictedStudioRightViews() && !restrictedStudioRightViews().has(option.value))
             || (isQuartoOption && !quartoRelevant);
         });
         rightViewSelect.title = isWatchedFilePreview
@@ -474,6 +512,7 @@
           : (isEditorOnlyMode
           ? "Editor-only views: Editor Preview, contextual Quarto Preview for .qmd/.md/.markdown files, Changes, Files, REPL, or Side questions. F7 cycles; Cmd/Ctrl+Option/Alt+3/5/6/7/8 switch directly to numbered right-pane views, and Cmd/Ctrl+Option/Alt+F/R/Q open Files/REPL/Side questions."
           : "Right pane view mode. F7 cycles, including contextual Quarto Preview for file-backed .qmd, .md, and .markdown documents; Cmd/Ctrl+Option/Alt+1–8 switches directly between the numbered views. Cmd/Ctrl+Option/Alt+P/E/W/F/R/Q keep mnemonic shortcuts for Preview, Editor Preview, Working, Files, REPL, and Side questions.");
+        if (typeof syncStudioLinkedReaderChrome === "function") syncStudioLinkedReaderChrome();
       }
 
       function getInitialRightView(source) {
@@ -508,6 +547,8 @@
       let traceRenderRaf = null;
       const traceExpandedOutputs = new Set();
       const traceOpenDetails = new Set();
+      const traceClosedDetails = new Set();
+      const traceSectionDefaults = new Map();
       let gitChangesState = {
         status: "idle",
         requestId: null,
@@ -523,6 +564,8 @@
       };
       const TRACE_OUTPUT_PREVIEW_MAX_LINES = 50;
       const TRACE_OUTPUT_PREVIEW_MAX_CHARS = 8000;
+      const TRACE_SECTION_AUTO_OPEN_MAX_LINES = 6;
+      const TRACE_SECTION_AUTO_OPEN_MAX_CHARS = 600;
       const TRACE_IMAGE_SAFE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
       const REPL_POLL_INTERVAL_MS = 1000;
       const REPL_TRANSCRIPT_MAX_CHARS = 200_000;
@@ -551,6 +594,8 @@
       const QUIZ_ANGLES = ["general", "scientist", "mathematician", "statistician", "developer", "reviewer"];
       const QUIZ_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
       let sideQuestionState = null;
+      let sideQuestionNextSettings = null;
+      let sideQuestionNextOptionsOpen = false;
       let sideQuestionThinkingLevels = [...SIDE_QUESTION_THINKING_LEVELS];
       let sideQuestionWebSearchAvailable = false;
       let sideQuestionAvailablePiTools = [];
@@ -787,6 +832,9 @@
         }
       })();
       let studioRunChainActive = false;
+      let studioRuntimeActivity = null;
+      let studioStopRequestedRunId = null;
+      let studioRuntimeClock = null;
       let queuedSteeringCount = 0;
       let agentBusyFromServer = false;
       let terminalActivityPhase = "idle";
@@ -794,6 +842,7 @@
       let terminalActivityLabel = "";
       let lastSpecificToolLabel = "";
       let uiBusy = false;
+      let studioBusyEpoch = 0; // counts each start of busy work; a copy pins it (Sol, batch B)
       let previewExportInProgress = false;
       let compactInProgress = false;
       let modelLabel = (document.body && document.body.dataset && document.body.dataset.modelLabel) || "none";
@@ -827,6 +876,66 @@
         return trimmed ? trimmed : null;
       }
 
+      function applyStudioRuntimeActivity(message) {
+        if (!message || !Object.prototype.hasOwnProperty.call(message, "runtimeActivity")) return false;
+        const value = message.runtimeActivity;
+        const raw = value && typeof value === "object" ? value.run : null;
+        const valid = raw && typeof raw.id === "string" && raw.id.length > 0 && raw.id.length <= 128
+          && ["studio", "outside", "unknown"].includes(raw.origin) && Number.isFinite(raw.startedAt);
+        const kind = valid && ["direct", "critique", "show-me", "annotation"].includes(raw.kind) ? raw.kind : null;
+        const requestId = valid && typeof raw.requestId === "string" && raw.requestId.length > 0 ? raw.requestId : null;
+        studioRuntimeActivity = { run: valid ? { id: raw.id, origin: raw.origin, kind, requestId, startedAt: raw.startedAt,
+          stopping: raw.stopping === true, cancellable: raw.cancellable === true && raw.origin === "studio" && Boolean(kind && requestId) } : null,
+          compaction: value?.compaction && typeof value.compaction === "object" ? { reason: String(value.compaction.reason || "unknown") } : null };
+        // A fresh connection can prove that an earlier delivery never reached
+        // the server. Ordinary updates do not release an in-flight local latch.
+        if (studioStopRequestedRunId && (studioRuntimeActivity.run?.id !== studioStopRequestedRunId
+            || (message.type === "hello_ack" && studioRuntimeActivity.run?.cancellable && !studioRuntimeActivity.run.stopping))) studioStopRequestedRunId = null;
+        syncStudioRuntimePresentation();
+        return true;
+      }
+
+      function getStudioRuntimeStatusText() {
+        const run = studioRuntimeActivity?.run;
+        if (wsState === "Disconnected" || wsState === "Connecting") return run ? "Run status unknown · reconnecting…" : "Reconnecting…";
+        const stopping = run && (run.stopping || studioStopRequestedRunId === run.id);
+        if (stopping) return "Stopping…" + (studioRuntimeActivity.compaction ? " · Compacting context…" : "");
+        if (studioRuntimeActivity?.compaction) return "Compacting context…";
+        if (run) {
+          if (run.origin === "outside") return "Pi is busy · started outside Studio";
+          if (run.origin === "unknown") return "Pi is busy · run origin unknown";
+          const seconds = Math.max(0, Math.floor((Date.now() - run.startedAt) / 1000));
+          return "Running " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+        }
+        return uiBusy ? getStudioBusyStatus(pendingKind) : "";
+      }
+
+      function syncStudioRuntimePresentation() {
+        const ui = studioUiRefreshUi;
+        if (!ui?.runStatus) return;
+        const text = getStudioRuntimeStatusText(), rightFocused = paneFocusTarget === "right";
+        ui.runStatus.textContent = text; ui.runStatus.hidden = !text || rightFocused;
+        ui.headerRunStatus.textContent = text; ui.headerRunStatus.hidden = !text || !rightFocused;
+        if (typeof syncPromptRunIndicator === "function") syncPromptRunIndicator();
+        const run = studioRuntimeActivity?.run, activeKind = getAbortablePendingKind();
+        const stopping = run && (run.stopping || studioStopRequestedRunId === run.id);
+        const ownedRun = run?.origin === "studio" && Boolean(run.requestId && run.kind);
+        ui.headerStop.hidden = isEditorOnlyMode || !rightFocused || (!activeKind && !stopping && !ownedRun);
+        ui.headerStop.textContent = stopping ? "Stopping…" : "Stop";
+        ui.headerStop.disabled = Boolean(stopping) || !activeKind;
+        if (run && !isEditorOnlyMode && sendRunBtn) {
+          const owned = run.origin === "studio" && Boolean(run.requestId && run.kind);
+          if (owned) {
+            sendRunBtn.textContent = stopping ? "Stopping…" : "Stop";
+            sendRunBtn.disabled = Boolean(stopping) || !activeKind;
+            sendRunBtn.classList.toggle("request-stop-active", !stopping);
+          } else sendRunBtn.disabled = true;
+          sendRunBtn.title = text;
+        } else if (uiBusy && sendRunBtn?.disabled) sendRunBtn.title = text || sendRunBtn.title;
+        if (run && !studioRuntimeClock) studioRuntimeClock = window.setInterval(syncStudioRuntimePresentation, 1000);
+        if (!run && studioRuntimeClock) { window.clearInterval(studioRuntimeClock); studioRuntimeClock = null; }
+      }
+
       function applyStudioRunQueueStateFromMessage(message) {
         if (!message || typeof message !== "object") return false;
         let changed = false;
@@ -857,7 +966,7 @@
       }
 
       function normalizeTraceStatus(status) {
-        return status === "running" || status === "complete" ? status : "idle";
+        return status === "running" || status === "complete" || status === "stopped" || status === "error" ? status : "idle";
       }
 
       function normalizeTraceEntryStatus(status) {
@@ -961,6 +1070,8 @@
         if ((traceState.runId || null) !== previousRunId) {
           traceExpandedOutputs.clear();
           traceOpenDetails.clear();
+          traceClosedDetails.clear();
+          traceSectionDefaults.clear();
         }
         renderTraceViewIfActive();
       }
@@ -1323,9 +1434,13 @@
           setStatus("No visible working details to load yet.", "warning");
           return;
         }
-        setEditorText(content, { preserveScroll: false, preserveSelection: false });
-        setSourceState({ source: "blank", label: getWorkingDocumentLabel(), path: null });
-        setStatus("Loaded visible working into editor.", "success");
+        const label = getWorkingDocumentLabel();
+        const apply = () => {
+          setEditorText(content, { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label, path: null });
+          setStatus("Loaded visible working into editor.", "success");
+        };
+        return documentHostingEnabled ? runStudioEditorSourceMutation(apply) : apply();
       }
 
       function getKnownReplRuntime(value) {
@@ -2356,10 +2471,13 @@
           return;
         }
         const markdown = buildReplJournalMarkdown(entries);
-        setEditorText(markdown, { preserveScroll: false, preserveSelection: false });
-        setSourceState({ source: "blank", label: "Shared REPL Record", path: null });
-        setEditorLanguage("markdown");
-        setStatus("Loaded shared REPL record into editor.", "success");
+        const apply = () => {
+          setEditorText(markdown, { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label: "Shared REPL Record", path: null });
+          setEditorLanguage("markdown");
+          setStatus("Loaded shared REPL record into editor.", "success");
+        };
+        return documentHostingEnabled ? runStudioEditorSourceMutation(apply) : apply();
       }
 
       function addSelectedReplJournalNote() {
@@ -2550,6 +2668,8 @@
       const PANE_SPLIT_STORAGE_KEY = "piStudio.paneSplitPercent";
       const PANE_LAYOUT_STORAGE_KEY = "piStudio.paneLayout";
       const ACTIVITY_TRACKING_STORAGE_KEY = "piStudio.trackActivity";
+      const DOCUMENT_PREVIEW_FOLLOW_STORAGE_KEY = "piStudio.followDocumentPreview";
+      const LATEST_RESPONSE_FOLLOW_STORAGE_KEY = "piStudio.followLatestResponse";
       const PANE_SPLIT_MIN_PERCENT = 20;
       const PANE_SPLIT_MAX_PERCENT = 80;
       const PANE_SPLIT_SNAP_TO_CENTER_PERCENT = 1;
@@ -2557,6 +2677,11 @@
       let activityTrackingEnabled = readActivityTrackingEnabled();
       let activityTrackingOwnsWorkingView = false;
       let activityTrackingRequestId = "";
+      let latestResponseFollowingEnabled = readLatestResponseFollowingEnabled();
+      let studioRunFollowing = null;
+      let documentPreviewFollowingEnabled = readDocumentPreviewFollowingEnabled();
+      let documentPreviewFollowOwner = null;
+      const documentPreviewFollowScrolls = new Map();
       const STUDIO_WORKSPACE_MAX_TEXT_CHARS = 900_000;
       const STUDIO_WORKSPACE_PERSIST_INTERVAL_MS = 300;
       const STUDIO_WORKSPACE_RECOVERY_FETCH_TIMEOUT_MS = 1_500;
@@ -2625,6 +2750,7 @@
       let pendingResponseScrollReset = false;
       let editorMetaUpdateRaf = null;
       let editorHighlightEnabled = false;
+      let editorWrapCompositionActive = false;
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
       let completionSuggestionState = null;
@@ -2959,10 +3085,10 @@
         buttonEl.setAttribute("aria-label", isFocusedPane ? "Exit focus" : "Focus pane");
       }
 
-      function appendStudioUiRefreshMenuSection(menuEl, heading, controls) {
-        const sectionEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-section");
+      function appendStudioUiRefreshMenuSection(menuEl, heading, controls, options = {}) {
+        const sectionEl = makeStudioUiRefreshElement(options.collapsed ? "details" : "div", "studio-refresh-menu-section");
         if (heading) {
-          sectionEl.appendChild(makeStudioUiRefreshElement("div", "studio-refresh-menu-heading", heading));
+          sectionEl.appendChild(makeStudioUiRefreshElement(options.collapsed ? "summary" : "div", "studio-refresh-menu-heading", heading));
         }
         for (const control of controls) {
           if (!control) continue;
@@ -2971,6 +3097,7 @@
           sectionEl.appendChild(itemEl);
         }
         menuEl.appendChild(sectionEl);
+        return sectionEl;
       }
 
       function getStudioUiRefreshSelectSummary(selectEl, prefix) {
@@ -3107,6 +3234,8 @@
 
       function syncStudioUiRefreshSummaries() {
         if (!studioUiRefreshUi) return;
+        syncStudioWorkspaceFilename();
+        syncPromptRunIndicator();
         if (studioUiRefreshUi.annotationsButton) {
           const inlineLabel = annotationsEnabled ? "Inline on" : "Inline hidden";
           const headerLabel = getStudioUiRefreshAnnotationHeaderEnabled() ? "Header on" : "Header off";
@@ -3122,13 +3251,18 @@
           if (studioPaneLayout === "editor-top") extras.push("Editor above");
           if (studioPaneLayout === "response-top") extras.push("Response above");
           if (activityTrackingEnabled) extras.push("Following activity");
-          setStudioUiRefreshButtonText(studioUiRefreshUi.viewButton, "View: " + syntaxLabel + " · " + lineLabel + " · " + editorSizeLabel + (extras.length ? " · " + extras.join(" · ") : ""));
+          setStudioUiRefreshButtonText(studioUiRefreshUi.viewButton, "View");
+          studioUiRefreshUi.viewButton.title = syntaxLabel + " · " + lineLabel + " · " + editorSizeLabel + (extras.length ? " · " + extras.join(" · ") : "");
         }
         syncStudioUiRefreshReviewTrigger();
+        syncStudioFollowMenu();
       }
 
       function closeStudioUiRefreshMenus() {
         if (!studioUiRefreshUi || !studioUiRefreshUi.menus) return;
+        // Only while the name still controls File; a named file's own menu keeps its state (Sol).
+        const fileMenuId = studioUiRefreshUi.menus.find(item => item.name === "context")?.menu.id;
+        if (studioUiRefreshUi.filenameButton?.getAttribute("aria-controls") === fileMenuId) studioUiRefreshUi.filenameButton.setAttribute("aria-expanded", "false");
         for (const item of studioUiRefreshUi.menus) {
           item.menu.hidden = true;
           item.button.classList.remove("is-open");
@@ -3138,6 +3272,7 @@
 
       function toggleStudioUiRefreshMenu(name) {
         if (!studioUiRefreshUi || !studioUiRefreshUi.menus) return;
+        closeStudioBufferActionMenus();
         let willOpen = false;
         for (const item of studioUiRefreshUi.menus) {
           if (item.name === name) willOpen = item.menu.hidden;
@@ -3147,7 +3282,28 @@
           item.menu.hidden = !isOpen;
           item.button.classList.toggle("is-open", isOpen);
           item.button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+          if (item.name === "context" && studioUiRefreshUi.filenameButton?.getAttribute("aria-controls") === item.menu.id) studioUiRefreshUi.filenameButton.setAttribute("aria-expanded", isOpen ? "true" : "false");
+          // Menus always open at their top, so the first items are never scrolled away.
+          if (isOpen) { item.menu.scrollTop = 0; placeStudioUiRefreshMenu(item); }
         }
+      }
+
+      function placeStudioUiRefreshMenu(item) {
+        const pane = item.anchor.closest("#leftPane, #rightPane");
+        if (!pane) return;
+        const bounds = pane.getBoundingClientRect(), origin = item.anchor.getBoundingClientRect();
+        const left = Math.max(8, bounds.left + 8), right = Math.min(window.innerWidth - 8, bounds.right - 8);
+        const width = Math.min(360, Math.max(0, right - left));
+        item.menu.style.width = width + "px";
+        item.menu.style.right = "auto";
+        const trigger = (item.openedBy || item.button)?.getBoundingClientRect() || origin;
+        item.menu.style.left = (Math.max(left, Math.min(trigger.left, right - width)) - origin.left) + "px";
+        const below = Math.max(0, Math.min(window.innerHeight - 8, bounds.bottom - 8) - origin.bottom - 8);
+        const above = Math.max(0, origin.top - Math.max(8, bounds.top + 8) - 8);
+        const upward = below < Math.min(240, item.menu.scrollHeight || 240) && above > below;
+        item.menu.style.top = upward ? "auto" : "calc(100% + 8px)";
+        item.menu.style.bottom = upward ? "calc(100% + 8px)" : "auto";
+        item.menu.style.maxHeight = Math.min(440, upward ? above : below) + "px";
       }
 
       function syncStudioUiRefreshReviewTrigger() {
@@ -3171,10 +3327,13 @@
         menuEl.hidden = true;
         buttonEl.type = "button";
         buttonEl.classList.add("studio-refresh-chip");
-        buttonEl.setAttribute("aria-haspopup", "menu");
+        menuEl.id = "studioRefreshMenu-" + name;
+        menuEl.setAttribute("role", "group"); menuEl.setAttribute("aria-label", buttonEl.textContent);
+        buttonEl.setAttribute("aria-controls", menuEl.id);
         buttonEl.setAttribute("aria-expanded", "false");
         buttonEl.addEventListener("click", (event) => {
           event.stopPropagation();
+          disclosure.openedBy = buttonEl;
           if (name === "review") syncShowMeButton();
           if (name === "review" && getAbortablePendingKind() === "critique") {
             requestCancelForPendingRequest("critique");
@@ -3182,9 +3341,74 @@
           }
           toggleStudioUiRefreshMenu(name);
         });
+        const close = (restoreFocus = false) => {
+          const wasOpen = !menuEl.hidden;
+          menuEl.hidden = true; buttonEl.classList.remove("is-open"); buttonEl.setAttribute("aria-expanded", "false");
+          if (name === "context" && studioUiRefreshUi?.filenameButton?.getAttribute("aria-controls") === menuEl.id) studioUiRefreshUi.filenameButton.setAttribute("aria-expanded", "false");
+          if (wasOpen && restoreFocus) (disclosure.openedBy || buttonEl).focus({ preventScroll: true });
+        };
+        const actions = () => Array.from(menuEl.querySelectorAll("button:not(:disabled), select:not(:disabled), input:not(:disabled), summary"))
+          .filter(control => !control.hidden && !control.closest("[inert]") && control.getClientRects().length
+            && (!control.closest("details") || control.closest("details").open || control.tagName === "SUMMARY"));
+        buttonEl.addEventListener("keydown", event => {
+          if (event.key === "Escape" && !menuEl.hidden) { event.preventDefault(); event.stopPropagation(); close(true); return; }
+          if (["Enter", " "].includes(event.key) && event.repeat) { event.preventDefault(); return; }
+          if (!["ArrowDown", "ArrowUp"].includes(event.key) || (name === "review" && getAbortablePendingKind() === "critique")) return;
+          disclosure.openedBy = buttonEl;
+          event.preventDefault(); if (menuEl.hidden) toggleStudioUiRefreshMenu(name);
+          const controls = actions(); (event.key === "ArrowUp" ? controls.at(-1) : controls[0])?.focus({ preventScroll: true });
+        });
+        menuEl.addEventListener("keydown", event => {
+          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); return; }
+          if (event.target?.tagName === "SELECT" || event.target?.tagName === "INPUT" || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          const controls = actions(); if (!controls.length) return;
+          event.preventDefault(); const index = controls.indexOf(document.activeElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? controls.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length;
+          controls[next].focus({ preventScroll: true });
+        });
+        menuEl.addEventListener("toggle", () => { if (!menuEl.hidden) placeStudioUiRefreshMenu(disclosure); }, true);
+        window.addEventListener("resize", () => close(anchorEl.contains(document.activeElement)));
+        window.addEventListener("blur", () => close());
+        anchorEl.addEventListener("focusout", event => { if (event.relatedTarget && !anchorEl.contains(event.relatedTarget)) close(); });
         anchorEl.appendChild(buttonEl);
         anchorEl.appendChild(menuEl);
-        return { name, anchor: anchorEl, button: buttonEl, menu: menuEl };
+        const disclosure = { name, anchor: anchorEl, button: buttonEl, menu: menuEl, close, openedBy: buttonEl };
+        return disclosure;
+      }
+
+      function syncStudioResponseActionLayout() {
+        const ui = studioUiRefreshUi;
+        if (!ui?.responseRow || !ui.responseMenu) return;
+        const collapsed = rightView === "editor-preview";
+        ui.responseMenu.anchor.hidden = !collapsed;
+        if (collapsed) {
+          if (ui.responseRow.parentElement !== ui.responseMenu.menu) ui.responseMenu.menu.appendChild(ui.responseRow);
+        } else {
+          if (ui.responseRow.parentElement !== responseActionsEl) responseActionsEl.insertBefore(ui.responseRow, ui.responseMenu.anchor);
+          ui.responseMenu.close();
+        }
+      }
+
+      function syncStudioWorkspaceFilename() {
+        const button = studioUiRefreshUi?.filenameButton;
+        if (!button) return;
+        const path = sourceState?.path;
+        const dirty = Boolean(path && editorDiffersFromFileBackedBaseline());
+        // Unsaved text is *Untitled* (italic): a placeholder name, not a file (Oliver, 8 Oct).
+        const name = path ? basenameForStudioPath(path) : "Untitled";
+        button.textContent = name + (dirty ? " •" : "");
+        if (path) button.classList?.remove("is-untitled"); else button.classList?.add("is-untitled");
+        button.title = path ? path + (dirty ? " · unsaved file edits" : "") + " · File details" : "Not saved to a file · Save As…";
+        if (studioUiRefreshUi.pathDetails) {
+          studioUiRefreshUi.pathDetails.textContent = path
+            ? path + (fileBackedBaselineText === null ? " · File baseline unavailable; disk not rechecked." : (dirty ? " · Unsaved file edits." : " · No edits since loading or saving; disk not rechecked."))
+            : "Not saved to a file.";
+          const provenance = editorDraftHelpers.normalizeSourceProvenance(sourceState?.provenance);
+          const summary = editorDraftHelpers.describeSourceProvenance(provenance);
+          if (summary) studioUiRefreshUi.pathDetails.textContent += " · " + summary;
+          studioUiRefreshUi.pathDetails.title = provenance
+            ? ("Response position when loaded: " + (provenance.responseNumber ?? "unavailable") + "\nResponse identity: " + (provenance.responseId ?? "unavailable") + "\nSource information only; not a saved-file receipt.") : "";
+        }
       }
 
       function setupStudioUiRefreshPrototype() {
@@ -3201,7 +3425,7 @@
           appendStudioUiRefreshMenuSection(reviewMenu.menu, "Setting", [lensSelect]);
         }
 
-        let contextMenu = null;
+        let contextMenu = null, pathDetails = null;
         if (suggestCompletionOptionsBtn) {
           suggestCompletionOptionsBtn.hidden = false;
           if (completionContextSelect) completionContextSelect.hidden = true;
@@ -3217,15 +3441,19 @@
             closeStudioUiRefreshMenus();
             void resetEditorOrigin();
           });
-          sourceOpenCurrentFileTabBtn = makeStudioUiRefreshElement("button", "source-open-file-tab-btn", "Open current file in new editor tab");
+          sourceOpenCurrentFileTabBtn = makeStudioUiRefreshElement("button", "source-open-file-tab-btn", "Open file in new Document window");
           sourceOpenCurrentFileTabBtn.type = "button";
-          sourceOpenCurrentFileTabBtn.title = "Open this file-backed document in a new refreshable editor-only Studio tab.";
+          sourceOpenCurrentFileTabBtn.title = "Open this file-backed document in a refreshable Document window.";
+          if (documentHostingEnabled) {
+            sourceOpenCurrentFileTabBtn.textContent = "Find file's Document window";
+            sourceOpenCurrentFileTabBtn.title = "Reuse the owning editor without reloading disk or creating an independent copy. Use Move Document to move it.";
+          }
           sourceOpenCurrentFileTabBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
             const path = sourceState && sourceState.path ? String(sourceState.path) : "";
             if (!path) {
-              setStatus("Open current file in new editor tab is only available for file-backed documents.", "warning");
+              setStatus("Opening the file's Document window is only available for file-backed documents.", "warning");
               return;
             }
             closeStudioUiRefreshMenus();
@@ -3234,34 +3462,38 @@
                 label: sourceState && sourceState.label ? sourceState.label : basenameForStudioPath(path),
                 resourceDir: getCurrentResourceDirValue() || dirnameForDisplayPath(path),
               });
-              setStatus("Opening current file in a new editor tab.");
+              setStatus("Opening the file's Document window.");
             } catch (error) {
               setStatus((error && error.message) ? error.message : String(error || "Could not open file tab."), "warning");
             }
           });
-          sourceOpenCurrentTextCopyTabBtn = makeStudioUiRefreshElement("button", "source-open-text-copy-tab-btn", "Open current text as copy in new editor tab");
+          sourceOpenCurrentTextCopyTabBtn = makeStudioUiRefreshElement("button", "source-open-text-copy-tab-btn", "Copy to new window");
           sourceOpenCurrentTextCopyTabBtn.type = "button";
-          sourceOpenCurrentTextCopyTabBtn.title = "Open a detached copy of the current editor text in a new editor-only Studio tab.";
+          sourceOpenCurrentTextCopyTabBtn.title = "Open an independent snapshot of the current editor text in a Document window.";
           sourceOpenCurrentTextCopyTabBtn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
             const content = String(sourceTextEl.value || "");
             if (!content.trim()) {
-              setStatus("Editor is empty. Use New editor tab for a blank editor.", "warning");
+              setStatus("Editor is empty. Use New Document window for a blank Document.", "warning");
               return;
             }
             closeStudioUiRefreshMenus();
             requestOpenEditorOnlyDocument(content, {
+              hostingCopy: true,
               label: sourceState && sourceState.label ? sourceState.label : "current editor",
               path: sourceState && sourceState.path ? sourceState.path : undefined,
               resourceDir: getCurrentResourceDirValue() || undefined,
             });
           });
           if (sendEditorBtn) sendEditorBtn.textContent = "Send current text to Pi editor";
-          appendStudioUiRefreshMenuSection(contextMenu.menu, "Document", [sourceOriginSummaryEl, sourceResetOriginBtn, sourceOpenCurrentFileTabBtn, sourceOpenCurrentTextCopyTabBtn]);
-          appendStudioUiRefreshMenuSection(contextMenu.menu, "Working directory", [resourceDirBtn, resourceDirLabel, resourceDirInputWrap]);
+          contextMenu.fileActionsSection = appendStudioUiRefreshMenuSection(contextMenu.menu, "File", [saveAsBtn, refreshFromDiskBtn, copyDraftBtn, sourceOpenCurrentTextCopyTabBtn]);
+          pathDetails = makeStudioUiRefreshElement("div", "studio-refresh-menu-note studio-file-path-details");
+          appendStudioUiRefreshMenuSection(contextMenu.menu, "File details", [pathDetails, sourceOriginSummaryEl, sourceResetOriginBtn, sourceOpenCurrentFileTabBtn], { collapsed: true });
+          contextMenu.menu.addEventListener("click", event => { if (event.target?.tagName === "BUTTON") contextMenu.close(true); }, true);
+          appendStudioUiRefreshMenuSection(contextMenu.menu, "Working directory", [resourceDirBtn, resourceDirLabel, resourceDirInputWrap], { collapsed: true });
           if (!isEditorOnlyMode) {
-            appendStudioUiRefreshMenuSection(contextMenu.menu, "Pi editor", [sendEditorBtn, clearPiEditorBtn]);
+            contextMenu.piEditorSection = appendStudioUiRefreshMenuSection(contextMenu.menu, "Pi editor", [sendEditorBtn, clearPiEditorBtn], { collapsed: true });
           }
           const cursorContextBtn = makeStudioUiRefreshElement("button", "completion-context-option", "Editor only");
           cursorContextBtn.type = "button";
@@ -3285,13 +3517,14 @@
           const completionThinkingNoteEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note completion-thinking-note", "Suggest: thinking off; model choice only affects suggestions.");
           completionThinkingNoteEl.setAttribute("aria-label", "Suggestion model note");
           suggestionItems.push(completionThinkingNoteEl);
-          appendStudioUiRefreshMenuSection(contextMenu.menu, "Suggestions", suggestionItems);
+          appendStudioUiRefreshMenuSection(reviewMenu ? reviewMenu.menu : contextMenu.menu, "Suggestions", [suggestCompletionBtn, ...suggestionItems]);
           const statusItems = [];
           if (!isEditorOnlyMode) {
-            sourceSessionSummaryEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note source-session-summary", "Session tree: branch history follows the current Pi branch; editor text stays independent.");
+            sourceSessionSummaryEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note source-session-summary", "Responses follow the current Pi branch.");
             sourceSessionSummaryEl.setAttribute("aria-label", "Pi session tree and editor sync behaviour");
             sourceSessionSummaryEl.title = "Use /tree in the Pi terminal to navigate branches. Studio updates branch history to match the active branch and leaves editor text unchanged.";
-            statusItems.push(sourceSessionSummaryEl);
+            if (contextMenu.piEditorSection) contextMenu.piEditorSection.appendChild(sourceSessionSummaryEl);
+            else statusItems.push(sourceSessionSummaryEl);
           }
           if (syncBadgeEl) {
             syncBadgeEl.hidden = false;
@@ -3302,8 +3535,19 @@
           }
         }
 
-        const headerTopEl = makeStudioUiRefreshElement("div", "studio-refresh-header-top");
+        if (contextMenu) {
+          if (clearWorkspaceBtn) clearWorkspaceBtn.hidden = documentHostingEnabled || isWatchedFilePreview;
+          appendStudioUiRefreshMenuSection(contextMenu.menu, "Workspace", [clearWorkspaceBtn]);
+        }
+        const openButton = makeStudioUiRefreshElement("button", "", "Open");
+        const openMenu = makeStudioUiRefreshMenu(openButton, "open", "studio-refresh-open-anchor");
+        appendStudioUiRefreshMenuSection(openMenu.menu, "Open", [importFileBtn, isEditorOnlyMode ? null : getEditorBtn, openCompanionBtn]);
+        openMenu.menu.addEventListener("click", event => {
+          if ([importFileBtn, getEditorBtn, openCompanionBtn].includes(event.target)) { closeStudioUiRefreshMenus(); openMenu.button.focus({ preventScroll: true }); }
+        }, true);
+        const headerTopEl = makeStudioUiRefreshElement("div", "studio-refresh-header-top studio-workspace-row-one");
         const titleGroupEl = makeStudioUiRefreshElement("div", "studio-refresh-title-group");
+        const tabsHost = makeStudioUiRefreshElement("div", "studio-workspace-tabs-host");
         if (leftFocusBtn) {
           setStudioUiRefreshFocusButtonIcon(leftFocusBtn, false);
           titleGroupEl.appendChild(leftFocusBtn);
@@ -3313,7 +3557,7 @@
           const staticTitleEl = makeStudioUiRefreshElement(
             "span",
             "studio-refresh-static-title",
-            isWatchedFilePreview ? "Source" : "Editor (Raw)",
+            isWatchedFilePreview ? "Source" : "Document (Raw)",
           );
           if (isWatchedFilePreview) {
             staticTitleEl.classList.add("studio-watched-source-title");
@@ -3331,24 +3575,40 @@
             titleGroupEl.appendChild(readOnlyBadgeEl);
           }
         } else if (editorViewSelect) {
-          titleGroupEl.appendChild(editorViewSelectWrap || editorViewSelect);
+          tabsHost.appendChild(editorViewSelectWrap || editorViewSelect);
         }
-        if (contextMenu) {
-          titleGroupEl.appendChild(makeStudioUiRefreshSeparator());
-          titleGroupEl.appendChild(contextMenu.anchor);
-        }
+        titleGroupEl.appendChild(tabsHost);
         headerTopEl.appendChild(titleGroupEl);
-        const headerToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
-        if (reviewNotesBtn) headerToolsEl.appendChild(reviewNotesBtn);
-        if (outlineBtn) headerToolsEl.appendChild(outlineBtn);
-        if (scratchpadBtn) headerToolsEl.appendChild(scratchpadBtn);
-        if (isEditorOnlyMode && askAsideBtn) headerToolsEl.appendChild(askAsideBtn);
-        if (reviewMenu) headerToolsEl.appendChild(reviewMenu.anchor);
+        const headerToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools studio-workspace-file-controls");
+        const filenameButton = makeStudioUiRefreshElement("button", "studio-workspace-filename is-untitled", "Untitled");
+        filenameButton.type = "button"; filenameButton.title = "File details";
+        if (contextMenu) { filenameButton.setAttribute("aria-controls", contextMenu.menu.id); filenameButton.setAttribute("aria-expanded", "false"); }
+        // Like File's own button, keep this click from reaching the page-wide "click elsewhere
+        // closes menus" handler, which otherwise shut File as soon as it opened.
+        filenameButton.addEventListener("click", event => {
+          event.stopPropagation();
+          // Untitled text: the click names it, via the existing guarded Save As (Oliver, 9 Oct).
+          if (filenameButton.classList.contains("is-untitled") && saveAsBtn && !saveAsBtn.disabled) { saveAsBtn.click(); return; }
+          if (bufferSwitcherUi?.nameMenu) return; // a named file opens its own menu (setupStudioFileNameMenu)
+          if (contextMenu) { contextMenu.openedBy = filenameButton; toggleStudioUiRefreshMenu("context"); }
+        });
+        filenameButton.addEventListener("keydown", event => {
+          if (contextMenu && event.key === "Escape" && !contextMenu.menu.hidden) { event.preventDefault(); event.stopPropagation(); contextMenu.close(true); }
+        });
+        headerToolsEl.append(filenameButton, openMenu.anchor);
+        if (saveOverBtn) headerToolsEl.appendChild(saveOverBtn);
+        if (contextMenu) headerToolsEl.appendChild(contextMenu.anchor);
         headerTopEl.appendChild(headerToolsEl);
 
         leftHeaderEl.replaceChildren(headerTopEl);
 
         const rightHeaderEl = document.getElementById("rightSectionHeader");
+        const headerRunStatus = makeStudioUiRefreshElement("span", "studio-run-status");
+        headerRunStatus.hidden = true;
+        const headerStop = makeStudioUiRefreshElement("button", "request-stop-active", "Stop");
+        headerStop.type = "button"; headerStop.hidden = true;
+        headerStop.addEventListener("click", event => { if (event.detail > 1) return; const kind = getAbortablePendingKind(); if (kind) requestCancelForPendingRequest(kind); });
+        let rightViewMenu = null, followMenu = null;
         if (rightHeaderEl && rightViewSelect) {
           const rightIdentityEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-identity studio-refresh-pane-identity-right");
           const rightTitleGroupEl = makeStudioUiRefreshElement("div", "studio-refresh-title-group");
@@ -3361,6 +3621,20 @@
           rightIdentityEl.appendChild(rightTitleGroupEl);
           const rightToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools");
           if (watchedOpenEditableBtn && isWatchedFilePreview) rightToolsEl.appendChild(watchedOpenEditableBtn);
+          rightViewMenu = makeStudioUiRefreshMenu(makeStudioUiRefreshElement("button", "", "View"), "right-view", "studio-refresh-right-view-anchor");
+          appendStudioUiRefreshMenuSection(rightViewMenu.menu, "Display", [responseHighlightSelect, responseFontSizeSelect]);
+          if (bufferSwitchingEnabled && !isEditorOnlyMode && !isWatchedFilePreview) {
+            followMenu = makeStudioUiRefreshMenu(makeStudioUiRefreshElement("button", "studio-follow-button", "Follow: on"), "follow", "studio-refresh-follow-anchor");
+            for (const [control, label] of [[activityTrackingSelect, "Working, while Pi runs"], [followSelect, "The latest response, when it arrives"],
+              [documentPreviewFollowSelect, "The Document preview, while in Document"]]) {
+              control?.setAttribute("aria-label", label);
+              for (const option of Array.from(control?.options || [])) option.textContent = label + ": " + (option.value === "off" ? "Off" : "On");
+            }
+            appendStudioUiRefreshMenuSection(followMenu.menu, "Switch this pane automatically to:", [activityTrackingSelect, followSelect, documentPreviewFollowSelect]);
+          } else if (!isEditorOnlyMode && !isWatchedFilePreview) appendStudioUiRefreshMenuSection(rightViewMenu.menu, "Response updates", [followSelect]);
+          rightToolsEl.append(headerRunStatus, headerStop);
+          if (followMenu) rightToolsEl.appendChild(followMenu.anchor);
+          rightToolsEl.appendChild(rightViewMenu.anchor);
           if (exportPreviewControlsEl) {
             rightToolsEl.appendChild(exportPreviewControlsEl);
           } else if (exportPdfBtn) {
@@ -3369,36 +3643,57 @@
           rightHeaderEl.replaceChildren(rightIdentityEl, rightToolsEl);
         }
 
+        let responseMenu = null, responseRow = null;
+        if (responseActionsEl) {
+          responseRow = responseActionsEl.querySelector(".response-result-row");
+          if (responseRow) {
+            if (loadHistoryPromptBtn) responseRow.appendChild(loadHistoryPromptBtn);
+            if (copyResponsePromptBtn) responseRow.appendChild(copyResponsePromptBtn);
+            if (copyResponseBtn) responseRow.appendChild(copyResponseBtn);
+            responseMenu = makeStudioUiRefreshMenu(makeStudioUiRefreshElement("button", "", "Response actions"), "response-actions", "studio-refresh-response-actions-anchor");
+            responseMenu.anchor.hidden = true; responseActionsEl.appendChild(responseMenu.anchor);
+          }
+        }
         const toolbarEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar");
         const toolbarMainEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-main");
         const actionsEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-actions");
         const actionLineOneEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         if (!isEditorOnlyMode && sendRunBtn) actionLineOneEl.appendChild(sendRunBtn);
+        const promptRunIndicator = makeStudioUiRefreshElement("span", "studio-prompt-run-indicator");
+        promptRunIndicator.id = "studioPromptRunIndicator"; promptRunIndicator.hidden = true;
+        promptRunIndicator.setAttribute("role", "status"); promptRunIndicator.setAttribute("aria-live", "polite");
+        if (bufferSwitchingEnabled) actionLineOneEl.appendChild(promptRunIndicator);
+        // The run status takes the indicator's place while running, so the row keeps its width.
+        const runStatus = makeStudioUiRefreshElement("span", "studio-run-status");
+        runStatus.hidden = true; actionLineOneEl.appendChild(runStatus);
         if (!isEditorOnlyMode && queueSteerBtn) actionLineOneEl.appendChild(queueSteerBtn);
         const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line studio-refresh-utility-action-line");
-        actionLineTwoEl.appendChild(copyDraftBtn);
-        if (suggestCompletionBtn) actionLineTwoEl.appendChild(suggestCompletionBtn);
-        if (openCompanionBtn) actionLineTwoEl.appendChild(openCompanionBtn);
+        if (!contextMenu && copyDraftBtn) actionLineTwoEl.appendChild(copyDraftBtn);
+        if (!contextMenu && suggestCompletionBtn) actionLineTwoEl.appendChild(suggestCompletionBtn);
         const replActionLineEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line repl-action-line");
         replActionLineEl.hidden = true;
         if (sendReplBtn) replActionLineEl.appendChild(sendReplBtn);
         if (replSendModeSelect) replActionLineEl.appendChild(replSendModeSelect);
-        if (actionLineOneEl.childNodes.length > 0) actionsEl.appendChild(actionLineOneEl);
+        actionsEl.appendChild(actionLineOneEl);
         actionsEl.appendChild(actionLineTwoEl);
         if (replActionLineEl.childNodes.length > 0) actionsEl.appendChild(replActionLineEl);
 
         const stateEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-state");
-        const annotationsButton = makeStudioUiRefreshElement("button", "", "Annotations");
-        const annotationsMenu = makeStudioUiRefreshMenu(annotationsButton, "annotations", "studio-refresh-annotations-anchor");
-        appendStudioUiRefreshMenuSection(annotationsMenu.menu, "Display", [annotationModeSelect, insertHeaderBtn]);
-        appendStudioUiRefreshMenuSection(annotationsMenu.menu, "Actions", [stripAnnotationsBtn, saveAnnotatedBtn]);
+
         const viewButton = makeStudioUiRefreshElement("button", "", "View");
         const viewMenu = makeStudioUiRefreshMenu(viewButton, "view", "studio-refresh-view-anchor");
-        appendStudioUiRefreshMenuSection(viewMenu.menu, "Display", [highlightSelect, lineNumbersSelect, editorFontSizeSelect]);
+        // Outline is a way of viewing the text, so it lives under View (Oliver, 8 Oct).
+        appendStudioUiRefreshMenuSection(viewMenu.menu, "Display", [outlineBtn, highlightSelect, lineNumbersSelect, editorFontSizeSelect]);
         if (activityTrackingSelect) activityTrackingSelect.hidden = isEditorOnlyMode || isWatchedFilePreview;
-        appendStudioUiRefreshMenuSection(viewMenu.menu, "Workspace", [studioPaneLayoutSelect, (isEditorOnlyMode || isWatchedFilePreview) ? null : activityTrackingSelect]);
-        stateEl.appendChild(annotationsMenu.anchor);
-        stateEl.appendChild(viewMenu.anchor);
+        appendStudioUiRefreshMenuSection(viewMenu.menu, "Workspace", [studioPaneLayoutSelect,
+          (isEditorOnlyMode || isWatchedFilePreview || followMenu) ? null : activityTrackingSelect,
+          (bufferSwitchingEnabled && !followMenu) ? documentPreviewFollowSelect : null]);
+        appendStudioUiRefreshMenuSection(viewMenu.menu, "Annotations", [annotationModeSelect, insertHeaderBtn, stripAnnotationsBtn, saveAnnotatedBtn]);
+        if (reviewNotesBtn) actionLineOneEl.appendChild(reviewNotesBtn);
+        if (scratchpadBtn) actionLineOneEl.appendChild(scratchpadBtn);
+        if (isEditorOnlyMode && askAsideBtn) actionLineOneEl.appendChild(askAsideBtn);
+        if (reviewMenu) actionLineOneEl.appendChild(reviewMenu.anchor);
+        actionLineOneEl.appendChild(viewMenu.anchor);
 
         toolbarMainEl.appendChild(actionsEl);
         toolbarMainEl.appendChild(stateEl);
@@ -3406,13 +3701,28 @@
         sourceMetaEl.replaceChildren(toolbarEl);
 
         studioUiRefreshUi = {
-          annotationsButton,
-          viewButton,
+          annotationsButton: null,
+          viewButton, tabsHost, fileControls: headerToolsEl, filenameButton, openMenu, actionLine: actionLineOneEl,
+          responseRow, responseMenu, runStatus, promptRunIndicator, headerRunStatus, headerStop, followButton: followMenu?.button ?? null,
+          fileButton: contextMenu ? contextMenu.button : null, pathDetails,
           reviewButton: reviewMenu ? reviewMenu.button : null,
-          menus: [annotationsMenu, viewMenu]
+          menus: [viewMenu, openMenu]
+            .concat(rightViewMenu ? [rightViewMenu] : [])
+            .concat(followMenu ? [followMenu] : [])
+            .concat(responseMenu ? [responseMenu] : [])
             .concat(contextMenu ? [contextMenu] : [])
             .concat(reviewMenu ? [reviewMenu] : []),
         };
+        document.body.classList.add("studio-workspace-layout");
+        if (saveOverBtn) saveOverBtn.textContent = "Save";
+        if (saveAsBtn) saveAsBtn.textContent = "Save As…";
+        if (refreshFromDiskBtn) refreshFromDiskBtn.textContent = "Reload from disk";
+        if (clearWorkspaceBtn) clearWorkspaceBtn.textContent = "Reset editor…";
+        if (contextMenu) {
+          contextMenu.button.textContent = "File";
+          contextMenu.button.setAttribute("aria-label", "File"); contextMenu.menu.setAttribute("aria-label", "File");
+        }
+        syncStudioWorkspaceFilename();
 
         document.addEventListener("click", (event) => {
           const target = event.target;
@@ -3544,12 +3854,7 @@
         return summary;
       }
 
-      function getIdleStatus() {
-        if (isEditorOnlyMode) {
-          return "Editor-only mode: edit, browse files, annotate, preview, save, suggest, ask a side question, refresh file-backed text, or send to a REPL.";
-        }
-        return "Edit, load, or annotate text, then run, save, review, explain, or ask a side question.";
-      }
+      function getIdleStatus() { return ""; }
 
       function normalizeTerminalPhase(phase) {
         if (phase === "running" || phase === "tool" || phase === "responding") return phase;
@@ -3672,17 +3977,53 @@
           : "original run + " + steeringCount + " steering messages";
       }
 
+      function getHistoryPromptCopyTitle(item) {
+        if (!item) return "Select a response with a recorded prompt.";
+        if (typeof item.prompt !== "string" || !item.prompt.trim()) return "No prompt was recorded for this response.";
+        const kind = item.promptMode === "run" ? "original run prompt"
+          : (item.promptMode === "effective" ? "effective prompt" : "stored prompt");
+        return "Copy the " + kind + " recorded for the selected response. Does not load or run it.";
+      }
+
+      async function copySelectedHistoryPromptToClipboard() {
+        if (uiBusy) {
+          setStatus("Wait for the current action to finish.", "warning");
+          return false;
+        }
+        const item = getSelectedHistoryItem();
+        if (!item || typeof item.prompt !== "string" || !item.prompt.trim()) {
+          setStatus("Prompt unavailable for the selected response.", "warning");
+          return false;
+        }
+        // Pin the selected record before the asynchronous clipboard path. Later
+        // selection or editing must not lend newer text/provenance to this copy.
+        const content = item.prompt;
+        const kind = item.promptMode === "run" ? "original run prompt"
+          : (item.promptMode === "effective" ? "effective prompt" : "response prompt");
+        try {
+          const copied = await writeTextToClipboard(content);
+          setStatus(copied ? "Copied " + kind + "." : "Could not copy response prompt.", copied ? "success" : "warning");
+          return copied === true;
+        } catch {
+          setStatus("Clipboard write failed.", "warning");
+          return false;
+        }
+      }
+
       function getHistoryPromptButtonLabel(item) {
-        if (!item || !item.prompt || !String(item.prompt).trim()) {
-          return "Response prompt unavailable";
-        }
-        if (item.promptMode === "effective") {
-          return "Load effective prompt into editor";
-        }
-        if (item.promptMode === "run") {
-          return "Load run prompt into editor";
-        }
-        return "Load response prompt into editor";
+        return "Load response prompt";
+      }
+
+      function getHistoryPromptButtonTitle(item) {
+        if (!item) return "Select a response with a recorded prompt.";
+        if (typeof item.prompt !== "string" || !item.prompt.trim()) return "No prompt was recorded for this response.";
+        if (bufferSwitchingEnabled && isStudioDocumentBufferView()) return "Return to Prompt to load this response's prompt.";
+        if (responseReplacementPending) return "Finish the current text replacement first.";
+        if (uiBusy) return "Wait for the current action to finish.";
+        const sourceLabel = getHistoryPromptSourceLabel(item);
+        return sourceLabel
+          ? "Load the " + sourceLabel + " prompt chain that generated the selected response into the editor."
+          : "Load the prompt that generated the selected response into the editor.";
       }
 
       function getHistoryPromptLoadedStatus(item) {
@@ -3964,7 +4305,8 @@
       function updateDocumentTitle() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
-        const titleParts = ["pi Studio"];
+        const documentName = sourceState?.path ? basenameForStudioPath(sourceState.path) : "Draft";
+        const titleParts = [isEditorOnlyMode ? documentName + " — π Studio" : "pi Studio"];
         if (terminalText && terminalText !== "unknown") titleParts.push(terminalText);
         if (modelText && modelText !== "none") titleParts.push(modelText);
 
@@ -4073,7 +4415,7 @@
           + "<div class='footer-model-menu-heading'>Pi model & thinking</div>"
           + "<label class='footer-model-menu-field'><span>Pi model</span><span class='studio-menu-select-wrap'><select id='footerPiModelSelect'>" + modelOptionsHtml.join("") + "</select></span></label>"
           + "<label class='footer-model-menu-field'><span>Thinking</span><span class='studio-menu-select-wrap'><select id='footerPiThinkingSelect'>" + thinkingOptionsHtml.join("") + "</select></span></label>"
-          + "<div class='footer-model-menu-note'>Affects future Pi turns. Studio Suggest has its own model setting.</div>";
+          + "<div class='footer-model-menu-note'>Applies from the next Run.</div>";
       }
 
       function setFooterModelMenuOpen(open) {
@@ -4231,12 +4573,137 @@
         }
       }
 
+      function collectStudioOperationNotices() {
+        const notices = new Map();
+        if (!documentHostingEnabled) return notices;
+        const add = notice => notices.set(notice.id, { severity: "warning", unresolved: true, ...notice });
+        const copy = documentHostingController?.copyState();
+        if (copy?.record && (!copy.live || !documentHostingGeneration || wsState === "Disconnected")) {
+          const request = copy.record.request, created = copy.receipt?.operationId === request.operationId;
+          add({ id: "copy:" + request.operationId, kind: "copy", bufferId: request.bufferId,
+            message: created ? "Copy made. Couldn't confirm its window opened." : "Couldn't confirm the copy was made. The original attempt is kept.",
+            actions: [{ controlId: "studioCopyDocumentBtn", label: "Try again" }, { controlId: "studioForgetCopyBtn", label: "Stop checking…" }] });
+        } else if (copy?.error) add({ id: "copy:invalid", kind: "copy", bufferId: null,
+          message: "Couldn't check the earlier copy. Keep recovery copies, and check it before starting another.", actions: [] });
+        const launch = documentHostingController?.launchState?.();
+        if (launch?.record) add({ id: "launch:" + launch.record.request.operationId, kind: "launch", bufferId: launch.record.request.bufferId,
+          message: "Couldn't confirm the Document window was made. The original request is kept.",
+          actions: [{ controlId: "studioRecheckLaunchBtn", label: "Try again" }, { controlId: "studioForgetLaunchBtn", label: "Stop checking…" }] });
+        else if (launch?.error) add({ id: "launch:invalid", kind: "launch", bufferId: null,
+          message: "Couldn't check the Document window request. Keep recovery copies and check again.", actions: [] });
+        const move = documentHostingController?.moveState?.(), backup = bufferRecoveryClient?.handoffBackup();
+        for (const destination of [...(copy?.destinations || []), ...(launch?.destinations || [])]) {
+          if (destination.live && documentHostingGeneration && wsState !== "Disconnected") continue;
+          if (destination.kind === "move" && backup?.record?.moveId === destination.operationId) continue;
+          const label = destination.kind === "copy" ? "Copy made" : destination.kind === "move" ? "Document moved" : destination.created ? "Document created" : "Existing Document found";
+          add({ id: "destination:" + destination.operationId, kind: "destination", bufferId: destination.sourceBufferId,
+            message: label + ". Couldn't confirm its window opened; its identity is kept.",
+            actions: [{ controlId: "studioDestination-" + destination.operationId, label: "Show its window" }] });
+        }
+        const pending = move?.pending;
+        if (pending) add({ id: "move:" + pending.moveId, kind: "move", bufferId: pending.bufferId,
+          message: "Couldn't confirm the move finished. Both editors' work remains protected.",
+          actions: [{ controlId: "studioRecheckMoveBtn", label: "Check again" }, { controlId: "studioCancelMoveBtn", label: "Cancel" }] });
+        else if (backup?.record) add({ id: "move:" + backup.record.moveId, kind: "move", bufferId: backup.record.bufferId ?? backup.record.buffer?.id ?? move?.receipt?.bufferId,
+          message: move?.receipt?.moveId === backup.record.moveId && move.receipt.adopted ? "The other window accepted the moved Document. A backup is still kept here; check recovery before closing."
+            : "Document moved, but couldn't confirm the other window accepted it. The backup is kept here.",
+          actions: [{ controlId: "studioRecheckMoveBtn", label: "Check again" }, { controlId: "studioFindMovedDocumentBtn", label: "Show its window" }] });
+        if (move?.adoptionPending) add({ id: "adoption:" + move.adoptionPending.moveId, kind: "adoption", bufferId: move.adoptionPending.bufferId,
+          message: "Document received here, but couldn't confirm that to the original window. Keep its backup there.",
+          actions: [{ controlId: "studioRecheckMoveBtn", label: "Check again" }, { controlId: "bufferRecoveryBtn", label: "Check recovery…" }] });
+        const opening = documentOpenController?.state();
+        if (opening?.record) {
+          const request = opening.record.request, name = basenameForStudioPath(request.path) || "the file";
+          add({ id: "open:" + request.operationId, kind: "open", bufferId: request.bufferId,
+            message: opening.busy || opening.cancelling ? "Checking " + name + " opening. Previous text kept until confirmed."
+              : "Couldn’t confirm that " + name + " opened. Previous text kept.",
+            actions: [{ controlId: "studioRecheckOpenBtn", label: "Try again" }, { controlId: "studioCancelOpenBtn", label: "Cancel" },
+              { controlId: "studioDownloadOpenBtn", label: "Export backup" }] });
+        } else if (opening?.error) add({ id: "open:invalid", kind: "open", bufferId: null,
+          message: "Opening backup could not be verified. Keep it for recovery; current work was kept.",
+          actions: [{ controlId: "studioDownloadOpenBtn", label: "Export backup" }] });
+        for (const save of bufferRecoveryClient?.pendingHostingSaves() || []) add({ id: "save:" + save.operationId, kind: "save", bufferId: save.bufferId,
+          message: "Disk save recorded; attaching its backing is unresolved. Current text kept.",
+          actions: [{ controlId: "studioResolveSaveBtn", label: "Resolve saved backing…", selectedBufferOnly: true }] });
+        return notices;
+      }
+
+      function getStudioPriorityOperationNotice() {
+        return [...studioOperationNotices.values()].find(notice => notice.unresolved && notice.severity === "warning") || null;
+      }
+
+      function activateStudioOperationNotice(id, action) {
+        // Re-derive the original operation immediately before dispatch. A stale
+        // DOM button cannot target a new attempt or a different buffer's save.
+        const notice = collectStudioOperationNotices().get(id);
+        const currentAction = notice?.actions.find(item => item.controlId === action.controlId);
+        if (!currentAction) return false;
+        if (currentAction.selectedBufferOnly && getStudioSelectedBuffer()?.id !== notice.bufferId) return false;
+        if (["move", "adoption"].includes(notice.kind) && action.controlId !== "bufferRecoveryBtn") {
+          const move = documentHostingController?.moveState?.(), backup = bufferRecoveryClient?.handoffBackup();
+          const target = move?.pending?.moveId || backup?.record?.moveId || move?.adoptionPending?.moveId || move?.receipt?.moveId;
+          if (notice.id !== notice.kind + ":" + target) return false;
+        }
+        const control = document.getElementById(action.controlId);
+        if (!control || control.disabled) return false;
+        control.click(); // existing guarded handler/identity/confirmation, never a new protocol
+        return true;
+      }
+
+      function syncStudioOperationNotices() {
+        if (!documentHostingEnabled) return;
+        studioOperationNotices = collectStudioOperationNotices();
+        const fingerprint = JSON.stringify([...studioOperationNotices.values()]);
+        if (!studioOperationNoticesEl && studioOperationNotices.size) {
+          const main = paneResizeHandleEl?.closest("main");
+          if (main?.parentElement) {
+            studioOperationNoticesEl = document.createElement("div");
+            studioOperationNoticesEl.id = "studioOperationNotices";
+            studioOperationNoticesEl.className = "studio-operation-notices";
+            studioOperationNoticesEl.setAttribute("aria-live", "polite");
+            main.parentElement.insertBefore(studioOperationNoticesEl, main);
+          }
+        }
+        if (studioOperationNoticesEl) {
+          studioOperationNoticesEl.hidden = !studioOperationNotices.size;
+          if (fingerprint !== studioOperationNoticeFingerprint) {
+            studioOperationNoticesEl.replaceChildren();
+            for (const notice of studioOperationNotices.values()) {
+              const line = document.createElement("div"); line.className = "studio-operation-notice";
+              line.dataset.operationId = notice.id; line.dataset.bufferId = notice.bufferId || "";
+              const text = document.createElement("span"); text.textContent = notice.message; line.appendChild(text);
+              for (const action of notice.actions) {
+                const button = document.createElement("button"); button.type = "button"; button.textContent = action.label;
+                button.dataset.controlId = action.controlId;
+                button.addEventListener("click", () => activateStudioOperationNotice(notice.id, action));
+                line.appendChild(button);
+              }
+              studioOperationNoticesEl.appendChild(line);
+            }
+          }
+          for (const button of studioOperationNoticesEl.querySelectorAll("button")) {
+            const line = button.closest("[data-operation-id]"), notice = studioOperationNotices.get(line.dataset.operationId);
+            const action = notice?.actions.find(item => item.controlId === button.dataset.controlId);
+            button.disabled = !action || !document.getElementById(action.controlId) || document.getElementById(action.controlId).disabled
+              || Boolean(action.selectedBufferOnly && getStudioSelectedBuffer()?.id !== notice.bufferId);
+          }
+        }
+        const changed = fingerprint !== studioOperationNoticeFingerprint;
+        studioOperationNoticeFingerprint = fingerprint;
+        if (changed) renderStatus();
+      }
+
       function renderStatus() {
+        const operation = getStudioPriorityOperationNotice();
+        // The reachable notice owns the unresolved fact and its actions. Keep
+        // the footer quiet rather than duplicating it or competing with a short
+        // confirmation; retain a fallback if notice rendering is unavailable.
+        const operationInNotice = operation && studioOperationNoticesEl?.isConnected && !studioOperationNoticesEl.hidden;
         statusEl.textContent = bufferRecoveryIssue
-          ? "Recovery: " + bufferRecoveryIssue + " Save/copy current text before refreshing. " + statusMessage
-          : statusMessage;
-        statusEl.className = bufferRecoveryIssue ? "warning" : (statusLevel || "");
-        statusEl.title = bufferRecoveryIssue || "";
+          ? "Recovery: " + bufferRecoveryIssue + " Save/copy current text before refreshing. " + (operationInNotice ? "" : (operation?.message || statusMessage))
+          : operationInNotice ? "" : operation?.message || statusMessage;
+        statusEl.className = bufferRecoveryIssue ? "warning" : operationInNotice ? "" : operation?.severity || (statusLevel || "");
+        statusEl.title = bufferRecoveryIssue || (!operationInNotice && operation?.message) || "";
 
         const spinnerActive = shouldAnimateFooterSpinner();
         if (statusLineEl && statusLineEl.classList) {
@@ -4636,6 +5103,7 @@
       }
 
       function updateSourceBadge() {
+        syncStudioWorkspaceFilename();
         const label = sourceState && sourceState.label ? sourceState.label : "blank";
         const originText = isWatchedFilePreview
           ? ("Watching: " + label + " · read-only" + (watchedFilePreviewState.lastError || watchedFilePreviewState.renderError ? " · last good preview" : ""))
@@ -4662,10 +5130,11 @@
             : "Reset the editor origin and keep the current text in a new draft.";
         }
         // Show "Set working dir" button when not file-backed
+        if (documentHostingEnabled && resourceDirInputWrap?.classList.contains("visible")) return;
         var isFileBacked = hasRefreshableFilePath();
         if (isFileBacked) {
-          var fileBackedResourceDir = getCurrentResourceDirValue() || dirnameForDisplayPath(sourceState.path);
-          if (resourceDirInput) resourceDirInput.value = fileBackedResourceDir;
+          var fileBackedResourceDir = getCurrentResourceDirValue() || (documentHostingEnabled ? "" : dirnameForDisplayPath(sourceState.path));
+          setStudioResourceDirValue(fileBackedResourceDir, documentHostingEnabled);
           if (resourceDirLabel) {
             resourceDirLabel.textContent = fileBackedResourceDir ? ("Resource dir: " + fileBackedResourceDir) : "Resource dir: file directory";
             resourceDirLabel.hidden = false;
@@ -4675,7 +5144,7 @@
         } else {
           // Restore to label if dir is set, otherwise show button
           var dir = getCurrentResourceDirValue();
-          if (resourceDirInput) resourceDirInput.value = dir;
+          setStudioResourceDirValue(dir, documentHostingEnabled);
           if (dir) {
             if (resourceDirBtn) resourceDirBtn.hidden = true;
             if (resourceDirLabel) { resourceDirLabel.textContent = "Working dir: " + dir; resourceDirLabel.hidden = false; }
@@ -4707,16 +5176,11 @@
           setStatus("Editor changed while Reset origin was open. Kept the current origin; try again.", "warning");
           return;
         }
-        const nextLabel = String(sourceTextEl.value || "").trim() ? "draft" : "blank";
-        setSourceState({
-          source: "blank",
-          label: nextLabel,
-          path: null,
-          draftId: makeStudioDraftId(),
-        }, {
-          carryCurrentMetadataToNewDocument: true,
-        });
-        setStatus(descriptor.fileBacked ? "Detached editor from file origin into a new draft." : "Reset editor origin to a new draft.", "success");
+        return runStudioEditorSourceMutation(() => {
+          const nextLabel = String(sourceTextEl.value || "").trim() ? "draft" : "blank";
+          setSourceState({ source: "blank", label: nextLabel, path: null, draftId: makeStudioDraftId() }, { carryCurrentMetadataToNewDocument: true });
+          setStatus(descriptor.fileBacked ? "Detached editor from file origin into a new draft." : "Reset editor origin to a new draft.", "success");
+        }, () => !bufferRecoveryEnabled || editorAsyncConsentIsCurrent(consent));
       }
 
       function normalizeStudioPaneLayout(value) {
@@ -4733,11 +5197,244 @@
       }
 
       function readActivityTrackingEnabled() {
+        const freshDefault = bufferSwitchingEnabled && !isEditorOnlyMode && !isWatchedFilePreview;
         try {
-          return Boolean(window.localStorage && window.localStorage.getItem(ACTIVITY_TRACKING_STORAGE_KEY) === "on");
-        } catch {
-          return false;
+          const saved = window.localStorage?.getItem(ACTIVITY_TRACKING_STORAGE_KEY);
+          return saved === "off" ? false : saved === "on" ? true : freshDefault;
+        } catch { return freshDefault; }
+      }
+
+      function readLatestResponseFollowingEnabled() {
+        try {
+          const saved = window.localStorage?.getItem(LATEST_RESPONSE_FOLLOW_STORAGE_KEY);
+          return saved === "off" ? false : saved === "on" ? true : null;
+        } catch { return null; }
+      }
+
+      function studioRunFollowingAvailable() {
+        return bufferSwitchingEnabled && !isEditorOnlyMode && !isWatchedFilePreview && studioRuntimeActivity !== null;
+      }
+
+      function ensureLatestResponseFollowingPreference() {
+        if (latestResponseFollowingEnabled === null) {
+          const prompt = bufferRecoveryClient?.snapshot()?.buffers.find(entry => entry.role === "prompt");
+          if (!prompt) return;
+          // Migrate the Prompt's explicit old preference, never Document's forced Off.
+          latestResponseFollowingEnabled = prompt.view.followLatest !== false;
         }
+        if (followSelect) followSelect.value = latestResponseFollowingEnabled === false ? "off" : "on";
+      }
+
+      function getStudioPromptRunView() {
+        const state = bufferRecoveryClient?.snapshot(), entry = state?.buffers.find(item => item.id === state.activePromptId);
+        if (!entry) return null;
+        const selected = state.selectedBufferId === entry.id;
+        const saved = bufferTransientStates.get(entry.id);
+        const view = saved?.runFollowingView;
+        return { entry, selected, rightView: selected ? rightView : view?.rightView ?? entry.view.rightView,
+          rightScrollTop: selected ? studioBufferScrollPosition("right", critiqueViewEl.scrollTop) : view?.rightScrollTop ?? entry.view.rightScrollTop ?? 0,
+          selection: selected ? { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex }
+            : saved?.historySelection ?? { id: responseHistory[entry.view.responseHistoryIndex]?.id ?? null, index: entry.view.responseHistoryIndex } };
+      }
+
+      function getStudioRunWorkingOwner() {
+        const owner = studioRunFollowing?.working;
+        return owner && getStudioSelectedBuffer()?.id === owner.bufferId ? owner : null;
+      }
+
+      function setStudioPromptRunView(view, scrollTop, responseId) {
+        const target = getStudioPromptRunView();
+        if (!target || target.entry.id !== studioRunFollowing?.promptId) return false;
+        const saved = bufferTransientStates.get(target.entry.id) || {};
+        const index = responseId ? responseHistory.findIndex(item => item.id === responseId) : -1;
+        bufferTransientStates.set(target.entry.id, { ...saved, runFollowingView: { rightView: view, rightScrollTop: scrollTop },
+          ...(index >= 0 ? { historySelection: { id: responseId, index, resetScroll: true }, responseScrollPending: true } : {}) });
+        if (target.selected) {
+          if (index >= 0) selectHistoryIndex(index, { silent: true, automatic: true });
+          setRightView(view, { activityTracking: true });
+          if (view === "trace") syncTraceForSelectedHistoryItem();
+          restoreDocumentFollowScroll(scrollTop);
+          scheduleWorkspacePersistence();
+        }
+        return true;
+      }
+
+      function relinquishStudioRunWorking(restore = false) {
+        const state = studioRunFollowing, owner = state?.working;
+        if (!owner) return false;
+        const target = getStudioPromptRunView();
+        state.working = null;
+        if (restore && target?.entry.id === owner.bufferId && target.rightView === "trace") {
+          return setStudioPromptRunView(owner.rightView, owner.rightScrollTop);
+        }
+        return false;
+      }
+
+      function pauseStudioRunFollowing() {
+        if (!studioRunFollowingAvailable() || !studioRunFollowing?.active) return;
+        studioRunFollowing.paused = true;
+        // Hidden Prompt must also lose its temporary Working override. Never
+        // navigate the currently visible Document on the way out.
+        const target = getStudioPromptRunView();
+        relinquishStudioRunWorking(!target?.selected);
+        syncStudioFollowMenu();
+      }
+
+      function acquireStudioRunWorking() {
+        const state = studioRunFollowing;
+        if (!state?.active || state.paused || state.working || !activityTrackingEnabled) return false;
+        const target = getStudioPromptRunView();
+        if (!target || target.entry.id !== state.promptId) return false;
+        state.working = { bufferId: target.entry.id, rightView: target.rightView, rightScrollTop: target.rightScrollTop };
+        return setStudioPromptRunView("trace", 0);
+      }
+
+      function applyStudioRunLatestResponse() {
+        const state = studioRunFollowing;
+        if (!state || state.paused || latestResponseFollowingEnabled === false || !state.latestResponseId) return false;
+        if (!responseHistory.some(item => item.id === state.latestResponseId)) return false;
+        state.latestAppliedId = state.latestResponseId;
+        const applied = setStudioPromptRunView("preview", 0, state.latestResponseId);
+        if (applied) queuedLatestResponse = null;
+        return applied;
+      }
+
+      function settleStudioRunFollowing() {
+        const state = studioRunFollowing;
+        if (!state?.active) return;
+        state.active = false;
+        const owner = state.working;
+        if (!state.paused && state.latestResponseId && latestResponseFollowingEnabled !== false) {
+          state.working = null;
+          applyStudioRunLatestResponse();
+        } else if (owner) relinquishStudioRunWorking(true);
+        syncStudioFollowMenu();
+      }
+
+      function syncStudioRunFollowingFromMessage(message) {
+        if (!studioRunFollowingAvailable() || !workspacePersistenceReady || bufferBindingInProgress || bufferRecoveryInitializing) return;
+        ensureLatestResponseFollowingPreference();
+        const run = studioRuntimeActivity.run;
+        if (run && studioRunFollowing?.runId !== run.id) {
+          settleStudioRunFollowing();
+          const target = getStudioPromptRunView();
+          if (!target) return;
+          studioRunFollowing = { runId: run.id, active: true, paused: false, promptId: target.entry.id, working: null,
+            knownResponses: new Set(responseHistory.map(item => item.id)), latestResponseId: null, latestAppliedId: null };
+          acquireStudioRunWorking();
+        }
+        const state = studioRunFollowing;
+        if (!state?.active) { syncStudioFollowMenu(); return; }
+        const arrival = ["response", "latest_response", "response_history"].includes(message.type) && message.reason !== "tree";
+        for (const item of responseHistory) {
+          if (!state.knownResponses.has(item.id) && (arrival || item.studioRunId === state.runId)) state.latestResponseId = item.id;
+          state.knownResponses.add(item.id);
+        }
+        if (!state.working && state.latestResponseId !== state.latestAppliedId) applyStudioRunLatestResponse();
+        if (!run || run.id !== state.runId) settleStudioRunFollowing();
+        syncStudioFollowMenu();
+      }
+
+      function setLatestResponseFollowingEnabled(enabled) {
+        latestResponseFollowingEnabled = Boolean(enabled);
+        followLatest = getStudioSelectedBuffer()?.role === "prompt" && Boolean(enabled);
+        try { window.localStorage?.setItem(LATEST_RESPONSE_FOLLOW_STORAGE_KEY, enabled ? "on" : "off"); } catch {}
+        if (followSelect) followSelect.value = enabled ? "on" : "off";
+        if (studioRunFollowing?.active && !studioRunFollowing.working) applyStudioRunLatestResponse();
+        syncStudioFollowMenu();
+        scheduleWorkspacePersistence();
+      }
+
+      function syncStudioFollowMenu() {
+        if (!studioUiRefreshUi?.followButton) return;
+        const enabled = activityTrackingEnabled || latestResponseFollowingEnabled !== false || documentPreviewFollowingEnabled;
+        setStudioUiRefreshButtonText(studioUiRefreshUi.followButton, "Follow: " + (enabled ? "on" : "off")
+          + (enabled && studioRunFollowing?.paused ? " · run paused" : ""));
+        if (activityTrackingSelect) activityTrackingSelect.value = activityTrackingEnabled ? "on" : "off";
+        if (followSelect) followSelect.value = latestResponseFollowingEnabled === false ? "off" : "on";
+        if (documentPreviewFollowSelect) documentPreviewFollowSelect.value = documentPreviewFollowingEnabled ? "on" : "off";
+      }
+
+      function readDocumentPreviewFollowingEnabled() {
+        if (!bufferSwitchingEnabled || isEditorOnlyMode || isWatchedFilePreview) return false;
+        try {
+          return !window.localStorage || window.localStorage.getItem(DOCUMENT_PREVIEW_FOLLOW_STORAGE_KEY) !== "off";
+        } catch { return true; }
+      }
+
+      function getDocumentPreviewFollowOwner() {
+        return bufferSwitchingEnabled && documentPreviewFollowOwner && documentPreviewFollowOwner.bufferId === getStudioSelectedBuffer()?.id
+          ? documentPreviewFollowOwner : null;
+      }
+
+      function rememberDocumentPreviewFollowScroll() {
+        const owner = getDocumentPreviewFollowOwner();
+        if (owner && rightView === "editor-preview") {
+          documentPreviewFollowScrolls.set(owner.bufferId, studioBufferScrollPosition("right", critiqueViewEl.scrollTop));
+          while (documentPreviewFollowScrolls.size > 128) documentPreviewFollowScrolls.delete(documentPreviewFollowScrolls.keys().next().value);
+        }
+      }
+
+      function documentPreviewFollowingView(entry, restoredView) {
+        documentPreviewFollowOwner = null;
+        if (!bufferSwitchingEnabled || !documentPreviewFollowingEnabled || isEditorOnlyMode || isWatchedFilePreview
+            || entry.role !== "document") return restoredView;
+        // Follow never switches the Document to a response or Working, so a saved one was chosen
+        // there on purpose; keep it rather than override it with the preview (Sol, 8 Oct).
+        if (restoredView === "preview" || restoredView === "markdown" || restoredView === "trace") return restoredView;
+        // Automatic preview does not become this Document's saved right view.
+        documentPreviewFollowOwner = { bufferId: entry.id, rightView: restoredView, rightScrollTop: entry.view.rightScrollTop ?? 0 };
+        return "editor-preview";
+      }
+
+      function retireStudioBufferSourceView(bufferId) {
+        bufferTransientStates.delete(bufferId);
+        documentPreviewFollowScrolls.delete(bufferId);
+        if (documentPreviewFollowOwner?.bufferId === bufferId) documentPreviewFollowOwner = null;
+        if (studioRunFollowing?.promptId === bufferId) { studioRunFollowing.working = null; studioRunFollowing.paused = true; }
+      }
+
+      function relinquishDocumentPreviewFollowing() {
+        rememberDocumentPreviewFollowScroll();
+        documentPreviewFollowOwner = null;
+      }
+
+      function restoreDocumentFollowScroll(scrollTop) {
+        const entry = getStudioSelectedBuffer();
+        if (!entry) return;
+        if (!bufferViewRestore || bufferViewRestore.bufferId !== entry.id) {
+          bufferViewRestore = { bufferId: entry.id, editor: null, source: null, owners: {} };
+        }
+        bufferViewRestore.right = scrollTop;
+        bufferViewRestore.owners.right = captureStudioBufferScrollOwner("right");
+        scheduleStudioBufferScrollRestore(critiqueViewEl);
+      }
+
+      function setDocumentPreviewFollowingEnabled(enabled, options) {
+        const wasEnabled = documentPreviewFollowingEnabled;
+        documentPreviewFollowingEnabled = Boolean(enabled) && bufferSwitchingEnabled && !isEditorOnlyMode && !isWatchedFilePreview;
+        if (documentPreviewFollowSelect) {
+          documentPreviewFollowSelect.hidden = !bufferSwitchingEnabled || isEditorOnlyMode || isWatchedFilePreview;
+          documentPreviewFollowSelect.value = documentPreviewFollowingEnabled ? "on" : "off";
+        }
+        if (!options || options.persist !== false) {
+          try { window.localStorage?.setItem(DOCUMENT_PREVIEW_FOLLOW_STORAGE_KEY, documentPreviewFollowingEnabled ? "on" : "off"); }
+          catch { /* The current choice still works without browser storage. */ }
+        }
+        const owner = getDocumentPreviewFollowOwner(), entry = getStudioSelectedBuffer();
+        if (!documentPreviewFollowingEnabled && owner) {
+          relinquishDocumentPreviewFollowing();
+          setRightView(owner.rightView, { documentPreviewFollowing: true });
+          restoreDocumentFollowScroll(owner.rightScrollTop);
+        } else if (documentPreviewFollowingEnabled && !wasEnabled && entry?.role === "document") {
+          documentPreviewFollowOwner = { bufferId: entry.id, rightView,
+            rightScrollTop: studioBufferScrollPosition("right", critiqueViewEl.scrollTop) };
+          setRightView("editor-preview", { documentPreviewFollowing: true });
+          restoreDocumentFollowScroll(documentPreviewFollowScrolls.get(entry.id) ?? 0);
+        }
+        persistWorkspaceStateNow();
+        syncStudioFollowMenu();
+        return documentPreviewFollowingEnabled;
       }
 
       function isStackedStudioPaneLayout() {
@@ -4755,6 +5452,8 @@
       }
 
       function setStudioPaneLayout(value, options) {
+        const menu = options?.menuSelection ? studioUiRefreshUi?.menus.find(item => item.name === "view") : null;
+        const restoreMenuFocus = menu && !menu.menu.hidden;
         studioPaneLayout = normalizeStudioPaneLayout(value);
         document.body.dataset.studioLayout = studioPaneLayout;
         if (studioPaneLayoutSelect) studioPaneLayoutSelect.value = studioPaneLayout;
@@ -4780,6 +5479,9 @@
         if (!options || !options.silent) {
           setStatus("Pane layout: " + getStudioPaneLayoutLabel(studioPaneLayout) + ".");
         }
+        // Reparenting can blur/close the menu. Restore its owning opener only
+        // after the layout is applied, not from an earlier change listener.
+        if (restoreMenuFocus) { menu.close(); menu.button.focus({ preventScroll: true }); }
         return studioPaneLayout;
       }
 
@@ -4810,6 +5512,12 @@
           }
         }
         syncStudioUiRefreshSummaries();
+        if (studioRunFollowingAvailable()) {
+          if (!activityTrackingEnabled) relinquishStudioRunWorking(true);
+          else acquireStudioRunWorking();
+          syncStudioFollowMenu();
+          return activityTrackingEnabled;
+        }
         if (activityTrackingEnabled && agentBusyFromServer) {
           if (bufferSwitchingEnabled && !wasEnabled && isStudioDocumentBufferView() && uiBusy
               && typeof pendingRequestId === "string" && pendingRequestId.length > 0) {
@@ -4831,6 +5539,7 @@
       }
 
       function beginTrackedStudioActivity(requestId) {
+        if (studioRunFollowingAvailable()) return false; // SDK identity, not a request slot, owns the override
         if (!activityTrackingEnabled || isEditorOnlyMode || isWatchedFilePreview || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
         const normalizedRequestId = String(requestId || "active");
         if (!activityTrackingOwnsWorkingView && activityTrackingRequestId
@@ -4848,6 +5557,8 @@
       }
 
       function finishTrackedStudioActivity(requestId) {
+        if (studioRunFollowingAvailable()) return false;
+        if (studioRuntimeActivity?.run) return false; // a response / agent_end is not final SDK settlement
         if (!activityTrackingRequestId && !activityTrackingOwnsWorkingView) return false;
         const normalizedRequestId = String(requestId || "");
         if (normalizedRequestId && activityTrackingRequestId !== normalizedRequestId) return false;
@@ -5043,6 +5754,7 @@
         }
         updatePaneFocusButtons();
         updateResultActionButtons();
+        syncStudioRuntimePresentation();
       }
 
       function persistPaneFocusUrlState() {
@@ -5130,6 +5842,10 @@
       }
 
       function focusPaneViewControl(pane) {
+        if (pane === "left" && bufferSwitcherUi?.workspaceLayout) {
+          const tab = isStudioDocumentBufferView() ? bufferSwitcherUi.document : bufferSwitcherUi.prompt;
+          if (tab.disabled) return false; tab.focus({ preventScroll: true }); return true;
+        }
         const control = pane === "right" ? rightViewSelect : editorViewSelect;
         if (!control || control.disabled || control.hidden) return false;
         try {
@@ -5238,6 +5954,7 @@
 
       function triggerLoadResponseShortcut() {
         if (isEditorOnlyMode || isWatchedFilePreview || studioModalBlocksDraftAction()) return false;
+        if (bufferSwitchingEnabled && isStudioDocumentBufferView()) { setStatus("Return to Prompt to load or annotate this response.", "warning"); return true; }
         if (!loadResponseBtn || loadResponseBtn.hidden || loadResponseBtn.disabled) return false;
         loadResponseBtn.click();
         return true;
@@ -5245,6 +5962,7 @@
 
       function triggerAnnotateResponseShortcut() {
         if (isEditorOnlyMode || isWatchedFilePreview || studioModalBlocksDraftAction()) return false;
+        if (bufferSwitchingEnabled && isStudioDocumentBufferView()) { setStatus("Return to Prompt to load or annotate this response.", "warning"); return true; }
         if (!annotateResponseBtn || annotateResponseBtn.hidden || annotateResponseBtn.disabled) return false;
         annotateResponseBtn.click();
         return true;
@@ -5337,7 +6055,7 @@
       }
 
       function triggerEditorSaveShortcut() {
-        if (hasRefreshableFilePath() && saveOverBtn && !saveOverBtn.disabled && !saveOverBtn.hidden) {
+        if (saveOverBtn && !saveOverBtn.disabled && !saveOverBtn.hidden) {
           saveOverBtn.click();
           return true;
         }
@@ -5911,6 +6629,7 @@
 
         return {
           id,
+          studioRunId: typeof item.studioRunId === "string" ? item.studioRunId : null,
           markdown,
           thinking,
           timestamp,
@@ -5999,6 +6718,11 @@
       }
 
       function syncTraceForSelectedHistoryItem() {
+        if (getStudioRunWorkingOwner()) {
+          setTraceDisplayContext({ mode: "live", responseId: null, historyIndex: responseHistoryIndex, total: responseHistory.length, summary: null });
+          replaceTraceState(liveTraceState || createEmptyTraceState());
+          return;
+        }
         const item = getSelectedHistoryItem();
         const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
         const index = responseHistoryIndex;
@@ -6077,14 +6801,14 @@
         const selectedItem = getSelectedHistoryItem();
         const hasPrompt = Boolean(selectedItem && typeof selectedItem.prompt === "string" && selectedItem.prompt.trim());
         if (loadHistoryPromptBtn) {
-          loadHistoryPromptBtn.disabled = uiBusy || !hasPrompt || (bufferSwitchingEnabled && isStudioDocumentBufferView());
+          loadHistoryPromptBtn.disabled = uiBusy || responseReplacementPending || !hasPrompt || (bufferSwitchingEnabled && isStudioDocumentBufferView());
           loadHistoryPromptBtn.textContent = getHistoryPromptButtonLabel(selectedItem);
-          const promptSourceLabel = getHistoryPromptSourceLabel(selectedItem);
-          loadHistoryPromptBtn.title = hasPrompt
-            ? (promptSourceLabel
-              ? "Load the " + promptSourceLabel + " prompt chain that generated the selected response into the editor."
-              : "Load the prompt that generated the selected response into the editor.")
-            : "Prompt unavailable for the selected response.";
+          loadHistoryPromptBtn.title = getHistoryPromptButtonTitle(selectedItem);
+        }
+        if (copyResponsePromptBtn) {
+          copyResponsePromptBtn.disabled = uiBusy || !hasPrompt;
+          copyResponsePromptBtn.textContent = hasPrompt ? "Copy response prompt" : "Copy response prompt (unavailable)";
+          copyResponsePromptBtn.title = getHistoryPromptCopyTitle(selectedItem);
         }
         syncShowMeButton();
       }
@@ -6100,6 +6824,16 @@
       }
 
       function selectHistoryIndex(index, options) {
+        if (!options?.automatic && !options?.readerNavigation && typeof closeStudioLinkedReader === "function") closeStudioLinkedReader();
+        if (!options?.automatic) {
+          const entry = getStudioSelectedBuffer();
+          // Reading responses in the Document is not the Prompt taking control of its Run (Sol).
+          if (entry?.role !== "document") pauseStudioRunFollowing();
+          if (entry?.role === "prompt") {
+            const saved = bufferTransientStates.get(entry.id);
+            if (saved) delete saved.runFollowingView;
+          }
+        }
         const total = Array.isArray(responseHistory) ? responseHistory.length : 0;
         if (total === 0) {
           responseHistoryIndex = -1;
@@ -6131,6 +6865,7 @@
       }
 
       function setResponseHistory(items, options) {
+        if (studioRunFollowingAvailable() && !options?.initialSync && !options?.branchSync) options = { ...options, autoSelectLatest: false, preserveSelection: true, runFollowingPreserve: true };
         const normalized = Array.isArray(items)
           ? items
               .map((item, index) => normalizeHistoryItem(item, index))
@@ -6142,31 +6877,48 @@
 
         responseHistory = normalized;
         const documentView = bufferSwitchingEnabled && isStudioDocumentBufferView();
+        // A Document showing a response or Working repaints it, so the display, its link ownership
+        // and Copy all match the current history entries (Sol, 8 Oct).
+        const documentReading = documentView && (rightView === "preview" || rightView === "markdown" || rightView === "trace");
 
         if (!responseHistory.length) {
           responseHistoryIndex = -1;
-          clearActiveResponseView({ render: !documentView });
+          clearActiveResponseView({ render: !documentView || documentReading });
+          if (documentReading) syncTraceForSelectedHistoryItem(); // Working follows the live/empty policy too (Sol)
           syncStudioPromptHistorySelection(options);
           updateHistoryControls();
           return false;
         }
 
         const targetIndex = responseHistorySelectionIndex(responseHistory, previousId, responseHistoryIndex, options);
+        if (targetIndex < 0) {
+          responseHistoryIndex = -1;
+          clearActiveResponseView({ render: !documentView || documentReading });
+          if (documentReading) syncTraceForSelectedHistoryItem(); // Working follows the live/empty policy too (Sol)
+          syncStudioPromptHistorySelection(options);
+          updateHistoryControls();
+          return false;
+        }
 
         if (documentView) {
           // Cache conversation events without rebuilding a live Document preview
           // (including its iframe state). Prompt binding applies its reading policy.
-          responseHistoryIndex = targetIndex;
+          // A response the Document is showing stays put: arrivals never navigate it, but it is
+          // repainted from its new entry (same as the Prompt) so nothing shown goes stale.
+          const kept = documentReading && previousId ? responseHistory.findIndex(item => item.id === previousId) : -1;
+          responseHistoryIndex = kept >= 0 ? kept : targetIndex;
           syncStudioPromptHistorySelection(options);
-          applySelectedHistoryItem({ resetScroll: false, render: false });
+          applySelectedHistoryItem({ resetScroll: documentReading && kept < 0, render: documentReading });
+          if (documentReading) syncTraceForSelectedHistoryItem();
           updateHistoryControls();
           return true;
         }
-        return selectHistoryIndex(targetIndex, { silent: Boolean(options && options.silent) });
+        return selectHistoryIndex(targetIndex, { silent: Boolean(options && options.silent), automatic: true });
       }
 
       function responseHistorySelectionIndex(items, previousId, previousIndex, options) {
         if (!items.length) return -1;
+        if (options?.runFollowingPreserve && !previousId && previousIndex < 0) return -1;
         const autoSelectLatest = options && Object.prototype.hasOwnProperty.call(options, "autoSelectLatest")
           ? Boolean(options.autoSelectLatest) : true;
         if (options?.preserveSelection && previousId) {
@@ -6207,8 +6959,9 @@
       function updateReferenceBadge() {
         if (!referenceBadgeEl) return;
         const referenceMetaEl = referenceBadgeEl.closest(".reference-meta");
-        if (rightView === "repl") {
+        if (rightView === "repl" || (studioUiRefreshUi && rightView === "editor-preview")) {
           if (referenceMetaEl instanceof HTMLElement) referenceMetaEl.hidden = true;
+          if (rightView === "editor-preview") referenceBadgeEl.textContent = "";
           return;
         }
         if (referenceMetaEl instanceof HTMLElement) referenceMetaEl.hidden = false;
@@ -6258,7 +7011,7 @@
           }
           const statusLabel = context.mode === "history"
             ? "saved"
-            : (state.status === "running" ? "live" : "complete");
+            : ({ running: "running", complete: "finished", stopped: "stopped", error: "failed" }[state.status] || "finished");
           referenceBadgeEl.textContent = "Working: " + statusLabel
             + (context.mode === "history" ? (" · " + getTraceHistoryContextLabel()) : "")
             + (entryCount ? (" · " + entryCount + " entr" + (entryCount === 1 ? "y" : "ies")) : "")
@@ -6598,7 +7351,7 @@
           : normalizeForCompare(sourceTextEl.value);
         const inSync = normalizedEditor === latestResponseNormalized;
         syncBadgeEl.hidden = false;
-        syncBadgeEl.textContent = inSync ? "In sync with response" : "Editor differs from latest response";
+        syncBadgeEl.textContent = inSync ? "Matches the latest response" : "Differs from the latest response";
         syncBadgeEl.classList.toggle("sync", inSync);
         syncBadgeEl.classList.toggle("out-of-sync", !inSync);
       }
@@ -6956,7 +7709,7 @@
           + "    if (!raw || raw.charAt(0) === '#') return false;\n"
           + "    if (/^(?:data|blob|http|https|about|javascript|mailto):/i.test(raw)) return false;\n"
           + "    if (/^\\/\\//.test(raw)) return false;\n"
-          + "    return /\\.(?:png|jpe?g|gif|webp)(?:[?#].*)?$/i.test(raw);\n"
+          + "    return /\\.(?:png|jpe?g|gif|webp|svg)(?:[?#].*)?$/i.test(raw);\n"
           + "  }\n"
           + "  function scanHtmlPreviewResources() {\n"
           + "    htmlResourceScanScheduled = false;\n"
@@ -7643,6 +8396,11 @@
               setStatus((error && error.message) ? error.message : String(error || "Could not open linked image."), "warning");
             }
           });
+          return;
+        }
+        if (kind === "text" && studioLinkedReaderAvailable()) {
+          if (studioLinkedReaderIsActive() && critiqueViewEl.contains(record.iframe)) return;
+          void readStudioLinkedFile(context.href, { ...context, readerOrigin: sourcePreviewEl.contains(record.iframe) ? "editor" : undefined });
           return;
         }
         if (kind === "text" || kind === "office") {
@@ -10579,22 +11337,62 @@
       }
 
       function handleTraceDetailsToggle(event) {
-        if (rightView !== "trace") return;
+        if (rightView !== "trace" || studioLinkedReaderIsActive()) return;
         const target = event.target;
-        if (!(target instanceof Element) || !target.matches("details[data-trace-details-key]")) return;
+        if (!(target instanceof Element) || target.isConnected === false || !critiqueViewEl?.contains(target)
+            || !target.matches("details[data-trace-details-key]")) return;
         const key = target.getAttribute("data-trace-details-key") || "";
         if (!key) return;
-        if (target.open) {
-          traceOpenDetails.add(key);
-        } else {
-          traceOpenDetails.delete(key);
-        }
+        const expected = target.getAttribute("data-trace-expected-open");
+        // Initial open attributes also queue native toggles: not user choices.
+        if (expected !== null && expected === String(target.open) && target.getAttribute("data-trace-user-toggle") !== "1") return;
+        target.setAttribute("data-trace-expected-open", String(target.open));
+        target.setAttribute("data-trace-user-toggle", "");
+        if (target.open) { traceOpenDetails.add(key); traceClosedDetails.delete(key); }
+        else { traceOpenDetails.delete(key); traceClosedDetails.add(key); }
         traceAutoScroll = false;
       }
 
+      function setTraceVisibleDetails(open) {
+        if (rightView !== "trace" || studioLinkedReaderIsActive() || !critiqueViewEl) return false;
+        const nodes = critiqueViewEl.querySelectorAll("details[data-trace-details-key]");
+        for (const node of nodes) {
+          const key = node.getAttribute("data-trace-details-key");
+          if (open) { traceOpenDetails.add(key); traceClosedDetails.delete(key); }
+          else { traceOpenDetails.delete(key); traceClosedDetails.add(key); }
+          node.setAttribute("data-trace-expected-open", String(open));
+          node.open = open;
+        }
+        if (nodes.length) traceAutoScroll = false;
+        return nodes.length > 0;
+      }
+
+      function handleTracePaneKeydown(event) {
+        if (!event || event.defaultPrevented || event.repeat || event.isComposing || rightView !== "trace" || studioLinkedReaderIsActive()
+            || studioModalBlocksDraftAction() || !event.ctrlKey || !event.shiftKey || event.metaKey || event.altKey
+            || !(event.target instanceof Element) || !critiqueViewEl?.contains(event.target) || isTextEntryShortcutTarget(event.target)
+            || event.target.closest("[role='textbox'], iframe")) return;
+        const collapse = event.code === "BracketLeft" || (!event.code && ["[", "{"].includes(event.key));
+        const expand = event.code === "BracketRight" || (!event.code && ["]", "}"].includes(event.key));
+        if ((collapse || expand) && setTraceVisibleDetails(expand)) event.preventDefault();
+      }
+
       async function handleTracePaneClick(event) {
-        if (rightView !== "trace") return;
+        if (rightView !== "trace" || studioLinkedReaderIsActive()) return;
         const target = event.target;
+        const summary = target instanceof Element ? target.closest("summary") : null;
+        const details = summary?.parentElement;
+        if (!event.defaultPrevented && details?.matches("details[data-trace-details-key]")) {
+          const key = details.getAttribute("data-trace-details-key");
+          // Commit at activation, not the queued native toggle: a streamed
+          // rerender may retire this node before that event is delivered.
+          if (key) {
+            if (!details.open) { traceOpenDetails.add(key); traceClosedDetails.delete(key); }
+            else { traceOpenDetails.delete(key); traceClosedDetails.add(key); }
+            traceAutoScroll = false;
+          }
+          details.setAttribute("data-trace-user-toggle", "1");
+        }
         const filterBtn = target instanceof Element ? target.closest("[data-trace-filter]") : null;
         if (filterBtn) {
           event.preventDefault();
@@ -10621,6 +11419,7 @@
         if (!actionBtn) return;
         event.preventDefault();
         const action = actionBtn.getAttribute("data-trace-action") || "";
+        if (action === "collapse" || action === "expand") { setTraceVisibleDetails(action === "expand"); return; }
         if (action === "copy") {
           await copyVisibleWorkingToClipboard();
           return;
@@ -10853,8 +11652,16 @@
         critiqueViewEl.addEventListener("focusin", handleReplPaneFocusIn);
         critiqueViewEl.addEventListener("input", handleSideQuestionInput);
         critiqueViewEl.addEventListener("input", handleReplPaneInput);
+        critiqueViewEl.addEventListener("keydown", handleTracePaneKeydown);
         critiqueViewEl.addEventListener("keydown", handleSideQuestionKeydown);
         critiqueViewEl.addEventListener("keydown", handleReplPaneKeydown);
+        critiqueViewEl.addEventListener("keydown", event => {
+          // Files picker: Enter opens a pasted path; Esc cancels without opening anything.
+          if (rightView !== "files" || !studioFilePick || event.isComposing) return;
+          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelStudioFilePick(); return; }
+          const input = event.target instanceof Element ? event.target.closest("[data-files-pick-path]") : null;
+          if (input && event.key === "Enter" && String(input.value || "").trim()) { event.preventDefault(); void completeStudioFilePick(input.value); }
+        });
         critiqueViewEl.addEventListener("change", handleSideQuestionChange);
         critiqueViewEl.addEventListener("change", handleReplPaneChange);
         critiqueViewEl.addEventListener("change", (event) => {
@@ -10910,7 +11717,10 @@
       }
 
       function applyPendingResponseScrollReset() {
-        if (!critiqueViewEl || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
+        if (!critiqueViewEl || (bufferSwitchingEnabled && isStudioDocumentBufferView() && !(rightView === "preview" || rightView === "markdown"))) return false;
+        // A reader return owns its saved position until this exact response's
+        // DOM commits. Its restoration consumes the ordinary deferred reset.
+        if (typeof applyStudioReaderReturnScroll === "function" && applyStudioReaderReturnScroll()) return true;
         // A buffer return may restore another view first. Only actual response
         // rendering consumes that Prompt's deferred response retirement.
         const responseBuffer = bufferSwitchingEnabled && (rightView === "preview" || rightView === "markdown") ? getStudioSelectedBuffer() : null;
@@ -11092,7 +11902,7 @@
             resourceDir: sourcePath ? "" : resourceDir,
           };
           if (previewOptions.includeEditorLanguage) {
-            payload.editorLanguage = String(editorLanguage || "");
+            payload.editorLanguage = String(previewOptions.editorLanguage ?? editorLanguage ?? "");
           }
           response = await fetch("/render-preview?token=" + encodeURIComponent(token), {
             method: "POST",
@@ -11185,9 +11995,18 @@
         return typeof payload.downloadUrl === "string" ? payload.downloadUrl : "";
       }
 
+      function refuseStudioReaderExport() {
+        if (!studioLinkedReaderIsActive()) return false;
+        closeExportPreviewMenu();
+        setStatus("Return from the reader before exporting the right-pane preview.", "warning");
+        return true;
+      }
+
       async function exportRightPanePdf(options) {
+        if (refuseStudioReaderExport()) return;
         const exportOptions = options && typeof options === "object" ? options : {};
         const openTarget = exportOptions.openTarget === "studio" ? "studio" : "default";
+        const exportOwner = documentHostingEnabled ? captureStudioPreviewOwner("response") : null;
         const exportingSideThread = rightView === "side-questions";
         const sideThreadExportedAt = exportingSideThread ? new Date() : null;
         let studioLaunch = null;
@@ -11322,6 +12141,22 @@
               downloadName += ".pdf";
             }
 
+            if (openTarget === "studio" && documentHostingEnabled) {
+              // A reader overlay leaves its underlying renderer current, but hides
+              // the exported preview. Keep generic render ownership independent.
+              if (studioLinkedReaderIsActive() || !studioPreviewOwnerIsCurrent(exportOwner)) {
+                cancelPendingStudioTab(studioLaunch, "The originating preview changed; its exported PDF was kept.");
+                setStatus("Exported PDF; its originating preview changed. Output was kept: " + (exportPath || payload.downloadUrl || downloadName), "warning");
+                return;
+              }
+              const targetUrl = typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
+              if (!targetUrl || payload.readOnly !== true) throw new Error("Studio did not return a read-only PDF viewer URL.");
+              navigatePendingStudioReadOnlyTab(studioLaunch, targetUrl);
+              setStatus("Requested exported PDF in a separate read-only viewer: " + (exportPath || downloadName)
+                + (writeError ? "; project file could not be written: " + writeError : (exportWarning ? "; " + exportWarning : "")),
+                writeError || exportWarning ? "warning" : undefined);
+              return;
+            }
             if (openTarget === "studio") {
               const targetUrl = typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
               const openedStudio = Boolean(targetUrl);
@@ -11430,7 +12265,19 @@
         }
       }
 
+      function captureStudioHtmlDocumentExportOrigin(markdown, sideExportedAt) {
+        const owner = captureStudioPreviewOwner("response");
+        const bufferId = bufferRecoveryClient?.snapshot().selectedBufferId;
+        const generation = documentHostingGeneration;
+        return () => Boolean(bufferId && generation && generation === documentHostingGeneration && !documentHostingRetired
+          && !studioLinkedReaderIsActive() && bufferRecoveryClient?.snapshot().selectedBufferId === bufferId
+          && studioPreviewOwnerIsCurrent(owner)
+          && (owner.view !== "side-questions" || buildCurrentSideQuestionTranscriptMarkdown(sideExportedAt) === markdown)
+          && (owner.view !== "repl" || buildReplJournalMarkdown(getVisibleReplJournalEntries()) === markdown));
+      }
+
       async function exportRightPaneHtml(options) {
+        if (refuseStudioReaderExport()) return;
         const exportOptions = options && typeof options === "object" ? options : {};
         const openTarget = exportOptions.openTarget === "studio" ? "studio" : "browser";
         const exportingSideThread = rightView === "side-questions";
@@ -11482,6 +12329,9 @@
         const isEditorPreview = rightView === "editor-preview";
         const editorIsDelimitedPreview = isEditorPreview && Boolean(getDelimitedTextPreviewConfig(editorLanguage || ""));
         const editorHtmlLanguage = htmlArtifactSource ? "html" : (isEditorPreview ? (editorIsDelimitedPreview ? "markdown" : normalizeFenceLanguage(editorLanguage || "")) : "");
+        const hostedDocumentExport = documentHostingEnabled && openTarget === "studio";
+        const exportIsCurrent = hostedDocumentExport ? captureStudioHtmlDocumentExportOrigin(markdown, sideThreadExportedAt) : () => true;
+        let hostingProof = null;
         const isLatex = exportingSideThread ? false : (htmlArtifactSource ? false : (isEditorPreview
           ? editorHtmlLanguage === "latex"
           : /\\documentclass\b|\\begin\{document\}/.test(markdown)));
@@ -11498,7 +12348,7 @@
 
         if (openTarget === "studio") {
           try {
-            studioLaunch = openPendingStudioTab("export");
+            studioLaunch = openPendingStudioTab(hostedDocumentExport ? "document" : "export");
           } catch (error) {
             setStatus((error && error.message) ? error.message : "Could not prepare a Studio export tab.", "error");
             return;
@@ -11511,12 +12361,21 @@
           : (openTarget === "studio" ? "Exporting HTML for Studio…" : "Exporting HTML…"), "warning");
 
         try {
+          if (hostedDocumentExport) {
+            if (!documentHostingController || documentHostingController.operationPending() || !documentHostingReady) throw new Error("Finish the current Document operation before exporting HTML.");
+            await prepareDocumentHosting("launch");
+            if (!exportIsCurrent()) { cancelPendingStudioTab(studioLaunch, "The originating preview changed; current work was kept."); setStatus("HTML export cancelled before generation; its originating preview changed.", "warning"); return; }
+            hostingProof = bufferRecoveryClient?.hostingAuthority();
+            if (!hostingProof?.ok) throw new Error(hostingProof?.message || "The export source checkpoint is unavailable.");
+          }
           const response = await fetchWithTimeout("/export-html?token=" + encodeURIComponent(token), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              ...(hostedDocumentExport ? { "X-Studio-Buffer-Capability": document.body.dataset.bufferCapability || "" } : {}),
             },
             body: JSON.stringify({
+              ...(hostedDocumentExport ? { hosting: hostingProof } : {}),
               markdown: String(markdown || ""),
               sourcePath: sourcePath,
               resourceDir: resourceDir,
@@ -11563,6 +12422,37 @@
               downloadName += ".html";
             }
 
+            if (hostedDocumentExport) {
+              if (!exportIsCurrent()) {
+                cancelPendingStudioTab(studioLaunch, "The originating preview changed; its exported HTML was kept.");
+                setStatus("Exported HTML; its originating preview changed. Output was kept: " + (exportPath || downloadName), "warning"); return;
+              }
+              const prepared = payload.preparedDocument;
+              if (!prepared || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(prepared.exportId || "")
+                  || !["blank", "file"].includes(prepared.kind) || typeof prepared.path !== "string" || (prepared.kind === "file" ? !prepared.path : prepared.path)) throw new Error("The retained HTML Document identity was not verified. Generated output was kept.");
+              let presented = false, retainedDestination = null;
+              const requested = await documentHostingController.launch({ kind: prepared.kind, exportId: prepared.exportId,
+                path: prepared.kind === "file" ? encodeURIComponent(prepared.path) : "" }, {
+                authority: hostingProof, current: exportIsCurrent, retained: destination => { retainedDestination = destination; },
+                open: url => { if (!exportIsCurrent()) throw new Error("The originating preview changed; generated HTML was kept."); navigatePendingStudioTab(studioLaunch, url); presented = true; },
+              });
+              if (!requested) {
+                if (!exportIsCurrent()) {
+                  cancelPendingStudioTab(studioLaunch, "The originating preview changed; its exported HTML and any verified Document identity were kept.");
+                  setStatus("Exported HTML; opening cancelled after its originating preview changed. Output and any verified Document identity were kept.", "warning");
+                } else {
+                  failPendingStudioTab(studioLaunch, "Document opening was not confirmed. Keep its original attempt in File → Document windows; generated HTML was downloaded as a fallback.");
+                  triggerBrowserDownload(payload.downloadUrl, downloadName);
+                  setStatus("HTML Document opening was not confirmed. Its original tracking was kept; generated HTML was downloaded as a fallback.", "warning");
+                }
+                return;
+              }
+              if (!presented) cancelPendingStudioTab(studioLaunch, "The existing Document owner was selected or its focus requested. Its current work was not reloaded.");
+              setStatus((prepared.kind === "blank" ? "Requested a detached unsaved HTML Document: " : "Requested exported HTML in its registered Document: ") + (exportPath || downloadName)
+                + (retainedDestination?.created === false ? ". Existing owner work was kept; it may differ from the generated export." : "")
+                + (writeError ? ". Project writing failed or was refused: " + writeError : "") + (exportWarning ? ". Warning: " + exportWarning : ""), writeError || exportWarning ? "warning" : "success");
+              return;
+            }
             if (openTarget === "studio") {
               const targetUrl = typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
               const openedStudio = Boolean(targetUrl);
@@ -11682,6 +12572,7 @@
       }
 
       function exportRightPaneFormat(format) {
+        if (refuseStudioReaderExport()) return;
         closeExportPreviewMenu();
         if (String(format || "").startsWith("side-markdown-") && rightView !== "side-questions") {
           setStatus("Side-thread Markdown export is available only in Side questions.", "warning");
@@ -11920,6 +12811,12 @@
       }
 
       function captureStudioPreviewOwner(pane, nonce) {
+        if (pane === "reader") {
+          const page = studioLinkedReaderUi?.snapshot().current;
+          return { pane, nonce: nonce ?? studioLinkedReaderRenderNonce, reader: page, view: "reader", editor: false,
+            language: [".tex", ".ltx"].includes(page?.extension) ? "latex" : "markdown", annotations: true,
+            resource: { sourcePath: page?.path || "", resourceDir: page?.resourceDir || "" } };
+        }
         const editor = pane === "source" || rightView === "editor-preview";
         return {
           pane, nonce: nonce ?? (pane === "source" ? sourcePreviewRenderNonce : responsePreviewRenderNonce),
@@ -11932,6 +12829,7 @@
       }
 
       function studioPreviewOwnerIsCurrent(owner) {
+        if (owner?.pane === "reader") return Boolean(!bufferPageClosed && owner.nonce === studioLinkedReaderRenderNonce && studioLinkedReaderUi?.isCurrent(owner.reader));
         if (!bufferRecoveryEnabled) return true;
         if (!owner || bufferPageClosed
             || owner.nonce !== (owner.pane === "source" ? sourcePreviewRenderNonce : responsePreviewRenderNonce)
@@ -11946,6 +12844,7 @@
       function getStudioPreviewPaneForElement(targetEl) {
         if (targetEl === sourcePreviewEl) return "source";
         if (targetEl === critiqueViewEl) return "response";
+        if (targetEl.id === "studioLinkedReaderContent") return "reader";
         return "";
       }
 
@@ -11960,7 +12859,7 @@
         if (!node) return null;
         const element = node instanceof Element ? node : node.parentElement;
         if (!element || typeof element.closest !== "function") return null;
-        return element.closest("#sourcePreview, #critiqueView");
+        return element.closest("#sourcePreview, #critiqueView, #studioLinkedReaderContent");
       }
 
       function getStudioPreviewOwnerForNode(node) {
@@ -11970,6 +12869,7 @@
       }
 
       function studioPreviewPaneUsesCommittedOwner(paneEl) {
+        if (paneEl?.id === "studioLinkedReaderContent") return true;
         if (paneEl === sourcePreviewEl) return editorView === "preview";
         if (paneEl === critiqueViewEl) return rightView === "preview" || rightView === "editor-preview";
         return false;
@@ -11978,6 +12878,7 @@
       function studioPreviewNodeOwnerIsCurrent(node) {
         if (!bufferRecoveryEnabled) return true;
         const paneEl = getStudioPreviewElementForNode(node);
+        if (paneEl === critiqueViewEl && typeof studioLinkedReaderIsActive === "function" && studioLinkedReaderIsActive()) return false;
         if (!studioPreviewPaneUsesCommittedOwner(paneEl)) return paneEl !== sourcePreviewEl;
         const owner = studioPreviewElementOwners.get(paneEl);
         return Boolean(owner && paneEl.isConnected !== false && studioPreviewOwnerIsCurrent(owner));
@@ -11989,6 +12890,7 @@
         const usesOwner = studioPreviewPaneUsesCommittedOwner(paneEl);
         const owner = usesOwner && paneEl ? studioPreviewElementOwners.get(paneEl) : null;
         const resource = owner && owner.resource ? owner.resource : getHtmlPreviewResourceContextOptions();
+        if (paneEl === sourcePreviewEl) next.readerOrigin = "editor";
         if (!Object.prototype.hasOwnProperty.call(next, "sourcePath")) next.sourcePath = String(resource.sourcePath || "");
         if (!Object.prototype.hasOwnProperty.call(next, "resourceDir")) next.resourceDir = String(resource.resourceDir || "");
         if (!bufferRecoveryEnabled || typeof next.isCurrent === "function") return next;
@@ -12000,6 +12902,7 @@
               && owner
               && paneEl.isConnected !== false
               && studioPreviewElementOwners.get(paneEl) === owner
+              && !(paneEl === critiqueViewEl && typeof studioLinkedReaderIsActive === "function" && studioLinkedReaderIsActive())
               && studioPreviewOwnerIsCurrent(owner)
             )
           : () => Boolean(
@@ -12024,6 +12927,7 @@
       }
 
       function isCurrentStudioPreviewRender(pane, nonce) {
+        if (pane === "reader") return nonce === studioLinkedReaderRenderNonce && Boolean(studioLinkedReaderUi?.snapshot().active);
         if (pane === "source") {
           return nonce === sourcePreviewRenderNonce && editorView === "preview";
         }
@@ -12049,7 +12953,7 @@
 
       async function applyRenderedMarkdown(targetEl, markdown, pane, nonce) {
         const owner = bufferRecoveryEnabled ? captureStudioPreviewOwner(pane, nonce) : null;
-        const renderAnnotations = annotationsEnabled;
+        const renderAnnotations = pane === "reader" ? true : annotationsEnabled;
         const previewPrepared = renderAnnotations
           ? prepareMarkdownForPandocPreview(markdown)
           : { markdown: stripAnnotationMarkers(String(markdown || "")), placeholders: [] };
@@ -12071,7 +12975,8 @@
 
         try {
           const renderedHtml = await renderMarkdownWithPandoc(pdfPrepared.markdown, {
-            includeEditorLanguage: pane === "source" || rightView === "editor-preview",
+            includeEditorLanguage: pane === "reader" ? owner.language === "latex" : (pane === "source" || rightView === "editor-preview"),
+            editorLanguage: pane === "reader" ? owner.language : undefined,
             resourceContext: previewResourceContext,
           });
           if (abandonIfStale()) return;
@@ -12127,8 +13032,10 @@
           if (targetEl.dataset) targetEl.dataset.studioPreviewCommitted = "1";
           previewCommitted = true;
           if (shouldDecoratePreviewComments) updatePreviewCommentBlocksForElement(targetEl);
-          clearWatchedPreviewRenderError();
-          scheduleWatchedPreviewReadingPositionRestore(targetEl, markdown);
+          if (pane !== "reader") {
+            clearWatchedPreviewRenderError();
+            scheduleWatchedPreviewReadingPositionRestore(targetEl, markdown);
+          }
           if (pane === "response") {
             applyPendingResponseScrollReset();
             scheduleResponsePaneRepaintNudge();
@@ -12145,7 +13052,7 @@
           const detail = error && error.message ? error.message : String(error || "unknown error");
           clearPreviewJumpHighlight(targetEl);
           finishPreviewRender(targetEl, owner);
-          if (isWatchedFilePreview && hasMeaningfulPreviewContent(targetEl)) {
+          if (pane !== "reader" && isWatchedFilePreview && hasMeaningfulPreviewContent(targetEl)) {
             watchedFilePreviewState.renderError = detail;
             showWatchedPreviewRenderError(targetEl, detail);
             updateSourceBadge();
@@ -12154,7 +13061,7 @@
             return;
           }
           targetEl.innerHTML = buildPreviewErrorHtml("Preview renderer unavailable (" + detail + "). Showing plain markdown.", markdown, previewFallbackOptions);
-          scheduleWatchedPreviewReadingPositionRestore(targetEl, markdown);
+          if (pane !== "reader") scheduleWatchedPreviewReadingPositionRestore(targetEl, markdown);
           if (pane === "response") {
             applyPendingResponseScrollReset();
             scheduleResponsePaneRepaintNudge();
@@ -12317,7 +13224,9 @@
         const isExpanded = traceExpandedOutputs.has(key);
         const preview = getTraceOutputPreview(value);
         const visibleText = isExpanded || !preview.truncated ? value : preview.text;
-        const body = "<pre class='plain-markdown trace-output'>" + escapeHtml(visibleText) + "</pre>";
+        const code = options && options.language === "javascript";
+        const rendered = code ? visibleText.replace(/\r\n/g, "\n").split("\n").map(line => highlightCodeLine(line, "javascript", "overlay")).join("\n") : escapeHtml(visibleText);
+        const body = "<pre class='plain-markdown trace-output" + (code ? " trace-output-code" : "") + "'>" + rendered + "</pre>";
         if (!preview.truncated) return body;
 
         const hiddenParts = [];
@@ -12335,6 +13244,45 @@
           + "<button type='button' class='trace-output-toggle' data-trace-output-key='" + escapeHtml(key) + "' aria-expanded='" + (isExpanded ? "true" : "false") + "'>" + escapeHtml(buttonLabel) + "</button>"
           + "</div>"
           + "</div>";
+      }
+
+      function traceSectionIsOpen(key, text, defaultOpen, rememberDefault = true) {
+        if (traceClosedDetails.has(key)) return false;
+        if (traceOpenDetails.has(key) || traceExpandedOutputs.has(key)) return true;
+        if (traceSectionDefaults.has(key)) return traceSectionDefaults.get(key);
+        const value = String(text || "");
+        const opened = typeof defaultOpen === "boolean" ? defaultOpen
+          : value.length <= TRACE_SECTION_AUTO_OPEN_MAX_CHARS && countTraceTextLines(value) <= TRACE_SECTION_AUTO_OPEN_MAX_LINES;
+        // A default is initial display policy, not a reason to collapse content
+        // the user is already watching as it streams. Empty pending placeholders
+        // do not choose for the first real output.
+        if (rememberDefault) traceSectionDefaults.set(key, opened);
+        return opened;
+      }
+
+      function renderTraceSection(label, text, key, body, options) {
+        const settings = options || {}, value = String(text || ""), images = settings.imageCount || 0;
+        const opened = traceSectionIsOpen(key, value, images > 1 ? false : undefined, !settings.pending || Boolean(value) || images > 0);
+        const metrics = value ? formatTraceTextMetrics(value) : (images ? "" : (settings.pending ? "Waiting for output" : "No output"));
+        const summary = [label, settings.isError ? "Error" : "", metrics, images ? images + " image" + (images === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
+        return "<details class='trace-tool-details trace-section-fold" + (settings.isError ? " is-error" : "") + "' data-trace-details-key='" + escapeHtml(key)
+          + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
+          + "<summary>" + escapeHtml(summary) + "</summary><div class='trace-tool-details-body'>" + body + "</div></details>";
+      }
+
+      function formatTraceEntryDuration(entry) {
+        if (!Number.isFinite(entry.startedAt) || !Number.isFinite(entry.updatedAt)) return "";
+        return (Math.max(0, entry.updatedAt - entry.startedAt) / 1000).toFixed(1) + "s";
+      }
+
+      function getTraceToolInputPresentation(entry) {
+        const text = String(entry.args || entry.argsSummary || ""), name = String(entry.toolName || "").trim().toLowerCase();
+        const payload = parseTraceToolArgsObject(text);
+        if ((name === "codemode" || name.endsWith(".codemode")) && (!payload || typeof payload.code === "string")) {
+          return { label: "Code", language: "javascript", text: payload ? payload.code : text,
+            extraInput: payload && Object.keys(payload).some(key => key !== "code") ? text : "" };
+        }
+        return { label: name === "repl_send" || name === "studio_repl_send" ? "Code" : "Input", language: "", text, extraInput: "" };
       }
 
       function parseTraceToolArgsObject(inputText) {
@@ -12376,8 +13324,8 @@
         if (!value) return "";
         const rawKey = outputKey + ":raw-input";
         const detailsKey = rawKey;
-        const openAttr = traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(rawKey) ? " open" : "";
-        return "<details class='trace-tool-details trace-tool-raw-input' data-trace-details-key='" + escapeHtml(detailsKey) + "'" + openAttr + ">"
+        const opened = !traceClosedDetails.has(detailsKey) && (traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(rawKey));
+        return "<details class='trace-tool-details trace-tool-raw-input' data-trace-details-key='" + escapeHtml(detailsKey) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
           + "<summary>Raw input</summary>"
           + "<div class='trace-tool-details-body'>"
           + renderTraceOutput(value, rawKey, { label: "Raw input" })
@@ -12389,8 +13337,8 @@
         const value = String(text || "");
         const emptyText = options && typeof options.emptyText === "string" ? options.emptyText : "[empty]";
         const detailsKey = outputKey;
-        const openAttr = traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(outputKey) ? " open" : "";
-        return "<details class='trace-tool-details" + (options && options.className ? " " + escapeHtml(options.className) : "") + "' data-trace-details-key='" + escapeHtml(detailsKey) + "'" + openAttr + ">"
+        const opened = !traceClosedDetails.has(detailsKey) && (traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(outputKey));
+        return "<details class='trace-tool-details" + (options && options.className ? " " + escapeHtml(options.className) : "") + "' data-trace-details-key='" + escapeHtml(detailsKey) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
           + "<summary>" + escapeHtml(summary) + "</summary>"
           + "<div class='trace-tool-details-body'>"
           + renderTraceOutput(value || emptyText, outputKey, { label })
@@ -12423,8 +13371,8 @@
             const oldKey = entry.id + ":edit:" + edit.index + ":old";
             const newKey = entry.id + ":edit:" + edit.index + ":new";
             const detailsKey = entry.id + ":edit:" + edit.index;
-            const openAttr = traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(oldKey) || traceExpandedOutputs.has(newKey) ? " open" : "";
-            return "<details class='trace-tool-details trace-tool-change' data-trace-details-key='" + escapeHtml(detailsKey) + "'" + openAttr + ">"
+            const opened = !traceClosedDetails.has(detailsKey) && (traceOpenDetails.has(detailsKey) || traceExpandedOutputs.has(oldKey) || traceExpandedOutputs.has(newKey));
+            return "<details class='trace-tool-details trace-tool-change' data-trace-details-key='" + escapeHtml(detailsKey) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
               + "<summary>Replacement " + escapeHtml(String(displayIndex + 1)) + " · " + escapeHtml(oldMetrics) + " → " + escapeHtml(newMetrics) + "</summary>"
               + "<div class='trace-tool-change-body'>"
               + "<div class='trace-tool-change-grid'>"
@@ -12488,8 +13436,11 @@
       }
 
       function renderTraceToolInput(entry) {
-        const inputText = String(entry.args || entry.argsSummary || "").trim();
-        if (!inputText) return "";
+        const presentation = getTraceToolInputPresentation(entry);
+        const inputText = String(entry.args || entry.argsSummary || "");
+        if (!inputText.trim()) return "";
+        if (presentation.language === "javascript") return renderTraceOutput(presentation.text, entry.id + ":input", { label: "Code", language: "javascript" })
+          + (presentation.extraInput ? renderTraceRawInputDetails(presentation.extraInput, entry.id + ":input") : "");
         const toolName = String(entry.toolName || "").trim().toLowerCase();
         if (toolName === "bash") return renderTraceCommandInput(entry, inputText, "Command");
         if (toolName === "repl_send" || toolName === "studio_repl_send") return renderTraceCommandInput(entry, inputText, "Code");
@@ -12686,7 +13637,7 @@
           + (hasEntries ? cards : "<div class='repl-studio-empty'>" + escapeHtml(emptyText) + "</div>");
         return "<section class='repl-journal'>"
           + "<div class='repl-journal-header'><h3>Shared REPL Record</h3>" + toggleActions + "</div>"
-          + "<p class='repl-journal-description'>Clean record shared by compatible pi-repl and pi-studio clients for this exact tmux session. Direct pane typing remains in the raw mirror below.</p>"
+          + "<p class='repl-journal-description'>What Studio and pi-repl have sent to this session.</p>"
           + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
           + "<div class='repl-journal-list'>" + terminalContent + "</div>"
           + "</section>";
@@ -12736,7 +13687,7 @@
           + "<div class='repl-quick-header'><div><strong id='replQuickComposerTitle'>Quick send</strong><button type='button' class='repl-quick-target' data-repl-action='jump-controls' title='Target: " + escapeHtml(targetDetails) + ". Jump to REPL session controls.' aria-label='Target: " + escapeHtml(targetDetails) + ". Jump to REPL session controls.'><span class='repl-quick-target-label'>" + escapeHtml(visibleTargetLabel) + "</span><span class='repl-quick-target-arrow' aria-hidden='true'>↑</span></button></div>"
           + "<span class='repl-quick-hint'>Enter adds a line · Cmd/Ctrl+Enter sends</span></div>"
           + "<textarea data-repl-quick-draft rows='3' maxlength='" + REPL_QUICK_DRAFT_MAX_CHARS + "' aria-label='Quick code for " + escapeHtml(targetDetails) + "' aria-keyshortcuts='Meta+Enter Control+Enter' placeholder='" + (activeSession ? (key ? "Type a short command or snippet…" : "Exact tmux identity unavailable; refresh the session list") : "Start or select a REPL session first") + "'" + (inputDisabled ? " disabled" : "") + ">" + escapeHtml(draft) + "</textarea>"
-          + "<div class='repl-quick-actions'><span>Raw send through Studio’s safe submission and Shared REPL Record path.</span><div>"
+          + "<div class='repl-quick-actions'><span></span><div>"
           + "<button type='button' data-repl-action='quick-clear'" + (pending || !draft ? " disabled" : "") + ">Clear</button>"
           + "<button class='repl-quick-send-btn' type='button' data-repl-action='quick-send'" + (sendDisabled ? " disabled" : "") + ">" + (pending ? "Sending…" : "Send") + "</button>"
           + "</div></div></section>";
@@ -12812,7 +13763,7 @@
             ? "Loading"
             : (context.mode === "missing"
               ? "Not saved"
-              : (state.status === "running" ? "Live" : (state.status === "complete" ? "Complete" : "Idle"))));
+              : (TRACE_RUN_STATUS_LABELS[state.status] || "Idle")));
         const filterMeta = filter === "thinking"
           ? "Thinking only"
           : (filter === "tools" ? "Tools only" : null);
@@ -12834,6 +13785,8 @@
           + "<button type='button' class='trace-filter-btn" + (filter === "thinking" ? " is-active" : "") + "' data-trace-filter='thinking' aria-pressed='" + (filter === "thinking" ? "true" : "false") + "'>Thinking</button>"
           + "<button type='button' class='trace-filter-btn" + (filter === "tools" ? " is-active" : "") + "' data-trace-filter='tools' aria-pressed='" + (filter === "tools" ? "true" : "false") + "'>Tools</button>"
           + "</div>"
+          + "<button type='button' class='trace-action-btn' data-trace-action='collapse' aria-keyshortcuts='Control+Shift+[' title='Collapse displayed Working sections (Ctrl+Shift+[ while focused here)'" + (entries.length ? "" : " disabled") + ">Collapse all</button>"
+          + "<button type='button' class='trace-action-btn' data-trace-action='expand' aria-keyshortcuts='Control+Shift+]' title='Expand displayed Working sections (Ctrl+Shift+] while focused here); full output stays a separate choice'" + (entries.length ? "" : " disabled") + ">Expand all</button>"
           + "<button type='button' class='trace-action-btn' data-trace-action='load'" + (hasVisibleContent ? "" : " disabled") + ">Load visible into editor</button>"
           + "<button type='button' class='trace-action-btn' data-trace-action='copy'" + (hasVisibleContent ? "" : " disabled") + ">Copy visible</button>"
           + "</div>"
@@ -12859,18 +13812,12 @@
             const sections = [];
             if (String(entry.thinking || "").trim()) {
               sections.push(
-                "<div class='trace-section'>"
-                + "<div class='trace-section-label'>Thinking</div>"
-                + renderTraceOutput(entry.thinking, entry.id + ":thinking")
-                + "</div>"
+                renderTraceSection("Thinking", entry.thinking, entry.id + ":thinking", renderTraceOutput(entry.thinking, entry.id + ":thinking", { label: "Thinking" }))
               );
             }
             if (filter === "all" && String(entry.text || "").trim()) {
               sections.push(
-                "<div class='trace-section'>"
-                + "<div class='trace-section-label'>Response</div>"
-                + renderTraceOutput(entry.text, entry.id + ":response")
-                + "</div>"
+                renderTraceSection("Response", entry.text, entry.id + ":response", renderTraceOutput(entry.text, entry.id + ":response", { label: "Response" }))
               );
             }
             if (!sections.length) {
@@ -12880,34 +13827,30 @@
               + "<div class='trace-card-header'>"
               + "<span class='trace-kind-badge'>" + escapeHtml(filter === "thinking" ? "Thinking" : "Assistant") + "</span>"
               + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
-              + "<span class='trace-entry-status trace-entry-status-" + escapeHtml(entry.status) + "'>" + escapeHtml(entry.status === "streaming" ? "Live" : "Complete") + "</span>"
-              + (entry.stopReason ? ("<span class='trace-card-meta'>stop: " + escapeHtml(entry.stopReason) + "</span>") : "")
+              + renderTraceEntryStatus(state, entry.status, false)
+              + (entry.stopReason === "length" ? "<span class='trace-card-meta'>Cut off at the length limit</span>" : "")
               + "</div>"
               + sections.join("")
               + "</article>";
           }
 
           const title = entry.label || entry.toolName || "tool";
-          const inputHtml = renderTraceToolInput(entry);
-          const argsSummary = inputHtml
-            ? "<div class='trace-section trace-section-input'><div class='trace-section-label'>Input</div>" + inputHtml + "</div>"
-            : "";
+          const toolError = entry.isError || entry.status === "error";
+          const inputHtml = renderTraceToolInput(entry), presentation = getTraceToolInputPresentation(entry);
+          const argsSummary = inputHtml ? renderTraceSection(presentation.label, presentation.text, entry.id + ":input", inputHtml) : "";
           const imageOutput = renderTraceImages(entry.images);
           const outputPieces = [];
           if (entry.output) outputPieces.push(renderTraceOutput(entry.output, entry.id + ":output", { label: "Output" }));
           if (imageOutput) outputPieces.push(imageOutput);
-          const output = outputPieces.length
-            ? "<div class='trace-section trace-section-output'><div class='trace-section-label'>Output</div>" + outputPieces.join("") + "</div>"
-            : "<div class='trace-empty-inline'>No output yet.</div>";
-          const toolStatusLabel = entry.isError
-            ? "Error"
-            : (entry.status === "streaming" || entry.status === "pending" ? "Live" : "Complete");
+          const output = renderTraceSection("Output", entry.output, entry.id + ":output", outputPieces.length ? outputPieces.join("") : "<div class='trace-empty-inline'>No output yet.</div>",
+            { imageCount: entry.images?.length || 0, isError: toolError, pending: entry.status === "streaming" || entry.status === "pending" });
           return "<article class='trace-card trace-card-tool'>"
             + "<div class='trace-card-header'>"
             + "<span class='trace-kind-badge'>" + escapeHtml(entry.toolName || "tool") + "</span>"
             + "<span class='trace-card-title'>" + escapeHtml(title) + "</span>"
             + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
-            + "<span class='trace-entry-status trace-entry-status-" + escapeHtml(entry.status) + "'>" + escapeHtml(toolStatusLabel) + "</span>"
+            + (formatTraceEntryDuration(entry) ? "<span class='trace-card-meta'>" + escapeHtml(formatTraceEntryDuration(entry)) + "</span>" : "")
+            + renderTraceEntryStatus(state, entry.status, toolError)
             + "</div>"
             + argsSummary
             + output
@@ -12915,6 +13858,18 @@
         }).join("");
 
         return "<div class='trace-panel'>" + toolbar + "<div class='trace-list'>" + cards + "</div></div>";
+      }
+
+      const TRACE_RUN_STATUS_LABELS = { running: "Running", complete: "Finished", stopped: "Stopped", error: "Failed", idle: "Idle" };
+
+      // Finished steps need no label; only running, stopped or failed steps say so.
+      function renderTraceEntryStatus(state, status, isError) {
+        const unfinished = status === "streaming" || status === "pending";
+        const label = isError || status === "error" ? "Error"
+          : unfinished && state.status === "stopped" ? "Stopped"
+          : unfinished && state.status === "error" ? "Failed"
+          : unfinished ? "Running" : "";
+        return label ? "<span class='trace-entry-status trace-entry-status-" + escapeHtml(isError ? "error" : status) + "'>" + escapeHtml(label) + "</span>" : "";
       }
 
       function renderTraceView() {
@@ -13004,6 +13959,32 @@
         return "<select class='files-sort-select studio-flat-select' data-files-sort aria-label='Files sort order' title='Sort file browser entries. Folders remain grouped first.'>" + options + "</select>";
       }
 
+      // New-layout Files row (trial48 finding 6): the name is always visible and reads the file;
+      // Edit and Use as Prompt are the visible actions; everything else is under ⋯.
+      function buildStudioFilesRowHtml({ type, kind, path, name, icon, meta }) {
+        const attrs = (action, extra = "") => "type='button' data-files-action='" + action + "' data-files-path='" + escapeHtml(path) + "' data-files-kind='" + escapeHtml(kind) + "'" + extra;
+        const editable = kind === "text" || kind === "office";
+        const mainAction = type === "directory" ? "open-dir" : (kind === "text" ? "read" : "open");
+        const mainTitle = type === "directory" ? "Open folder" : (kind === "text" ? "Read" : (kind === "pdf" || kind === "image" ? "Preview" : "Open"));
+        const visible = type === "directory" ? "" : editable
+          ? "<button " + attrs("edit", " title='Open in the Document. Save writes the file.'") + ">Edit</button>"
+            + "<button " + attrs("open-prompt", " title='Open as the Prompt. Save writes the file.'") + ">Use as Prompt</button>"
+          : (kind === "pdf" || kind === "image" ? "<button " + attrs("open-preview-new") + ">" + (documentHostingEnabled ? "Open separately" : "Preview tab") + "</button>" : "");
+        const more = (kind === "text" ? "<button " + attrs("watch-new") + ">Follow changes</button>" : "")
+          + (editable ? "<button " + attrs("open-new") + ">" + (kind === "office" ? "Convert in new window" : "Open in new window") + "</button>" : "")
+          + "<button " + attrs("copy-path") + ">Copy path</button>"
+          + (type === "file" ? "<button " + attrs("reveal") + ">Show in folder</button>" : "");
+        return "<div class='files-row files-row-" + escapeHtml(type) + " files-kind-" + escapeHtml(kind) + "'>"
+          + "<button " + attrs(mainAction, " class='files-open-btn' title='" + escapeHtml(mainTitle) + "'") + ">"
+          + "<span class='files-icon' aria-hidden='true'>" + icon + "</span>"
+          + "<span class='files-name'>" + escapeHtml(name) + "</span>"
+          + "<span class='files-meta'>" + escapeHtml(meta) + "</span>"
+          + "</button>"
+          + "<span class='files-actions'>" + visible
+          + "<details class='files-more'><summary aria-label='More actions for " + escapeHtml(name) + "'>⋯</summary><div class='files-more-menu'>" + more + "</div></details>"
+          + "</span></div>";
+      }
+
       function buildFileBrowserEntryRowHtml(entry) {
         const type = entry && entry.type === "directory" ? "directory" : "file";
         const kind = (entry && entry.kind) || (type === "directory" ? "directory" : "other");
@@ -13014,12 +13995,13 @@
         if (type === "file") metaParts.push(formatFileBrowserSize(entry && entry.size));
         const time = formatFileBrowserTime(entry && entry.mtimeMs);
         if (time) metaParts.push(time);
+        if (bufferSwitchingEnabled && studioUiRefreshUi) return buildStudioFilesRowHtml({ type, kind, path, name, icon, meta: metaParts.filter(Boolean).join(" · ") });
         const newTabAction = kind === "text" || kind === "office"
           ? "open-new"
           : ((kind === "pdf" || kind === "image") ? "open-preview-new" : "");
         const newTabLabel = kind === "text"
           ? "Open file-backed tab"
-          : (kind === "office" ? "Convert tab" : ((kind === "pdf" || kind === "image") ? "Preview tab" : "New tab"));
+          : (kind === "office" ? "Convert tab" : ((kind === "pdf" || kind === "image") ? (documentHostingEnabled ? "Open separately" : "Preview tab") : "New tab"));
         const newTabTitle = kind === "text"
           ? "Open this file-backed document in a new refreshable editor tab. Save editor and Refresh from disk will use this file."
           : (kind === "office" ? "Convert this document to Markdown in a new editor tab." : ((kind === "pdf" || kind === "image") ? "Open this preview in a new Studio tab." : "Open in a new Studio tab."));
@@ -13040,6 +14022,7 @@
           + "</button>"
           + "<span class='files-actions'>"
           + (bufferSwitchingEnabled && (kind === "text" || kind === "office") ? "<button type='button' data-files-action='open-prompt' data-files-path='" + escapeHtml(path) + "' data-files-kind='" + escapeHtml(kind) + "' title='Explicitly replace the Prompt with this file text; keep the separate Document.'>Use as Prompt…</button>" : "")
+          + (kind === "text" && studioLinkedReaderAvailable() ? "<button type='button' data-files-action='read-here' data-files-path='" + escapeHtml(path) + "' data-files-kind='text'>Read here</button>" : "")
           + watchButton
           + newTabButton
           + "<button type='button' data-files-action='copy-path' data-files-path='" + escapeHtml(path) + "'>Copy path</button>"
@@ -13077,7 +14060,14 @@
         if (state.grantRequiredPath) notices.push("<div class='files-notice'>Allow that folder to browse it in Files. Exact-file grants do not expose their parent folders.</div>");
         if (state.omitted) notices.push("<div class='files-notice'>" + escapeHtml(String(state.omitted)) + " item" + (state.omitted === 1 ? "" : "s") + " omitted.</div>");
         if (state.omittedIgnored) notices.push("<div class='files-notice'>" + escapeHtml(String(state.omittedIgnored)) + " heavy/cache folder" + (state.omittedIgnored === 1 ? "" : "s") + " hidden.</div>");
-        return "<div class='files-panel'>"
+        const pick = studioFilePick;
+        const pickStrip = pick
+          ? "<div class='files-pick-strip' role='group' aria-label='Choose a file'><span class='files-pick-what'>"
+            + escapeHtml((pick.mode === "open" ? "Choose a file to open in the " : "Choose a file to copy into the ") + studioFilePickDestination(pick))
+            + "</span><input type='text' class='files-pick-path' data-files-pick-path placeholder='or paste a path' aria-label='File path'>"
+            + "<button type='button' data-files-action='pick-cancel'>Cancel</button></div>"
+          : "";
+        return "<div class='files-panel" + (pick ? " files-picking files-picking-" + escapeHtml(pick.mode) : "") + "'>" + pickStrip
           + "<div class='files-toolbar'>"
           + "<div class='files-path-group'><span class='files-label'>Files</span><span class='files-path' title='" + escapeHtml(currentDir) + "'>" + escapeHtml(relativeDir || ".") + "</span></div>"
           + "<div class='files-toolbar-actions'>"
@@ -13122,12 +14112,25 @@
           };
         }
         finishPreviewRender(critiqueViewEl);
-        critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+        paintFileBrowserPanel();
         critiqueViewEl.classList.remove("response-scroll-resetting");
         if (!fileBrowserState.loaded && !fileBrowserState.loading) {
           loadFileBrowserDirectory("");
         }
         scheduleResponsePaneRepaintNudge();
+      }
+
+      // Every Files redraw goes through here. A listing can arrive while a path is being
+      // typed into the picker; keep the text and caret.
+      function paintFileBrowserPanel() {
+        const typedPath = critiqueViewEl.querySelector("[data-files-pick-path]");
+        const typed = typedPath ? { value: typedPath.value, focused: document.activeElement === typedPath, start: typedPath.selectionStart, end: typedPath.selectionEnd } : null;
+        critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+        const pathInput = typed ? critiqueViewEl.querySelector("[data-files-pick-path]") : null;
+        if (pathInput) {
+          pathInput.value = typed.value;
+          if (typed.focused) { pathInput.focus({ preventScroll: true }); pathInput.setSelectionRange?.(typed.start, typed.end); }
+        }
       }
 
       async function loadFileBrowserDirectory(dir, options) {
@@ -13147,7 +14150,7 @@
         };
         if (rightView === "files") {
           finishPreviewRender(critiqueViewEl);
-          critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+          paintFileBrowserPanel();
         }
         try {
           const query = {};
@@ -13178,7 +14181,7 @@
           };
           if (rightView === "files") {
             finishPreviewRender(critiqueViewEl);
-            critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+            paintFileBrowserPanel();
             scheduleResponsePaneRepaintNudge();
           }
           if (config.user) setStatus("Loaded file list.", "success");
@@ -13199,7 +14202,7 @@
           };
           if (rightView === "files") {
             finishPreviewRender(critiqueViewEl);
-            critiqueViewEl.innerHTML = buildFileBrowserPanelHtml();
+            paintFileBrowserPanel();
             scheduleResponsePaneRepaintNudge();
           }
         }
@@ -13215,8 +14218,11 @@
         const cleanPath = stripPreviewLocalLinkUrlSuffix(path || "").trim();
         if (!isLikelyAbsoluteStudioPath(cleanPath)) return;
         if (sourceState && sourceState.path) return;
+        // Hosted opening must bind its validated response atomically. This
+        // legacy fallback must not attach a path after an unrelated await.
+        if (documentHostingEnabled) return;
         const resourceDir = normalizeStudioResourceDirValue(fileBrowserState.rootDir || getCurrentResourceDirValue() || dirnameForDisplayPath(cleanPath));
-        if (resourceDirInput && resourceDir) resourceDirInput.value = resourceDir;
+        if (resourceDirInput && resourceDir) setStudioResourceDirValue(resourceDir);
         setSourceState({
           source: "file",
           label: sourceState && sourceState.label && sourceState.label !== "blank" ? sourceState.label : basenameForStudioPath(cleanPath),
@@ -13228,7 +14234,7 @@
       async function openFileBrowserEntry(path, kind) {
         const context = getFileBrowserLocalLinkContext();
         if (bufferSwitchingEnabled && (kind === "text" || kind === "office")) {
-          await openStudioBufferDocument(path, context);
+          await openStudioBufferDocument(studioLiteralPathToLinkRef(path), context);
           return;
         }
         if (kind === "text") {
@@ -13289,11 +14295,15 @@
           setStatus("No current folder to use as working directory.", "warning");
           return;
         }
-        if (resourceDirInput) resourceDirInput.value = nextDir;
-        applyResourceDir();
-        fileBrowserState = { ...fileBrowserState, contextKey: "" };
-        if (rightView === "files") renderFilesView();
-        setStatus("Working dir set to current folder.", "success");
+        const finish = applied => {
+          if (applied === false) return;
+          fileBrowserState = { ...fileBrowserState, contextKey: "" };
+          if (rightView === "files") renderFilesView();
+          setStatus("Working dir set to current folder.", "success");
+        };
+        const result = applyResourceDir(nextDir);
+        if (documentHostingEnabled) return Promise.resolve(result).then(finish);
+        finish(result);
       }
 
       async function openFileBrowserDirectoryInFileViewer(path) {
@@ -13338,11 +14348,29 @@
         const target = event.target;
         const actionEl = target instanceof Element ? target.closest("[data-files-action]") : null;
         if (!actionEl) return;
+        actionEl.closest("details.files-more")?.removeAttribute("open");
         event.preventDefault();
         const action = actionEl.getAttribute("data-files-action") || "";
         const path = actionEl.getAttribute("data-files-path") || "";
-        const kind = actionEl.getAttribute("data-files-kind") || getPreviewLocalLinkKind(path);
+        const kind = actionEl.getAttribute("data-files-kind") || studioLiteralPathKind(path);
+        // The new layout's buffer and reader routes take link references; keep "#", "?" and "%"
+        // in a listed name (Sol, batch B). Classic routes keep their existing literal handling.
+        const ref = studioLiteralPathToLinkRef(path);
+
         try {
+          if (action === "pick-cancel") { cancelStudioFilePick(); return; }
+          if (studioFilePick && (action === "open" || action === "read")) { await completeStudioFilePick(path, actionEl.getAttribute("data-files-kind") || ""); return; }
+          if (action === "read") {
+            if (kind === "text" && studioLinkedReaderAvailable()) {
+              const context = buildStudioPreviewInteractionContext(actionEl, { ...getFileBrowserLocalLinkContext(), readerOrigin: "files", focusPath: path, focusAction: action });
+              await readStudioLinkedFile(ref, context); return;
+            }
+            await openFileBrowserEntry(path, kind); return;
+          }
+          if (action === "edit" && bufferSwitchingEnabled) {
+            await openStudioBufferDocument(ref, getFileBrowserLocalLinkContext(), "document");
+            return;
+          }
           if (action === "allow-folder") {
             await allowFileBrowserFolder();
             return;
@@ -13359,12 +14387,16 @@
             await loadFileBrowserDirectory(path, { user: true });
             return;
           }
+          if (action === "read-here" && studioLinkedReaderAvailable()) {
+            const context = buildStudioPreviewInteractionContext(actionEl, { ...getFileBrowserLocalLinkContext(), readerOrigin: "files", focusPath: path, focusAction: action });
+            await readStudioLinkedFile(path, context); return;
+          }
           if (action === "open") {
             await openFileBrowserEntry(path, kind);
             return;
           }
           if (action === "open-prompt" && bufferSwitchingEnabled) {
-            await openStudioBufferDocument(path, getFileBrowserLocalLinkContext(), "prompt");
+            await openStudioBufferDocument(ref, getFileBrowserLocalLinkContext(), "prompt");
             return;
           }
           if (action === "open-new") {
@@ -13599,11 +14631,13 @@
             setStatus("No git diff to load.", "warning");
             return;
           }
-          setEditorText(String(gitChangesState.content || ""), { preserveScroll: false, preserveSelection: false });
-          setSourceState({ source: "blank", label: gitChangesState.label || "git diff", path: null });
-          setEditorLanguage("diff");
-          setStatus("Loaded current git diff into editor.", "success");
-          return;
+          const content = String(gitChangesState.content || ""), label = gitChangesState.label || "git diff";
+          const apply = () => {
+            setEditorText(content, { preserveScroll: false, preserveSelection: false });
+            setSourceState({ source: "blank", label, path: null });
+            setEditorLanguage("diff"); setStatus("Loaded current git diff into editor.", "success");
+          };
+          return documentHostingEnabled ? runStudioEditorSourceMutation(apply) : apply();
         }
         if (action === "open") {
           const absPath = actionEl.getAttribute("data-git-change-abs-path") || "";
@@ -13897,8 +14931,52 @@
         return selected && typeof selected.markdown === "string" ? selected.markdown : latestResponseMarkdown;
       }
 
-      function getSideQuestionGatherScope() {
-        if (sideQuestionUi.gatherScope) return sideQuestionUi.gatherScope;
+      function cloneSideQuestionSettings(settings) {
+        return {
+          focusMode: settings.focusMode,
+          gatherScope: settings.gatherScope,
+          customPath: settings.customPath,
+          includeConversation: settings.includeConversation,
+          gitContext: settings.gitContext,
+          webSearch: settings.webSearch,
+          toolIds: settings.toolIds.slice(0, 12),
+          thinking: settings.thinking,
+          preferredThinking: settings.preferredThinking || settings.thinking,
+        };
+      }
+
+      function getSideQuestionNextSettings() {
+        if (!sideQuestionNextSettings) {
+          // Keep the existing New-thread defaults. Only settings are staged;
+          // editor/response text, conversation snapshots and access are not.
+          sideQuestionNextSettings = cloneSideQuestionSettings({
+            ...sideQuestionUi,
+            preferredThinking: sideQuestionPreferredThinking,
+            focusMode: "auto", customPath: "", includeConversation: false,
+            gitContext: false, webSearch: false,
+          });
+        }
+        return sideQuestionNextSettings;
+      }
+
+      function getSideQuestionControlSettings(target) {
+        const active = Boolean(sideQuestionState && sideQuestionState.threadId);
+        const field = target.getAttribute("data-side-question-field");
+        if (target.hasAttribute("data-side-question-next")) {
+          return active && field !== "draft" ? getSideQuestionNextSettings() : null;
+        }
+        // Old setup nodes cannot edit the active thread's candidate settings.
+        return !active || field === "draft" ? sideQuestionUi : null;
+      }
+
+      function sideQuestionSettingsAreCurrent(settings, threadId) {
+        const currentThreadId = sideQuestionState && sideQuestionState.threadId ? sideQuestionState.threadId : null;
+        return currentThreadId === threadId
+          && (threadId ? sideQuestionNextSettings === settings : sideQuestionUi === settings);
+      }
+
+      function getSideQuestionGatherScope(settings = sideQuestionUi) {
+        if (settings.gatherScope) return settings.gatherScope;
         return sideQuestionHelpers.getDefaultStudioSideQuestionGatherScope({
           sourcePath: getEffectiveSavePath() || sourceState.path || "",
           resourceDir: getCurrentResourceDirValue(),
@@ -13916,9 +14994,10 @@
         });
       }
 
-      function persistSideQuestionToolSelection() {
+      function persistSideQuestionToolSelection(settings = sideQuestionUi) {
+        if (settings !== sideQuestionUi) return; // Future choices commit only after accepted New.
         try {
-          if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_TOOLS_STORAGE_KEY, JSON.stringify(sideQuestionUi.toolIds.slice(0, 12)));
+          if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_TOOLS_STORAGE_KEY, JSON.stringify(settings.toolIds.slice(0, 12)));
         } catch {}
       }
 
@@ -13939,11 +15018,15 @@
           }];
         }).slice(0, 200);
         const available = new Set(sideQuestionAvailablePiTools.map((tool) => tool.id));
-        const nextSelection = sideQuestionUi.toolIds.filter((id) => available.has(id)).slice(0, 12);
-        if (nextSelection.length !== sideQuestionUi.toolIds.length || nextSelection.some((id, index) => id !== sideQuestionUi.toolIds[index])) {
-          sideQuestionUi.toolIds = nextSelection;
-          persistSideQuestionToolSelection();
+        let selectionChanged = false;
+        for (const settings of [sideQuestionUi, sideQuestionNextSettings].filter(Boolean)) {
+          const nextSelection = settings.toolIds.filter((id) => available.has(id)).slice(0, 12);
+          if (nextSelection.length !== settings.toolIds.length || nextSelection.some((id, index) => id !== settings.toolIds[index])) {
+            settings.toolIds = nextSelection;
+            if (settings === sideQuestionUi) selectionChanged = true;
+          }
         }
+        if (selectionChanged) persistSideQuestionToolSelection();
       }
 
       function normalizeSideQuestionState(value) {
@@ -14195,6 +15278,9 @@
         const nextThinking = clampSideQuestionThinkingLevel(sideQuestionPreferredThinking, next);
         const thinkingChanged = nextThinking !== sideQuestionUi.thinking;
         if (thinkingChanged) sideQuestionUi.thinking = nextThinking;
+        if (sideQuestionNextSettings) {
+          sideQuestionNextSettings.thinking = clampSideQuestionThinkingLevel(sideQuestionNextSettings.preferredThinking, next);
+        }
         if ((levelsChanged || thinkingChanged) && rightView === "side-questions" && (!sideQuestionState || !sideQuestionState.threadId)) {
           renderSideQuestionView();
         }
@@ -14208,9 +15294,10 @@
         });
       }
 
-      function renderSideQuestionPiToolPicker() {
-        const selected = new Set(sideQuestionUi.toolIds);
-        const selectedCount = sideQuestionUi.toolIds.length;
+      function renderSideQuestionPiToolPicker(settings = sideQuestionUi, nextThread = false) {
+        const selected = new Set(settings.toolIds);
+        const nextAttribute = nextThread ? " data-side-question-next" : "";
+        const selectedCount = settings.toolIds.length;
         if (!sideQuestionAvailablePiTools.length) {
           return "<div class='side-question-tool-empty'><strong>Additional Pi tools</strong><span>No eligible extension tools are currently available.</span></div>";
         }
@@ -14223,7 +15310,7 @@
           const toolHtml = tools.map((tool) => {
             const description = tool.description || "No description supplied by this extension.";
             return "<label class='side-question-tool-option' title='" + escapeHtml(description) + "'>"
-              + "<input type='checkbox' data-side-question-tool='" + escapeHtml(tool.id) + "' data-side-question-tool-name='" + escapeHtml(tool.name) + "'" + (selected.has(tool.id) ? " checked" : "") + ">"
+              + "<input type='checkbox'" + nextAttribute + " data-side-question-tool='" + escapeHtml(tool.id) + "' data-side-question-tool-name='" + escapeHtml(tool.name) + "'" + (selected.has(tool.id) ? " checked" : "") + ">"
               + "<span><code>" + escapeHtml(tool.name) + "</code><small>" + escapeHtml(description) + "</small></span>"
               + (tool.gateway ? "<em>gateway</em>" : "")
               + "</label>";
@@ -14232,47 +15319,61 @@
         }).join("");
         return "<details class='side-question-tool-picker'" + (selectedCount ? " open" : "") + ">"
           + "<summary>Additional Pi tools · " + selectedCount + " selected</summary>"
-          + "<p>Selecting a tool loads its owning extension into the isolated side runtime. Selection is remembered, then frozen; a gateway may expose further configured services.</p>"
+          + "<p>Selecting a tool loads its owning extension into the isolated side runtime. " + (nextThread ? "Selection is staged until New is accepted, then remembered and frozen" : "Selection is remembered, then frozen") + "; a gateway may expose further configured services.</p>"
           + "<div class='side-question-tool-groups'>" + groupHtml + "</div>"
           + "</details>";
+      }
+
+      function renderSideQuestionOptions(settings, scope, nextThread = false) {
+        const webDisabled = !sideQuestionWebSearchAvailable;
+        const nextAttribute = nextThread ? " data-side-question-next" : "";
+        const ruleId = nextThread ? "sideQuestionNextContextRule" : "sideQuestionContextRule";
+        const options = "<div class='side-question-context-grid'>"
+          + "<label>Starting text<select" + nextAttribute + " class='studio-flat-select' data-side-question-field='focusMode' aria-describedby='" + ruleId + "'>" + sideQuestionSelectOptions([
+            ["auto", "Automatic"], ["selection", "Editor selection only"], ["section", "Heading block or nearby text at cursor"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No starting text"],
+          ], settings.focusMode) + "</select></label>"
+          + "<label>Also use files from<select" + nextAttribute + " class='studio-flat-select' data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
+            ["none", "No other files"], ["folder", "Same folder as document"], ["repo", "Repository"], ["custom", "Choose a folder"],
+          ], scope) + "</select></label>"
+          + "<label>Thinking<select" + nextAttribute + " class='studio-flat-select' data-side-question-field='thinking'>" + sideQuestionSelectOptions(
+            getSideQuestionThinkingOptions(), settings.thinking
+          ) + "</select></label>"
+          + "</div>"
+          + "<details class='side-question-context-rule'><summary id='" + ruleId + "'>Automatic: selection → heading block at cursor → nearby text</summary><p>A heading block starts at the nearest Markdown/LaTeX heading above the cursor and ends before the next heading of the same or higher level. With no heading, Studio uses the surrounding text block or a nearby excerpt.</p></details>"
+          + (scope === "none" ? "" : "<p class='side-question-context-access-note'>Related-file access is limited to folders allowed for this Studio session. Studio asks before starting if this folder is not already allowed.</p>")
+          + (scope === "custom" ? "<label class='side-question-path-label'>Folder path<input" + nextAttribute + " data-side-question-field='customPath' type='text' value='" + escapeHtml(settings.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
+          + "<div class='side-question-checks'>"
+          + "<label><input" + nextAttribute + " data-side-question-field='includeConversation' type='checkbox'" + (settings.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
+          + (scope === "repo" ? "<label title='Capture Git status, staged and unstaged changes, and up to 20 recent commits when this thread starts.'><input" + nextAttribute + " data-side-question-field='gitContext' type='checkbox'" + (settings.gitContext ? " checked" : "") + "> Include Git context</label>" : "")
+          + "<label title='" + (webDisabled ? "Set BRAVE_API_KEY before starting Pi to enable web search." : "Allow this side thread to search the web when useful.") + "'><input" + nextAttribute + " data-side-question-field='webSearch' type='checkbox'" + (settings.webSearch ? " checked" : "") + (webDisabled ? " disabled" : "") + "> Allow web search" + (webDisabled ? " (unavailable)" : "") + "</label>"
+          + "</div>"
+          + renderSideQuestionPiToolPicker(settings, nextThread);
+        return options;
       }
 
       function renderSideQuestionSetup() {
         const summary = getSideQuestionContextSummary();
         const scope = summary.scope;
         const webDisabled = !sideQuestionWebSearchAvailable;
+        const options = renderSideQuestionOptions(sideQuestionUi, scope);
+        const scopeText = [summary.attachmentText, summary.relatedFilesText,
+          sideQuestionUi.includeConversation ? "main conversation snapshot" : "", summary.gitContextText,
+          sideQuestionUi.webSearch ? (webDisabled ? "web search unavailable" : "web search selected") : "",
+          sideQuestionUi.toolIds.length ? sideQuestionUi.toolIds.length + " additional Pi tool(s) selected" : ""].filter(Boolean).join(" · ");
         return "<div class='side-question-empty'>"
-          + "<div class='side-question-intro'><h2>Side question</h2><p>Ask something without adding it to the main Pi conversation. Choose the starting text and whether Studio may look through related files.</p></div>"
-          + "<div class='side-question-context-grid'>"
-          + "<label>Starting text<select class='studio-flat-select' data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'>" + sideQuestionSelectOptions([
-            ["auto", "Automatic"], ["selection", "Editor selection only"], ["section", "Heading block or nearby text at cursor"], ["editor", "Whole editor document"], ["response", "Displayed response"], ["none", "No starting text"],
-          ], sideQuestionUi.focusMode) + "</select></label>"
-          + "<label>Also use files from<select class='studio-flat-select' data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
-            ["none", "No other files"], ["folder", "Same folder as document"], ["repo", "Repository"], ["custom", "Choose a folder"],
-          ], scope) + "</select></label>"
-          + "<label>Thinking<select class='studio-flat-select' data-side-question-field='thinking'>" + sideQuestionSelectOptions(
-            getSideQuestionThinkingOptions(), sideQuestionUi.thinking
-          ) + "</select></label>"
-          + "</div>"
-          + "<details class='side-question-context-rule'><summary id='sideQuestionContextRule'>Automatic: selection → heading block at cursor → nearby text</summary><p>A heading block starts at the nearest Markdown/LaTeX heading above the cursor and ends before the next heading of the same or higher level. With no heading, Studio uses the surrounding text block or a nearby excerpt.</p></details>"
-          + (scope === "none" ? "" : "<p class='side-question-context-access-note'>Related-file access is limited to folders allowed for this Studio session. Studio asks before starting if this folder is not already allowed.</p>")
-          + (scope === "custom" ? "<label class='side-question-path-label'>Folder path<input data-side-question-field='customPath' type='text' value='" + escapeHtml(sideQuestionUi.customPath) + "' placeholder='Folder on the computer running Pi'></label>" : "")
-          + "<div class='side-question-checks'>"
-          + "<label><input data-side-question-field='includeConversation' type='checkbox'" + (sideQuestionUi.includeConversation ? " checked" : "") + "> Include the current main conversation snapshot</label>"
-          + (scope === "repo" ? "<label title='Capture Git status, staged and unstaged changes, and up to 20 recent commits when this thread starts.'><input data-side-question-field='gitContext' type='checkbox'" + (sideQuestionUi.gitContext ? " checked" : "") + "> Include Git context</label>" : "")
-          + "<label title='" + (webDisabled ? "Set BRAVE_API_KEY before starting Pi to enable web search." : "Allow this side thread to search the web when useful.") + "'><input data-side-question-field='webSearch' type='checkbox'" + (sideQuestionUi.webSearch ? " checked" : "") + (webDisabled ? " disabled" : "") + "> Allow web search" + (webDisabled ? " (unavailable)" : "") + "</label>"
-          + "</div>"
-          + renderSideQuestionPiToolPicker()
-          + "<dl class='side-question-context-summary'><div><dt>Starting text</dt><dd>" + escapeHtml(summary.attachmentText) + "</dd></div><div><dt>Related files</dt><dd>" + escapeHtml(summary.relatedFilesText) + "</dd></div>" + (summary.gitContextText ? "<div><dt>Git context</dt><dd>" + escapeHtml(summary.gitContextText) + "</dd></div>" : "") + "</dl>"
+          + "<div class='side-question-intro'><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div>"
           + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' title='Enter adds a new line. Cmd/Ctrl+Enter asks the side question.' placeholder='Ask about the starting text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
           + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask side question (Cmd/Ctrl+Enter)'" + (sideQuestionContextGrantPending || !isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionContextGrantPending ? "Checking related-file access…" : (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question")) + "</button></div>"
+          + "<p class='side-question-scope'>Scope: " + escapeHtml(scopeText) + "</p>"
+          + "<details class='side-question-options' data-side-question-options" + (sideQuestionUi.optionsOpen ? " open" : "") + "><summary>Options</summary>" + options + "</details>"
           + "</div>";
       }
 
       function renderSideQuestionThread() {
         const state = sideQuestionState;
         const context = state.context || {};
+        const nextSettings = getSideQuestionNextSettings();
         const latestAnswer = getLatestCompletedSideQuestionAnswer();
         const messageHtml = state.messages.map((message) => {
           const roleLabel = message.role === "user" ? "You" : "Side answer";
@@ -14280,11 +15381,11 @@
             ? "<div class='side-question-message-body rendered-markdown' data-side-question-markdown='" + escapeHtml(message.text) + "'><div class='side-question-markdown-fallback'>" + escapeHtml(message.text) + "</div></div>"
             : "<div class='side-question-message-body side-question-plain'>" + escapeHtml(message.text || (message.status === "streaming" ? "Thinking…" : "")) + "</div>";
           return "<article class='side-question-message side-question-message-" + message.role + " side-question-status-" + message.status + "'>"
-            + "<div class='side-question-message-label'>" + roleLabel + (message.status === "streaming" ? " <span class='side-question-live'>●</span>" : "") + "</div>" + body + "</article>";
+            + "<div class='side-question-message-label'>" + roleLabel + (message.status === "streaming" ? " <span class='side-question-live'>working</span>" : "") + "</div>" + body + "</article>";
         }).join("");
         const activityHtml = state.activity.length
           ? "<details class='side-question-activity'" + (state.status === "running" ? " open" : "") + "><summary>Gathered context · " + state.activity.length + " action" + (state.activity.length === 1 ? "" : "s") + "</summary><ul>"
-            + state.activity.map((entry) => "<li class='side-question-activity-" + entry.status + "'><span>" + (entry.status === "running" ? "●" : (entry.status === "error" ? "!" : "✓")) + "</span>" + escapeHtml(entry.label) + "</li>").join("") + "</ul></details>"
+            + state.activity.map((entry) => "<li class='side-question-activity-" + entry.status + "'><span>" + (entry.status === "running" ? "Running" : (entry.status === "error" ? "Error" : "Done")) + "</span>" + escapeHtml(entry.label) + "</li>").join("") + "</ul></details>"
           : "";
         const webLabel = context.webSearchRequested
           ? (context.webSearchAvailable ? "web allowed" : "web unavailable")
@@ -14299,10 +15400,7 @@
           : "";
         return "<div class='side-question-thread'>"
           + "<div class='side-question-thread-header'><div><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div><button type='button' data-side-question-action='new'" + (state.status === "running" ? " disabled" : "") + ">New thread</button></div>"
-          + "<div class='side-question-context-chips'><span>" + escapeHtml(context.focusLabel || "Editor context") + "</span><span>" + escapeHtml(context.gatherScope === "none" ? "no other files" : (context.contextRoot || context.gatherScope || "local context")) + "</span>"
-          + (context.includeConversation ? "<span>main conversation snapshot</span>" : "") + (gitLabel ? "<span>" + escapeHtml(gitLabel) + "</span>" : "") + "<span>" + escapeHtml(webLabel) + "</span><span>" + escapeHtml(selectedToolLabel) + "</span><span>" + escapeHtml(state.modelLabel + " · " + state.thinking) + "</span></div>"
           + "<div class='side-question-transcript'>" + messageHtml + "</div>"
-          + activityHtml
           + (state.error ? "<div class='side-question-error'>" + escapeHtml(state.error) + "</div>" : "")
           + (latestAnswer ? "<div class='side-question-result-actions'><button type='button' data-side-question-action='copy'>Copy latest answer</button><button type='button' data-side-question-action='insert'>Insert at editor cursor</button><button type='button' data-side-question-action='promote'>Bring to main conversation</button></div>" : "")
           + "<label class='side-question-composer-label'>Follow-up<textarea data-side-question-field='draft' rows='3' title='Enter adds a new line. Cmd/Ctrl+Enter asks the follow-up.' placeholder='Ask a follow-up in this side thread…'" + (state.status === "running" ? " disabled" : "") + ">" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
@@ -14310,7 +15408,17 @@
           + (state.status === "running"
             ? "<button type='button' class='side-question-stop' data-side-question-action='stop'>Stop</button>"
             : "<button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask follow-up (Cmd/Ctrl+Enter)'" + (!isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() ? " disabled" : "") + ">Ask follow-up</button>")
-          + "</div></div>";
+          + "</div>"
+          + "<p class='side-question-scope'>Scope: " + escapeHtml([context.focusLabel || "Editor context",
+            context.gatherScope === "none" ? "no other files" : (context.contextRoot || context.gatherScope || "local context"),
+            context.includeConversation ? "main conversation snapshot" : "", gitLabel,
+            context.webSearchRequested ? webLabel : "", Array.isArray(context.tools) && context.tools.length ? selectedToolLabel : ""].filter(Boolean).join(" · ")) + "</p>"
+          + "<details class='side-question-options' data-side-question-options" + (sideQuestionUi.optionsOpen || state.status === "running" ? " open" : "") + "><summary>Options</summary>"
+          + "<p>" + escapeHtml(state.modelLabel + " · " + state.thinking + " · " + webLabel + " · " + selectedToolLabel) + "</p>"
+          + "<p>This thread keeps its captured context. Start a New thread to change scope or tools.</p>" + activityHtml + "</details>"
+          + "<details class='side-question-options' data-side-question-next-options" + (sideQuestionNextOptionsOpen ? " open" : "") + "><summary>Next thread settings</summary>"
+          + "<p>These settings apply only after you choose New thread. Remembered preferences change when New is accepted; reload discards unapplied choices. Follow-ups keep this thread's captured context and tools. Starting text and file access are checked when you ask the first question.</p>"
+          + renderSideQuestionOptions(nextSettings, getSideQuestionGatherScope(nextSettings), true) + "</details></div>";
       }
 
       function scheduleSideQuestionContextRefresh() {
@@ -14326,6 +15434,10 @@
         finishPreviewRender(critiqueViewEl);
         const scrollTop = critiqueViewEl.scrollTop;
         const nearBottom = critiqueViewEl.scrollHeight - critiqueViewEl.clientHeight - critiqueViewEl.scrollTop < 100;
+        const previousOptions = critiqueViewEl.querySelector("[data-side-question-options]");
+        if (previousOptions) sideQuestionUi.optionsOpen = previousOptions.open;
+        const previousNextOptions = critiqueViewEl.querySelector("[data-side-question-next-options]");
+        if (previousNextOptions) sideQuestionNextOptionsOpen = previousNextOptions.open;
         critiqueViewEl.innerHTML = sideQuestionState && sideQuestionState.threadId ? renderSideQuestionThread() : renderSideQuestionSetup();
         const nonce = ++sideQuestionPreviewRenderNonce;
         void renderSideQuestionMarkdownFields(nonce);
@@ -14490,6 +15602,37 @@
         setStatus("Inserted the latest side answer at the editor cursor.", "success");
       }
 
+      async function startNewSideQuestionThread() {
+        const state = sideQuestionState;
+        if (!state || !state.threadId || state.status === "running" || !isSideQuestionConnectionReady()) return false;
+        const settings = getSideQuestionNextSettings();
+        const snapshot = JSON.stringify(settings);
+        const draft = sideQuestionUi.draft;
+        const confirmed = !state.messages.length || await requestStudioConfirmation(
+          "Clear this ephemeral side thread and apply the next-thread settings? The follow-up draft will be cleared. Nothing has been added to the main conversation.",
+          { title: "Start a new side thread?", confirmLabel: "New thread", destructive: true },
+        );
+        if (!confirmed) return false;
+        if (sideQuestionState !== state || state.status === "running" || sideQuestionUi.draft !== draft
+            || !sideQuestionSettingsAreCurrent(settings, state.threadId) || JSON.stringify(settings) !== snapshot
+            || !isSideQuestionConnectionReady()) {
+          setStatus("The side thread or next-thread settings changed. Current work was kept; choose New thread again.", "warning");
+          return false;
+        }
+        if (!sendMessage({ type: "side_question_clear_request", threadId: state.threadId })) return false;
+        sideQuestionUi = { ...sideQuestionUi, ...cloneSideQuestionSettings(settings), draft: "" };
+        sideQuestionPreferredThinking = settings.preferredThinking;
+        persistSideQuestionToolSelection();
+        try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_GATHER_STORAGE_KEY, sideQuestionUi.gatherScope); } catch {}
+        try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_THINKING_STORAGE_KEY, sideQuestionPreferredThinking); } catch {}
+        sideQuestionState = null;
+        sideQuestionNextSettings = null;
+        sideQuestionNextOptionsOpen = false;
+        renderSideQuestionView();
+        updateResultActionButtons();
+        return true;
+      }
+
       async function handleSideQuestionClick(event) {
         if (rightView !== "side-questions") return;
         const target = event && event.target instanceof Element ? event.target.closest("[data-side-question-action]") : null;
@@ -14504,25 +15647,7 @@
             setStatus("Stopping side question…", "warning");
           }
         } else if (action === "new") {
-          const confirmed = !sideQuestionState || !sideQuestionState.messages.length || await requestStudioConfirmation(
-            "Clear this ephemeral side thread and choose fresh context? Nothing has been added to the main conversation.",
-            { title: "Start a new side thread?", confirmLabel: "New thread", destructive: true },
-          );
-          if (confirmed) {
-            sendMessage({ type: "side_question_clear_request", threadId: sideQuestionState && sideQuestionState.threadId ? sideQuestionState.threadId : undefined });
-            sideQuestionState = null;
-            sideQuestionUi = {
-              ...sideQuestionUi,
-              focusMode: "auto",
-              customPath: "",
-              includeConversation: false,
-              gitContext: false,
-              webSearch: false,
-              draft: "",
-            };
-            renderSideQuestionView();
-            updateResultActionButtons();
-          }
+          await startNewSideQuestionThread();
         } else if (action === "copy") {
           const answer = getLatestCompletedSideQuestionAnswer();
           if (answer) {
@@ -14546,11 +15671,16 @@
         if (rightView !== "side-questions") return;
         const target = event && event.target;
         if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) return;
+        const settings = getSideQuestionControlSettings(target);
+        if (!settings) return;
         const field = target.getAttribute("data-side-question-field");
-        if (field === "draft") sideQuestionUi.draft = target.value;
-        if (field === "customPath") sideQuestionUi.customPath = target.value;
+        if (field === "draft" && settings === sideQuestionUi) sideQuestionUi.draft = target.value;
+        if (field === "customPath") settings.customPath = target.value;
+        if (settings !== sideQuestionUi) return;
         const askButton = critiqueViewEl.querySelector("[data-side-question-action='ask']");
-        if (askButton) askButton.disabled = sideQuestionContextGrantPending || !isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() || (getSideQuestionGatherScope() === "custom" && !sideQuestionUi.customPath.trim());
+        if (askButton) askButton.disabled = sideQuestionContextGrantPending || !isSideQuestionConnectionReady()
+          || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim()
+          || (!(sideQuestionState && sideQuestionState.threadId) && getSideQuestionGatherScope() === "custom" && !sideQuestionUi.customPath.trim());
       }
 
       function handleSideQuestionKeydown(event) {
@@ -14571,23 +15701,31 @@
         if (rightView !== "side-questions") return;
         const target = event && event.target;
         if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+        const settings = getSideQuestionControlSettings(target);
+        if (!settings) return;
+        const threadId = sideQuestionState && sideQuestionState.threadId ? sideQuestionState.threadId : null;
         const toolId = target.getAttribute("data-side-question-tool");
         if (toolId) {
           const tool = sideQuestionAvailablePiTools.find((candidate) => candidate.id === toolId);
           if (!tool) return;
-          const selected = new Set(sideQuestionUi.toolIds);
-          if (target.checked) {
-            if (tool.gateway && !selected.has(toolId)) {
-              const confirmed = await requestStudioConfirmation(
-                `“${tool.name}” is a gateway tool. Selecting it may expose additional services and actions configured behind that extension, subject to the extension's own permissions.`,
-                { title: "Allow gateway tool in side questions?", confirmLabel: "Allow gateway" },
-              );
-              if (!confirmed) {
-                target.checked = false;
-                renderSideQuestionView();
-                return;
-              }
+          const wanted = target.checked;
+          if (wanted && tool.gateway && !settings.toolIds.includes(toolId)) {
+            const confirmed = await requestStudioConfirmation(
+              `“${tool.name}” is a gateway tool. Selecting it may expose additional services and actions configured behind that extension, subject to the extension's own permissions.`,
+              { title: "Allow gateway tool in side questions?", confirmLabel: "Allow gateway" },
+            );
+            if (!sideQuestionSettingsAreCurrent(settings, threadId)
+                || !sideQuestionAvailablePiTools.some((candidate) => candidate.id === toolId && candidate.gateway === tool.gateway)) return;
+            if (!confirmed) {
+              target.checked = false;
+              renderSideQuestionView();
+              return;
             }
+          }
+          // Re-read after consent so this choice cannot discard another tool
+          // selected or removed while the confirmation was pending.
+          const selected = new Set(settings.toolIds);
+          if (wanted) {
             if (selected.size >= 12 && !selected.has(toolId)) {
               setStatus("Select at most 12 additional Pi tools.", "warning");
               renderSideQuestionView();
@@ -14597,27 +15735,39 @@
           } else {
             selected.delete(toolId);
           }
-          sideQuestionUi.toolIds = [...selected];
-          persistSideQuestionToolSelection();
+          settings.toolIds = [...selected];
+          persistSideQuestionToolSelection(settings);
           renderSideQuestionView();
           return;
         }
         const field = target.getAttribute("data-side-question-field");
-        if (!field) return;
-        if (field === "focusMode") sideQuestionUi.focusMode = target.value;
+        if (field === "customPath") {
+          // Removal of a focused path input can synchronously emit change while
+          // renderSideQuestionView replaces its parent. Keep its committed text
+          // without re-entering that DOM replacement (input already updates Ask).
+          settings.customPath = target.value;
+          return;
+        }
+        if (!["focusMode", "gatherScope", "thinking", "includeConversation", "gitContext", "webSearch"].includes(field)) return;
+        if (field === "focusMode") settings.focusMode = target.value;
         if (field === "gatherScope") {
-          sideQuestionUi.gatherScope = target.value;
-          if (sideQuestionUi.gatherScope !== "repo") sideQuestionUi.gitContext = false;
-          try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_GATHER_STORAGE_KEY, sideQuestionUi.gatherScope); } catch {}
+          settings.gatherScope = target.value;
+          if (settings.gatherScope !== "repo") settings.gitContext = false;
+          if (settings === sideQuestionUi) {
+            try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_GATHER_STORAGE_KEY, settings.gatherScope); } catch {}
+          }
         }
         if (field === "thinking" && sideQuestionThinkingLevels.includes(target.value)) {
-          sideQuestionPreferredThinking = target.value;
-          sideQuestionUi.thinking = target.value;
-          try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_THINKING_STORAGE_KEY, sideQuestionPreferredThinking); } catch {}
+          settings.thinking = target.value;
+          settings.preferredThinking = target.value;
+          if (settings === sideQuestionUi) {
+            sideQuestionPreferredThinking = target.value;
+            try { if (window.localStorage) window.localStorage.setItem(SIDE_QUESTION_THINKING_STORAGE_KEY, target.value); } catch {}
+          }
         }
-        if (field === "includeConversation") sideQuestionUi.includeConversation = target.checked;
-        if (field === "gitContext") sideQuestionUi.gitContext = target.checked && getSideQuestionGatherScope() === "repo";
-        if (field === "webSearch") sideQuestionUi.webSearch = target.checked;
+        if (field === "includeConversation") settings.includeConversation = target.checked;
+        if (field === "gitContext") settings.gitContext = target.checked && getSideQuestionGatherScope(settings) === "repo";
+        if (field === "webSearch") settings.webSearch = target.checked;
         renderSideQuestionView();
       }
 
@@ -14743,6 +15893,7 @@
           responseWrapEl.hidden = showingAuxiliaryRightPane;
         }
 
+        syncStudioResponseActionLayout();
         const critiqueNotes = isCritiqueResponse ? latestCritiqueNotes : "";
         const critiqueNotesLoaded = Boolean(critiqueNotes) && normalizedEditor === latestCritiqueNotesNormalized;
 
@@ -14752,7 +15903,7 @@
         loadCritiqueFullBtn.hidden = !isCritiqueResponse;
 
         loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse || (bufferSwitchingEnabled && isStudioDocumentBufferView());
-        loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response into editor";
+        loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response";
 
         const annotationWorkspaceReady = responseLoaded
           && editorView === "markdown"
@@ -14770,8 +15921,16 @@
         loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded || (bufferSwitchingEnabled && isStudioDocumentBufferView());
         loadCritiqueFullBtn.textContent = responseLoaded ? "Full critique already in editor" : "Load full critique into editor";
 
+        // The Document can show responses, but they load or annotate into the Prompt only (Sol, 8 Oct).
+        const documentView = bufferSwitchingEnabled && isStudioDocumentBufferView();
+        for (const button of [loadResponseBtn, loadCritiqueNotesBtn, loadCritiqueFullBtn]) {
+          if (button.dataset && button.dataset.promptTitle === undefined) button.dataset.promptTitle = button.title || "";
+          button.title = documentView ? "Return to Prompt to load or annotate this response." : (button.dataset?.promptTitle ?? button.title);
+        }
+        if (documentView) annotateResponseBtn.title = "Return to Prompt to load or annotate this response.";
+
         copyResponseBtn.disabled = uiBusy || !hasResponse;
-        copyResponseBtn.textContent = "Copy response text";
+        copyResponseBtn.textContent = "Copy response";
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         const exportingReplJournal = rightView === "repl";
@@ -14785,7 +15944,8 @@
           : (exportingSideThread
             ? sideThreadExportText
             : (rightView === "editor-preview" ? prepareEditorTextForPreview(sourceTextEl.value) : latestResponseMarkdown));
-        const canExportPreview = (rightPaneShowsPreview || exportingReplJournal || exportingSideThread) && Boolean(String(exportText || "").trim());
+        const readerActive = typeof studioLinkedReaderIsActive === "function" && studioLinkedReaderIsActive();
+        const canExportPreview = !readerActive && (rightPaneShowsPreview || exportingReplJournal || exportingSideThread) && Boolean(String(exportText || "").trim());
         const htmlArtifactExportSource = canExportPreview && !exportingReplJournal && !exportingSideThread ? getRightPaneHtmlArtifactSource() : "";
         const isHtmlArtifactPreview = Boolean(htmlArtifactExportSource);
         const sideThreadRenderTooLarge = exportingSideThread && sideThreadExportText.length > SIDE_QUESTION_TRANSCRIPT_RENDER_MAX_CHARS;
@@ -14843,7 +16003,10 @@
         if (exportSideThreadRenderSeparatorEl) exportSideThreadRenderSeparatorEl.hidden = !exportingSideThread;
         if (exportPreviewPdfStudioBtn) {
           exportPreviewPdfStudioBtn.disabled = exportBusy || !canExportPreview || isHtmlArtifactPreview || sideThreadRenderTooLarge;
-          exportPreviewPdfStudioBtn.title = sideThreadRenderTooLarge
+          exportPreviewPdfStudioBtn.textContent = documentHostingEnabled ? "Export PDF and open in browser" : "Export PDF and Open in Studio";
+          exportPreviewPdfStudioBtn.title = documentHostingEnabled && canExportPreview && !isHtmlArtifactPreview && !sideThreadRenderTooLarge
+            ? "Export as PDF and open it in the browser's PDF viewer."
+            : sideThreadRenderTooLarge
             ? "This transcript is too large for rendered export; save or copy the Markdown instead."
             : (isHtmlArtifactPreview
               ? "Interactive HTML preview PDF export is not available yet."
@@ -14851,6 +16014,9 @@
         }
         if (exportPreviewPdfBtn) {
           exportPreviewPdfBtn.disabled = exportBusy || !canExportPreview || isHtmlArtifactPreview || sideThreadRenderTooLarge;
+          // Trial48 finding 7: the same choices, in the same words, for PDF and HTML.
+          if (documentHostingEnabled) exportPreviewPdfBtn.textContent = "Export PDF and open in system viewer";
+          if (documentHostingEnabled && exportPreviewHtmlBtn) exportPreviewHtmlBtn.textContent = "Export HTML and open in browser";
           exportPreviewPdfBtn.title = sideThreadRenderTooLarge
             ? "This transcript is too large for rendered export; save or copy the Markdown instead."
             : (isHtmlArtifactPreview
@@ -14859,7 +16025,10 @@
         }
         if (exportPreviewHtmlStudioBtn) {
           exportPreviewHtmlStudioBtn.disabled = exportBusy || !canExportPreview || sideThreadRenderTooLarge;
-          exportPreviewHtmlStudioBtn.title = sideThreadRenderTooLarge
+          exportPreviewHtmlStudioBtn.textContent = documentHostingEnabled ? "Export HTML and open in Document" : "Export HTML and Open in Studio";
+          exportPreviewHtmlStudioBtn.title = documentHostingEnabled
+            ? "Export as HTML and open it as a Document. Existing files are never overwritten."
+            : sideThreadRenderTooLarge
             ? "This transcript is too large for rendered export; save or copy the Markdown instead."
             : (isHtmlArtifactPreview
               ? "Export the authored HTML preview and open it in a new Studio editor tab."
@@ -14874,7 +16043,7 @@
               : (exportingSideThread ? "Export the side-thread transcript as standalone HTML and open it in the default browser." : (exportingReplJournal ? "Export the shared REPL record as standalone HTML and open it in the default browser." : "Export the current right-pane preview as standalone HTML and open it in the default browser.")));
         }
         if (exportPreviewControlsEl) {
-          exportPreviewControlsEl.hidden = rightView === "editor-quarto-preview";
+          exportPreviewControlsEl.hidden = readerActive || rightView === "editor-quarto-preview";
           exportPreviewControlsEl.title = canExportPreview
             ? (exportingSideThread
               ? "Choose a durable export for the visible side discussion."
@@ -14904,6 +16073,7 @@
         renderActiveResult();
         updateHistoryControls();
         updateResultActionButtons();
+        if (typeof syncStudioLinkedReaderChrome === "function") syncStudioLinkedReaderChrome();
       }
 
       function normalizeStudioResourceDirValue(value) {
@@ -14932,8 +16102,23 @@
         return text;
       }
 
+      function setStudioResourceDirValue(value, verifiedBuffer = false) {
+        // A validated recovery model already owns this exact context. Do not
+        // reinterpret an embedded /tmp/ (or /home/) segment during binding.
+        const dir = verifiedBuffer ? String(value || "") : normalizeStudioResourceDirValue(value);
+        if (documentHostingEnabled) {
+          if (documentHostingResourceDir !== dir || (resourceDirInput && resourceDirInput.value !== dir)) documentHostingResourceEditGeneration++;
+          documentHostingResourceDir = dir;
+        }
+        if (resourceDirInput) resourceDirInput.value = dir;
+      }
       function getCurrentResourceDirValue() {
-        return resourceDirInput ? normalizeStudioResourceDirValue(resourceDirInput.value) : "";
+        const value = resourceDirInput ? normalizeStudioResourceDirValue(resourceDirInput.value) : "";
+        if (!documentHostingEnabled) return value;
+        // Typing in the directory form is not authority to change resource
+        // context, a derived Save As target, or a recovery checkpoint.
+        if (documentHostingResourceDir === null) documentHostingResourceDir = value;
+        return documentHostingResourceDir;
       }
 
       function stripImportedFileLabel(label) {
@@ -15042,7 +16227,7 @@
       }
 
       function buildAnnotatedSaveSuggestion() {
-        const effectivePath = getEffectiveSavePath() || sourceState.path || "";
+        const effectivePath = sourceState.path || "";
         if (effectivePath) {
           const parts = String(effectivePath).split(/[/\\]/);
           const fileName = parts.pop() || "draft.md";
@@ -15051,12 +16236,10 @@
           return dir + stem + ".annotated.md";
         }
 
-        const rawLabel = sourceState.label ? stripImportedFileLabel(sourceState.label) : "draft.md";
-        const stem = rawLabel.replace(/\.[^.]+$/, "") || "draft";
         const suggestedDir = getCurrentResourceDirValue()
           ? getCurrentResourceDirValue().replace(/\/$/, "") + "/"
           : "./";
-        return suggestedDir + stem + ".annotated.md";
+        return suggestedDir + editorDraftHelpers.buildDraftSaveFilename({ sourceState, text: sourceTextEl.value, annotated: true });
       }
 
       function updateSaveFileTooltip() {
@@ -15068,7 +16251,7 @@
           return;
         }
 
-        saveOverBtn.title = "Save editor is available after opening a file-backed document. Use Save editor as… for a new file.";
+        saveOverBtn.title = "Choose a file path with Save As for this draft. Nothing is written until you confirm. Shortcut: Cmd/Ctrl+S.";
       }
 
       function updateRefreshFromDiskTooltip() {
@@ -15079,12 +16262,14 @@
           return;
         }
 
-        refreshFromDiskBtn.title = "Refresh from disk is available after opening a file from disk. Use Files → Open here, Files → Open file tab, or /studio-editor-only <path> for a refreshable editor tab.";
+        refreshFromDiskBtn.title = documentHostingEnabled
+          ? "Refresh from disk is available after opening a file. Use Open / load → Open file in Document, or Files → Open here / Open file tab."
+          : "Refresh from disk is available after opening a file from disk. Use Files → Open here, Files → Open file tab, or /studio-editor-only <path> for a refreshable editor tab.";
       }
 
       function syncActionButtons() {
         syncStudioBufferOpenOperation();
-        const canSaveOver = hasRefreshableFilePath();
+        if (typeof syncPromptRunIndicator === "function") syncPromptRunIndicator();
         const canRefreshFromDisk = hasRefreshableFilePath();
 
         fileInput.disabled = uiBusy || isWatchedFilePreview;
@@ -15094,12 +16279,12 @@
         if (sourceOpenCurrentFileTabBtn) {
           sourceOpenCurrentFileTabBtn.disabled = uiBusy || !hasRefreshableFilePath();
           sourceOpenCurrentFileTabBtn.title = hasRefreshableFilePath()
-            ? "Open this file-backed document in a new refreshable editor-only Studio tab."
-            : "Available after opening a file-backed document.";
+            ? "Open this file in a new Document window."
+            : "Open a file first.";
         }
         if (sourceOpenCurrentTextCopyTabBtn) sourceOpenCurrentTextCopyTabBtn.disabled = uiBusy || wsState !== "Ready" || !String(sourceTextEl.value || "").trim();
         saveAsBtn.disabled = uiBusy || isWatchedFilePreview;
-        saveOverBtn.disabled = uiBusy || isWatchedFilePreview || !canSaveOver;
+        saveOverBtn.disabled = uiBusy || isWatchedFilePreview;
         if (refreshFromDiskBtn) refreshFromDiskBtn.disabled = uiBusy || isWatchedFilePreview || !canRefreshFromDisk;
         if (clearWorkspaceBtn) clearWorkspaceBtn.disabled = uiBusy || isWatchedFilePreview;
         sendEditorBtn.disabled = uiBusy || isEditorOnlyMode;
@@ -15110,6 +16295,7 @@
           watchedOpenEditableBtn.disabled = uiBusy || !watchedFilePreviewState.path;
         }
         syncRunAndCritiqueButtons();
+        syncStudioRuntimePresentation();
         copyDraftBtn.disabled = uiBusy;
         if (suggestCompletionBtn) {
           const hasSuggestionForCurrentText = Boolean(completionSuggestionState && sourceTextEl && sourceTextEl.value === completionSuggestionState.baseText);
@@ -15137,7 +16323,7 @@
         editorViewSelect.disabled = isEditorOnlyMode;
         syncRightViewModeOptions();
         rightViewSelect.disabled = isWatchedFilePreview;
-        followSelect.disabled = isEditorOnlyMode || uiBusy || (bufferSwitchingEnabled && isStudioDocumentBufferView());
+        followSelect.disabled = isEditorOnlyMode || isWatchedFilePreview || (!studioRunFollowingAvailable() && (uiBusy || (bufferSwitchingEnabled && isStudioDocumentBufferView())));
         if (responseHighlightSelect) responseHighlightSelect.disabled = isEditorOnlyMode || rightView !== "markdown";
         insertHeaderBtn.disabled = uiBusy || isWatchedFilePreview;
         lensSelect.disabled = uiBusy || isEditorOnlyMode;
@@ -15145,13 +16331,20 @@
         updateRefreshFromDiskTooltip();
         updateHistoryControls();
         updateResultActionButtons();
+        if (typeof syncStudioLinkedReaderChrome === "function") syncStudioLinkedReaderChrome();
       }
 
       function setBusy(busy) {
+        const started = Boolean(busy) && !uiBusy;
         uiBusy = Boolean(busy);
+        if (started) {
+          studioBusyEpoch += 1;
+          if (studioFilePick) { cancelStudioFilePick({ silent: true }); setStatus("Studio is busy, so choosing a file was cancelled. Nothing was opened.", "warning"); }
+        }
         syncFooterSpinnerState();
         renderStatus();
         syncActionButtons();
+        if (documentHostingEnabled) syncDocumentHostingReadiness();
       }
 
       function setSourceState(next, options) {
@@ -15176,7 +16369,9 @@
           draftId: nextPath
             ? null
             : (next && next.draftId ? next.draftId : makeStudioDraftId()),
+          ...(next && Object.prototype.hasOwnProperty.call(next, "provenance") ? { provenance: next.provenance } : {}),
         };
+        bufferRecoveryClient?.refreshHostingReadiness?.();
         const nextDescriptor = getCurrentStudioDocumentDescriptor();
         const recoveredMetadata = options && options.metadataAssociations && typeof options.metadataAssociations === "object"
           ? options.metadataAssociations
@@ -15240,6 +16435,7 @@
           label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : "blank",
           path,
           draftId: path ? null : (typeof raw.draftId === "string" && raw.draftId.trim() ? raw.draftId.trim() : null),
+          ...(Object.prototype.hasOwnProperty.call(raw, "provenance") ? { provenance: raw.provenance } : {}),
         };
       }
 
@@ -15302,6 +16498,9 @@
       }
 
       function buildWorkspacePersistencePayload() {
+        // Hosted hello can precede restore. Resolve recovered Prompt Off before
+        // the first capture can turn an unset browser preference into On.
+        if (studioRunFollowingAvailable()) ensureLatestResponseFollowingPreference();
         lastWorkspacePersistenceSavedAt = Math.max(Date.now(), lastWorkspacePersistenceSavedAt + 1);
         const pendingEditorView = bufferSwitchingEnabled ? pendingStudioBufferEditorView() : null;
         return {
@@ -15311,9 +16510,9 @@
           diskRevision: fileBackedDiskRevision,
           resourceDir: getCurrentResourceDirValue(),
           editorView,
-          rightView: normalizeRightViewValue(rightView),
+          rightView: normalizeRightViewValue(bufferSwitchingEnabled ? getStudioRunWorkingOwner()?.rightView ?? getDocumentPreviewFollowOwner()?.rightView ?? rightView : rightView),
           editorLanguage,
-          followLatest,
+          followLatest: studioRunFollowingAvailable() && getStudioSelectedBuffer()?.role === "prompt" ? latestResponseFollowingEnabled !== false : followLatest,
           responseHistoryIndex,
           selectionStart: pendingEditorView?.selectionStart ?? (typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : 0),
           selectionEnd: pendingEditorView?.selectionEnd ?? (typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : 0),
@@ -15420,13 +16619,15 @@
       }
 
       function applyPersistedWorkspaceState(state, options) {
-        if (!shouldRestorePersistedWorkspaceState(state)) return false;
+        const verified = options?.verifiedBuffer === true;
+        if (!verified && !shouldRestorePersistedWorkspaceState(state)) return false;
         const nextSourceState = normalizeWorkspaceSourceState(state.sourceState);
-        const nextResourceDir = normalizeStudioResourceDirValue(typeof state.resourceDir === "string" ? state.resourceDir : "");
+        const dir = typeof state.resourceDir === "string" ? state.resourceDir : "";
+        const nextResourceDir = verified ? dir : normalizeStudioResourceDirValue(dir);
         const currentBaselineText = fileBackedBaselineText;
         const currentDiskRevision = fileBackedDiskRevision;
         const persistedDiskRevision = normalizeStudioDiskRevision(state.diskRevision);
-        if (resourceDirInput) resourceDirInput.value = nextResourceDir;
+        setStudioResourceDirValue(nextResourceDir, verified);
         setEditorText(state.text, { preserveScroll: false, preserveSelection: false });
         setSourceState(nextSourceState, {
           metadataAssociations: options && options.metadataAssociations,
@@ -15437,7 +16638,7 @@
             || (currentBaselineText !== null && state.text === currentBaselineText ? currentDiskRevision : null);
         }
         if (resourceDirInput && nextResourceDir) {
-          resourceDirInput.value = nextResourceDir;
+          setStudioResourceDirValue(nextResourceDir, verified);
           updateSourceBadge();
         }
         const detectedPersistedPathLanguage = detectLanguageFromName(nextSourceState.path || nextSourceState.label || "");
@@ -15483,6 +16684,438 @@
         } finally { window.clearTimeout(timeout); }
       }
 
+      function documentHostingProof(bufferId) {
+        if (!documentHostingEnabled) return null;
+        const authority = documentHostingRetired ? { ok: false, message: "This Document has moved; use its destination editor." } : bufferRecoveryClient?.hostingAuthority(bufferId);
+        return { ...(authority || { ok: false }), capability: document.body.dataset.bufferCapability };
+      }
+      function documentHostingSaveAffectsBuffer(bufferId) {
+        return Boolean(bufferId && (documentHostingFilePreparationBufferId === bufferId || documentHostingSaveResolutionBufferId === bufferId
+          || [...pendingSaveOperations.values()].some(operation => operation.hosting?.bufferId === bufferId)
+          || bufferRecoveryClient?.pendingHostingSaves().some(save => save.bufferId === bufferId)));
+      }
+      function documentHostingMetadataProof(key) {
+        const matches = bufferRecoveryClient?.snapshot()?.buffers.filter(b => b.metadata.scratchpadKey === key || b.metadata.reviewNotesKey === key || describeStudioDocument(b.sourceState).key === key) || [];
+        const entry = matches.length === 1 ? matches[0] : null;
+        return entry ? documentHostingProof(entry.id) : { ok: false, capability: document.body.dataset.bufferCapability };
+      }
+      function syncDocumentHostingReadiness() {
+        if (!documentHostingEnabled) return;
+        const entry = getStudioSelectedBuffer(), proof = documentHostingProof(entry?.id);
+        const ready = Boolean(proof?.ok && documentHostingGeneration && ws?.readyState === WebSocket.OPEN
+          && !bufferRecoveryInitializing && !bufferBindingInProgress && !bufferPageClosed
+          && documentHostingDomId === entry?.id && ["source", "label", "path", "draftId"].every(key => sourceState[key] === entry.sourceState[key])
+          && getCurrentResourceDirValue() === entry.resourceDir);
+        sourceTextEl.readOnly = !ready; sourceTextEl.setAttribute("aria-readonly", String(!ready));
+        if (documentHostingReady !== ready) {
+          documentHostingReady = ready;
+          renderReviewNotesList();
+          if (scratchpadTextEl) scratchpadTextEl.readOnly = !ready || !studioMetadataKeyCanEdit(scratchpadLoadedKeys, scratchpadAssociation?.key);
+          if (!ready) for (const textarea of document.querySelectorAll("#reviewNotesList textarea")) textarea.readOnly = true;
+          if (ready) {
+            flushScratchpadPersistence(); flushReviewNotesPersistence();
+            renderSourcePreview();
+          }
+        }
+        const locked = documentHostingSaveAffectsBuffer(entry?.id);
+        if (locked !== documentHostingMetadataLocked) {
+          documentHostingMetadataLocked = locked;
+          updateScratchpadUi(); updateReviewNotesUi(); renderReviewNotesList();
+        }
+        syncDocumentHostingControls();
+      }
+      function syncStudioDocumentDestinations(copy, launch) {
+        if (!studioDocumentDestinationsSection) return;
+        const destinations = [...(copy.destinations || []), ...(launch?.destinations || [])];
+        const signature = JSON.stringify(destinations.map(d => [d.operationId, d.kind, d.bufferId]));
+        if (studioDocumentDestinationsSection.dataset.signature !== signature) {
+          studioDocumentDestinationsSection.dataset.signature = signature;
+          studioDocumentDestinationsSection.replaceChildren();
+          for (const destination of destinations) {
+            const button = makeStudioUiRefreshElement("button", "studio-buffer-menu-item");
+            const label = destination.kind === "copy" ? "Copied Document" : destination.kind === "move" ? "Moved Document" : destination.kind === "blank" ? "New Document" : "Opened Document";
+            button.id = "studioDestination-" + destination.operationId; button.type = "button";
+            button.textContent = label + " · " + destination.bufferId.slice(-8);
+            button.title = "Show this retained Document's current owner. Disconnected editors may contain newer work; resuming requires consent.";
+            button.addEventListener("click", event => { if (event.detail > 1) return; closeStudioBufferActionMenus(); closeStudioUiRefreshMenus(); void documentHostingController.openDestination(destination); });
+            const item = makeStudioUiRefreshElement("div", "studio-refresh-menu-item"); item.append(button); studioDocumentDestinationsSection.append(item);
+          }
+        }
+        const group = studioDocumentDestinationsSection.parentElement;
+        if (group) group.hidden = !destinations.length;
+        for (const button of studioDocumentDestinationsSection.querySelectorAll("button")) button.disabled = !documentHostingGeneration || wsState !== "Ready" || uiBusy || studioModalBlocksDraftAction();
+      }
+      function syncDocumentHostingControls() {
+        if (!documentHostingEnabled || !documentHostingController) return;
+        const copy = documentHostingController.copyState(), active = documentHostingController.active();
+        const selected = getStudioSelectedBuffer();
+        const available = documentHostingReady && !documentHostingSaveResolution && !uiBusy && !pendingSaveOperations.size && !studioModalBlocksDraftAction();
+        const update = (id, disabled, label) => { const button = document.getElementById(id); if (button) { button.disabled = disabled; if (label) button.textContent = label; } };
+        update("studioMoveDocumentBtn", !available || selected?.role !== "document" || Boolean(active));
+        update("studioCopyDocumentBtn", copy.busy || (copy.record ? !documentHostingGeneration : !available || Boolean(active)), copy.record ? "Recheck copy attempt" : "Copy to new window");
+        update("studioForgetCopyBtn", !copy.record);
+        const launch = documentHostingController.launchState?.();
+        update("studioRecheckLaunchBtn", !launch?.record || launch.busy || !documentHostingGeneration);
+        update("studioForgetLaunchBtn", !launch?.record || launch.busy);
+        const opening = documentOpenController?.state();
+        update("studioRecheckOpenBtn", !opening?.record || opening.busy || opening.cancelling || !documentHostingGeneration);
+        update("studioCancelOpenBtn", !opening?.record || opening.cancelling || !documentHostingGeneration);
+        for (const id of ["studioRecheckOpenBtn", "studioCancelOpenBtn", "studioDownloadOpenBtn"]) {
+          const button = document.getElementById(id); if (button) button.hidden = !opening?.record && !opening?.error;
+        }
+        if (openCompanionBtn) {
+          openCompanionBtn.textContent = launch?.record?.request.kind === "blank" ? "Find new Document window" : "New Document window";
+          openCompanionBtn.title = "Open a new, blank Document window.";
+          openCompanionBtn.disabled = !available || Boolean(active) || Boolean(launch?.busy);
+        }
+        update("studioCancelMoveBtn", !active);
+        if (sourceOpenCurrentTextCopyTabBtn) {
+          sourceOpenCurrentTextCopyTabBtn.textContent = copy.record ? "Find retained text copy" : "Copy to new window";
+          sourceOpenCurrentTextCopyTabBtn.title = copy.record ? "Recheck the original copy attempt without creating a duplicate." : "Make an independent snapshot of current text. Confirmed copies remain in File.";
+        }
+        syncStudioDocumentDestinations(copy, launch);
+        syncStudioOperationNotices();
+      }
+      async function requestDocumentHosting(body) {
+        const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+          const response = await fetch("/document-hosting?token=" + encodeURIComponent(getToken()), {
+            method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json", "X-Studio-Buffer-Capability": document.body.dataset.bufferCapability },
+            body: JSON.stringify(body),
+          });
+          return await response.json();
+        } finally { clearTimeout(timeout); }
+      }
+      async function settleDocumentHostingMetadata(bufferId) {
+        const entry = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.id === bufferId);
+        if (!entry) throw new Error("The Document is no longer available.");
+        const keys = new Set([describeStudioDocument(entry.sourceState).key, entry.metadata.scratchpadKey, entry.metadata.reviewNotesKey].filter(Boolean));
+        if (keys.has(scratchpadAssociation?.key)) flushScratchpadPersistence();
+        if (keys.has(reviewNotesAssociation?.key)) flushReviewNotesPersistence();
+        await Promise.all([...scratchpadWriteChains, ...reviewNotesWriteChains].filter(([key]) => keys.has(key)).map(([, p]) => p.catch(() => {})));
+        if ((keys.has(scratchpadAssociation?.key) && scratchpadDirty) || (keys.has(reviewNotesAssociation?.key) && reviewNotesDirty)
+            || [...keys].some(key => scratchpadUnsyncedRecords.has(key) || reviewNotesUnsyncedRecords.has(key))) throw new Error("Finish saving this Document's comments and scratchpad before changing its backing or host.");
+      }
+      function hostedSaveMetadataCanTransfer(bufferId) {
+        return documentHostingMetadataIsIdle(bufferId)
+          && studioMetadataKeyIsLoaded(scratchpadLoadedKeys, scratchpadAssociation?.key)
+          && studioMetadataKeyIsLoaded(reviewNotesLoadedKeys, reviewNotesAssociation?.key);
+      }
+      function retireConfirmedHostingSaveRequests(claims, automaticOperationId) {
+        for (const [requestId, operation] of pendingSaveOperations) {
+          const id = operation.hosting?.operationId;
+          if (!id || (id !== automaticOperationId && !claims.some(claim => claim.operationId === id))) continue;
+          settledHostingSaveRequests.set(requestId, id);
+          while (settledHostingSaveRequests.size > 128) settledHostingSaveRequests.delete(settledHostingSaveRequests.keys().next().value);
+          abandonPendingSaveRequest(requestId);
+        }
+      }
+      function resolveDocumentHostingSave(options = {}) {
+        if (documentHostingSaveResolution) return documentHostingSaveResolution;
+        if (!documentHostingEnabled || !bufferRecoveryClient || !documentHostingGeneration || documentHostingRetired || studioModalBlocksDraftAction()) {
+          setStatus("Keep the current text and recheck the disk save when this editor is available.", "warning"); return Promise.resolve();
+        }
+        const client = bufferRecoveryClient, generation = documentHostingGeneration, bufferId = client.snapshot().selectedBufferId;
+        const facts = () => JSON.stringify([bufferConnectionGeneration, editorContentGeneration, editorSourceGeneration, sourceTextEl.value,
+          sourceState, fileBackedBaselineText, fileBackedDiskRevision, getCurrentResourceDirValue(), editorView, rightView,
+          sourceTextEl.selectionStart, sourceTextEl.selectionEnd, sourceTextEl.selectionDirection, sourceTextEl.scrollTop, scratchpadAssociationGeneration,
+          reviewNotesAssociationGeneration, scratchpadText, reviewNotes]);
+        const before = facts(); let decision = null;
+        const current = () => !bufferPageClosed && client === bufferRecoveryClient && generation > 0 && generation === documentHostingGeneration
+          && bufferId === client.snapshot().selectedBufferId && facts() === before && !studioModalBlocksDraftAction(decision);
+        documentHostingSaveResolutionBufferId = bufferId;
+        syncDocumentHostingReadiness();
+        documentHostingSaveResolution = (async () => {
+          try {
+            captureStudioBufferTransientState(); persistWorkspaceStateNow(); await client.settled();
+            const checked = await client.retry(current);
+            if (!checked.ok || !current()) throw new Error(checked.message || "The editor changed while checking its save. Current work was kept.");
+            // A read proving a successful write may retire its pending spinner,
+            // but an unchanged GET with no receipt never proves a failed write.
+            const observed = documentHostingLastRemote?.pendingSaves || [];
+            retireConfirmedHostingSaveRequests(observed, options.automaticOperationId);
+            const record = client.pendingHostingSaves().find(save => save.bufferId === bufferId
+              && (!options.automaticOperationId || save.operationId === options.automaticOperationId));
+            if (!record) {
+              setStatus(pendingSaveOperations.size ? "No retained successful save is visible yet. The request may still be pending; keep this tab and recheck."
+                : client.pendingHostingSaves().length ? "Another buffer has a retained save. Select that buffer to resolve it."
+                : "Recovery is acknowledged; no disk-save outcome remains pending.", pendingSaveOperations.size ? "warning" : "success"); return;
+            }
+            const entry = client.snapshot().buffers.find(b => b.id === bufferId);
+            const changedPath = entry.sourceState.path !== record.path;
+            let canAttach = documentHostingMetadataIsIdle(bufferId) && (!changedPath || hostedSaveMetadataCanTransfer(bufferId));
+            let metadata = null, blocked = "Metadata must be loaded and fully saved before changing its association.";
+            if (changedPath && canAttach) {
+              metadata = await requestDocumentHosting({ ...client.hostingAuthority(bufferId), operation: "save-metadata", operationId: record.operationId });
+              if (!current()) throw new Error("The editor changed while checking metadata. All copies were kept.");
+              if (!metadata.ok) { canAttach = false; blocked = metadata.message || blocked; }
+              else if (!metadata.prepared && (metadata.source?.scratchpadText !== scratchpadText
+                || JSON.stringify(cloneReviewNotes(metadata.source?.reviewNotes)) !== JSON.stringify(cloneReviewNotes(reviewNotes)))) {
+                canAttach = false; blocked = "The saved source metadata differs from this browser's notes. Keep the current backing and preserve both copies before retrying.";
+              }
+            }
+            const conflict = Boolean(metadata?.conflict && !metadata.prepared);
+            let choice = canAttach && !conflict && options.automaticOperationId ? true : null;
+            if (options.automaticOperationId && (!canAttach || conflict)) {
+              setStatus("The file was saved, but its backing was not attached. " + (conflict ? "The destination already has different notes. " : blocked + " ")
+                + "Use Resolve disk save; current text and both metadata copies were kept.", "warning"); return;
+            }
+            if (!options.automaticOperationId) {
+              const waiting = openStudioDecision({ mode: "confirm", title: "Resolve successful disk save",
+                message: "The server saved " + record.path + ". Current editor text will NOT be replaced and the disk file will NOT be deleted. "
+                  + (canAttach ? (conflict ? "The destination has different notes. Explicitly use its scratchpad and comments, or keep the current backing. Your current notes remain with their original document; neither set is overwritten."
+                    : (!changedPath ? "Attach its saved baseline, keeping this Document's existing scratchpad and comments. Later typing remains unsaved."
+                      : metadata?.prepared ? "The saved file's notes are already prepared. Attach its saved baseline; original notes and later typing are kept."
+                        : "Copy the current scratchpad and comments to the saved file and attach its baseline. Original notes are kept too. Later typing remains unsaved.")) : blocked + " Keep the current backing, or cancel to preserve all copies."),
+                confirmLabel: canAttach ? (conflict ? "Use destination notes" : "Attach saved baseline") : "Keep current backing", secondaryLabel: canAttach ? "Keep current backing" : undefined,
+                secondaryValue: "keep", cancelLabel: "Cancel" });
+              decision = studioDecisionState; choice = await waiting; decision = null;
+              if (!choice) return;
+              if (!canAttach) choice = "keep";
+            }
+            if (!current()) throw new Error("The editor changed during the save decision. Current work and the disk output were kept.");
+            const proof = client.hostingAuthority(bufferId); if (!proof.ok) throw new Error(proof.message);
+            if (choice === "keep") {
+              const discarded = await requestDocumentHosting({ ...proof, operation: "discard-save", operationId: record.operationId, confirmed: true });
+              if (!discarded.ok) throw new Error(discarded.message);
+              if (!current()) throw new Error("The disk file was retained; recheck recovery for the changed editor before continuing.");
+              const resumed = await client.retry(current); if (!resumed.ok) throw new Error(resumed.message);
+              setStatus("Kept this Document's current backing. The saved disk file was not changed or deleted.", "success");
+            } else {
+              if (!documentHostingMetadataIsIdle(bufferId) || (changedPath && !hostedSaveMetadataCanTransfer(bufferId))) throw new Error("Metadata changed; the saved backing was not attached.");
+              if (changedPath) {
+                if (!metadata?.prepared) {
+                  const prepared = await requestDocumentHosting({ ...proof, operation: "save-metadata", operationId: record.operationId,
+                    choice: conflict ? "destination" : "carry", metadataRevision: metadata?.metadataRevision });
+                  if (!prepared.ok) throw new Error(prepared.message || "Metadata could not be prepared. Keep both copies.");
+                }
+                if (!current()) throw new Error("Metadata was prepared, but the editor changed. Recheck this retained save before attaching it.");
+                const refreshed = await client.retry(current);
+                if (!refreshed.ok || !current()) throw new Error(refreshed.message || "Recheck the saved metadata before attaching its backing.");
+              }
+              const attached = client.attachHostingSave(record.operationId);
+              if (!attached.ok) throw new Error(attached.message);
+              // Bind the chosen model synchronously before any authority callback
+              // can enable an editor still displaying the previous backing.
+              bindSelectedStudioBuffer({ focusEditor: false }); persistWorkspaceStateNow(); await client.settled();
+              if (client.pendingHostingSaves().some(save => save.operationId === record.operationId) || !client.hostingAuthority(bufferId).ok) {
+                throw new Error("The saved baseline is kept locally, but recovery is not acknowledged. Keep this tab and recheck copies before closing.");
+              }
+              setStatus("Attached the saved baseline without replacing later typing. The disk file was not rewritten.", "success");
+            }
+          } catch (error) { setStatus(error.message || "The save outcome could not be resolved. Keep current work and recheck.", "warning"); }
+        })().finally(() => { documentHostingSaveResolution = null; documentHostingSaveResolutionBufferId = null; syncDocumentHostingReadiness(); });
+        return documentHostingSaveResolution;
+      }
+      function documentHostingMetadataIsIdle(bufferId) {
+        const entry = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.id === bufferId);
+        if (!entry) return false;
+        const keys = new Set([describeStudioDocument(entry.sourceState).key, entry.metadata.scratchpadKey, entry.metadata.reviewNotesKey].filter(Boolean));
+        return !(keys.has(scratchpadAssociation?.key) && scratchpadDirty) && !(keys.has(reviewNotesAssociation?.key) && reviewNotesDirty)
+          && ![...keys].some(key => scratchpadUnsyncedRecords.has(key) || reviewNotesUnsyncedRecords.has(key)
+            || scratchpadWriteChains.has(key) || reviewNotesWriteChains.has(key));
+      }
+      function runStudioEditorSourceMutation(apply, extraCurrent = () => true) {
+        if (!documentHostingEnabled) return apply();
+        const consent = captureEditorAsyncConsent();
+        return applyDocumentHostingReplacement(consent,
+          () => editorAsyncConsentIsCurrent(consent) && extraCurrent() && !studioModalBlocksDraftAction(),
+          apply, message => setStatus(message, "warning"));
+      }
+      async function applyDocumentHostingReplacement(consent, isCurrent, apply, refused) {
+        try {
+          const ready = await prepareDocumentHostingReplacement(consent.bufferId, isCurrent);
+          if (!isCurrent() || !ready()) throw new Error("The editor changed while preparing its replacement. Current work was kept.");
+          return apply() !== false;
+        } catch (error) { refused(error.message || "The replacement could not be prepared. Current work was kept."); return false; }
+      }
+      async function prepareDocumentHostingReplacement(bufferId, isCurrent) {
+        if (!documentHostingEnabled) return isCurrent;
+        const client = bufferRecoveryClient, generation = documentHostingGeneration;
+        const saving = () => documentHostingFilePreparationBufferId === bufferId
+          || [...pendingSaveOperations.values()].some(operation => operation.hosting?.bufferId === bufferId);
+        const current = () => client && client === bufferRecoveryClient && generation > 0 && generation === documentHostingGeneration
+          && !documentHostingRetired && !documentHostingSaveResolution && isCurrent() && !saving();
+        if (!current()) throw new Error("The editor changed or has a pending save. Current work was kept.");
+        await settleDocumentHostingMetadata(bufferId);
+        if (!current()) throw new Error("The editor changed while its metadata was saving. Current work was kept.");
+        const proof = client.hostingAuthority(bufferId);
+        if (!proof.ok) throw new Error(proof.message || "Document ownership is not ready.");
+        const remote = await requestBufferRecovery("GET");
+        if (!current() || !remote.ok || remote.revision !== proof.expectedRevision || remote.documents?.[bufferId] !== proof.documentEpoch) {
+          throw new Error("Document ownership changed while preparing the replacement. Recheck recovery; current work was kept.");
+        }
+        if (remote.pendingSaves?.some(save => save.bufferId === bufferId)) throw new Error("This Document has an unresolved disk save. Resolve or explicitly discard its retained save outcome before replacing its source.");
+        // The caller checks this immediately before mutation: a late producer
+        // between the awaits and its continuation must revoke consent too.
+        return () => {
+          const latest = client.hostingAuthority(bufferId);
+          return Boolean(current() && documentHostingMetadataIsIdle(bufferId) && latest.ok
+            && latest.documentEpoch === proof.documentEpoch && latest.expectedRevision === proof.expectedRevision);
+        };
+      }
+      async function prepareDocumentHosting(direction) {
+        if (!bufferRecoveryClient || !documentHostingGeneration || documentHostingRetired || documentHostingSaveResolution || bufferBindingInProgress || pendingSaveOperations.size
+            || pendingEditorRefresh || pendingPiEditorDraftSnapshots.size || studioModalBlocksDraftAction()) throw new Error("Finish the current editor operation first.");
+        const consent = direction === "incoming" ? null : captureEditorAsyncConsent();
+        const state = bufferRecoveryClient.snapshot();
+        await settleDocumentHostingMetadata(direction === "incoming" ? state.buffers.find(b => b.role === "document")?.id : state.selectedBufferId);
+        if (consent && !editorAsyncConsentIsCurrent(consent)) throw new Error("The editor changed; retry the action explicitly.");
+        captureStudioBufferTransientState();
+        persistWorkspaceStateNow(); await bufferRecoveryClient.settled();
+        if (consent && !editorAsyncConsentIsCurrent(consent)) throw new Error("The editor changed; retry the action explicitly.");
+      }
+      async function setupDocumentHosting() {
+        const helpers = await import("/buffer-modules/studio-document-host-client.js?token=" + encodeURIComponent(getToken()));
+        documentHostingCanCloseRetired = () => helpers.studioDocumentRetiredViewCanClose({
+          retired: documentHostingRetired, adoptionConfirmed: documentHostingRetirementAdopted,
+          editorText: sourceTextEl.value, snapshot: bufferRecoveryClient?.snapshot(), backup: bufferRecoveryClient?.handoffBackup(),
+          boundBufferId: documentHostingDomId, editorSourceState: sourceState, editorResourceDir: getCurrentResourceDirValue(),
+          editorBaselineText: fileBackedBaselineText, editorDiskRevision: fileBackedDiskRevision,
+          metadataPending: hasUnsyncedStudioMetadata() || scratchpadWriteChains.size || reviewNotesWriteChains.size
+            || scratchpadAssociation || reviewNotesAssociation || scratchpadText || reviewNotes.length,
+          operationPending: uiBusy || pendingSaveOperations.size || pendingEditorRefresh || pendingPiEditorDraftSnapshots.size || studioModalBlocksDraftAction()
+            || documentHostingController?.needsUnloadConfirmation() || documentOpenController?.active() || documentHostingSaveResolution,
+        });
+        documentHostingController = helpers.createStudioDocumentHostController({
+          workspaceId: studioTabStateId, full: !isEditorOnlyMode, client: () => bufferRecoveryClient,
+          copyStorage: { getItem: key => window.sessionStorage.getItem(key), setItem: (key, value) => window.sessionStorage.setItem(key, value), removeItem: key => window.sessionStorage.removeItem(key) },
+          confirmCopy: (title, message) => openStudioDecision({ mode: "confirm", title, message, confirmLabel: "Forget tracking", cancelLabel: "Keep tracking", destructive: true }),
+          generation: () => documentHostingGeneration, request: requestDocumentHosting,
+          confirmResume: (title, message) => openStudioDecision({ mode: "confirm", title, message, confirmLabel: "Reopen same Document", cancelLabel: "Cancel" }),
+          selectOwner: bufferId => {
+            const state = bufferRecoveryClient?.snapshot();
+            return Boolean(state?.buffers.some(b => b.id === bufferId) && (state.selectedBufferId === bufferId || selectStudioBuffer(bufferId, { focusEditor: true })));
+          },
+          launch: {
+            confirm: (title, message) => openStudioDecision({ mode: "confirm", title, message, confirmLabel: title.startsWith("Forget") ? "Forget tracking" : "Reopen same Document", cancelLabel: "Cancel" }),
+            open: (url, resumed) => { const target = new URL(url, window.location.href); if (resumed) target.searchParams.set("resumeAcknowledged", "1"); openStudioTabDirect(target.href); },
+            request: async (body, interactive) => {
+              let result = await requestDocumentHosting(body);
+              const grant = getStudioResourceGrantRequest({ studioPayload: result });
+              if (grant && interactive) {
+                const consent = captureEditorAsyncConsent();
+                const current = () => { const proof = bufferRecoveryClient?.hostingAuthority(body.bufferId); return editorAsyncConsentIsCurrent(consent) && proof?.ok && proof.documentEpoch === body.documentEpoch && proof.expectedRevision === body.expectedRevision; };
+                if (current() && await requestStudioResourceGrant(grant, { isCurrent: current }) && current()) result = await requestDocumentHosting(body);
+              }
+              return result;
+            },
+          },
+          busy: () => !documentHostingReady || documentOpenController?.active() || (isEditorOnlyMode ? uiBusy : !studioBuffersCanSwitch()) || pendingSaveOperations.size || studioModalBlocksDraftAction(),
+          prepare: prepareDocumentHosting, status: setStatus, changed: syncDocumentHostingReadiness,
+          capture: () => { captureStudioBufferTransientState(); persistWorkspaceStateNow(); },
+          depart: bufferId => retireStudioBufferSourceView(bufferId),
+          confirm: (title, message) => openStudioDecision({ mode: "confirm", title, message, confirmLabel: "Replace Document", cancelLabel: "Cancel" }),
+          domCurrent: proof => {
+            const selected = proof.state.buffers.find(b => b.id === proof.state.selectedBufferId);
+            return !bufferPageClosed && documentHostingDomId === selected.id && (selected.id !== proof.bufferId
+              || (sourceTextEl.value === selected.text && JSON.stringify(sourceState) === JSON.stringify(selected.sourceState)));
+          },
+          bind: () => { bindSelectedStudioBuffer(); documentHostingDomId = bufferRecoveryClient.snapshot().selectedBufferId; syncDocumentHostingReadiness(); },
+          retire: () => {
+            documentHostingRetired = true; documentHostingRetirementAdopted = false; clearEditorAsyncOperations();
+            const state = bufferRecoveryClient.snapshot(), entry = state.buffers.find(b => b.id === state.selectedBufferId);
+            sourceTextEl.value = entry.text; sourceState = { ...entry.sourceState };
+            sourcePreviewEl?.replaceChildren(); sourceHighlightEl?.replaceChildren();
+            setStudioResourceDirValue(entry.resourceDir);
+            fileBackedBaselineText = entry.baselineText; fileBackedDiskRevision = entry.diskRevision;
+            scratchpadAssociation = reviewNotesAssociation = null; scratchpadText = ""; reviewNotes = [];
+            documentHostingDomId = entry.id; syncDocumentHostingReadiness();
+          },
+          closeRetired: () => {
+            if (!documentHostingRetired) return;
+            documentHostingRetirementAdopted = true; // Controller already verified and resolved the exact source backup.
+            if (documentHostingCanCloseRetired()) window.close();
+            else setStatus("Document moved, but this tab has remaining local work. Keep it open or export that work before closing.", "warning");
+          },
+          open: (url, resumed) => { const target = new URL(url, window.location.href); if (resumed) target.searchParams.set("resumeAcknowledged", "1"); openStudioTabDirect(target.href); },
+        });
+        const openingHelpers = await import("/buffer-modules/studio-document-open-client.js?token=" + encodeURIComponent(getToken()));
+        documentOpenController = openingHelpers.createStudioDocumentOpenController({
+          client: () => bufferRecoveryClient, generation: () => documentHostingGeneration,
+          request: requestDocumentHosting, status: setStatus, changed: syncDocumentHostingReadiness,
+          busy: () => documentHostingRetired || documentHostingSaveResolution || documentHostingController.operationPending(),
+          prepare: async (bufferId, current) => {
+            await settleDocumentHostingMetadata(bufferId);
+            if (!current()) throw new Error("The editor changed. Current work was kept.");
+            captureStudioBufferTransientState(); persistWorkspaceStateNow(); await bufferRecoveryClient.settled();
+            const ready = await prepareDocumentHostingReplacement(bufferId, current);
+            if (!ready()) throw new Error("The owning checkpoint changed before opening.");
+          },
+          capture: () => { captureStudioBufferTransientState(); persistWorkspaceStateNow(); },
+          domCurrent: () => {
+            const selected = getStudioSelectedBuffer();
+            return !bufferPageClosed && selected && documentHostingDomId === selected.id && sourceTextEl.value === selected.text
+              && JSON.stringify(sourceState) === JSON.stringify(selected.sourceState) && getCurrentResourceDirValue() === selected.resourceDir;
+          },
+          replace: bufferId => retireStudioBufferSourceView(bufferId),
+          bind: () => bindSelectedStudioBuffer({ focusEditor: false }),
+          reuse: async request => {
+            const result = await reuseHostedDocumentOwner(request.path, { sourcePath: request.sourcePath, resourceDir: request.resourceDir });
+            if (!result.handled) setStatus("The file owner is no longer available. Current work was kept; retry opening explicitly.", "warning");
+            return result.ok;
+          },
+        });
+        let menu = bufferSwitcherUi?.workspaceLayout
+          ? studioUiRefreshUi?.menus.find(item => item.name === "context") : bufferSwitcherUi?.loadMenu;
+        if (!menu) {
+          menu = makeStudioBufferActionMenu("studioDocumentHostBtn", "Document");
+          const strip = document.createElement("div"); strip.className = "studio-buffer-switcher"; strip.append(menu.anchor);
+          leftPaneEl.querySelector(".source-wrap").prepend(strip);
+        }
+        const action = (id, label, run) => {
+          const button = document.createElement("button"); button.id = id; button.type = "button"; button.className = "studio-buffer-menu-item"; button.textContent = label;
+          button.addEventListener("click", event => { if (event.detail > 1) return; menu.close(); Promise.resolve().then(run).catch(error => setStatus(error.message || "The outcome is uncertain; keep all copies.", "warning")); });
+          const target = ["studioMoveDocumentBtn", "studioCopyDocumentBtn"].includes(id) && menu.fileActionsSection ? menu.fileActionsSection : menu.menu;
+          if (target === menu.fileActionsSection) {
+            const item = makeStudioUiRefreshElement("div", "studio-refresh-menu-item"); item.append(button); target.append(item);
+          } else target.append(button);
+          return button;
+        };
+        action("studioCopyDocumentBtn", "Copy to new window", () => documentHostingController.copy());
+        action("studioMoveDocumentBtn", isEditorOnlyMode ? "Move to main window" : "Move to new window", () => documentHostingController.move());
+        // The legacy snapshot entry delegates to this same guarded Copy intent.
+        // Keep its handler/ID, but show only the ownership-aware File entry here.
+        if (bufferSwitcherUi?.workspaceLayout && sourceOpenCurrentTextCopyTabBtn) sourceOpenCurrentTextCopyTabBtn.hidden = true;
+        action("studioForgetCopyBtn", "Forget copy tracking…", () => documentHostingController.forgetCopy());
+        action("studioRecheckLaunchBtn", "Recheck / open editor request", () => documentHostingController.recheckLaunch());
+        action("studioForgetLaunchBtn", "Forget editor request tracking…", () => documentHostingController.forgetLaunch());
+        action("studioResolveSaveBtn", "Resolve disk save…", () => resolveDocumentHostingSave());
+        action("studioRecheckOpenBtn", "Recheck file opening", () => documentOpenController.recheck());
+        action("studioCancelOpenBtn", "Cancel pending opening", () => documentOpenController.cancel());
+        action("studioDownloadOpenBtn", "Download opening backup", () => {
+          const backup = bufferRecoveryClient?.openBackup(); if (!backup?.record && !backup?.error) return;
+          const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })), link = document.createElement("a");
+          link.href = url; link.download = "studio-before-file-open.json"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
+        const destinationsGroup = appendStudioUiRefreshMenuSection(menu.menu, "Document windows", []);
+        studioDocumentDestinationsSection = makeStudioUiRefreshElement("div", "studio-refresh-menu-destinations");
+        destinationsGroup.append(studioDocumentDestinationsSection);
+        action("studioFindMovedDocumentBtn", "Find moved Document", () => documentHostingController.openMoved());
+        action("studioRecheckMoveBtn", "Recheck move", () => documentHostingController.recheck());
+        action("studioCancelMoveBtn", "Cancel pending move", () => documentHostingController.cancel());
+        action("studioDownloadHandoffBtn", "Download handoff backup", () => {
+          const backup = bufferRecoveryClient?.handoffBackup(); if (!backup?.record && !backup?.error) return setStatus("No handoff backup is pending.");
+          const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }), url = URL.createObjectURL(blob), link = document.createElement("a");
+          link.href = url; link.download = "studio-document-handoff.json"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
+        action("studioDiscardHandoffBtn", "Discard handoff backup…", async () => {
+          const backup = bufferRecoveryClient?.handoffBackup()?.record; if (!backup) return;
+          if (await openStudioDecision({ mode: "confirm", title: "Discard this backup?", message: "This removes the noneditable source backup, not the destination Document. Continue only if this copy is disposable or already kept elsewhere.", confirmLabel: "Discard backup", cancelLabel: "Keep" })) {
+            const result = bufferRecoveryClient.discardHandoff(backup.moveId, true); setStatus(result.ok ? "Backup discarded." : result.message, result.ok ? "success" : "warning");
+          }
+        });
+        syncDocumentHostingReadiness();
+        await documentHostingController.ready(documentHostingLastRemote);
+        if (bufferRecoveryClient?.openBackup()?.record) await documentOpenController.recheck();
+      }
+      function waitForDocumentHostingLease() {
+        if (documentHostingGeneration) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => { documentHostingWaiters.delete(done); reject(new Error("The owning editing connection did not become ready. Keep recovery copies and reload.")); }, 15000);
+          const done = () => { clearTimeout(timeout); resolve(); }; documentHostingWaiters.add(done);
+        });
+      }
       function captureBufferRecoveryInitializationOwner() {
         return {
           editor: captureEditorConsent(),
@@ -15527,12 +17160,12 @@
       function bufferRecoveryExtra() {
         return {
           view: { selectionDirection: (bufferSwitchingEnabled ? pendingStudioBufferEditorView()?.selectionDirection : null) ?? sourceTextEl.selectionDirection, previewScrollTop: bufferSwitchingEnabled ? studioBufferScrollPosition("source", sourcePreviewEl.scrollTop) : sourcePreviewEl.scrollTop,
-            ...(bufferSwitchingEnabled ? { rightScrollTop: studioBufferScrollPosition("right", critiqueViewEl.scrollTop) } : {}) },
+            ...(bufferSwitchingEnabled ? { rightScrollTop: getStudioRunWorkingOwner()?.rightScrollTop ?? getDocumentPreviewFollowOwner()?.rightScrollTop ?? studioBufferScrollPosition("right", critiqueViewEl.scrollTop) } : {}) },
           metadata: { annotationsEnabled, ...getCurrentMetadataAssociationSnapshot() },
         };
       }
       function getStudioSelectedBuffer() {
-        const state = bufferSwitchingEnabled ? bufferRecoveryClient?.snapshot() : null;
+        const state = (bufferSwitchingEnabled || documentHostingEnabled) ? bufferRecoveryClient?.snapshot() : null;
         return state?.buffers.find(entry => entry.id === state.selectedBufferId) || null;
       }
       function isStudioDocumentBufferView() {
@@ -15593,9 +17226,13 @@
         });
       }
       function captureStudioBufferTransientState() {
+        rememberDocumentPreviewFollowScroll();
         const current = getStudioSelectedBuffer();
         if (!current) return;
         bufferTransientStates.set(current.id, {
+          ...bufferTransientStates.get(current.id),
+          ...(bufferTransientStates.get(current.id)?.runFollowingView ? { runFollowingView: { rightView,
+            rightScrollTop: studioBufferScrollPosition("right", critiqueViewEl.scrollTop) } } : {}),
           sourceGeneration: bufferTransientStates.get(current.id)?.sourceGeneration ?? editorSourceGeneration,
           linkedPiEditorDraftSnapshot: normalizePiEditorDraftSnapshot(linkedPiEditorDraftSnapshot),
           activityTracking: { requestId: activityTrackingRequestId, ownsWorkingView: activityTrackingOwnsWorkingView },
@@ -15604,6 +17241,9 @@
             traceScrollOwner: studioBufferTraceScrollOwner(),
             // An arrival while Prompt is active may not have rendered yet.
             responseScrollPending: pendingResponseScrollReset || bufferTransientStates.get(current.id)?.responseScrollPending === true,
+          } : ((rightView === "preview" || rightView === "markdown") || rightView === "trace") ? {
+            // The Document's own reading identity, kept apart from the Prompt's (Sol).
+            historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false },
           } : {}),
         });
       }
@@ -15647,23 +17287,27 @@
         bufferViewRestore = null;
         try {
           clearEditorAsyncOperations();
+          if (typeof clearStudioReaderReturnScroll === "function") clearStudioReaderReturnScroll();
           activityTrackingOwnsWorkingView = false;
           activityTrackingRequestId = "";
           pendingResponseScrollReset = false;
           fileBrowserLoadNonce++; // Late lists must not repaint another buffer's Files view.
           fileBrowserState = { ...fileBrowserState, contextKey: "", loaded: false, loading: false };
-          if (resourceDirInput) resourceDirInput.value = entry.resourceDir;
+          setStudioResourceDirValue(entry.resourceDir, documentHostingEnabled);
           setEditorText(entry.text, { preserveScroll: false, preserveSelection: false, updatePreview: false });
           setSourceState(entry.sourceState, { metadataAssociations: entry.metadata });
+          if (documentHostingEnabled) setStudioResourceDirValue(entry.resourceDir, true);
           fileBackedBaselineText = entry.sourceState.path ? entry.baselineText : null;
           fileBackedDiskRevision = entry.sourceState.path ? entry.diskRevision : null;
           if (!bufferTransientStates.has(entry.id)) bufferTransientStates.set(entry.id, { sourceGeneration: editorSourceGeneration, linkedPiEditorDraftSnapshot: null });
           linkedPiEditorDraftSnapshot = normalizePiEditorDraftSnapshot(bufferTransientStates.get(entry.id).linkedPiEditorDraftSnapshot);
           setEditorLanguage(entry.view.editorLanguage);
           setAnnotationsEnabled(typeof entry.metadata.annotationsEnabled === "boolean" ? entry.metadata.annotationsEnabled : initialAnnotationsEnabled, { silent: true });
-          followLatest = entry.role === "prompt" && entry.view.followLatest;
-          if (followSelect) followSelect.value = followLatest ? "on" : "off";
-          const resumeQueuedResponse = entry.role === "prompt" && followLatest && queuedLatestResponse;
+          const runFollowPolicy = studioRunFollowingAvailable();
+          if (runFollowPolicy) ensureLatestResponseFollowingPreference();
+          followLatest = entry.role === "prompt" && (runFollowPolicy ? latestResponseFollowingEnabled !== false : entry.view.followLatest);
+          if (followSelect) followSelect.value = runFollowPolicy ? (latestResponseFollowingEnabled === false ? "off" : "on") : (followLatest ? "on" : "off");
+          const resumeQueuedResponse = !runFollowPolicy && entry.role === "prompt" && followLatest && queuedLatestResponse;
           const savedHistory = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.historySelection : null;
           const savedTraceOwner = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.traceScrollOwner : null;
           const savedResponseScrollPending = entry.role === "prompt" && bufferTransientStates.get(entry.id)?.responseScrollPending === true;
@@ -15674,9 +17318,10 @@
           let appliedQueuedResponse = false;
           if (entry.role === "prompt" && responseHistory.length) {
             const savedIndex = savedHistory?.id ? responseHistory.findIndex(item => item.id === savedHistory.id) : -1;
+            const preserveUnselected = runFollowPolicy && (savedHistory ? savedHistory.index : entry.view.responseHistoryIndex) < 0;
             responseHistoryIndex = resumeQueuedResponse ? responseHistory.length - 1 : (savedIndex >= 0 ? savedIndex
-              : Math.max(0, Math.min(responseHistory.length - 1, entry.view.responseHistoryIndex < 0 ? responseHistory.length - 1 : entry.view.responseHistoryIndex)));
-            if (savedHistory && savedHistory.id !== getSelectedHistoryItem()?.id) changedHistory = true;
+              : preserveUnselected ? -1 : Math.max(0, Math.min(responseHistory.length - 1, entry.view.responseHistoryIndex < 0 ? responseHistory.length - 1 : entry.view.responseHistoryIndex)));
+            if (savedHistory && savedHistory.id !== (getSelectedHistoryItem()?.id ?? null)) changedHistory = true;
             const applied = applySelectedHistoryItem({ resetScroll: resetResponseReading && (Boolean(resumeQueuedResponse) || changedHistory) });
             if (resumeQueuedResponse && applied) { queuedLatestResponse = null; appliedQueuedResponse = true; }
           } else if (resumeQueuedResponse && applyLatestPayload(resumeQueuedResponse, { resetScroll: resetResponseReading })) {
@@ -15686,11 +17331,25 @@
           // Empty history must also resolve the live fallback, rather than adopt
           // a historical context browsed while Document was selected.
           if (entry.role === "prompt") syncTraceForSelectedHistoryItem();
-          const savedActivity = entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.activityTracking : null;
+          const savedActivity = !runFollowPolicy && entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.activityTracking : null;
           const resumeActivity = savedActivity?.requestId && uiBusy && savedActivity.requestId === pendingRequestId;
           const retiredWorkingView = savedActivity?.ownsWorkingView && !resumeActivity && entry.view.rightView === "trace";
           const resumedWorkingView = resumeActivity && savedActivity.ownsWorkingView;
-          const nextRightView = retiredWorkingView ? "preview" : (resumedWorkingView ? "trace" : entry.view.rightView);
+          const savedRunView = runFollowPolicy && entry.role === "prompt" ? bufferTransientStates.get(entry.id)?.runFollowingView : null;
+          const nextRightView = documentPreviewFollowingView(entry, savedRunView?.rightView ?? (retiredWorkingView ? "preview" : (resumedWorkingView ? "trace" : entry.view.rightView)));
+          if (entry.role === "document" && ((nextRightView === "preview" || nextRightView === "markdown") || nextRightView === "trace") && responseHistory.length) {
+            // The Document reads its own response: its last one here, else its saved position,
+            // else whatever was selected. The Prompt's saved selection is untouched.
+            const savedDocumentHistory = bufferTransientStates.get(entry.id)?.historySelection;
+            const savedIndex = savedDocumentHistory?.id ? responseHistory.findIndex(item => item.id === savedDocumentHistory.id) : -1;
+            const storedIndex = entry.view.responseHistoryIndex;
+            const index = savedIndex >= 0 ? savedIndex
+              : (!savedDocumentHistory && storedIndex >= 0 && storedIndex < responseHistory.length ? storedIndex : responseHistoryIndex);
+            // Its own scroll (entry.view.rightScrollTop) is restored below; don't reset it.
+            if (index >= 0) responseHistoryIndex = index;
+            if (responseHistoryIndex >= 0) applySelectedHistoryItem({ resetScroll: false, render: false });
+            syncTraceForSelectedHistoryItem();
+          }
           const changedTrace = savedTraceOwner != null ? savedTraceOwner !== studioBufferTraceScrollOwner() : appliedQueuedResponse || changedHistory;
           const resetResponseScroll = Boolean(savedResponseScrollPending || appliedQueuedResponse || changedHistory || retiredWorkingView);
           const responseView = nextRightView === "preview" || nextRightView === "markdown";
@@ -15712,7 +17371,9 @@
           sourceTextEl.setSelectionRange(entry.view.selectionStart, entry.view.selectionEnd, entry.view.selectionDirection);
           sourceTextEl.scrollTop = entry.view.scrollTop;
           syncEditorHighlightScroll();
-          const restoreRightScroll = resetRightScroll ? 0 : (entry.view.rightScrollTop ?? 0);
+          const restoreRightScroll = getDocumentPreviewFollowOwner() ? documentPreviewFollowScrolls.get(entry.id) ?? 0
+            : savedRunView?.rightView === nextRightView ? savedRunView.rightScrollTop
+            : resetRightScroll ? 0 : (entry.view.rightScrollTop ?? 0);
           // Numeric offsets belong to the intended view/content at binding, not
           // whichever renderer eventually calls finishPreviewRender.
           bufferViewRestore = { bufferId: entry.id, editor: entry.view, source: entry.view.previewScrollTop, right: restoreRightScroll,
@@ -15722,6 +17383,7 @@
           scheduleStudioBufferScrollRestore(critiqueViewEl);
           if (options?.focusEditor) { setActivePane("left"); if (editorView === "markdown") sourceTextEl.focus({ preventScroll: true }); }
         } finally { bufferBindingInProgress = false; }
+        bufferRecoveryClient?.notifyHostingViewBound?.(entry.id);
         persistWorkspaceStateNow();
         syncActionButtons();
         return true;
@@ -15739,10 +17401,10 @@
         const result = bufferRecoveryClient.select(id);
         if (!result.ok) { setStatus(result.message, "warning"); return false; }
         bindSelectedStudioBuffer(options);
-        setStatus(isStudioDocumentBufferView() ? "Document selected. The Prompt is kept separately; nothing was sent." : "Returned to the same Prompt. Review it before Run.");
         return true;
       }
       function requireStudioPromptForSend() {
+        if (documentHostingEnabled && !documentHostingReady) { setStatus("The owning editor is not ready. Nothing was sent.", "warning"); return false; }
         if (!bufferSwitchingEnabled) return true;
         const state = bufferRecoveryClient?.snapshot(), selected = getStudioSelectedBuffer();
         if (!state || !selected) { setStatus("The experimental switcher is not ready. Resolve recovery before using Run.", "warning"); return false; }
@@ -15795,7 +17457,10 @@
         const button = bufferSwitcherUi?.addSelection;
         if (!button || bufferBindingInProgress) return;
         button.disabled = !studioBuffersCanAddSelection(true);
-        button.title = "Append selected Document editor text to Prompt with its source label. Keeps both drafts; does not save or send. Preview selections are not used.";
+        button.title = button.disabled
+          ? "Select text in the Document first."
+          : "Add the selected text to the Prompt.";
+        if (bufferSwitcherUi.selectionInfo) bufferSwitcherUi.selectionInfo.textContent = button.title;
       }
       function setupStudioSelectionAppendAction(button) {
         const setSourceActive = active => {
@@ -15822,7 +17487,10 @@
         for (const type of ["select", "keyup", "mouseup"]) sourceTextEl.addEventListener(type, () => sourceSelection());
         for (const type of ["focus", "pointerdown", "keydown"]) sourceTextEl.addEventListener(type, () => sourceSelection(true));
         document.addEventListener("pointerdown", event => {
-          if (event.target !== sourceTextEl && event.target !== button) setSourceActive(false);
+          // Opening the Add disclosure preserves an existing editor selection;
+          // it must never reclaim one revoked by a preview or another field.
+          const addControl = event.target === bufferSwitcherUi?.addMenu?.button || event.target === bufferSwitcherUi?.addDocument;
+          if (event.target !== sourceTextEl && event.target !== button && !addControl) setSourceActive(false);
         }, true);
         document.addEventListener("focusin", event => {
           if (event.target !== sourceTextEl && (event.target.matches?.("input, textarea, iframe, [contenteditable='true']")
@@ -15894,7 +17562,7 @@
       function studioDocumentAppendAvailability(ignoreModal = false) {
         const unavailable = message => ({ ok: false, message });
         if (!bufferSwitchingEnabled || !bufferRecoveryClient) return unavailable("Document copying is not enabled in this workspace.");
-        if (!isStudioDocumentBufferView()) return unavailable("Select Document to add its full editor text to Prompt.");
+        if (!isStudioDocumentBufferView()) return unavailable("Switch to Document first. This action appends its editor text to Prompt.");
         if (editorView !== "markdown") return unavailable("Switch Document to Editor to add its source text. Preview content is not copied.");
         if (!studioBuffersCanSwitch(ignoreModal) || sourceTextEl.readOnly || sourceTextEl.disabled || pendingStudioBufferEditorView()
             || pendingBufferDocumentOpen || pendingPiEditorLoad || pendingPiEditorLink || pendingPiEditorClear || pendingTerminalDocument || activeFileImport
@@ -15935,11 +17603,8 @@
         if (!bufferSwitcherUi?.addDocument || bufferBindingInProgress) return;
         const available = studioDocumentAppendAvailability(true), button = bufferSwitcherUi.addDocument;
         button.disabled = !available.ok;
-        button.title = available.ok ? "Append the full in-memory Document editor text, including unsaved edits. Keeps both drafts; does not save or send." : available.message;
-        const size = Number.isSafeInteger(available.addedCharacters) && Number.isSafeInteger(available.availableCharacters)
-          ? "Document: " + available.addedCharacters.toLocaleString() + " to add / " + available.availableCharacters.toLocaleString() + " available (UTF-16 units, label included)."
-          : "";
-        const description = size + (available.ok ? "" : (size ? " " : "") + available.message);
+        const description = available.ok ? "Add the whole Document to the Prompt." : available.message;
+        button.title = description;
         if (bufferSwitcherUi.documentInfo.textContent !== description) bufferSwitcherUi.documentInfo.textContent = description;
       }
       function setupStudioDocumentAppendAction(button) {
@@ -15999,6 +17664,130 @@
           if (captured) appendStudioDocumentToPrompt(captured);
         });
       }
+      function closeStudioBufferActionMenus() {
+        for (const menu of [bufferSwitcherUi?.addMenu, bufferSwitcherUi?.loadMenu, bufferSwitcherUi?.nameMenu, ...(bufferSwitcherUi?.viewMenus || [])]) menu?.close();
+      }
+      // A named file's own menu (Oliver, 9 Oct): the same file actions as Files' ⋯, plus Save As and
+      // Reload for the open file. Untitled text goes straight to Save As instead (filename click).
+      function setupStudioFileNameMenu() {
+        const nameButton = studioUiRefreshUi?.filenameButton, host = nameButton?.parentElement;
+        if (!nameButton || !host) return null;
+        const next = nameButton.nextSibling;
+        const pathEl = document.createElement("div"); pathEl.className = "studio-file-menu-path";
+        const item = (label, run) => {
+          const button = document.createElement("button"); button.type = "button"; button.textContent = label;
+          button.addEventListener("click", () => {
+            const path = sourceState?.path; nameMenu.close(true); if (!path) return;
+            // Report a failure (deleted file, refused permission) the way Files does (Sol).
+            Promise.resolve().then(() => run(path)).catch(error => {
+              if (!error?.studioCancelled) setStatus((error && error.message) ? error.message : String(error || "File action failed."), "warning");
+            });
+          });
+          return button;
+        };
+        const context = () => getHtmlPreviewResourceContextOptions();
+        const copy = item("Copy path", async path => {
+          const ok = await writeTextToClipboard(path); setStatus(ok ? "Copied path." : "Clipboard write failed.", ok ? "success" : "warning");
+        });
+        const reveal = item("Show in folder", path => revealPreviewLocalLink(studioLiteralPathToLinkRef(path), context()));
+        const follow = item("Follow changes", path => openPreviewDocumentInWatchedPreview(studioLiteralPathToLinkRef(path), context()));
+        const saveAs = item("Save As…", () => { if (saveAsBtn && !saveAsBtn.disabled) saveAsBtn.click(); });
+        const reload = item("Reload from disk", () => { if (refreshFromDiskBtn && !refreshFromDiskBtn.disabled) refreshFromDiskBtn.click(); });
+        const nameMenu = makeStudioBufferActionMenu("studioWorkspaceFilename", "This file", {
+          button: nameButton,
+          canOpen: () => Boolean(sourceState?.path) && !studioModalBlocksDraftAction(),
+          onOpen: () => {
+            pathEl.textContent = sourceState?.path || ""; pathEl.title = pathEl.textContent;
+            saveAs.disabled = !saveAsBtn || saveAsBtn.disabled; reload.disabled = !refreshFromDiskBtn || refreshFromDiskBtn.disabled;
+          },
+        });
+        nameMenu.menu.append(pathEl, copy, reveal, follow, saveAs, reload);
+        host.insertBefore(nameMenu.anchor, next);
+        return nameMenu;
+      }
+      function makeStudioBufferActionMenu(id, label, options = {}) {
+        // A disclosure with native buttons, not an ARIA menu with incomplete
+        // menuitem semantics. Tab, arrows, Escape and outside dismissal work.
+        const anchor = document.createElement("div"); anchor.className = "studio-buffer-menu-anchor";
+        const button = options.button || document.createElement("button"); button.id = id; button.type = "button";
+        if (!options.button) button.textContent = label + " ▾";
+        const menu = document.createElement("div"); menu.id = id + "Menu"; menu.className = "studio-buffer-menu"; menu.hidden = true;
+        menu.setAttribute("role", "group"); menu.setAttribute("aria-label", label);
+        button.setAttribute("aria-controls", menu.id); button.setAttribute("aria-expanded", "false");
+        anchor.append(button, menu);
+        const close = (restoreFocus = false) => {
+          const wasOpen = !menu.hidden;
+          menu.hidden = true; button.setAttribute("aria-expanded", "false");
+          if (wasOpen && restoreFocus) button.focus({ preventScroll: true });
+        };
+        const actions = () => Array.from(menu.querySelectorAll("button:not(:disabled)"));
+        const open = (last = false) => {
+          if (options.canOpen && !options.canOpen()) return;
+          closeStudioUiRefreshMenus(); closeStudioBufferActionMenus();
+          options.onOpen?.();
+          menu.hidden = false; button.setAttribute("aria-expanded", "true");
+          // Panes clip overflow. Keep the disclosure inside both its pane and
+          // the viewport, including when the compact strip wraps at narrow widths.
+          const pane = leftPaneEl.getBoundingClientRect(), origin = anchor.getBoundingClientRect();
+          const left = Math.max(8, pane.left + 8), right = Math.min(window.innerWidth - 8, pane.right - 8);
+          const width = Math.min(340, Math.max(0, right - left));
+          menu.style.width = width + "px";
+          menu.style.right = "auto";
+          menu.style.left = (Math.max(left, Math.min(origin.right - width, right - width)) - origin.left) + "px";
+          menu.style.maxHeight = Math.max(0, Math.min(440, window.innerHeight - origin.bottom - 14, pane.bottom - origin.bottom - 14)) + "px";
+          const buttons = actions(); (last ? buttons.at(-1) : buttons[0])?.focus({ preventScroll: true });
+        };
+        button.addEventListener("click", event => {
+          event.stopPropagation(); if (event.detail > 1) return;
+          if (menu.hidden) open(); else close();
+        });
+        button.addEventListener("keydown", event => {
+          if (["Enter", " "].includes(event.key) && event.repeat) { event.preventDefault(); return; }
+          if (!["ArrowDown", "ArrowUp"].includes(event.key)) return;
+          event.preventDefault(); open(event.key === "ArrowUp");
+        });
+        menu.addEventListener("keydown", event => {
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          const buttons = actions(); if (!buttons.length) return;
+          event.preventDefault();
+          const index = buttons.indexOf(document.activeElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+            : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+          buttons[next].focus({ preventScroll: true });
+        });
+        document.addEventListener("pointerdown", event => { if (!anchor.contains(event.target)) close(); }, true);
+        document.addEventListener("keydown", event => {
+          if (menu.hidden || event.key !== "Escape") return;
+          event.preventDefault(); event.stopPropagation(); close(true);
+        }, true);
+        anchor.addEventListener("focusout", event => { if (event.relatedTarget && !anchor.contains(event.relatedTarget)) close(); });
+        window.addEventListener("blur", () => close());
+        window.addEventListener("resize", () => close(anchor.contains(document.activeElement)));
+        return { anchor, button, menu, close };
+      }
+      function syncStudioBufferSourceActions() {
+        if (!bufferSwitcherUi) return;
+        const selected = getStudioSelectedBuffer(), destination = selected?.role === "document" ? "Document" : "Prompt";
+        if (bufferSwitcherUi.selectedBufferId !== selected?.id) closeStudioBufferActionMenus();
+        bufferSwitcherUi.selectedBufferId = selected?.id;
+        // File acts on the buffer you're in (Oliver, 8 Oct), so labels don't change with it.
+        const workspace = bufferSwitcherUi.workspaceLayout;
+        if (importFileBtn) {
+          importFileBtn.textContent = workspace ? "Open a copy…" : "Import file into " + destination + "…";
+          importFileBtn.title = workspace ? "Start from a file's text. The file itself isn't changed." : "Replace the " + destination + " with a copy of a file. The file itself isn't linked.";
+          if (bufferSwitcherUi.importInfo) bufferSwitcherUi.importInfo.textContent = importFileBtn.title;
+        }
+        if (getEditorBtn) {
+          getEditorBtn.textContent = workspace ? "Load Pi draft" : "Load Pi draft into " + destination;
+          getEditorBtn.title = "Replace the " + destination + " with Pi's draft (Cmd/Ctrl+Shift+L).";
+          if (workspace) getEditorBtn.hidden = destination !== "Prompt";
+          if (bufferSwitcherUi.piInfo) bufferSwitcherUi.piInfo.textContent = getEditorBtn.title;
+        }
+        if (workspace && bufferSwitcherUi.open) {
+          bufferSwitcherUi.open.textContent = "Open file…";
+          bufferSwitcherUi.open.title = "Edit a file in the " + destination + ". Save writes the file.";
+        }
+      }
       function syncStudioBufferSwitcher() {
         // Binding is synchronous. Do not transiently disable (and blur) the clicked
         // tab midway through restoring the textarea's selection.
@@ -16013,47 +17802,172 @@
           const base = role === "prompt" ? "Prompt" : "Document";
           const labelled = name && !["Prompt", "Document", "blank", "draft"].includes(name) ? base + " · " + name : base;
           const dirty = entry && entry.sourceState.path && (entry.baselineText === null || entry.text !== entry.baselineText);
-          const text = labelled + (dirty ? " •" : "");
+          const selected = entry?.id === state?.selectedBufferId;
+          const text = bufferSwitcherUi.workspaceLayout
+            ? base + (selected ? " (" + (editorView === "preview" ? "Preview" : "Raw") + ") ▾" : (dirty ? " •" : ""))
+            : labelled + (dirty ? " •" : "");
           if (button.textContent !== text) button.textContent = text;
-          button.title = entry ? base + (entry.sourceState.path ? ": " + entry.sourceState.path : ": independent draft") + (dirty ? " · unsaved file edits" : "") : "Waiting for buffer recovery";
+          const purpose = role === "prompt" ? "Draft your next prompt." : "Read and edit a document.";
+          button.title = entry ? purpose + "\n" + base + (entry.sourceState.path ? ": " + entry.sourceState.path : ": independent draft") + (dirty ? " · unsaved file edits" : "") : "Waiting for buffer recovery";
           button.disabled = !canSwitch || !entry;
           button.setAttribute("aria-selected", String(entry?.id === state?.selectedBufferId && Boolean(entry)));
           button.tabIndex = entry?.id === state?.selectedBufferId ? 0 : -1;
         }
         bufferSwitcherUi.open.disabled = !studioBuffersCanOpenDocument(true);
+        bufferSwitcherUi.addMenu.anchor.hidden = Boolean(bufferSwitcherUi.workspaceLayout && state?.buffers.find(b => b.id === state.selectedBufferId)?.role !== "document");
         syncStudioSelectionAppendAction();
         syncStudioDocumentAppendAction();
-        const active = state?.buffers.find(b => b.id === state.activePromptId);
-        bufferSwitcherUi.target.textContent = active ? "Run: Prompt" + (active.sourceState.path ? " · " + basenameForStudioPath(active.sourceState.path) : "") : "Switcher waiting for recovery";
-        bufferSwitcherUi.target.title = "One Pi conversation. Selecting Document never sends it or changes the active Prompt.";
+        syncStudioBufferSourceActions();
       }
+      function persistPromptRunIndicator() {
+        if (!promptRunIndicatorReady || !promptRunIndicatorTracker) return;
+        try { window.sessionStorage.setItem("piStudio.promptRun.v1:" + studioTabStateId, JSON.stringify(promptRunIndicatorTracker.snapshot())); } catch {}
+      }
+      function initializePromptRunIndicator() {
+        const prompt = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.role === "prompt");
+        if (!bufferSwitchingEnabled || !prompt || !promptRunIndicatorTracker) return;
+        let restored = false;
+        try { restored = promptRunIndicatorTracker.restore(JSON.parse(window.sessionStorage.getItem("piStudio.promptRun.v1:" + studioTabStateId)), prompt.id); } catch {}
+        if (!restored) promptRunIndicatorTracker.initialize(prompt.id, promptRunIndicatorFresh);
+        promptRunIndicatorReady = true; persistPromptRunIndicator(); syncPromptRunIndicator();
+      }
+      function rememberPromptRun(requestId, text) {
+        const prompt = getStudioSelectedBuffer();
+        if (bufferSwitchingEnabled && prompt?.role === "prompt") {
+          promptRunIndicatorTracker?.remember(requestId, prompt.id, text); persistPromptRunIndicator();
+        }
+      }
+      function syncPromptRunIndicator() {
+        const element = studioUiRefreshUi?.promptRunIndicator, selected = getStudioSelectedBuffer();
+        if (!element) return;
+        element.hidden = !promptRunIndicatorReady || !promptRunIndicatorTracker || selected?.role !== "prompt"
+          || Boolean(studioUiRefreshUi?.runStatus && !studioUiRefreshUi.runStatus.hidden);
+        if (element.hidden) return;
+        const state = promptRunIndicatorTracker.state(selected.id, prepareEditorTextForRunRequest(sourceTextEl.value));
+        const clock = at => at ? new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "";
+        const time = clock(state.sentAt), ended = clock(state.settledAt);
+        const label = state.phase === "not-run" ? "Not run" : state.phase === "sent" ? "Sent " + time
+          : state.phase === "stopped" ? "Stopped " + ended : state.phase === "failed" ? "Failed " + ended
+          : state.phase === "edited" ? "Edited since " + time : "Run history unknown";
+        if (element.textContent !== label) element.textContent = label;
+        element.title = state.phase === "not-run" ? "Not run yet."
+          : state.phase === "sent" ? "This text was sent at " + time + "."
+          : state.phase === "stopped" ? "Sent at " + time + " and stopped at " + ended + "."
+          : state.phase === "failed" ? "Sent at " + time + "; the Run failed at " + ended + "."
+          : state.phase === "edited" ? "Changed since it was sent at " + time + "."
+          : time ? "Last sent at " + time + ". Whether this text matches is unavailable."
+          : "Run history for this Prompt is unavailable.";
+      }
+      function triggerStudioRoleShortcut(event) {
+        if (!bufferSwitchingEnabled || !bufferSwitcherUi || !event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return false;
+        const code = event.code || "";
+        if (!["Digit1", "Digit2"].includes(code)) return false;
+        event.preventDefault(); event.stopPropagation();
+        if (event.repeat || event.isComposing || studioModalBlocksDraftAction()) return true;
+        const role = code === "Digit1" ? "prompt" : "document";
+        const entry = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.role === role);
+        if (entry && selectStudioBuffer(entry.id, { focusEditor: true })) {
+          closeStudioUiRefreshMenus(); closeStudioBufferActionMenus();
+          if (editorView === "preview") bufferSwitcherUi[role === "prompt" ? "prompt" : "document"].focus();
+        }
+        return true;
+      }
+
       function setupStudioBufferSwitcher() {
         if (!bufferSwitchingEnabled || bufferSwitcherUi) return;
         const strip = document.createElement("div"); strip.className = "studio-buffer-switcher"; strip.id = "studioBufferSwitcher";
         const tabs = document.createElement("div"); tabs.className = "studio-buffer-tabs"; tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "Prompt and document buffers");
         const makeButton = (id, text) => { const button = document.createElement("button"); button.id = id; button.type = "button"; button.textContent = text; return button; };
         const prompt = makeButton("studioPromptBufferBtn", "Prompt"), documentButton = makeButton("studioDocumentBufferBtn", "Document");
+        prompt.setAttribute("aria-keyshortcuts", "Meta+Shift+1 Control+Shift+1"); documentButton.setAttribute("aria-keyshortcuts", "Meta+Shift+2 Control+Shift+2");
+        document.addEventListener("keydown", triggerStudioRoleShortcut, true);
         for (const button of [prompt, documentButton]) { button.setAttribute("role", "tab"); button.setAttribute("aria-controls", "sourceEditorWrap sourcePreview"); tabs.appendChild(button); }
-        const open = makeButton("studioOpenDocumentBtn", "Open document…");
-        const addSelection = makeButton("studioAddSelectionBtn", "Add selection to Prompt");
-        const addDocument = makeButton("studioAddDocumentBtn", "Add document to Prompt");
-        const documentInfo = document.createElement("span"); documentInfo.className = "studio-buffer-document-info"; documentInfo.id = "studioAddDocumentInfo";
-        addDocument.setAttribute("aria-describedby", documentInfo.id);
-        const target = document.createElement("span"); target.className = "studio-buffer-target";
-        strip.append(tabs, open, addSelection, addDocument, documentInfo, target); leftPaneEl.querySelector(".source-wrap").prepend(strip);
-        bufferSwitcherUi = { strip, prompt, document: documentButton, open, addSelection, addDocument, documentInfo, target };
+        const workspaceHost = leftPaneEl.querySelector(".studio-workspace-tabs-host");
+        const loadMenu = makeStudioBufferActionMenu("studioBufferLoadBtn", workspaceHost ? "Open" : "Open / load");
+        const addMenu = makeStudioBufferActionMenu("studioBufferAddBtn", "Add to Prompt");
+        const addItem = (menu, button, id, description = "") => {
+          const item = document.createElement("div"); item.className = "studio-buffer-menu-item";
+          const info = document.createElement("div"); info.className = "studio-buffer-menu-help"; info.id = id; info.textContent = description;
+          button.setAttribute("aria-describedby", id); item.append(button, info); menu.menu.appendChild(item);
+          return info;
+        };
+        const importInfo = importFileBtn ? addItem(loadMenu, importFileBtn, "studioBufferImportInfo") : null;
+        const piInfo = getEditorBtn ? addItem(loadMenu, getEditorBtn, "studioBufferPiInfo") : null;
+        const open = makeButton("studioOpenDocumentBtn", "Open file in Document…");
+        open.title = "Open a file in the Document. Studio asks first if unsaved changes would be replaced.";
+        addItem(loadMenu, open, "studioOpenDocumentInfo", open.title);
+        const addSelection = makeButton("studioAddSelectionBtn", "Selection");
+        const addDocument = makeButton("studioAddDocumentBtn", "Whole document");
+        const selectionInfo = addItem(addMenu, addSelection, "studioAddSelectionInfo");
+        const documentInfo = addItem(addMenu, addDocument, "studioAddDocumentInfo");
+        const viewMenus = [];
+        if (workspaceHost) {
+          for (const [role, button] of [["prompt", prompt], ["document", documentButton]]) {
+            let targetId = null;
+            const viewMenu = makeStudioBufferActionMenu(button.id, (role === "prompt" ? "Prompt" : "Document") + " view", {
+              button, canOpen: () => getStudioSelectedBuffer()?.role === role && !editorViewSelect.disabled && !studioModalBlocksDraftAction(),
+              onOpen: () => { targetId = getStudioSelectedBuffer()?.id; },
+            });
+            for (const [value, label] of [["markdown", "Raw"], ["preview", "Preview"]]) {
+              const action = makeButton(button.id + value, label);
+              action.addEventListener("click", event => {
+                if (event.detail > 1 || getStudioSelectedBuffer()?.id !== targetId || editorViewSelect.disabled || studioModalBlocksDraftAction()) return;
+                viewMenu.close(true); editorViewSelect.value = value; editorViewSelect.dispatchEvent(new Event("change", { bubbles: true }));
+                syncStudioBufferSwitcher();
+              });
+              viewMenu.menu.append(action);
+            }
+            tabs.appendChild(viewMenu.anchor); viewMenus.push(viewMenu);
+          }
+          workspaceHost.replaceChildren(tabs);
+          // Open folds into File ▾ (trial48 finding 15): opening comes first; Save stays visible.
+          const fileMenu = studioUiRefreshUi.menus.find(item => item.name === "context");
+          if (fileMenu) {
+            const openItems = [open, importFileBtn, getEditorBtn, openCompanionBtn].filter(Boolean);
+            // Their old description lines stay in the unused Open menu; don't point at them.
+            for (const item of openItems) item.removeAttribute?.("aria-describedby");
+            const openSection = appendStudioUiRefreshMenuSection(fileMenu.menu, "", openItems);
+            fileMenu.menu.insertBefore(openSection, fileMenu.menu.firstElementChild ?? fileMenu.menu.children?.[0] ?? null);
+            const openAnchor = studioUiRefreshUi.openMenu.anchor;
+            openAnchor.parentElement?.removeChild(openAnchor);
+            // Loaders may open a modal at once; close first so focus returns to File.
+            fileMenu.menu.addEventListener("click", event => { if (openItems.includes(event.target)) fileMenu.close(true); }, true);
+          } else {
+            studioUiRefreshUi.openMenu.anchor.replaceWith(loadMenu.anchor);
+            if (openCompanionBtn) addItem(loadMenu, openCompanionBtn, "studioNewDocumentWindowInfo", openCompanionBtn.title);
+          }
+          studioUiRefreshUi.menus = studioUiRefreshUi.menus.filter(item => item !== studioUiRefreshUi.openMenu);
+          studioUiRefreshUi.actionLine.insertBefore(addMenu.anchor, queueSteerBtn?.nextSibling || sendRunBtn?.nextSibling || null);
+          if (clearWorkspaceBtn) clearWorkspaceBtn.textContent = "Reset Prompt and Document…";
+        } else {
+          strip.append(tabs, loadMenu.anchor, addMenu.anchor); leftPaneEl.querySelector(".source-wrap").prepend(strip);
+        }
+        const nameMenu = workspaceHost ? setupStudioFileNameMenu() : null;
+        bufferSwitcherUi = { strip, prompt, document: documentButton, open, addSelection, addDocument, selectionInfo, documentInfo, importInfo, piInfo, addMenu, loadMenu, viewMenus, nameMenu, workspaceLayout: Boolean(workspaceHost) };
         setupStudioSelectionAppendAction(addSelection);
         setupStudioDocumentAppendAction(addDocument);
-        if (clearWorkspaceBtn) { clearWorkspaceBtn.textContent = "Reset both buffers"; clearWorkspaceBtn.title = "Reset Prompt and Document together after confirmation. Saved files are not changed."; }
+        // Append consumes its native press before closing/focusing the trigger.
+        addMenu.menu.addEventListener("click", event => {
+          if (event.target === addSelection || event.target === addDocument) addMenu.close(true);
+        });
+        // Source loaders may synchronously open a modal and stop propagation.
+        // Close first so modal focus returns to the visible disclosure trigger.
+        loadMenu.menu.addEventListener("click", event => {
+          if ([open, importFileBtn, getEditorBtn, openCompanionBtn].includes(event.target)) loadMenu.close(true);
+        }, true);
+        if (clearWorkspaceBtn) { if (!workspaceHost) clearWorkspaceBtn.textContent = "Reset both buffers"; clearWorkspaceBtn.title = "Reset Prompt and Document together after confirmation. Saved files are not changed."; }
         const selectRole = role => { const entry = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.role === role); if (entry) selectStudioBuffer(entry.id); };
         prompt.addEventListener("click", () => selectRole("prompt")); documentButton.addEventListener("click", () => selectRole("document"));
         tabs.addEventListener("keydown", event => {
-          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || event.altKey || event.ctrlKey || event.metaKey) return;
+          if (![prompt, documentButton].includes(event.target) || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || event.altKey || event.ctrlKey || event.metaKey) return;
           event.preventDefault();
           const role = event.key === "Home" ? "prompt" : (event.key === "End" ? "document" : (isStudioDocumentBufferView() ? "prompt" : "document"));
           selectRole(role); (role === "prompt" ? prompt : documentButton).focus();
         });
-        open.addEventListener("click", () => { void promptStudioBufferDocumentPath().catch(error => setStatus(error.message || "Could not open the document. Both buffers were kept.", "warning")); });
+        open.addEventListener("click", () => {
+          if (bufferSwitcherUi?.workspaceLayout && startStudioFilePick("open")) return;
+          void promptStudioBufferDocumentPath().catch(error => setStatus(error.message || "Could not open the document. Both buffers were kept.", "warning"));
+        });
         for (const type of ["pointerdown", "keydown", "wheel", "touchstart", "input"]) sourceTextEl.addEventListener(type, () => {
           if (bufferViewRestore) bufferViewRestore.editor = null;
         }, { passive: true, capture: true });
@@ -16070,6 +17984,78 @@
         // baseline, metadata or connection; those owners are still rechecked.
         for (const key of ["selectionStart", "selectionEnd", "selectionDirection", "scrollTop", "previewScrollTop"]) delete consent.workspace[key];
         return consent;
+      }
+      // Picking a file uses the right pane's Files view (Oliver, 8 Oct): no path-only dialog and
+      // no browser file picker (unavailable in Muxy). The pick is pinned to the buffer selected
+      // when it started; the routes are the existing guarded open and copy operations.
+      function studioFilePickDestination(pick = studioFilePick) { return pick?.role === "prompt" ? "Prompt" : "Document"; }
+      function startStudioFilePick(mode) {
+        if (!bufferSwitchingEnabled || !bufferRecoveryClient) return false;
+        const selected = getStudioSelectedBuffer();
+        if (!selected) return false;
+        if (mode === "open" ? !studioBuffersCanOpenDocument() : uiBusy) { setStatus("Wait for the current action before opening a file.", "warning"); return false; }
+        if (studioFilePick) cancelStudioFilePick({ silent: true });
+        const pick = { mode, role: selected.role, bufferId: selected.id, returnView: rightView,
+          returnTop: critiqueViewEl.scrollTop, returnLeft: critiqueViewEl.scrollLeft };
+        if (mode === "open") pick.consent = captureStudioBufferOpenConsent();
+        else {
+          pick.operation = bufferRecoveryEnabled ? { consent: captureEditorAsyncConsent(), reader: null, decision: null, busyEpoch: studioBusyEpoch } : null;
+          if (bufferRecoveryEnabled) activeFileImport = pick.operation;
+        }
+        studioFilePick = pick;
+        if (rightView === "files") renderFilesView(); else setRightView("files");
+        window.requestAnimationFrame(() => { if (studioFilePick === pick) critiqueViewEl.querySelector("[data-files-pick-path]")?.focus({ preventScroll: true }); });
+        return true;
+      }
+      function leaveStudioFilePick(pick, { keepImport = false } = {}) {
+        if (studioFilePick !== pick) return;
+        studioFilePick = null;
+        if (pick.mode === "copy" && !keepImport) finishFileImport(pick.operation);
+        if (rightView !== "files") return;
+        if (!pick.returnView || pick.returnView === "files") { renderFilesView(); return; }
+        setRightView(pick.returnView);
+        window.requestAnimationFrame(() => {
+          if (rightView === pick.returnView) { critiqueViewEl.scrollTop = pick.returnTop || 0; critiqueViewEl.scrollLeft = pick.returnLeft || 0; }
+        });
+      }
+      function cancelStudioFilePick(options = {}) {
+        const pick = studioFilePick;
+        if (!pick) return false;
+        leaveStudioFilePick(pick);
+        if (!options.silent) setStatus("Nothing was opened.");
+        return true;
+      }
+      function resolveStudioFilePickPath(value) {
+        const raw = String(value || "").trim();
+        if (!raw || raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)) return raw;
+        // The copy endpoint resolves relative paths against Pi's folder; pass absolute paths.
+        const base = String(fileBrowserState?.currentDir || getCurrentResourceDirValue() || "").replace(/[\\/]+$/, "");
+        return base ? base + "/" + raw.replace(/^\.\//, "") : raw;
+      }
+      // A pasted path is a literal file name: "#" and "?" are part of it, not a link suffix.
+      function studioLiteralPathKind(path) { return getPreviewLocalLinkKind(String(path || "").replace(/[#?]/g, "_")); }
+      function studioFilePickAccepts(pick, kind) {
+        // Opening converts office files; a copy reads raw text, so only text can be copied.
+        return kind !== "pdf" && kind !== "image" && !(pick.mode === "copy" && kind === "office");
+      }
+      async function completeStudioFilePick(value, knownKind = "") {
+        const pick = studioFilePick;
+        if (!pick) return false;
+        const path = resolveStudioFilePickPath(value);
+        if (!path) return false;
+        if (!studioFilePickAccepts(pick, knownKind || studioLiteralPathKind(path))) {
+          setStatus("That file can't be " + (pick.mode === "copy" ? "copied" : "opened") + " as text. Choose another, or Cancel.", "warning"); return false;
+        }
+        const selected = getStudioSelectedBuffer();
+        if (!selected || selected.id !== pick.bufferId) {
+          leaveStudioFilePick(pick); setStatus("The selected buffer changed while choosing. Nothing was opened.", "warning"); return false;
+        }
+        leaveStudioFilePick(pick, { keepImport: true });
+        if (pick.mode === "copy") return importStudioFileCopyFromPath(pick.operation, path);
+        if (!recoveryConsentIsCurrent(pick.consent) || !studioBuffersCanOpenDocument()) {
+          setStatus("The workspace changed while choosing. Both buffers were kept; try again.", "warning"); return false;
+        }
+        return openStudioBufferDocument(studioLiteralPathToLinkRef(path), getFileBrowserLocalLinkContext(), pick.role);
       }
       async function promptStudioBufferDocumentPath() {
         if (!studioBuffersCanOpenDocument()) return false;
@@ -16103,19 +18089,28 @@
           if (target.sourceState.path && stripPreviewLocalLinkUrlSuffix(href) === target.sourceState.path) {
             return selectStudioBuffer(target.id, { focusEditor: true });
           }
+          if (documentHostingEnabled && getPreviewLocalLinkKind(href) === "text") {
+            const existing = await reuseHostedDocumentOwner(href, context, { isCurrent, bufferOpenOperation: operation });
+            if (existing.handled) return existing.ok;
+          }
           if (!await confirmPreviewOfficeConversion(href, "here", { isCurrent, bufferOpenOperation: operation }) || !isCurrent()) return false;
-          const needsConfirmation = target.role === "prompt" ? target.text.length > 0 || (target.sourceState.path && (target.baselineText === null || target.text !== target.baselineText))
-            : (target.sourceState.path ? target.baselineText === null || target.text !== target.baselineText : target.text.length > 0);
+          const needsConfirmation = studioBufferReplacementNeedsConsent(target);
           if (needsConfirmation) {
             const confirmed = await requestStudioConfirmation("Replace the " + (role === "prompt" ? "Prompt" : "Document")
               + " buffer's current text and origin? Save or copy any work you need first. The other buffer and saved files are not changed.",
               { title: "Replace " + (role === "prompt" ? "Prompt" : "Document") + "?", confirmLabel: "Replace", destructive: true, bufferOpenOperation: operation });
             if (!confirmed || !isCurrent()) return false;
           }
+          if (documentHostingEnabled && getPreviewLocalLinkKind(href) === "text") {
+            const opened = await openHostedDocumentHere(href, context, target.id, isCurrent, operation);
+            if (opened.ok && opened.status === "committed" && !opened.rebased && recoveryConsentIsCurrent(operation.consent)) await selectStudioBuffer(target.id, { focusEditor: true });
+            return opened.ok;
+          }
           // The same operation must own permission prompts, grants and retries,
           // not merely the final replacement. Compose the caller's preview owner.
+          const replacementReady = documentHostingEnabled ? await prepareDocumentHostingReplacement(target.id, isCurrent) : isCurrent;
           const payload = await fetchPreviewLocalLink("document", href, { ...context, isCurrent }, { bufferOpenOperation: operation });
-          if (!isCurrent() || !studioBuffersCanOpenDocument()) return false;
+          if (!isCurrent() || !studioBuffersCanOpenDocument() || !replacementReady()) return false;
           if (typeof payload.text !== "string") throw new Error("Studio did not return document text.");
           const converted = payload.converted === true;
           const path = !converted && typeof payload.path === "string" && payload.path ? payload.path : null;
@@ -16131,8 +18126,9 @@
           captureStudioBufferTransientState();
           const replaced = client.replace(target.id, target.revision, next, path ? payload.text : null);
           if (!replaced.ok) { setStatus(replaced.message, "warning"); return false; }
-          // This is a replacement, not a transfer of terminal cleanup authority.
-          bufferTransientStates.delete(target.id);
+          // This is a replacement, not a transfer of terminal cleanup authority
+          // or the previous file's automatic-preview reading position.
+          retireStudioBufferSourceView(target.id);
           const selected = client.select(target.id);
           if (!selected.ok) { setStatus(selected.message, "warning"); return false; }
           bindSelectedStudioBuffer({ focusEditor: true });
@@ -16156,6 +18152,14 @@
         if (operation.decision && studioDecisionState === operation.decision) finishStudioDecision(null, false);
         syncStudioSelectionAppendAction();
         syncStudioDocumentAppendAction();
+      }
+      // Replacing a buffer asks first when it holds work: any Prompt text, or a Document's
+      // unsaved edits (or any text when it isn't a file). Shared by Open file and Open a copy.
+      function studioBufferReplacementNeedsConsent(target) {
+        if (!target) return false;
+        const fileChanged = Boolean(target.sourceState?.path) && (target.baselineText === null || target.text !== target.baselineText);
+        return target.role === "prompt" ? target.text.length > 0 || fileChanged
+          : (target.sourceState?.path ? fileChanged : target.text.length > 0);
       }
       function syncBufferRecoveryMenuAccess() {
         if (!bufferRecoveryEnabled) return;
@@ -16213,7 +18217,7 @@
             },
             currentText: () => sourceTextEl.value,
             captureConsent: captureRecoveryConsent, consentIsCurrent: recoveryConsentIsCurrent,
-            canChange: recoveryCanChangeWorkspace,
+            canChange: () => !documentHostingEnabled && recoveryCanChangeWorkspace(),
             canRetry: () => Boolean(bufferRecoveryClient && recoveryCanChangeWorkspace()),
             retry: async isCurrent => {
               if (!bufferRecoveryClient || !recoveryCanChangeWorkspace()) return { ok: false, message: "Wait for the Studio connection, or export current text and recheck the copies." };
@@ -16224,6 +18228,7 @@
               return result;
             },
             keepCurrent: (owner, isCurrent) => {
+              if (documentHostingEnabled) return { ok: false, message: "Creating a fresh workspace from recovery is unavailable in the hosting alpha. Export or recheck the retained copies instead." };
               const editor = buildWorkspacePersistencePayload(), extra = bufferRecoveryExtra();
               if (bufferRecoveryClient) {
                 const captured = bufferRecoveryClient.capture(editor, fileBackedBaselineText, extra);
@@ -16232,6 +18237,7 @@
               return owner.keepCurrent(editor, fileBackedBaselineText, extra, isCurrent, bufferRecoveryClient?.snapshot());
             },
             navigate: (result, consent) => {
+              if (documentHostingEnabled) { setStatus("Hosted recovery cannot navigate to an unregistered workspace. All copies were kept; export or recheck them.", "warning"); return; }
               if (!recoveryConsentIsCurrent(consent) || !recoveryCanChangeWorkspace()) return;
               const fresh = new URL(window.location.href);
               fresh.searchParams.delete("docId"); fresh.searchParams.delete("skipWorkspaceRestore");
@@ -16248,12 +18254,17 @@
             },
           });
         }
+        if (documentHostingEnabled) setStatus("Hosted recovery supports inspection, export and recheck. Creating a fresh workspace from this panel is unavailable in this alpha.", "warning");
         const opening = bufferRecoveryPanel.open();
         syncStudioBufferOpenOperation();
         await opening;
       }
 
       async function clearStudioWorkspace() {
+        if (documentHostingEnabled) {
+          setStatus("Resetting the whole workspace is unavailable in the Document-hosting alpha. Current work and recovery copies were kept; edit or detach individual buffers instead.", "warning");
+          return;
+        }
         if (uiBusy) {
           setStatus("Studio is busy.", "warning");
           return;
@@ -16285,7 +18296,7 @@
             const prepared = owner.keepCurrent(blank, null, {}, isCurrent); owner.dispose();
             if (!prepared.ok) { setStatus(prepared.message, "warning"); return; }
             const fresh = new URL(window.location.href);
-            for (const key of ["studioTabState", "docId", "docSource", "docLabel", "docPath", "draftId", "resourceDir", "skipWorkspaceRestore"]) fresh.searchParams.delete(key);
+            for (const key of ["studioTabState", "docId", "docSource", "docLabel", "docPath", "draftId", "resourceDir", "skipWorkspaceRestore", "hostedWorkspace", "resumeAcknowledged"]) fresh.searchParams.delete(key);
             fresh.searchParams.set("docSource", "blank"); fresh.searchParams.set("draftId", blankSource.draftId);
             fresh.searchParams.set("studioTabState", prepared.workspaceId);
             bufferRecoveryNavigationConsent = resetConsent;
@@ -16310,7 +18321,7 @@
           latestCritiqueNotesNormalized,
         };
         clearPersistedWorkspaceState();
-        if (resourceDirInput) resourceDirInput.value = "";
+        setStudioResourceDirValue("");
         if (resourceDirLabel) resourceDirLabel.textContent = "";
         setEditorText("", { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "blank", label: "blank", path: null, draftId: makeStudioDraftId() });
@@ -16522,11 +18533,11 @@
         if (completionContextSelect) completionContextSelect.value = completionSuggestionContextMode;
         syncCompletionSuggestionModelUi();
         if (suggestCompletionOptionsBtn) {
-          suggestCompletionOptionsBtn.textContent = "Source & context";
-          suggestCompletionOptionsBtn.title = completionSuggestionContextMode === "session"
+          suggestCompletionOptionsBtn.textContent = studioUiRefreshUi?.fileButton ? "File" : "Source & context";
+          suggestCompletionOptionsBtn.title = studioUiRefreshUi?.fileButton ? (studioUiRefreshUi.reviewButton ? "File actions, details and workspace recovery. Suggestion settings are under Review." : "File actions, details, workspace recovery and suggestion settings.") : (completionSuggestionContextMode === "session"
             ? "Document source, working directory, status, and suggestion context. Suggestions include editor plus latest response."
-            : "Document source, working directory, status, and suggestion context. Suggestions use editor-only context.";
-          suggestCompletionOptionsBtn.setAttribute("aria-label", suggestCompletionOptionsBtn.title);
+            : "Document source, working directory, status, and suggestion context. Suggestions use editor-only context.");
+          suggestCompletionOptionsBtn.setAttribute("aria-label", studioUiRefreshUi?.fileButton ? "File" : suggestCompletionOptionsBtn.title);
         }
         document.querySelectorAll("[data-completion-context-mode]").forEach((button) => {
           if (!(button instanceof HTMLElement)) return;
@@ -16960,12 +18971,46 @@
       }
 
       function setRightView(nextView, options) {
+        if (!options?.readerNavigation && !options?.activityTracking && !options?.bufferSwitch && !options?.documentPreviewFollowing
+            && typeof closeStudioLinkedReader === "function") closeStudioLinkedReader();
+        if (!options?.activityTracking && !options?.bufferSwitch && !options?.documentPreviewFollowing) {
+          const entry = getStudioSelectedBuffer();
+          // The Document reads independently; its view changes don't take over the Prompt's Run (Sol).
+          if (entry?.role !== "document") pauseStudioRunFollowing();
+          const saved = entry?.role === "prompt" ? bufferTransientStates.get(entry.id) : null;
+          if (saved) delete saved.runFollowingView;
+        }
+        // Every manual route (chooser, shortcuts, Review → Side question, etc.)
+        // relinquishes the same override. Restoration/automation is not navigation.
+        if (bufferSwitchingEnabled && !options?.activityTracking && !options?.bufferSwitch && !options?.documentPreviewFollowing) {
+          relinquishDocumentPreviewFollowing();
+        }
         const automatedActivityChange = Boolean(options && options.activityTracking);
         if (activityTrackingOwnsWorkingView && !automatedActivityChange) {
           activityTrackingOwnsWorkingView = false;
         }
         const previousView = rightView;
         rightView = normalizeRightViewValue(nextView);
+        const documentEntry = bufferSwitchingEnabled && !options?.bufferSwitch ? getStudioSelectedBuffer() : null;
+        if (documentEntry?.role === "document") {
+          // The Document remembers the response it was reading while it shows something else, and
+          // comes back to it (Sol: independent reading state). Binding restores it separately.
+          const reading = view => view === "preview" || view === "markdown" || view === "trace";
+          const entry = documentEntry;
+          if (reading(previousView) && !reading(rightView)) {
+            bufferTransientStates.set(entry.id, { ...bufferTransientStates.get(entry.id),
+              historySelection: { id: getSelectedHistoryItem()?.id ?? null, index: responseHistoryIndex, resetScroll: false } });
+          } else if (!reading(previousView) && reading(rightView)) {
+            const saved = bufferTransientStates.get(entry.id)?.historySelection;
+            const index = saved?.id ? responseHistory.findIndex(item => item.id === saved.id) : -1;
+            if (index >= 0 && index !== responseHistoryIndex) {
+              responseHistoryIndex = index;
+              applySelectedHistoryItem({ resetScroll: true, render: false });
+              syncTraceForSelectedHistoryItem();
+              updateHistoryControls();
+            }
+          }
+        }
         if (rightView !== previousView) studioRightViewGeneration++;
         if (rightView !== "repl") replQuickFocusRequested = false;
         syncRightViewModeOptions();
@@ -17317,6 +19362,11 @@
         return launch.navigate(normalized);
       }
 
+      function navigatePendingStudioReadOnlyTab(launch, relativeUrl) {
+        if (!launch || typeof launch.navigateReadOnly !== "function") throw new Error("Studio did not prepare a read-only viewer launch.");
+        return launch.navigateReadOnly(navigationHelpers.normalizeStudioReadOnlyTarget(relativeUrl, window.location, getToken()));
+      }
+
       function failPendingStudioTab(launch, message) {
         if (!launch) return false;
         return launch.fail(message || "Studio could not prepare this tab. Return to the originating Studio page for details.");
@@ -17351,8 +19401,57 @@
         });
       }
 
+      async function reuseHostedDocumentOwner(path, context, options = {}) {
+        const isCurrent = options.isCurrent || (() => true);
+        const query = { ...getPreviewLinkResourceQuery(path, context), operation: "owner", focus: false };
+        const found = await requestDocumentHosting(query);
+        if (!isCurrent()) return { handled: true, ok: false };
+        if (!found.ok) throw new Error(found.message || "The Document owner could not be checked. No independent editor was opened.");
+        if (!found.owner) return { handled: false };
+        const owner = found.owner;
+        const matches = reply => reply.owner?.workspaceId === owner.workspaceId && reply.owner?.bufferId === owner.bufferId;
+        const focus = async () => {
+          const reply = await requestDocumentHosting({ ...query, focus: true, generation: documentHostingGeneration, expectedOwner: owner });
+          if (!reply.ok || !matches(reply)) throw new Error(reply.message || "The Document owner changed; recheck before opening it.");
+          setStatus(reply.live ? "Requested focus in the existing editor. No independent copy was opened."
+            : "That editor disconnected before focus. Keep its original tab and recheck; no independent copy was opened.", reply.live ? "success" : "warning");
+          return { handled: true, ok: true };
+        };
+        if (owner.workspaceId === studioTabStateId) {
+          const state = bufferRecoveryClient.snapshot();
+          if (!state.buffers.some(b => b.id === owner.bufferId)) throw new Error("The owning buffer changed. Recheck before opening it.");
+          const selected = state.selectedBufferId === owner.bufferId || selectStudioBuffer(owner.bufferId, { focusEditor: true });
+          const ownerRole = state.buffers.find(b => b.id === owner.bufferId)?.role === "prompt" ? "Prompt" : "Document";
+          setStatus(selected ? "That file is already open as the " + ownerRole + ", so Studio switched to it. Its unsaved edits are kept."
+            : "That file is already open as the " + ownerRole + ". Studio couldn't switch to it; its unsaved edits are kept.", selected ? "info" : "warning");
+          return { handled: true, ok: selected };
+        }
+        if (found.live) return focus();
+        const agreed = await requestStudioConfirmation("The original window isn't connected, and may have newer edits than Studio's saved copy. Reconnect it if you can and keep any text in it. Otherwise, reopen the same Document (not a copy)?",
+          { title: "Reopen the same Document?", confirmLabel: "Reopen same Document", bufferOpenOperation: options.bufferOpenOperation });
+        if (!agreed || !isCurrent()) return { handled: true, ok: false };
+        const checked = await requestDocumentHosting(query);
+        if (!isCurrent()) return { handled: true, ok: false };
+        if (!checked.ok || !matches(checked)) throw new Error(checked.message || "The Document owner changed; recheck before opening it.");
+        if (checked.live) return focus();
+        const target = new URL(checked.url, window.location.href); target.searchParams.set("resumeAcknowledged", "1");
+        openStudioTabDirect(target.href);
+        setStatus("Requested the same retained editor. If the browser blocked it, allow that tab and recheck; do not open an independent copy.", "warning");
+        return { handled: true, ok: true };
+      }
       function openFileBackedStudioEditorTab(path, options) {
         const targetUrl = buildFileBackedStudioEditorUrl(path, options);
+        if (documentHostingEnabled) {
+          if (documentHostingOwnerFlights.has(targetUrl)) return;
+          const consent = captureEditorAsyncConsent();
+          const isCurrent = () => editorAsyncConsentIsCurrent(consent) && !studioModalBlocksDraftAction();
+          const flight = reuseHostedDocumentOwner(path, { resourceDir: options?.resourceDir }, { isCurrent }).then(result => {
+            if (!result.handled && isCurrent()) return documentHostingController?.launch({ kind: "file", ...getPreviewLinkResourceQuery(path, { resourceDir: options?.resourceDir }) });
+          }).catch(error => { if (!bufferPageClosed) setStatus(error.message || "Could not check the existing editor. Nothing was opened.", "warning"); })
+            .finally(() => documentHostingOwnerFlights.delete(targetUrl));
+          documentHostingOwnerFlights.set(targetUrl, flight);
+          return;
+        }
         openStudioTabDirect(targetUrl);
       }
 
@@ -17432,13 +19531,234 @@
         ".jl", ".f90", ".f95", ".f03", ".f", ".for", ".r", ".m", ".java", ".go", ".rb", ".swift", ".lua",
         ".diff", ".patch",
       ]);
-      const PREVIEW_LOCAL_IMAGE_LINK_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+      const PREVIEW_LOCAL_IMAGE_LINK_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
       const PREVIEW_LOCAL_OFFICE_LINK_EXTENSIONS = new Set([".docx", ".odt"]);
       const PREVIEW_LOCAL_TEXT_LINK_FILENAMES = new Set([
         ".dockerignore", ".editorconfig", ".env", ".env.example", ".eslintignore", ".gitattributes",
         ".gitignore", ".gitmodules", ".npmignore", ".prettierignore", "dockerfile", "gemfile",
         "justfile", "license", "makefile", "rakefile", "readme",
       ]);
+      function studioLinkedReaderAvailable() {
+        return bufferRecoveryEnabled && (bufferSwitchingEnabled || documentHostingEnabled) && !bufferPageClosed;
+      }
+      function studioLinkedReaderIsActive() {
+        return Boolean(studioLinkedReaderUi?.snapshot().active);
+      }
+      function syncStudioLinkedReaderChrome() {
+        if (!studioLinkedReaderUi) return;
+        if (!studioLinkedReaderIsActive()) rightViewSelect.value = rightView;
+        studioLinkedReaderUi.sync();
+        // Export/history/loading actions still describe the hidden underlying
+        // view. They must not masquerade as actions on the displayed file.
+        if (exportPreviewControlsEl) exportPreviewControlsEl.hidden = studioLinkedReaderIsActive() || rightView === "editor-quarto-preview";
+        if (studioLinkedReaderIsActive()) updateResultActionButtons();
+      }
+      function closeStudioLinkedReader() {
+        clearStudioReaderReturnScroll();
+        if (!studioLinkedReaderUi) return;
+        studioLinkedReaderRenderNonce++;
+        void studioLinkedReaderUi.close({ restore: false });
+      }
+      function captureStudioLinkedReaderOrigin(context = {}) {
+        const entry = getStudioSelectedBuffer();
+        const common = { bufferId: entry?.id || null, role: entry?.role || "", view: rightView,
+          path: entry?.sourceState?.path || (typeof sourceState === "object" ? sourceState.path || "" : ""),
+          top: critiqueViewEl.scrollTop, left: critiqueViewEl.scrollLeft };
+        if (context.readerOrigin === "files" || (!context.readerOrigin && rightView === "files")) return { ...common, kind: "files",
+          files: { ...fileBrowserState, entries: [...(fileBrowserState.entries || [])], exactFiles: [...(fileBrowserState.exactFiles || [])], locations: [...(fileBrowserState.locations || [])] },
+          focusPath: context.focusPath || "", focusAction: context.focusAction || "" };
+        if (context.readerOrigin === "editor" || rightView === "editor-preview" || isWatchedFilePreview) return { ...common, kind: "editor" };
+        if (rightView === "preview" || rightView === "markdown") return { ...common, kind: "response", responseId: getSelectedHistoryItem()?.id || null };
+        return { ...common, kind: "view" };
+      }
+      function studioLinkedReaderOriginLabel(origin) {
+        if (!origin) return "current view";
+        if (origin.kind === "files") return "Files";
+        if (origin.kind === "response") {
+          const index = responseHistory.findIndex(item => item.id === origin.responseId);
+          const label = index >= 0 ? "response " + (index + 1) + "/" + responseHistory.length : "current view (response unavailable)";
+          const selected = getStudioSelectedBuffer();
+          if (index >= 0 && origin.bufferId && origin.bufferId !== selected?.id) {
+            const entry = bufferRecoveryClient?.snapshot().buffers.find(buffer => buffer.id === origin.bufferId);
+            if (entry) return (entry.role === "prompt" ? "Prompt" : "Document") + " · " + label;
+          }
+          return label;
+        }
+        if (origin.kind === "view") return getRightViewDisplayLabel(origin.view);
+        return isStudioDocumentBufferView() || isEditorOnlyMode ? "Document preview" : "Prompt preview";
+      }
+      function studioLinkedReaderOriginTitle(origin) {
+        const label = studioLinkedReaderOriginLabel(origin);
+        const entry = origin?.kind === "response"
+          ? bufferRecoveryClient?.snapshot().buffers.find(buffer => buffer.id === origin.bufferId)
+          : getStudioSelectedBuffer();
+        const path = origin?.kind === "editor" ? entry?.sourceState?.path || sourceState.path
+          : origin?.kind === "response" ? entry?.sourceState?.path || origin.path
+          : origin?.kind === "files" ? origin.files?.currentDir : "";
+        return path ? label + " · " + path : label;
+      }
+      function clearStudioReaderReturnScroll() {
+        studioReaderReturnEpoch++;
+        pendingStudioReaderReturnScroll = null;
+      }
+      function readerReturnScrollIsCurrent(ticket) {
+        return pendingStudioReaderReturnScroll === ticket && ticket.epoch === studioReaderReturnEpoch
+          && !bufferPageClosed && !studioLinkedReaderIsActive()
+          && (getStudioSelectedBuffer()?.id || null) === ticket.bufferId
+          && rightView === ticket.view && responsePreviewRenderNonce === ticket.nonce
+          && getSelectedHistoryItem() === ticket.response;
+      }
+      function applyStudioReaderReturnScroll() {
+        const ticket = pendingStudioReaderReturnScroll;
+        if (!ticket) return false;
+        if (ticket.preparing) return true;
+        if (!readerReturnScrollIsCurrent(ticket)) { clearStudioReaderReturnScroll(); return false; }
+        const target = critiqueViewEl, owner = studioPreviewElementOwners.get(target);
+        // Loading and old committed DOM do not consume the saved position.
+        if (!owner || owner.pane !== "response" || !studioPreviewOwnerIsCurrent(owner)) return true;
+        pendingResponseScrollReset = false;
+        const reading = bufferTransientStates.get(ticket.bufferId);
+        if (reading?.responseScrollPending) bufferTransientStates.set(ticket.bufferId, { ...reading, responseScrollPending: false });
+        if (ticket.scheduledOwner === owner) return true;
+        ticket.scheduledOwner = owner;
+        window.requestAnimationFrame(() => {
+          if (!readerReturnScrollIsCurrent(ticket) || critiqueViewEl !== target || !target.isConnected
+              || studioPreviewElementOwners.get(target) !== owner || !studioPreviewOwnerIsCurrent(owner)) {
+            if (pendingStudioReaderReturnScroll === ticket) clearStudioReaderReturnScroll();
+            return;
+          }
+          target.scrollTop = ticket.top; target.scrollLeft = ticket.left;
+          pendingStudioReaderReturnScroll = null;
+        });
+        return true;
+      }
+      function restoreStudioLinkedReaderOrigin(origin) {
+        clearStudioReaderReturnScroll();
+        if (!origin) return;
+        if (origin.kind === "response") {
+          const index = responseHistory.findIndex(item => item.id === origin.responseId);
+          const state = bufferRecoveryClient?.snapshot();
+          const entry = state?.buffers.find(buffer => buffer.id === origin.bufferId);
+          if (entry && state.selectedBufferId !== entry.id && !selectStudioBuffer(entry.id, { focusEditor: false })) {
+            setRightView(rightView, { readerNavigation: true });
+            setStatus("The original response buffer cannot be selected right now. Returned to the current view.", "warning"); return;
+          }
+          if (index >= 0 && (!origin.bufferId || (entry?.role === "prompt" && entry.id === getStudioSelectedBuffer()?.id))) {
+            // Selection may synchronously commit structured/raw content. Fence
+            // its reset before selecting, then bind to the final render owner.
+            const ticket = { preparing: true, epoch: studioReaderReturnEpoch, bufferId: getStudioSelectedBuffer()?.id || null,
+              top: origin.top || 0, left: origin.left || 0 };
+            pendingStudioReaderReturnScroll = ticket;
+            selectHistoryIndex(index, { readerNavigation: true, silent: true });
+            setRightView("preview", { readerNavigation: true });
+            Object.assign(ticket, { preparing: false, view: rightView, nonce: responsePreviewRenderNonce, response: getSelectedHistoryItem() });
+            applyStudioReaderReturnScroll();
+            return;
+          } else {
+            setRightView(rightView, { readerNavigation: true });
+            setStatus(index >= 0 ? "The original response buffer is no longer available. Returned to the current view."
+              : "That response is no longer in history. Returned to the current view.", "warning");
+          }
+        } else if (origin.kind === "files") {
+          fileBrowserLoadNonce++;
+          fileBrowserState = { ...origin.files, contextKey: getFileBrowserContextKey(), loading: false };
+          setRightView("files", { readerNavigation: true });
+        } else setRightView(origin.kind === "view" ? origin.view : "editor-preview", { readerNavigation: true });
+        if (origin.kind === "files" || (origin.kind === "view" && rightView === origin.view)) {
+          const view = rightView, bufferId = getStudioSelectedBuffer()?.id || null, target = critiqueViewEl;
+          const epoch = studioReaderReturnEpoch, generation = studioRightViewGeneration, nonce = responsePreviewRenderNonce, filesNonce = fileBrowserLoadNonce;
+          window.requestAnimationFrame(() => {
+            if (bufferPageClosed || rightView !== view || studioLinkedReaderIsActive() || studioReaderReturnEpoch !== epoch
+                || studioRightViewGeneration !== generation || responsePreviewRenderNonce !== nonce || critiqueViewEl !== target
+                || (getStudioSelectedBuffer()?.id || null) !== bufferId || (origin.kind === "files" && fileBrowserLoadNonce !== filesNonce)) return;
+            critiqueViewEl.scrollTop = origin.top || 0; critiqueViewEl.scrollLeft = origin.left || 0;
+            if (origin.kind === "files" && origin.focusPath) {
+              const target = Array.from(critiqueViewEl.querySelectorAll("[data-files-path]")).find(el => el.getAttribute("data-files-path") === origin.focusPath && el.getAttribute("data-files-action") === origin.focusAction);
+              target?.focus({ preventScroll: true });
+            }
+          });
+        }
+      }
+      async function findStudioLinkedReaderEditor(page) {
+        if (isWatchedFilePreview) return { kind: "unavailable", label: "Read-only watched window", disabled: true };
+        const state = bufferRecoveryClient?.snapshot();
+        const local = state?.buffers.find(entry => entry.sourceState.path === page.path);
+        if (!documentHostingEnabled) return local ? { kind: "local", label: local.role === "prompt" ? "Go to Prompt" : "Go to Document", bufferId: local.id, workspaceId: studioTabStateId }
+          : { kind: "new", label: "Open in Document…" };
+        if (!documentHostingReady) return { kind: "unavailable", label: "Wait for Document recovery", disabled: true };
+        // page.path is canonical and literal; link routes need "#", "?" and "%" kept in the name (Sol).
+        const found = await requestDocumentHosting({ operation: "owner", path: studioLiteralPathToLinkRef(page.path), sourcePath: page.path, resourceDir: page.resourceDir, focus: false });
+        if (!found.ok) throw new Error(found.message || "The editing owner could not be checked.");
+        if (!found.owner) return { kind: "new", label: isEditorOnlyMode ? "Open in this Document…" : "Open in Document…" };
+        const owner = found.owner;
+        if (owner.workspaceId === studioTabStateId) {
+          const entry = state?.buffers.find(buffer => buffer.id === owner.bufferId);
+          return { ...owner, kind: "local", label: entry?.role === "prompt" ? "Go to Prompt" : "Go to Document" };
+        }
+        return { ...owner, kind: "window", label: found.live ? "Show its window" : "Resume its window…" };
+      }
+      async function openStudioLinkedReaderForEdit(page, owner, isCurrent) {
+        const context = { sourcePath: page.path, resourceDir: page.resourceDir, isCurrent };
+        if (owner.kind === "window" || (owner.kind === "local" && documentHostingEnabled)) {
+          const result = await reuseHostedDocumentOwner(studioLiteralPathToLinkRef(page.path), context, { isCurrent });
+          return result.handled && result.ok;
+        }
+        if (owner.kind === "local") return isCurrent() && selectStudioBuffer(owner.bufferId, { focusEditor: true });
+        return openPreviewDocumentHere(studioLiteralPathToLinkRef(page.path), context);
+      }
+      async function ensureStudioLinkedReader() {
+        if (!studioLinkedReaderAvailable()) return null;
+        if (studioLinkedReaderUi) return studioLinkedReaderUi;
+        if (studioLinkedReaderFlight) return studioLinkedReaderFlight;
+        studioLinkedReaderFlight = (async () => {
+          const helpers = await import("/buffer-modules/studio-linked-reader-ui.js?token=" + encodeURIComponent(getToken()));
+          if (!studioLinkedReaderAvailable()) return null;
+          studioLinkedReaderUi = helpers.createStudioLinkedReaderUi({ document, window,
+            host: rightPaneEl, root: critiqueViewEl, footer: responseWrapEl, select: rightViewSelect,
+            header: document.getElementById("rightSectionHeader"), metadata: rightPaneEl.querySelector(".reference-meta"),
+            captureOrigin: captureStudioLinkedReaderOrigin, contextIsCurrent: studioPreviewInteractionIsCurrent,
+            read: (href, context) => fetchPreviewLocalLink("reader", href, context),
+            originLabel: studioLinkedReaderOriginLabel, originTitle: studioLinkedReaderOriginTitle, returnToOrigin: restoreStudioLinkedReaderOrigin,
+            findOwner: findStudioLinkedReaderEditor, openForEdit: openStudioLinkedReaderForEdit,
+            editingBusy: () => bufferPageClosed || uiBusy || wsState !== "Ready",
+            report: message => setStatus(message, "warning"),
+            changed: syncStudioLinkedReaderChrome,
+            manualLeave: () => setRightView(rightView, { readerNavigation: true }),
+            render: async (element, page, isCurrent) => {
+              const nonce = ++studioLinkedReaderRenderNonce;
+              const markdown = [".md", ".markdown", ".qmd", ".tex", ".ltx"].includes(page.extension);
+              if (!markdown) {
+                if (!isCurrent()) return;
+                element.innerHTML = buildPlainMarkdownHtml(page.text);
+                bindStudioPreviewElementOwner(element, captureStudioPreviewOwner("reader", nonce)); return;
+              }
+              beginPreviewRender(element);
+              await applyRenderedMarkdown(element, page.text, "reader", nonce);
+            },
+          });
+          return studioLinkedReaderUi;
+        })().finally(() => { studioLinkedReaderFlight = null; });
+        return studioLinkedReaderFlight;
+      }
+      async function readStudioLinkedFile(href, context) {
+        // Files/Working have no committed Markdown owner. Capture their origin
+        // before the lazy module load, not after a later navigation or role swap.
+        const view = rightView, bufferId = getStudioSelectedBuffer()?.id || null;
+        const directory = view === "files" ? fileBrowserState.currentDir : null;
+        const readingContext = typeof context?.isCurrent === "function" ? context : { ...(context || {}),
+          isCurrent: () => !bufferPageClosed && rightView === view
+            && (getStudioSelectedBuffer()?.id || null) === bufferId
+            && (view !== "files" || fileBrowserState.currentDir === directory) };
+        try {
+          const reader = await ensureStudioLinkedReader();
+          if (!reader || !studioPreviewInteractionIsCurrent(readingContext)) return false;
+          return reader.read(href, readingContext);
+        } catch (error) {
+          if (!error?.studioCancelled && studioPreviewInteractionIsCurrent(readingContext)) setStatus(error?.message || "Could not start linked reading.", "warning");
+          return false;
+        }
+      }
+
       let previewLinkMenuEl = null;
       let activePreviewLinkContext = null;
       let previewLinkMenuRequestId = 0;
@@ -17493,6 +19813,12 @@
         return (parts.pop() || "").toLowerCase();
       }
 
+      // Link routes cut at "#" and "?" and decode "%"; a literal file path keeps all three as
+      // part of its name (Sol, batch B). Copy and listing routes read paths literally.
+      function studioLiteralPathToLinkRef(path) {
+        return String(path || "").replace(/[%#?]/g, ch => encodeURIComponent(ch));
+      }
+
       function getPreviewLocalLinkKind(href) {
         const ext = getPreviewLocalLinkExtension(href);
         const name = getPreviewLocalLinkFilename(href);
@@ -17533,7 +19859,7 @@
 
       function getPreviewLinkAnchorFromEvent(event) {
         const target = event && event.target;
-        const anchor = target instanceof Element ? target.closest("#sourcePreview a[href], #critiqueView a[href]") : null;
+        const anchor = target instanceof Element ? target.closest("#sourcePreview a[href], #critiqueView a[href], #studioLinkedReaderContent a[href]") : null;
         if (!anchor) return null;
         if (anchor.closest(".studio-pdf-card, .studio-html-artifact-toolbar, .studio-copy-block-btn")) return null;
         const href = String(anchor.getAttribute("href") || "").trim();
@@ -17617,9 +19943,10 @@
         activePreviewLinkContext = nextContext;
         if (kind === "pdf") {
           appendPreviewLinkMenuButton(menu, "Open PDF preview", "open-pdf");
-          appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
+          appendPreviewLinkMenuButton(menu, documentHostingEnabled ? "Open separately" : "Open in new Studio tab", "open-preview-new");
           appendPreviewLinkMenuButton(menu, "Open in system viewer", "open-system");
         } else if (kind === "text") {
+          if (studioLinkedReaderAvailable()) appendPreviewLinkMenuButton(menu, "Read here", "read-here");
           appendPreviewLinkMenuButton(menu, "Preview file (follow changes)", "watch-new");
           appendPreviewLinkMenuButton(menu, "Open file tab", "open-new");
           if (!isWatchedFilePreview) appendPreviewLinkMenuButton(menu, "Open here", "open-here");
@@ -17628,7 +19955,7 @@
           if (!isWatchedFilePreview) appendPreviewLinkMenuButton(menu, "Convert here", "open-here");
         } else if (kind === "image") {
           appendPreviewLinkMenuButton(menu, "Open image preview", "open-image");
-          appendPreviewLinkMenuButton(menu, "Open in new Studio tab", "open-preview-new");
+          appendPreviewLinkMenuButton(menu, documentHostingEnabled ? "Open separately" : "Open in new Studio tab", "open-preview-new");
         }
         appendPreviewLinkMenuButton(menu, "Reveal in file manager", "reveal");
         appendPreviewLinkMenuButton(menu, "Copy path", "copy-path");
@@ -17830,6 +20157,7 @@
 
       async function confirmPreviewOfficeConversion(href, destination, options) {
         if (getPreviewLocalLinkKind(href) !== "office") return true;
+        if (documentHostingEnabled) throw new Error("Office conversion is unavailable in the Document-hosting alpha. Convert separately and explicitly import a Markdown copy; the original document was not changed.");
         const isCurrent = options && typeof options.isCurrent === "function" ? options.isCurrent : () => true;
         if (!isCurrent()) return false;
         const label = getPreviewOfficeConversionLabel(href);
@@ -17852,6 +20180,17 @@
         return Boolean(value && (/^\//.test(value) || /^[A-Za-z]:[\\/]/.test(value)));
       }
 
+      async function openHostedDocumentHere(href, context, bufferId, isCurrent, operation) {
+        if (!documentOpenController) throw new Error("Wait for Document recovery before opening a file.");
+        const resource = await fetchPreviewLocalLink("resolve", href, { ...context, isCurrent }, { bufferOpenOperation: operation });
+        if (!isCurrent()) return { ok: false };
+        if (resource.kind !== "text" || typeof resource.path !== "string" || !resource.path) throw new Error("A canonical readable text file is required.");
+        const query = getPreviewLinkResourceQuery(resource.path, context);
+        // The hosting route reads its path as a link reference too; keep "#", "?" and "%" in the
+        // canonical name (as studioLiteralPathToLinkRef does).
+        const ref = resource.path.replace(/[%#?]/g, ch => encodeURIComponent(ch));
+        return documentOpenController.open({ bufferId, path: ref, sourcePath: query.sourcePath || "", resourceDir: query.resourceDir || "" }, isCurrent);
+      }
       async function openPreviewDocumentHere(href, contextOverride, options) {
         if (bufferSwitchingEnabled) return openStudioBufferDocument(href, contextOverride);
         if (isWatchedFilePreview) {
@@ -17860,6 +20199,10 @@
         const consent = bufferRecoveryEnabled ? captureEditorAsyncConsent() : null;
         const isCurrent = () => studioPreviewInteractionIsCurrent(contextOverride)
           && (!bufferRecoveryEnabled || editorAsyncConsentIsCurrent(consent));
+        if (documentHostingEnabled && getPreviewLocalLinkKind(href) === "text") {
+          const existing = await reuseHostedDocumentOwner(href, contextOverride, { isCurrent });
+          if (existing.handled) return existing.ok;
+        }
         if (!isCurrent() || !(await confirmPreviewOfficeConversion(href, "here", { isCurrent }))) return false;
         if (!isCurrent()) return false;
         if (editorHasPotentialUnsavedContent()) {
@@ -17874,8 +20217,10 @@
           });
           if (!isCurrent() || !confirmed) return false;
         }
+        if (documentHostingEnabled && getPreviewLocalLinkKind(href) === "text") return (await openHostedDocumentHere(href, contextOverride, consent.bufferId, isCurrent)).ok;
+        const ready = documentHostingEnabled ? await prepareDocumentHostingReplacement(consent.bufferId, isCurrent) : isCurrent;
         const payload = await fetchPreviewLocalLink("document", href, contextOverride);
-        if (!isCurrent()) return false;
+        if (!isCurrent() || !ready()) return false;
         if (typeof payload.text !== "string") throw new Error("Studio did not return document text.");
         const responsePath = typeof payload.path === "string" ? payload.path : "";
         const fallbackPath = options && typeof options.fallbackPath === "string" && isLikelyAbsoluteStudioPath(options.fallbackPath)
@@ -17886,7 +20231,7 @@
         const nextResourceDir = typeof payload.resourceDir === "string" ? normalizeStudioResourceDirValue(payload.resourceDir) : "";
         const converted = payload && payload.converted === true;
         if (!isCurrent()) return false;
-        if (resourceDirInput && nextResourceDir) resourceDirInput.value = nextResourceDir;
+        if (resourceDirInput && nextResourceDir) setStudioResourceDirValue(nextResourceDir);
         setEditorText(payload.text, { preserveScroll: false, preserveSelection: false });
         if (converted || !path) {
           setSourceState({ source: "blank", label, path: null });
@@ -17906,6 +20251,13 @@
 
       async function openPreviewDocumentInNewEditor(href, contextOverride) {
         const isCurrent = () => studioPreviewInteractionIsCurrent(contextOverride);
+        if (!isCurrent()) return false;
+        if (documentHostingEnabled && getPreviewLocalLinkKind(href) === "text") {
+          const existing = await reuseHostedDocumentOwner(href, contextOverride, { isCurrent });
+          if (existing.handled) return existing.ok;
+          if (isCurrent()) return documentHostingController?.launch({ kind: "file", ...getPreviewLinkResourceQuery(href, contextOverride) });
+          return false;
+        }
         if (!isCurrent() || !(await confirmPreviewOfficeConversion(href, "new", { isCurrent }))) return false;
         if (!isCurrent()) return false;
         let launch = null;
@@ -17961,15 +20313,18 @@
         let launch = null;
         try {
           launch = openPendingStudioTab("preview");
-          const payload = await fetchPreviewLocalLink("preview-url", href, contextOverride);
+          const payload = await fetchPreviewLocalLink(documentHostingEnabled ? "viewer-url" : "preview-url", href, contextOverride);
           if (!isCurrent()) {
             cancelPendingStudioTab(launch, "The originating preview changed before this tab finished opening.");
             return false;
           }
           const relativeUrl = payload && typeof payload.relativeUrl === "string" ? payload.relativeUrl : "";
           if (!relativeUrl) throw new Error("Studio did not return a preview URL.");
-          navigatePendingStudioTab(launch, relativeUrl);
-          if (isCurrent()) setStatus("Opening preview in a new Studio tab.");
+          if (documentHostingEnabled) {
+            if (payload.readOnly !== true) throw new Error("Studio did not return a read-only viewer.");
+            navigatePendingStudioReadOnlyTab(launch, relativeUrl);
+          } else navigatePendingStudioTab(launch, relativeUrl);
+          if (isCurrent()) setStatus(documentHostingEnabled ? "Requested a separate read-only preview." : "Opening preview in a new Studio tab.");
         } catch (error) {
           if (error && error.studioCancelled) {
             cancelPendingStudioTab(launch, "Local resource access was cancelled.");
@@ -18023,6 +20378,9 @@
             await openPreviewDocumentInNewEditor(href, context);
             return;
           }
+          if (action === "read-here") {
+            await readStudioLinkedFile(href, context); return;
+          }
           if (action === "watch-new") {
             await openPreviewDocumentInWatchedPreview(href, context);
             return;
@@ -18054,6 +20412,13 @@
       }
 
       function handlePreviewLocalLinkClick(event) {
+        const localAnchor = event.target instanceof Element ? event.target.closest("#studioLinkedReaderContent a[href]") : null;
+        const fragmentHref = localAnchor?.getAttribute("href") || "";
+        if (fragmentHref.startsWith("#")) {
+          event.preventDefault(); event.stopPropagation();
+          if (studioPreviewNodeOwnerIsCurrent(localAnchor)) studioLinkedReaderUi?.revealFragment(fragmentHref.slice(1));
+          return;
+        }
         const anchor = getPreviewLinkAnchorFromEvent(event);
         if (!anchor) return;
         const href = String(anchor.getAttribute("href") || "").trim();
@@ -18078,6 +20443,10 @@
               setStatus((error && error.message) ? error.message : String(error || "Could not open linked image."), "warning");
             }
           });
+          return;
+        }
+        if (kind === "text" && studioLinkedReaderAvailable() && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+          void readStudioLinkedFile(href, context);
           return;
         }
         if (kind === "text" || kind === "office") {
@@ -19417,6 +21786,56 @@
         return EXT_TO_LANG[ext] || "";
       }
 
+      function repairEditorTextareaWrap(event) {
+        // A composition can start without a matching end (e.g. macOS autocorrect in WebKit);
+        // an ordinary input event proves it is over, so a stale flag cannot disable the repair.
+        if (event?.type === "input" && event.isComposing === false) editorWrapCompositionActive = false;
+        if (!editorHighlightEnabled || editorView !== "markdown" || editorWrapCompositionActive || event?.isComposing) return false;
+        // WebKit can keep the previous soft-wrap layout after a native edit,
+        // while the rebuilt overlay has already moved a word onto its prior line.
+        // Narrow the text by 1px for one forced layout, then restore it, without
+        // replacing text or touching native undo/IME. Nudge the padding, not the
+        // width: the editor is a flex item that grows back to full width, so a
+        // width nudge never reached its text layout (checked in WebKit, 8 Oct).
+        const style = sourceTextEl.style;
+        const padding = style.getPropertyValue("padding-right");
+        const priority = style.getPropertyPriority("padding-right");
+        const computed = window.getComputedStyle(sourceTextEl).paddingRight || "0px";
+        const top = sourceTextEl.scrollTop, left = sourceTextEl.scrollLeft;
+        try {
+          style.setProperty("padding-right", "calc(" + computed + " + 1px)", "important");
+          void sourceTextEl.offsetWidth;
+        } finally {
+          if (padding) style.setProperty("padding-right", padding, priority);
+          else style.removeProperty("padding-right");
+          void sourceTextEl.offsetWidth;
+          sourceTextEl.scrollTop = top; sourceTextEl.scrollLeft = left;
+        }
+        syncEditorHighlightScroll();
+        return true;
+      }
+
+      // Catch-all: lay the text out again once typing pauses, covering edits made
+      // outside the ordinary input path (autocorrect, dictation, text replacement).
+      let editorWrapPauseTimer = null;
+      function scheduleEditorWrapPauseRepair() {
+        if (editorWrapPauseTimer !== null) window.clearTimeout(editorWrapPauseTimer);
+        editorWrapPauseTimer = window.setTimeout(() => { editorWrapPauseTimer = null; repairEditorTextareaWrap(); }, 300);
+      }
+
+      function handleEditorHighlightShortcut(event) {
+        if (!event || event.defaultPrevented || event.isComposing || editorWrapCompositionActive || event.target !== sourceTextEl
+            || editorView !== "markdown" || sourceTextEl.disabled || sourceTextEl.readOnly || studioModalBlocksDraftAction()
+            || !event.ctrlKey || !event.shiftKey || event.metaKey || event.altKey
+            || !(event.code === "KeyH" || String(event.key || "").toLowerCase() === "h")) return false;
+        event.preventDefault(); event.stopPropagation();
+        if (!event.repeat) {
+          setEditorHighlightEnabled(!editorHighlightEnabled);
+          repairEditorTextareaWrap();
+        }
+        return true;
+      }
+
       function renderEditorHighlightNow() {
         if (!sourceHighlightEl) return;
         if (!editorHighlightEnabled || editorView !== "markdown") {
@@ -19651,10 +22070,18 @@
       }
 
       function studioMetadataKeyIsLoaded(loadedKeys, key) {
+        if (documentHostingEnabled && !documentHostingMetadataProof(key)?.ok) return false;
         return !bufferRecoveryEnabled || Boolean(key && loadedKeys.has(key));
       }
 
+      function studioMetadataKeyCanEdit(loadedKeys, key) {
+        return studioMetadataKeyIsLoaded(loadedKeys, key)
+          && (!documentHostingEnabled || !documentHostingSaveAffectsBuffer(documentHostingMetadataProof(key)?.bufferId));
+      }
       function requireStudioMetadataLoaded(loadedKeys, association, label) {
+        if (documentHostingEnabled && documentHostingSaveAffectsBuffer(documentHostingMetadataProof(association?.key)?.bufferId)) {
+          setStatus("Finish or resolve this Document's disk save before editing its metadata. Existing notes are kept; editor text may still be edited.", "warning"); return false;
+        }
         if (studioMetadataKeyIsLoaded(loadedKeys, association && association.key)) return true;
         setStatus("Saved " + label + " must finish loading before editing. If loading failed, close and reopen this panel to retry.", "warning");
         return false;
@@ -19757,8 +22184,17 @@
         if (current && current.editGeneration === editGeneration && current.writeVersion === writeVersion) records.delete(key);
       }
 
+      function studioMetadataConsentAuthorityIsCurrent(consent, key) {
+        if (!documentHostingEnabled) return true;
+        const before = consent?.hosting, now = documentHostingMetadataProof(key);
+        return Boolean(key && before?.ok && now?.ok && now.bufferId && Number.isSafeInteger(now.generation) && now.generation > 0
+          && Number.isSafeInteger(now.documentEpoch) && now.documentEpoch > 0
+          && ["bufferId", "generation", "documentEpoch"].every(field => before[field] === now[field])
+          && !documentHostingSaveAffectsBuffer(now.bufferId));
+      }
       function captureScratchpadMutationConsent() {
         return {
+          ...(documentHostingEnabled ? { hosting: documentHostingMetadataProof(scratchpadAssociation?.key) } : {}),
           key: scratchpadAssociation ? scratchpadAssociation.key : "",
           associationGeneration: scratchpadAssociationGeneration,
           sourceGeneration: editorSourceGeneration,
@@ -19773,11 +22209,13 @@
           && consent.associationGeneration === scratchpadAssociationGeneration
           && consent.sourceGeneration === editorSourceGeneration
           && consent.editGeneration === scratchpadEditGeneration
-          && consent.actionGeneration === scratchpadActionGeneration);
+          && consent.actionGeneration === scratchpadActionGeneration
+          && studioMetadataConsentAuthorityIsCurrent(consent, consent.key));
       }
 
       function captureReviewNotesMutationConsent() {
         return {
+          ...(documentHostingEnabled ? { hosting: documentHostingMetadataProof(reviewNotesAssociation?.key) } : {}),
           key: reviewNotesAssociation ? reviewNotesAssociation.key : "",
           associationGeneration: reviewNotesAssociationGeneration,
           sourceGeneration: editorSourceGeneration,
@@ -19792,7 +22230,8 @@
           && consent.associationGeneration === reviewNotesAssociationGeneration
           && consent.sourceGeneration === editorSourceGeneration
           && consent.editGeneration === reviewNotesEditGeneration
-          && consent.actionGeneration === reviewNotesActionGeneration);
+          && consent.actionGeneration === reviewNotesActionGeneration
+          && studioMetadataConsentAuthorityIsCurrent(consent, consent.key));
       }
 
       function formatScratchpadRecentTime(timestamp) {
@@ -19960,10 +22399,13 @@
         markStudioMetadataUnsynced(scratchpadUnsyncedRecords, key, {
           editGeneration: writeGeneration,
           writeVersion,
+          ...(documentHostingEnabled ? { hosting: config.hosting || (scratchpadUnsyncedRecords.get(key)?.editGeneration === writeGeneration ? scratchpadUnsyncedRecords.get(key).hosting : null)
+            || (scratchpadHostingProduction?.key === key && scratchpadHostingProduction.editGeneration === writeGeneration ? scratchpadHostingProduction.proof : documentHostingMetadataProof(key)) } : {}),
           text: snapshot,
           label,
         });
-        const body = { documentKey: key, text: snapshot, label, ...getStudioMetadataWriteOwnership(writeVersion) };
+        const body = { documentKey: key, text: snapshot, label, ...getStudioMetadataWriteOwnership(writeVersion),
+          ...(documentHostingEnabled ? { hosting: scratchpadUnsyncedRecords.get(key).hosting } : {}) };
         if (config.beacon && trySendStudioJsonBeacon("/scratchpad-state", body)) {
           if (!bufferRecoveryEnabled) {
             clearStudioMetadataUnsynced(scratchpadUnsyncedRecords, key, writeGeneration, writeVersion);
@@ -20019,6 +22461,7 @@
         const key = String(documentKey || "").trim();
         const labelSnapshot = String(label || "").trim();
         const editGeneration = scratchpadEditGeneration;
+        if (documentHostingEnabled) scratchpadHostingProduction = { key, editGeneration, proof: documentHostingMetadataProof(key) };
         if (!key) return;
         scratchpadPersistTimer = window.setTimeout(() => {
           scratchpadPersistTimer = null;
@@ -20623,9 +23066,12 @@
         markStudioMetadataUnsynced(reviewNotesUnsyncedRecords, key, {
           editGeneration: writeGeneration,
           writeVersion,
+          ...(documentHostingEnabled ? { hosting: config.hosting || (reviewNotesUnsyncedRecords.get(key)?.editGeneration === writeGeneration ? reviewNotesUnsyncedRecords.get(key).hosting : null)
+            || (reviewNotesHostingProduction?.key === key && reviewNotesHostingProduction.editGeneration === writeGeneration ? reviewNotesHostingProduction.proof : documentHostingMetadataProof(key)) } : {}),
           notes: cloneReviewNotes(snapshot),
         });
-        const body = { documentKey: key, notes: snapshot, ...getStudioMetadataWriteOwnership(writeVersion) };
+        const body = { documentKey: key, notes: snapshot, ...getStudioMetadataWriteOwnership(writeVersion),
+          ...(documentHostingEnabled ? { hosting: reviewNotesUnsyncedRecords.get(key).hosting } : {}) };
         if (config.beacon && trySendStudioJsonBeacon("/review-notes", body)) {
           if (!bufferRecoveryEnabled) {
             clearStudioMetadataUnsynced(reviewNotesUnsyncedRecords, key, writeGeneration, writeVersion);
@@ -20680,6 +23126,7 @@
         const key = String(documentKey || (descriptor && descriptor.key) || "").trim();
         const snapshot = cloneReviewNotes(arguments.length >= 1 ? notes : reviewNotes);
         const editGeneration = reviewNotesEditGeneration;
+        if (documentHostingEnabled) reviewNotesHostingProduction = { key, editGeneration, proof: documentHostingMetadataProof(key) };
         if (!key) return;
         reviewNotesPersistTimer = window.setTimeout(() => {
           reviewNotesPersistTimer = null;
@@ -21046,9 +23493,12 @@
           if (!confirmed || !isCurrent()) return;
         }
         if (!isCurrent()) return;
-        setEditorText(prompt, { preserveScroll: false, preserveSelection: false });
-        setSourceState({ source: "blank", label: "comments prompt", path: null });
-        setStatus("Loaded comments prompt into editor.", "success");
+        const apply = () => {
+          setEditorText(prompt, { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label: "comments prompt", path: null });
+          setStatus("Loaded comments prompt into editor.", "success");
+        };
+        return documentHostingEnabled ? runStudioEditorSourceMutation(apply, isCurrent) : apply();
       }
 
       function buildReviewNoteLineMap(text) {
@@ -23669,7 +26119,7 @@
       }
 
       function recordReviewNotesMutation() {
-        if (!studioMetadataKeyIsLoaded(reviewNotesLoadedKeys, reviewNotesAssociation && reviewNotesAssociation.key)) return;
+        if (!studioMetadataKeyCanEdit(reviewNotesLoadedKeys, reviewNotesAssociation && reviewNotesAssociation.key)) return;
         reviewNotesEditGeneration += 1;
         if (!reviewNotesAssociation) return;
         reviewNotesAssociationStatus = "loaded";
@@ -23869,7 +26319,7 @@
         const count = reviewNotes.length;
         const hasNotes = count > 0;
         const isOpen = isReviewNotesOpen();
-        const editable = studioMetadataKeyIsLoaded(reviewNotesLoadedKeys, reviewNotesAssociation && reviewNotesAssociation.key);
+        const editable = studioMetadataKeyCanEdit(reviewNotesLoadedKeys, reviewNotesAssociation && reviewNotesAssociation.key);
         if (reviewNotesBtn) {
           reviewNotesBtn.textContent = "Comments";
           reviewNotesBtn.classList.toggle("has-content", hasNotes);
@@ -23885,7 +26335,9 @@
           const scopeLabel = descriptor.fileBacked
             ? "file-backed"
             : (descriptor.draftBacked ? "draft-backed" : "local buffer");
-          reviewNotesMetaEl.textContent = reviewNotesAssociationStatus === "loading"
+          reviewNotesMetaEl.textContent = documentHostingEnabled && documentHostingSaveAffectsBuffer(documentHostingMetadataProof(reviewNotesAssociation?.key)?.bufferId)
+            ? "Disk save pending · comments kept; editing paused"
+            : reviewNotesAssociationStatus === "loading"
             ? ("Loading comments · " + scopeLabel)
             : (reviewNotesAssociationStatus === "unavailable"
               ? ((editable ? "Saved comments unavailable · keeping this page’s current copy · " : "Saved comments unavailable · editing paused; close and reopen to retry · ") + scopeLabel)
@@ -23979,7 +26431,7 @@
 
           const textarea = document.createElement("textarea");
           textarea.value = String(note.text || "");
-          textarea.readOnly = !studioMetadataKeyIsLoaded(reviewNotesLoadedKeys, cardAssociationKey);
+          textarea.readOnly = !studioMetadataKeyCanEdit(reviewNotesLoadedKeys, cardAssociationKey);
           textarea.placeholder = "Write a local comment here…";
           textarea.title = "Write a local comment. Enter inserts a new line; changes save automatically as you type.";
           card.appendChild(textarea);
@@ -24027,7 +26479,7 @@
           const deleteBtn = document.createElement("button");
           deleteBtn.type = "button";
           deleteBtn.className = "review-note-delete-btn";
-          deleteBtn.disabled = !studioMetadataKeyIsLoaded(reviewNotesLoadedKeys, cardAssociationKey);
+          deleteBtn.disabled = !studioMetadataKeyCanEdit(reviewNotesLoadedKeys, cardAssociationKey);
           deleteBtn.textContent = "Delete";
           deleteBtn.title = "Delete this local comment.";
           deleteBtn.addEventListener("click", () => {
@@ -24518,7 +26970,7 @@
       }
 
       function updateScratchpadUi() {
-        const editable = studioMetadataKeyIsLoaded(scratchpadLoadedKeys, scratchpadAssociation && scratchpadAssociation.key);
+        const editable = studioMetadataKeyCanEdit(scratchpadLoadedKeys, scratchpadAssociation && scratchpadAssociation.key);
         const normalized = String(scratchpadText || "");
         const hasContent = Boolean(normalized.trim());
         const descriptor = getCurrentStudioDocumentDescriptor();
@@ -24530,7 +26982,9 @@
             : ("Open a local persistent scratchpad for this document/draft. Scope: " + descriptor.label + ". File-backed docs come back across Pi restarts; unsaved drafts stay with this draft instance until saved or cleared.");
         }
         if (scratchpadMetaEl) {
-          scratchpadMetaEl.textContent = scratchpadAssociationStatus === "loading"
+          scratchpadMetaEl.textContent = documentHostingEnabled && documentHostingSaveAffectsBuffer(documentHostingMetadataProof(scratchpadAssociation?.key)?.bufferId)
+            ? "Disk save pending · notes kept; editing paused"
+            : scratchpadAssociationStatus === "loading"
             ? "Loading notes for this document/draft…"
             : (scratchpadAssociationStatus === "unavailable"
               ? (editable ? "Saved notes could not be loaded; keeping this page’s current copy" : "Saved notes unavailable · editing paused; close and reopen to retry")
@@ -24832,19 +27286,26 @@
       }
 
       function getAbortablePendingKind() {
+        if (isEditorOnlyMode || isWatchedFilePreview) return null;
+        if (studioRuntimeActivity) {
+          const run = studioRuntimeActivity.run;
+          return run?.cancellable && !run.stopping && studioStopRequestedRunId !== run.id && wsState !== "Disconnected" && wsState !== "Connecting" ? run.kind : null;
+        }
         if (!pendingRequestId) return null;
         return pendingKind === "direct" || pendingKind === "critique" || pendingKind === "show-me" ? pendingKind : null;
       }
 
       function requestCancelForPendingRequest(expectedKind) {
         const activeKind = getAbortablePendingKind();
-        if (!activeKind || activeKind !== expectedKind || !pendingRequestId) {
+        if (!activeKind || activeKind !== expectedKind || (!studioRuntimeActivity?.run?.requestId && !pendingRequestId)) {
           setStatus("No matching Studio request is running.", "warning");
           return false;
         }
-        const requestId = pendingRequestId;
-        const sent = sendMessage({ type: "cancel_request", requestId });
+        const run = studioRuntimeActivity?.run;
+        const requestId = run?.requestId || pendingRequestId;
+        const sent = sendMessage({ type: "cancel_request", requestId, ...(run ? { runId: run.id } : {}) });
         if (!sent) return false;
+        if (run) { studioStopRequestedRunId = run.id; syncActionButtons(); }
         clearArmedTitleAttention(requestId);
         setStatus("Stopping request…", "warning");
         return true;
@@ -24873,6 +27334,7 @@
             queueSteerBtn.hidden = false;
             queueSteerBtn.disabled = true;
             queueSteerBtn.classList.remove("request-stop-active");
+            queueSteerBtn.hidden = true;
             queueSteerBtn.title = "Queue steering is unavailable in editor-only mode.";
           }
           if (sendReplBtn) {
@@ -24919,21 +27381,21 @@
           sendRunBtn.disabled = documentView && !directIsStop ? !studioBuffersCanSwitch(true)
             : wsState === "Disconnected" || (!directIsStop && (uiBusy || critiqueIsStop || !promptReady));
           const replHint = rightView === "repl" && getActiveReplSessionForCurrentRuntime()
-            ? " Sends text to Pi, not the REPL; use Send chunk/selection or Send to REPL to execute code in the active REPL."
+            ? " This sends to Pi, not the REPL."
             : "";
           const piEditorDraftHint = linkedPiEditorDraftSnapshot
-            ? " The linked Pi terminal draft will be cleared after Pi accepts this run only if that draft remains unchanged."
+            ? " Pi's terminal draft is cleared once Pi accepts the Run, if it hasn't changed."
             : "";
           sendRunBtn.title = directIsStop
             ? "Stop the active run. Shortcut: Esc."
             : (annotationsEnabled
-              ? "Run editor text as-is (includes [an: ...] markers). Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + piEditorDraftHint + replHint
-              : "Run editor text with [an: ...] markers stripped. Shortcut: Cmd/Ctrl+Enter. Stop the active request with Esc." + piEditorDraftHint + replHint);
+              ? "Run the Prompt (Cmd/Ctrl+Enter). Esc stops it." + piEditorDraftHint + replHint
+              : "Run the Prompt without its annotations (Cmd/Ctrl+Enter). Esc stops it." + piEditorDraftHint + replHint);
           if (documentView && !directIsStop) sendRunBtn.title = "Return to the preserved Prompt for review. This does not send this document or a hidden Prompt. Press Run separately after returning.";
         }
 
         if (queueSteerBtn) {
-          queueSteerBtn.hidden = false;
+          queueSteerBtn.hidden = !canQueueSteering;
           queueSteerBtn.disabled = wsState === "Disconnected" || !canQueueSteering || !promptReady;
           queueSteerBtn.classList.remove("request-stop-active");
           queueSteerBtn.title = canQueueSteering
@@ -25121,6 +27583,7 @@
           setStatus("Not connected to Studio server.", "error");
           return false;
         }
+        if (documentHostingEnabled && message.type === "refresh_from_disk_request" && !message.hosting) message = { ...message, hosting: documentHostingProof() };
         ws.send(JSON.stringify(message));
         return true;
       }
@@ -25192,6 +27655,30 @@
       }
 
       function handleServerMessage(message) {
+        if (!message || typeof message !== "object") return;
+        applyStudioRuntimeActivity(message);
+        if (message.type === "response_history" && message.reason === "tree") pauseStudioRunFollowing();
+        if (message.type === "cancel_rejected") {
+          if (message.runId === studioStopRequestedRunId) {
+            studioStopRequestedRunId = null;
+            setStatus(message.message || "Could not request cancellation. The run was kept active.", "warning");
+            syncActionButtons();
+          }
+          return;
+        }
+        try { return handleServerMessagePayload(message); }
+        finally {
+          // A response or a rejected operation cannot prove SDK settlement.
+          if (studioRuntimeActivity?.run || studioRuntimeActivity?.compaction) {
+            agentBusyFromServer = Boolean(studioRuntimeActivity.run);
+            setBusy(true);
+          }
+          syncStudioRunFollowingFromMessage(message);
+          syncStudioRuntimePresentation();
+        }
+      }
+
+      function handleServerMessagePayload(message) {
         if (!message || typeof message !== "object") return;
 
         debugTrace("server_message", summarizeServerMessage(message));
@@ -25411,7 +27898,31 @@
           return;
         }
 
+        if (documentHostingEnabled && message.type === "document_hosting_changed") {
+          if (typeof message.moveId === "string") void documentHostingController?.onChanged(message.moveId);
+          return;
+        }
+        if (documentHostingEnabled && message.type === "document_hosting_focus") {
+          if (bufferSwitchingEnabled && typeof message.bufferId === "string") selectStudioBuffer(message.bufferId);
+          window.focus(); return;
+        }
         if (message.type === "hello_ack") {
+          if (documentHostingEnabled && message.documentHosting?.workspaceId === studioTabStateId && Number.isSafeInteger(message.documentHosting.generation)) {
+            documentHostingGeneration = message.documentHosting.generation;
+            for (const done of documentHostingWaiters) done(); documentHostingWaiters.clear();
+            if (workspacePersistenceReady && bufferRecoveryClient) {
+              if (bufferRecoveryClient.isHostingFrozen()) void documentHostingController?.recheck();
+              else void bufferRecoveryClient.retry(() => !bufferPageClosed && Boolean(documentHostingGeneration)).then(async result => {
+                syncDocumentHostingReadiness();
+                if (result.ok) {
+                  scratchpadLoadedKeys.clear(); reviewNotesLoadedKeys.clear();
+                  renderReviewNotesList(); updateScratchpadUi();
+                  loadScratchpadForCurrentDocument(); void loadReviewNotesForCurrentDocument();
+                  await documentHostingController?.ready(await requestBufferRecovery("GET"));
+                }
+              });
+            }
+          }
           const busy = Boolean(message.busy);
           agentBusyFromServer = Boolean(message.agentBusy);
           updateTerminalActivityState(message.terminalPhase, message.terminalToolName, message.terminalActivityLabel);
@@ -25472,6 +27983,7 @@
           let loadedInitialDocument = false;
           if (
             !explicitDocumentIdentityFromUrl &&
+            (!documentHostingEnabled || !bufferRecoveryClient) &&
             !initialDocumentApplied &&
             message.initialDocument &&
             typeof message.initialDocument.text === "string"
@@ -25509,11 +28021,12 @@
             appliedHistory = setResponseHistory(message.responseHistory, {
               autoSelectLatest: !initialDocumentApplied,
               preserveSelection: initialDocumentApplied,
+              initialSync: !studioRunFollowing?.active,
               silent: true,
             });
           }
 
-          if (!appliedHistory && message.lastResponse && typeof message.lastResponse.markdown === "string") {
+          if (!appliedHistory && !(studioRunFollowingAvailable() && studioRunFollowing?.active) && message.lastResponse && typeof message.lastResponse.markdown === "string") {
             const lastMarkdown = message.lastResponse.markdown;
             const lastResponseKind =
               typeof message.lastResponse.kind === "string"
@@ -25749,6 +28262,17 @@
           return;
         }
 
+        if (message.type === "prompt_submitted") {
+          const recorded = message.studioOwned === true ? promptRunIndicatorTracker?.submitted(message.requestId, message.sentAt) : promptRunIndicatorTracker?.uncertain(message.requestId);
+          if (recorded) { persistPromptRunIndicator(); syncPromptRunIndicator(); }
+          return;
+        }
+
+        if (message.type === "run_settled") {
+          if (promptRunIndicatorTracker?.settled(Array.isArray(message.requestIds) ? message.requestIds : message.requestId, message.outcome, message.settledAt)) { persistPromptRunIndicator(); syncPromptRunIndicator(); }
+          return;
+        }
+
         if (message.type === "run_accepted") {
           submittedEditorDrafts.accept(message.requestId);
           return;
@@ -25826,14 +28350,14 @@
           stickyStudioKind = responseKind;
           pendingRequestId = null;
           pendingKind = null;
-          queuedLatestResponse = deferToPrompt && typeof message.markdown === "string"
+          queuedLatestResponse = (deferToPrompt || studioRunFollowingAvailable()) && typeof message.markdown === "string"
             ? { kind: normalizeHistoryKind(responseKind), markdown: message.markdown, thinking: message.thinking, timestamp: message.timestamp }
             : null;
           agentBusyFromServer = false;
           setBusy(false);
           setWsState("Ready");
 
-          pendingResponseScrollReset = !deferToPrompt;
+          pendingResponseScrollReset = !deferToPrompt && !studioRunFollowingAvailable();
           let appliedFromHistory = false;
           if (Array.isArray(message.responseHistory)) {
             appliedFromHistory = setResponseHistory(message.responseHistory, {
@@ -25843,7 +28367,7 @@
             });
           }
 
-          if (!deferToPrompt && !appliedFromHistory && typeof message.markdown === "string") {
+          if (!deferToPrompt && !studioRunFollowingAvailable() && !appliedFromHistory && typeof message.markdown === "string") {
             handleIncomingResponse(message.markdown, responseKind, message.timestamp, message.thinking);
           }
           if (deferToPrompt) { pendingResponseScrollReset = false; updateResultActionButtons(); }
@@ -25863,7 +28387,14 @@
         }
 
         if (message.type === "latest_response") {
-          if (pendingRequestId) return;
+          if (pendingRequestId && !studioRunFollowingAvailable()) return;
+          if (studioRunFollowingAvailable()) {
+            if (Array.isArray(message.responseHistory)) setResponseHistory(message.responseHistory, { silent: true });
+            if (typeof message.markdown === "string") queuedLatestResponse = { kind: normalizeHistoryKind(message.kind),
+              markdown: message.markdown, thinking: message.thinking, timestamp: message.timestamp };
+            updateResultActionButtons();
+            return;
+          }
 
           const hasHistory = Array.isArray(message.responseHistory);
           if (followLatest) {
@@ -25914,6 +28445,7 @@
           setResponseHistory(message.items, {
             autoSelectLatest: isTreeSync ? true : followLatest,
             preserveSelection: isTreeSync ? true : !followLatest,
+            branchSync: isTreeSync,
             silent: true,
           });
           return;
@@ -25931,6 +28463,14 @@
 
         if (message.type === "saved") {
           const savedOperation = typeof message.requestId === "string" ? pendingSaveOperations.get(message.requestId) : null;
+          if (documentHostingEnabled) {
+            if (settledHostingSaveRequests.has(message.requestId) && settledHostingSaveRequests.get(message.requestId) === message.hosting?.operationId) return;
+            if (!savedOperation?.hosting || savedOperation.hosting.operationId !== message.hosting?.operationId || savedOperation.sourceKey !== getEditorDraftSourceKey()) {
+              setStatus("The disk save may have succeeded, but its owning editor changed. Keep current text and use Resolve disk save before changing backing.", "warning"); return;
+            }
+            void resolveDocumentHostingSave({ automaticOperationId: savedOperation.hosting.operationId });
+            return;
+          }
           if (bufferRecoveryEnabled && (!savedOperation || savedOperation.sourceKey !== getEditorDraftSourceKey())) {
             if (savedOperation && pendingRequestId === message.requestId) abandonPendingSaveRequest(message.requestId);
             else pendingSaveOperations.delete(message.requestId);
@@ -25948,11 +28488,12 @@
             const savedResourceDir = typeof message.resourceDir === "string" && message.resourceDir.trim()
               ? normalizeStudioResourceDirValue(message.resourceDir)
               : dirnameForDisplayPath(message.path);
-            if (resourceDirInput) resourceDirInput.value = savedResourceDir;
+            setStudioResourceDirValue(savedResourceDir);
             setSourceState({
               source: "file",
               label: message.label || message.path,
               path: message.path,
+              ...(sourceState.provenance ? { provenance: sourceState.provenance } : {}),
             }, {
               carryCurrentMetadataToNewDocument: true,
             });
@@ -25960,6 +28501,7 @@
           }
           setBusy(false);
           setWsState("Ready");
+          if (documentHostingEnabled) { persistWorkspaceStateNow(); syncDocumentHostingReadiness(); }
           setStatus(typeof message.message === "string" ? message.message : "Saved.", "success");
           return;
         }
@@ -26015,24 +28557,28 @@
           if (typeof message.requestId === "string" && pendingRequestId && message.requestId !== pendingRequestId) {
             return;
           }
-          if (typeof message.requestId === "string" && pendingRequestId === message.requestId) {
+          if (!documentHostingEnabled && typeof message.requestId === "string" && pendingRequestId === message.requestId) {
             pendingRequestId = null;
             pendingKind = null;
           }
-
-          const content = typeof message.content === "string" ? message.content : "";
-          setEditorText(content, { preserveScroll: false, preserveSelection: false });
-          const snapshot = normalizePiEditorDraftSnapshot(message.piEditorDraftSnapshot);
-          setLinkedPiEditorDraftSnapshot(snapshot, Boolean(content.length > 0 && snapshot));
-          setSourceState({ source: "pi-editor", label: "pi editor draft", path: null });
-          setBusy(false);
-          setWsState("Ready");
-          setStatus(
-            content.trim()
-              ? "Loaded draft from pi editor. A Studio Run will clear it if the Pi draft remains unchanged."
-              : "pi editor is empty. Loaded blank text.",
-            content.trim() ? "success" : "warning",
-          );
+          const ownerRequestId = pendingRequestId;
+          const applySnapshot = () => {
+            if (pendingRequestId === message.requestId) { pendingRequestId = null; pendingKind = null; }
+            const content = typeof message.content === "string" ? message.content : "";
+            setEditorText(content, { preserveScroll: false, preserveSelection: false });
+            const snapshot = normalizePiEditorDraftSnapshot(message.piEditorDraftSnapshot);
+            setLinkedPiEditorDraftSnapshot(snapshot, Boolean(content.length > 0 && snapshot));
+            setSourceState({ source: "pi-editor", label: "pi editor draft", path: null });
+            setBusy(false);
+            setWsState("Ready");
+            setStatus(content.trim() ? "Loaded draft from pi editor. A Studio Run will clear it if the Pi draft remains unchanged."
+              : "pi editor is empty. Loaded blank text.", content.trim() ? "success" : "warning");
+          };
+          if (documentHostingEnabled) {
+            const consent = captureEditorAsyncConsent();
+            void applyDocumentHostingReplacement(consent, () => editorAsyncConsentIsCurrent(consent) && pendingRequestId === ownerRequestId && !bufferPageClosed && !studioModalBlocksDraftAction(), applySnapshot,
+              text => { if (pendingRequestId === ownerRequestId) { abandonPendingSaveRequest(ownerRequestId); setStatus(text, "warning"); } });
+          } else applySnapshot();
           return;
         }
 
@@ -26067,7 +28613,7 @@
             const nextPath = typeof nextDoc.path === "string" && nextDoc.path.trim() ? nextDoc.path : null;
             const nextResourceDir = typeof nextDoc.resourceDir === "string" && nextDoc.resourceDir.trim()
               ? normalizeStudioResourceDirValue(nextDoc.resourceDir) : (nextPath ? dirnameForDisplayPath(nextPath) : "");
-            if (resourceDirInput) resourceDirInput.value = nextResourceDir;
+            setStudioResourceDirValue(nextResourceDir);
             setEditorText(nextDoc.text, { preserveScroll: false, preserveSelection: false });
             setSourceState({ source: nextSource, label: nextLabel, path: nextPath,
               draftId: typeof nextDoc.draftId === "string" && nextDoc.draftId.trim() ? nextDoc.draftId.trim() : null });
@@ -26077,6 +28623,10 @@
           };
           if (bufferRecoveryEnabled && typeof message.requestId !== "string") {
             void confirmTerminalDocumentLoad(message, applyDocument);
+          } else if (documentHostingEnabled) {
+            const consent = captureEditorAsyncConsent();
+            void applyDocumentHostingReplacement(consent, () => editorAsyncConsentIsCurrent(consent) && pendingRequestId === message.requestId, applyDocument,
+              text => { if (pendingRequestId === message.requestId) { abandonPendingSaveRequest(message.requestId); setStatus(text, "warning"); } });
           } else applyDocument();
           return;
         }
@@ -26221,6 +28771,7 @@
           if (pendingEditorRefresh && message.requestId === pendingEditorRefresh.requestId) pendingEditorRefresh = null;
           if (typeof message.requestId === "string") {
             rejectedSubmission = submittedEditorDrafts.discard(message.requestId);
+            if (typeof promptRunIndicatorTracker !== "undefined") { promptRunIndicatorTracker?.discard(message.requestId); persistPromptRunIndicator(); }
             restoreReservedPiEditorDraftSnapshot(message.requestId);
             pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not start the companion editor because another request was busy.");
@@ -26256,6 +28807,7 @@
           if (pendingEditorRefresh && message.requestId === pendingEditorRefresh.requestId) pendingEditorRefresh = null;
           if (typeof message.requestId === "string") {
             rejectedSubmission = submittedEditorDrafts.discard(message.requestId);
+            if (typeof promptRunIndicatorTracker !== "undefined") { promptRunIndicatorTracker?.discard(message.requestId); persistPromptRunIndicator(); }
             restoreReservedPiEditorDraftSnapshot(message.requestId);
             pendingSaveOperations.delete(message.requestId);
             failPendingCompanionLaunch(message.requestId, "Studio could not prepare the companion editor. Return to the originating Studio page for details.");
@@ -26373,6 +28925,7 @@
 
         const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
         const wsParams = new URLSearchParams({ token: token });
+        if (documentHostingEnabled) wsParams.set("bufferCapability", document.body.dataset.bufferCapability);
         if (studioMode !== "full") {
           wsParams.set("mode", studioMode);
         }
@@ -26404,6 +28957,7 @@
           if (disconnectHandled) return;
           disconnectHandled = true;
           bufferConnectionGeneration++;
+          documentHostingGeneration = 0; syncDocumentHostingReadiness();
           clearEditorAsyncOperations();
           pendingEditorRefresh = null;
           bufferRecoveryClient?.invalidateRemoteRecovery();
@@ -26418,6 +28972,7 @@
           sideQuestionMarkdownExportRequest = null;
           pendingPiEditorDraftSnapshots.clear();
           submittedEditorDrafts.clearPending();
+          if (typeof promptRunIndicatorTracker !== "undefined") { persistPromptRunIndicator(); promptRunIndicatorTracker?.clearPending(); }
           failAllPendingCompanionLaunches("The originating Studio connection was lost before the companion editor was ready.");
           if (rightView === "editor-quarto-preview") renderQuartoPreviewView();
           setBusy(true);
@@ -26434,7 +28989,9 @@
             clearScheduledReconnect();
             reconnectAttempt = 0;
             setWsState("Disconnected");
-            setStatus("Another full Studio view is already active for this session. Use /studio-replace for a fresh full Studio view, or /studio-editor-only for a concurrent editor-only Studio view.", "warning");
+            setStatus(documentHostingEnabled
+              ? "Another full Studio view is already active. Use that view's Document controls; this duplicate view cannot replace it. Keep or export any local work."
+              : "Another full Studio view is already active for this session. Use /studio-replace for a fresh full Studio view, or /studio-editor-only for a concurrent editor-only Studio view.", "warning");
             return;
           }
 
@@ -26588,6 +29145,16 @@
       }
 
       function requestOpenEditorOnlyDocument(content, options) {
+        if (documentHostingEnabled) {
+          if (options?.hostingBlank && content === "" && documentHostingController) {
+            void documentHostingController.launch({ kind: "blank" }); return true;
+          }
+          if (options?.hostingCopy && content === sourceTextEl.value && documentHostingController) {
+            void documentHostingController.copy(); return true;
+          }
+          setStatus("This standalone-tab action is not available in the hosting prototype. Use Copy Document for an independent copy, or Move Document to move the current Document.", "warning");
+          return false;
+        }
         const requestId = beginUiAction("open_editor_only");
         if (!requestId) return false;
         try {
@@ -26824,6 +29391,7 @@
       }
 
       function flushStudioNavigationPersistence() {
+        if (documentHostingEnabled && documentHostingCanCloseRetired()) return;
         stopFooterSpinner();
         flushWorkspacePersistence();
         const scratchpadKeys = new Set();
@@ -26867,6 +29435,8 @@
         if (!event.persisted) {
           bufferPageClosed = true;
           clearEditorAsyncOperations();
+          documentOpenController?.dispose();
+          documentHostingController?.dispose();
           bufferRecoveryClient?.dispose();
           bufferRecoveryPanel?.dispose();
           if (bufferRecoveryEnabled) {
@@ -26881,16 +29451,26 @@
         abandonAllStudioTabLaunches("The originating Studio page was closed before this tab finished opening.");
       });
       window.addEventListener("beforeunload", (event) => {
+        if (documentHostingEnabled && documentHostingCanCloseRetired()) return;
+        const unsafeRetirement = documentHostingEnabled && documentHostingRetired;
+        const unresolvedCopy = documentHostingEnabled && documentHostingController?.needsUnloadConfirmation();
+        const unresolvedSave = documentHostingEnabled && documentHostingSaveResolution;
+        const unresolvedOpening = documentHostingEnabled && documentOpenController?.active();
         flushStudioNavigationPersistence();
         const recoveryNavigationConfirmed = bufferRecoveryNavigationConsent && recoveryConsentIsCurrent(bufferRecoveryNavigationConsent);
         const recoveryNavigationStale = bufferRecoveryNavigationConsent && !recoveryNavigationConfirmed;
         const metadataNeedsUnloadConfirmation = hasUnsyncedStudioMetadata();
         bufferRecoveryNavigationConsent = null; // One navigation only; cancelled attempts do not bless later closure.
-        if (bufferRecoveryEnabled && (metadataNeedsUnloadConfirmation || recoveryNavigationStale
+        if (bufferRecoveryEnabled && (unsafeRetirement || unresolvedCopy || unresolvedOpening || unresolvedSave || metadataNeedsUnloadConfirmation || recoveryNavigationStale
             || (!recoveryNavigationConfirmed && (!bufferRecoveryClient || bufferRecoveryClient.needsUnloadConfirmation())))) {
           // Closing a tab can discard sessionStorage and page-local metadata. A queued
           // beacon or expired recovery acknowledgement is not a saved copy.
-          bufferRecoveryIssue = metadataNeedsUnloadConfirmation
+          bufferRecoveryIssue = unsafeRetirement
+            ? "Keep this source until destination adoption and any remaining local work are resolved. Closing now may discard a backup or later edits."
+            : unresolvedOpening ? "A file opening is unresolved. Recheck or cancel it and keep its backup before closing."
+            : unresolvedSave ? "A disk-save outcome is being checked. Keep this tab and resolve it before closing."
+            : unresolvedCopy ? "An editor or copy request has not been confirmed open. Recheck that same request or explicitly forget its tracking before closing."
+            : metadataNeedsUnloadConfirmation
             ? "Scratchpad or comment changes are not currently acknowledged by the server. Closing now may discard them."
             : (recoveryNavigationStale
               ? "Editor or connection changed after the recovery decision. Cancel navigation to keep editing or make a new choice."
@@ -26912,6 +29492,10 @@
       attachResponsePaneInteractionHandlers();
 
       followSelect.addEventListener("change", () => {
+        if (studioRunFollowingAvailable()) {
+          setLatestResponseFollowingEnabled(followSelect.value !== "off");
+          return;
+        }
         followLatest = followSelect.value !== "off";
         scheduleWorkspacePersistence();
         if (followLatest && queuedLatestResponse) {
@@ -26961,7 +29545,13 @@
 
       if (studioPaneLayoutSelect) {
         studioPaneLayoutSelect.addEventListener("change", () => {
-          setStudioPaneLayout(studioPaneLayoutSelect.value);
+          setStudioPaneLayout(studioPaneLayoutSelect.value, { menuSelection: true });
+        });
+      }
+
+      if (documentPreviewFollowSelect) {
+        documentPreviewFollowSelect.addEventListener("change", () => {
+          setDocumentPreviewFollowingEnabled(documentPreviewFollowSelect.value === "on");
         });
       }
 
@@ -27042,19 +29632,64 @@
         });
       }
 
-      if (loadHistoryPromptBtn) {
-        loadHistoryPromptBtn.addEventListener("click", () => {
-          const item = getSelectedHistoryItem();
-          const prompt = item && typeof item.prompt === "string" ? item.prompt : "";
-          if (!prompt.trim()) {
-            setStatus("Prompt unavailable for the selected response.", "warning");
-            return;
-          }
-
-          setEditorText(prompt, { preserveScroll: false, preserveSelection: false });
-          setSourceState({ source: "blank", label: getHistoryPromptSourceStateLabel(item), path: null });
-          setStatus(getHistoryPromptLoadedStatus(item), "success");
+      async function loadSelectedHistoryPromptIntoEditor() {
+        if (bufferSwitchingEnabled && isStudioDocumentBufferView()) { setStatus("Return to Prompt to load or annotate this response.", "warning"); return false; }
+        const eligible = () => !isEditorOnlyMode && !isWatchedFilePreview && !uiBusy
+          && !studioModalBlocksDraftAction() && !(bufferSwitchingEnabled && isStudioDocumentBufferView());
+        if (!eligible() || responseReplacementPending) return false;
+        const item = getSelectedHistoryItem();
+        const prompt = item && typeof item.prompt === "string" ? item.prompt : "";
+        if (!prompt.trim()) {
+          setStatus("Prompt unavailable for the selected response.", "warning");
+          return false;
+        }
+        // Like response/critique loading, this replaces the selected editor; a
+        // stored run/effective prompt is not permission to discard newer work.
+        const text = String(sourceTextEl.value || ""), consent = captureEditorConsent();
+        const sourceKey = getEditorDraftSourceKey(), sourceGeneration = editorSourceGeneration;
+        const diskRevision = fileBackedDiskRevision;
+        const label = getHistoryPromptSourceStateLabel(item), status = getHistoryPromptLoadedStatus(item);
+        const current = () => eligible() && editorConsentIsCurrent(consent)
+          && text === sourceTextEl.value && sourceKey === getEditorDraftSourceKey()
+          && sourceGeneration === editorSourceGeneration && diskRevision === fileBackedDiskRevision
+          && getSelectedHistoryItem() === item && item.prompt === prompt && getHistoryPromptSourceStateLabel(item) === label;
+        const needsConfirmation = editorDraftHelpers.needsDraftReplacementConfirmation({
+          text, responseText: prompt, fileBacked: hasRefreshableFilePath(), dirty: editorDiffersFromFileBackedBaseline(),
+          submitted: submittedEditorDrafts.matches(text, sourceKey),
         });
+        responseReplacementPending = true;
+        syncActionButtons();
+        try {
+          if (needsConfirmation) {
+            const confirmed = await requestStudioConfirmation(
+              "Replace the current editor text with the selected response prompt? Unsubmitted edits or unsaved file changes will be lost. Cancel to save or copy them first.",
+              { title: "Replace editor text?", confirmLabel: "Replace", destructive: true },
+            );
+            if (!confirmed) { setStatus("Kept the current editor text."); return false; }
+          }
+          if (!current()) {
+            setStatus("Editor or selected response changed while preparing replacement. Kept the editor text; try again.", "warning");
+            return false;
+          }
+          if (documentHostingEnabled) {
+            const ready = await prepareDocumentHostingReplacement(bufferRecoveryClient.snapshot().selectedBufferId, current);
+            if (!current() || !ready()) return false;
+          }
+          setEditorText(prompt, { preserveScroll: false, preserveSelection: false });
+          setSourceState({ source: "blank", label, path: null });
+          setStatus(status, "success");
+          return true;
+        } catch (error) {
+          setStatus(error.message || "The replacement could not be prepared. Current work was kept.", "warning");
+          return false;
+        } finally {
+          responseReplacementPending = false;
+          syncActionButtons();
+        }
+      }
+
+      if (loadHistoryPromptBtn) {
+        loadHistoryPromptBtn.addEventListener("click", () => { void loadSelectedHistoryPromptIntoEditor(); });
       }
 
       pullLatestBtn.addEventListener("click", () => {
@@ -27074,9 +29709,18 @@
         requestLatestResponse();
       });
 
+      sourceTextEl.addEventListener("keydown", event => { if (!event.isComposing && event.keyCode !== 229) editorWrapCompositionActive = false; });
+      sourceTextEl.addEventListener("blur", () => { editorWrapCompositionActive = false; });
       sourceTextEl.addEventListener("keydown", handleSourceTextTabKey);
+      sourceTextEl.addEventListener("keydown", handleEditorHighlightShortcut);
+      sourceTextEl.addEventListener("compositionstart", () => { editorWrapCompositionActive = true; });
+      sourceTextEl.addEventListener("compositionend", () => {
+        editorWrapCompositionActive = false;
+        repairEditorTextareaWrap();
+      });
 
-      sourceTextEl.addEventListener("input", () => {
+      sourceTextEl.addEventListener("input", event => {
+        repairEditorTextareaWrap(event); scheduleEditorWrapPauseRepair();
         editorContentGeneration += 1;
         if (completionSuggestionState && sourceTextEl.value !== completionSuggestionState.baseText) {
           hideCompletionSuggestion();
@@ -27247,6 +29891,7 @@
       }
 
       async function loadSelectedResponseIntoEditor(options) {
+        if (bufferSwitchingEnabled && isStudioDocumentBufferView()) { setStatus("Return to Prompt to load or annotate this response.", "warning"); return false; }
         if (isEditorOnlyMode || isWatchedFilePreview || uiBusy || responseReplacementPending
           || studioModalBlocksDraftAction() || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
         const prepareForAnnotation = Boolean(options && options.annotate);
@@ -27265,6 +29910,9 @@
         const sourceKey = getEditorDraftSourceKey();
         const responseIndex = responseHistoryIndex;
         const responseTimestamp = latestResponseTimestamp;
+        const responseId = typeof getSelectedHistoryItem === "function" ? getSelectedHistoryItem()?.id ?? null : null;
+        const responseIsCurrent = () => responseText === latestResponseMarkdown && responseIndex === responseHistoryIndex
+          && responseTimestamp === latestResponseTimestamp && responseId === (typeof getSelectedHistoryItem === "function" ? getSelectedHistoryItem()?.id ?? null : null);
         const diskRevision = fileBackedDiskRevision;
         const needsConfirmation = editorDraftHelpers.needsDraftReplacementConfirmation({
           text: currentEditorText,
@@ -27290,15 +29938,22 @@
           }
           if (!editorConsentIsCurrent(replacementConsent) || uiBusy || studioModalBlocksDraftAction() || currentEditorText !== sourceTextEl.value
             || sourceKey !== getEditorDraftSourceKey() || diskRevision !== fileBackedDiskRevision
-            || responseText !== latestResponseMarkdown || responseIndex !== responseHistoryIndex
-            || responseTimestamp !== latestResponseTimestamp
+            || !responseIsCurrent()
             || (!prepareForAnnotation && rightView === "editor-quarto-preview")) {
             setStatus("Editor, response, or view changed while confirmation was open. Kept the editor text; try again.", "warning");
             return false;
           }
         }
+        if (documentHostingEnabled) {
+          try {
+            const current = () => editorConsentIsCurrent(replacementConsent) && responseIsCurrent() && !uiBusy && !studioModalBlocksDraftAction();
+            const ready = await prepareDocumentHostingReplacement(bufferRecoveryClient.snapshot().selectedBufferId, current);
+            if (!current() || !ready()) return false;
+          } catch (error) { setStatus(error.message, "warning"); return false; }
+        }
         setEditorText(responseText, { preserveScroll: false, preserveSelection: false });
-        setSourceState({ source: "last-response", label: "last model response", path: null });
+        setSourceState({ source: "last-response", label: responseIndex >= 0 ? "response " + (responseIndex + 1) : "loaded response", path: null,
+          provenance: editorDraftHelpers.createResponseDraftProvenance({ id: responseId, index: responseIndex, annotated: prepareForAnnotation }) });
         if (prepareForAnnotation) {
           if (editorView !== "markdown") setEditorView("markdown");
           exitPaneFocus();
@@ -27321,6 +29976,7 @@
       });
 
       async function loadSelectedCritiqueIntoEditor(mode) {
+        if (bufferSwitchingEnabled && isStudioDocumentBufferView()) { setStatus("Return to Prompt to load or annotate this response.", "warning"); return false; }
         if (mode !== "notes" && mode !== "full") return false;
         if (isEditorOnlyMode || isWatchedFilePreview || uiBusy || responseReplacementPending
           || studioModalBlocksDraftAction() || (bufferSwitchingEnabled && isStudioDocumentBufferView())) return false;
@@ -27380,6 +30036,15 @@
             return false;
           }
         }
+        if (documentHostingEnabled) {
+          try {
+            const current = () => editorConsentIsCurrent(replacementConsent) && responseText === latestResponseMarkdown
+              && responseIndex === responseHistoryIndex && responseTimestamp === latestResponseTimestamp && latestResponseIsStructuredCritique
+              && !uiBusy && !studioModalBlocksDraftAction() && rightView !== "editor-quarto-preview";
+            const ready = await prepareDocumentHostingReplacement(bufferRecoveryClient.snapshot().selectedBufferId, current);
+            if (!current() || !ready()) return false;
+          } catch (error) { setStatus(error.message, "warning"); return false; }
+        }
         setEditorText(editorText, { preserveScroll: false, preserveSelection: false });
         setSourceState({ source: "blank", label: label, path: null });
         setStatus("Loaded " + label + " into editor.", "success");
@@ -27408,6 +30073,12 @@
           setStatus("Clipboard write failed.", "warning");
         }
       });
+
+      if (copyResponsePromptBtn) {
+        copyResponsePromptBtn.addEventListener("click", () => {
+          void copySelectedHistoryPromptToClipboard();
+        });
+      }
 
       if (exportPdfBtn) {
         exportPdfBtn.addEventListener("click", (event) => {
@@ -27499,10 +30170,18 @@
       });
 
       function captureEditorConsent() {
-        return { text: sourceTextEl.value, sourceKey: getEditorDraftSourceKey(), generation: editorContentGeneration };
+        return { text: sourceTextEl.value, sourceKey: getEditorDraftSourceKey(), generation: editorContentGeneration,
+          ...(documentHostingEnabled ? { hosting: documentHostingProof() } : {}) };
       }
 
       function editorConsentIsCurrent(consent) {
+        // Bootstrap is a readonly DOM/recovery reconciliation, not an owned
+        // document mutation. It cannot yet possess a document epoch.
+        if (documentHostingEnabled && !(bufferRecoveryInitializing && !bufferRecoveryClient)) {
+          const current = documentHostingProof();
+          if (!consent?.hosting?.ok || !current?.ok || current.bufferId !== consent.hosting.bufferId
+            || current.generation !== consent.hosting.generation || current.documentEpoch !== consent.hosting.documentEpoch) return false;
+        }
         return !bufferRecoveryEnabled || (consent && consent.text === sourceTextEl.value
           && consent.sourceKey === getEditorDraftSourceKey() && consent.generation === editorContentGeneration);
       }
@@ -27516,6 +30195,11 @@
 
       function editorAsyncConsentIsCurrent(consent, options) {
         if (!bufferRecoveryEnabled) return true;
+        if (documentHostingEnabled) {
+          const current = documentHostingProof();
+          if (!consent?.editor?.hosting?.ok || !current?.ok || current.bufferId !== consent.editor.hosting.bufferId
+            || current.generation !== consent.editor.hosting.generation || current.documentEpoch !== consent.editor.hosting.documentEpoch) return false;
+        }
         return !bufferPageClosed && consent && consent.connection === bufferConnectionGeneration
           && consent.owner === bufferRecoveryClient
           && consent.bufferId === (bufferRecoveryClient?.snapshot()?.selectedBufferId ?? null)
@@ -27557,13 +30241,17 @@
           { title: "Load file from Pi?", confirmLabel: "Load file", destructive: true },
         );
         if (pendingTerminalDocument !== operation) return;
-        pendingTerminalDocument = null;
-        if (!confirmed) { setStatus("Kept the current editor text."); return; }
-        if (!editorAsyncConsentIsCurrent(operation.consent) || uiBusy || studioModalBlocksDraftAction()) {
-          setStatus("Editor or connection changed. Kept current text; retry the file load.", "warning");
-          return;
-        }
-        applyDocument();
+        if (!confirmed) { pendingTerminalDocument = null; setStatus("Kept the current editor text."); return; }
+        const current = () => pendingTerminalDocument === operation && editorAsyncConsentIsCurrent(operation.consent) && !uiBusy && !studioModalBlocksDraftAction();
+        try {
+          if (!current()) throw new Error("Editor or connection changed. Kept current text; retry the file load.");
+          if (documentHostingEnabled) {
+            const ready = await prepareDocumentHostingReplacement(operation.consent.bufferId, current);
+            if (!ready()) throw new Error("Editor metadata changed. Kept current text; retry the file load.");
+          }
+          pendingTerminalDocument = null; applyDocument();
+        } catch (error) { if (pendingTerminalDocument === operation) setStatus(error.message, "warning"); }
+        finally { if (pendingTerminalDocument === operation) pendingTerminalDocument = null; }
       }
 
       function clearEditorAsyncOperations() {
@@ -27588,9 +30276,27 @@
         stickyStudioKind = null;
         setBusy(false);
         setWsState("Ready");
+        if (documentHostingEnabled) syncDocumentHostingReadiness();
       }
 
-      function sendEditorSaveAsRequest(path, content, overwrite, expectedRevision) {
+      function prepareHostedEditorSave(send) {
+        if (documentHostingPreparingFile) return false;
+        documentHostingPreparingFile = true;
+        documentHostingFilePreparationBufferId = bufferRecoveryClient?.snapshot().selectedBufferId ?? null;
+        syncDocumentHostingReadiness();
+        const sourceKey = getEditorDraftSourceKey(), generation = documentHostingGeneration;
+        void prepareDocumentHosting("save").then(() => {
+          if (sourceKey !== getEditorDraftSourceKey() || generation !== documentHostingGeneration) throw new Error("The save's source changed. Nothing was written; retry explicitly.");
+          const proof = documentHostingProof(); if (!proof?.ok) throw new Error(proof?.message || "Document ownership is not ready.");
+          proof.operationId = Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, "0")).join("");
+          send(proof);
+        }).catch(error => setStatus(error.message, "warning")).finally(() => {
+          documentHostingPreparingFile = false; documentHostingFilePreparationBufferId = null; syncDocumentHostingReadiness();
+        });
+        return true;
+      }
+      function sendEditorSaveAsRequest(path, content, overwrite, expectedRevision, hosting) {
+        if (documentHostingEnabled && !hosting) return prepareHostedEditorSave(proof => sendEditorSaveAsRequest(path, content, overwrite, expectedRevision, proof));
         const cleanPath = String(path || "").trim();
         if (!cleanPath) {
           setStatus("Save cancelled: path is required.", "warning");
@@ -27599,7 +30305,7 @@
         const requestId = beginUiAction("save_as");
         if (!requestId) return false;
         const operation = {
-          kind: "save_as",
+          kind: "save_as", ...(hosting ? { hosting } : {}),
           sourceKey: getEditorDraftSourceKey(),
           path: cleanPath,
           content: String(content ?? ""),
@@ -27612,7 +30318,7 @@
           requestId,
           path: operation.path,
           content: operation.content,
-          overwrite: operation.overwrite,
+          overwrite: operation.overwrite, ...(hosting ? { hosting } : {}),
           expectedRevision: operation.expectedRevision || undefined,
         })) {
           abandonPendingSaveRequest(requestId);
@@ -27622,17 +30328,20 @@
       }
 
       async function openEditorSaveAsDialog(options) {
-        if (uiBusy) return false;
+        if (uiBusy || isWatchedFilePreview || bufferPageClosed || studioModalBlocksDraftAction()) return false;
         const consent = captureEditorConsent();
         const settings = options && typeof options === "object" ? options : {};
         const resourceDir = getCurrentResourceDirValue();
-        const currentPath = getEffectiveSavePath();
-        const label = sourceState.label ? stripImportedFileLabel(sourceState.label) : "draft.md";
+        const currentPath = sourceState.path;
+        const filename = editorDraftHelpers.buildDraftSaveFilename({ sourceState, text: sourceTextEl.value });
         const suggested = typeof settings.suggestedPath === "string" && settings.suggestedPath.trim()
           ? settings.suggestedPath.trim()
-          : (currentPath || (resourceDir ? resourceDir.replace(/\/$/, "") + "/" + label : "./draft.md"));
-        const path = await requestStudioTextInput("Save editor content as:", suggested, {
-          title: "Save editor as",
+          : (currentPath || (resourceDir ? resourceDir.replace(/\/$/, "") + "/" : "./") + filename);
+        // Plain wording in the new layout, naming the buffer being saved; classic keeps its text (Oliver, 9 Oct).
+        const workspace = Boolean(bufferSwitcherUi?.workspaceLayout);
+        const role = workspace && getStudioSelectedBuffer()?.role === "prompt" ? "Prompt" : "Document";
+        const path = await requestStudioTextInput(workspace ? "Save the " + role + " as:" : "Save editor content as:", suggested, {
+          title: workspace ? "Save as" : "Save editor as",
           confirmLabel: "Save",
           inputLabel: "File path",
         });
@@ -27650,8 +30359,17 @@
         return sendEditorSaveAsRequest(path, content, false);
       }
 
+      function requestEditorSave() {
+        if (uiBusy || isWatchedFilePreview || bufferPageClosed || studioModalBlocksDraftAction()) return false;
+        return hasRefreshableFilePath() ? sendEditorSaveOverRequest() : openEditorSaveAsDialog();
+      }
+
       function sendEditorSaveOverRequest(options) {
         const settings = options && typeof options === "object" ? options : {};
+        if (documentHostingEnabled && !settings.hosting) {
+          const snapshot = { ...settings, content: Object.prototype.hasOwnProperty.call(settings, "content") ? settings.content : sourceTextEl.value };
+          return prepareHostedEditorSave(hosting => sendEditorSaveOverRequest({ ...snapshot, hosting }));
+        }
         const path = typeof settings.path === "string" && settings.path.trim()
           ? settings.path.trim()
           : (sourceState && sourceState.path ? sourceState.path : "");
@@ -27662,7 +30380,7 @@
         const requestId = beginUiAction("save_over");
         if (!requestId) return false;
         const operation = {
-          kind: "save_over",
+          kind: "save_over", ...(settings.hosting ? { hosting: settings.hosting } : {}),
           sourceKey: getEditorDraftSourceKey(),
           path,
           content: Object.prototype.hasOwnProperty.call(settings, "content")
@@ -27680,7 +30398,7 @@
           path: operation.path,
           content: operation.content,
           expectedRevision: operation.expectedRevision || undefined,
-          force: operation.force,
+          force: operation.force, ...(settings.hosting ? { hosting: settings.hosting } : {}),
         })) {
           abandonPendingSaveRequest(requestId);
           return false;
@@ -27696,7 +30414,9 @@
           ? settings.path.trim()
           : (sourceState && sourceState.path ? sourceState.path : "");
         if (!path) {
-          setStatus("Refresh from disk requires a file-backed editor. Open one from Files or use /studio-editor-only <path>.", "warning");
+          setStatus(documentHostingEnabled
+            ? "Refresh from disk requires a file-backed editor. Use Open Document or the Files opening controls."
+            : "Refresh from disk requires a file-backed editor. Open one from Files or use /studio-editor-only <path>.", "warning");
           return false;
         }
         if (settings.skipConfirm !== true && editorDiffersFromFileBackedBaseline()) {
@@ -27850,8 +30570,7 @@
       });
 
       saveOverBtn.addEventListener("click", () => {
-        if (uiBusy) return;
-        sendEditorSaveOverRequest();
+        void requestEditorSave();
       });
 
       if (refreshFromDiskBtn) {
@@ -27925,6 +30644,7 @@
       if (openCompanionBtn) {
         openCompanionBtn.addEventListener("click", () => {
           requestOpenEditorOnlyDocument("", {
+            hostingBlank: true,
             label: "blank",
             resourceDir: getCurrentResourceDirValue() || undefined,
           });
@@ -27986,8 +30706,9 @@
       });
       sendRunBtn.addEventListener("click", (event) => {
         if (bufferSwitchingEnabled && event.detail > 1) return;
-        if (getAbortablePendingKind() === "direct") {
-          requestCancelForPendingRequest("direct");
+        const abortableKind = getAbortablePendingKind();
+        if (abortableKind === "direct" || (studioRuntimeActivity?.run && abortableKind)) {
+          requestCancelForPendingRequest(abortableKind);
           return;
         }
 
@@ -28001,6 +30722,7 @@
         const requestId = beginUiAction("direct");
         if (!requestId) return;
         submittedEditorDrafts.remember(requestId, sourceTextEl.value, getEditorDraftSourceKey());
+        rememberPromptRun(requestId, prepared);
         const piEditorDraftSnapshot = reserveLinkedPiEditorDraftSnapshot(requestId);
 
         const sent = sendMessage({
@@ -28012,6 +30734,7 @@
 
         if (!sent) {
           submittedEditorDrafts.discard(requestId);
+          promptRunIndicatorTracker?.discard(requestId); persistPromptRunIndicator();
           restoreReservedPiEditorDraftSnapshot(requestId);
           pendingRequestId = null;
           pendingKind = null;
@@ -28035,6 +30758,7 @@
           const requestId = makeRequestId();
           clearTitleAttention();
           submittedEditorDrafts.remember(requestId, sourceTextEl.value, getEditorDraftSourceKey());
+          rememberPromptRun(requestId, prepared);
           const piEditorDraftSnapshot = reserveLinkedPiEditorDraftSnapshot(requestId);
           const sent = sendMessage({
             type: "send_run_request",
@@ -28044,6 +30768,7 @@
           });
           if (!sent) {
             submittedEditorDrafts.discard(requestId);
+            promptRunIndicatorTracker?.discard(requestId); persistPromptRunIndicator();
             restoreReservedPiEditorDraftSnapshot(requestId);
             return;
           }
@@ -28517,19 +31242,18 @@
         }
         if (resourceDirLabel) resourceDirLabel.hidden = state !== "label";
       }
-      function applyResourceDir() {
-        var dir = getCurrentResourceDirValue();
-        if (resourceDirInput) resourceDirInput.value = dir;
-        if (dir) {
-          if (resourceDirLabel) resourceDirLabel.textContent = "Working dir: " + dir;
-          showResourceDirState("label");
-        } else {
-          showResourceDirState("button");
-        }
-        updateSaveFileTooltip();
-        syncActionButtons();
-        refreshPreviewsForResourceContextChange();
-        scheduleWorkspacePersistence();
+      function applyResourceDir(value) {
+        const input = resourceDirInput?.value ?? "", generation = documentHostingResourceEditGeneration;
+        const previous = getCurrentResourceDirValue();
+        const dir = normalizeStudioResourceDirValue(typeof value === "string" ? value : input);
+        return runStudioEditorSourceMutation(() => {
+          setStudioResourceDirValue(dir);
+          if (documentHostingEnabled) bufferRecoveryClient?.refreshHostingReadiness?.();
+          if (resourceDirLabel) resourceDirLabel.textContent = dir ? "Working dir: " + dir : "";
+          showResourceDirState(dir ? "label" : "button");
+          updateSaveFileTooltip(); syncActionButtons(); refreshPreviewsForResourceContextChange(); scheduleWorkspacePersistence();
+          return true;
+        }, () => (resourceDirInput?.value ?? "") === input && generation === documentHostingResourceEditGeneration && getCurrentResourceDirValue() === previous);
       }
       if (sourceBadgeEl) {
         sourceBadgeEl.addEventListener("click", () => {
@@ -28549,6 +31273,7 @@
         });
       }
       if (resourceDirInput) {
+        resourceDirInput.addEventListener("input", () => { if (documentHostingEnabled) documentHostingResourceEditGeneration++; });
         resourceDirInput.addEventListener("keydown", (e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -28556,6 +31281,7 @@
           } else if (e.key === "Escape") {
             e.preventDefault();
             var dir = getCurrentResourceDirValue();
+            if (documentHostingEnabled) setStudioResourceDirValue(dir, true);
             if (dir) {
               showResourceDirState("label");
             } else {
@@ -28566,13 +31292,7 @@
       }
       if (resourceDirClearBtn) {
         resourceDirClearBtn.addEventListener("click", () => {
-          if (resourceDirInput) resourceDirInput.value = "";
-          if (resourceDirLabel) resourceDirLabel.textContent = "";
-          showResourceDirState("button");
-          updateSaveFileTooltip();
-          syncActionButtons();
-          refreshPreviewsForResourceContextChange();
-          scheduleWorkspacePersistence();
+          void applyResourceDir("");
         });
       }
 
@@ -28617,7 +31337,7 @@
       }
 
       async function openStudioFileCopyDialog() {
-        const operation = bufferRecoveryEnabled ? { consent: captureEditorAsyncConsent(), reader: null, decision: null } : null;
+        const operation = bufferRecoveryEnabled ? { consent: captureEditorAsyncConsent(), reader: null, decision: null, busyEpoch: studioBusyEpoch } : null;
         if (bufferRecoveryEnabled) activeFileImport = operation;
         const resourceDir = getCurrentResourceDirValue();
         const suggestedPath = resourceDir ? resourceDir.replace(/[\\/]$/, "") + "/" : "./";
@@ -28642,10 +31362,30 @@
           if (!bufferRecoveryEnabled || activeFileImport === operation || !activeFileImport) studioImportDecisionOpen = false;
         }
         if (!path) { finishFileImport(operation); return; }
-        if (!fileImportIsCurrent(operation)) {
-          finishFileImport(operation);
-          setStatus("Editor changed while choosing a file. Current text was kept; try importing again.", "warning");
-          return;
+        await importStudioFileCopyFromPath(operation, path, { confirmed: true });
+      }
+
+      async function importStudioFileCopyFromPath(operation, path, { confirmed = false } = {}) {
+        // Copying replaces text, like opening: busy work that starts while a file is chosen or
+        // loading stops it for good, even if it has finished by the time the file arrives (Sol).
+        const epoch = operation?.busyEpoch ?? studioBusyEpoch;
+        const busyStarted = () => uiBusy || studioBusyEpoch !== epoch;
+        const eligible = () => fileImportIsCurrent(operation) && !busyStarted();
+        const refuse = () => {
+          setStatus(busyStarted() ? "Studio became busy, so the copy was stopped. Current text was kept."
+            : "Editor changed while choosing a file. Current text was kept; try again.", "warning");
+          return false;
+        };
+        if (!eligible()) { finishFileImport(operation); return refuse(); }
+        // Ask before replacing work, by the same rule as Open file.
+        const target = getStudioSelectedBuffer();
+        if (!confirmed && studioBufferReplacementNeedsConsent(target)) {
+          const name = basenameForStudioPath(path) || path, destination = target.role === "prompt" ? "Prompt" : "Document";
+          const agreed = await requestStudioConfirmation("Replace the " + destination + "'s current text with a copy of " + name
+            + "? Save or copy anything you need first. The file itself isn't changed.",
+            { title: "Replace the " + destination + "?", confirmLabel: "Replace", destructive: true });
+          if (!agreed) { finishFileImport(operation); return false; }
+          if (!eligible()) { finishFileImport(operation); return refuse(); }
         }
         if (operation) operation.reader = null; // Path submission supersedes an earlier browser read.
         try {
@@ -28653,15 +31393,22 @@
             method: "POST",
             body: JSON.stringify({ path }),
           });
-          if (!fileImportIsCurrent(operation)) {
-            if (!bufferRecoveryEnabled || activeFileImport === operation) setStatus("Editor changed while the file was loading. Current text was kept.", "warning");
-            return;
+          if (!eligible()) {
+            if (busyStarted()) setStatus("Studio became busy, so the copy was stopped. Current text was kept.", "warning");
+            else if (!bufferRecoveryEnabled || activeFileImport === operation) setStatus("Editor changed while the file was loading. Current text was kept.", "warning");
+            return false;
           }
           if (typeof payload.text !== "string") throw new Error("Studio did not return file text.");
+          if (documentHostingEnabled) {
+            const ready = await prepareDocumentHostingReplacement(operation.consent.bufferId, eligible);
+            if (!ready()) throw new Error("Editor metadata changed. Current work was kept; retry importing.");
+          }
           finishFileImport(operation);
           applyImportedFileCopy(payload.text, typeof payload.filename === "string" ? payload.filename : path);
+          return true;
         } catch (error) {
           if (fileImportIsCurrent(operation)) setStatus("Could not import file copy: " + (error && error.message ? error.message : String(error || "unknown error")), "warning");
+          return false;
         } finally { finishFileImport(operation); }
       }
 
@@ -28669,6 +31416,7 @@
         importFileBtn.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
+          if (bufferSwitcherUi?.workspaceLayout && startStudioFilePick("copy")) return;
           void openStudioFileCopyDialog();
         });
       }
@@ -28685,7 +31433,7 @@
         if (bufferRecoveryEnabled && (!fileImportIsCurrent(operation) || studioDecisionState !== operation.decision)) return;
         const reader = new FileReader();
         if (operation) operation.reader = reader;
-        reader.onload = () => {
+        reader.onload = async () => {
           if (bufferRecoveryEnabled && (!fileImportIsCurrent(operation) || operation.reader !== reader || studioDecisionState !== operation.decision)) {
             if (activeFileImport === operation && operation.reader === reader) {
               finishFileImport(operation);
@@ -28694,9 +31442,16 @@
             return;
           }
           const text = typeof reader.result === "string" ? reader.result : "";
+          if (documentHostingEnabled) {
+            try {
+              const ready = await prepareDocumentHostingReplacement(operation.consent.bufferId, () => fileImportIsCurrent(operation) && operation.reader === reader);
+              if (!ready()) throw new Error("Editor metadata changed. Current work was kept; retry importing.");
+            } catch (error) { if (fileImportIsCurrent(operation)) setStatus(error.message, "warning"); finishFileImport(operation); return; }
+          }
           if (bufferRecoveryEnabled) finishFileImport(operation);
           else if (studioImportDecisionOpen) finishStudioDecision(null);
-          applyImportedFileCopy(text, file.name);
+          try { applyImportedFileCopy(text, file.name); }
+          catch (error) { setStatus("Could not finish applying the import. Review the current editor and recovery copies. " + (error.message || ""), "error"); }
         };
         reader.onerror = () => {
           if (bufferRecoveryEnabled && (!fileImportIsCurrent(operation) || operation.reader !== reader || studioDecisionState !== operation.decision)) return;
@@ -28720,7 +31475,7 @@
       setResponseFontSize(initialResponseFontSize, { persist: false });
 
       if (resourceDirInput && initialResourceDir) {
-        resourceDirInput.value = normalizeStudioResourceDirValue(initialResourceDir);
+        setStudioResourceDirValue(initialResourceDir);
       }
       setSourceState(initialSourceState);
       if (initialSourceState.path) markFileBackedBaseline(sourceTextEl.value, initialDiskRevision);
@@ -28753,6 +31508,7 @@
       const initialLineNumbersEnabled = storedLineNumbersEnabled ?? Boolean(lineNumbersSelect && lineNumbersSelect.value === "on");
       setLineNumbersEnabled(initialLineNumbersEnabled);
       setActivityTrackingEnabled(activityTrackingEnabled, { persist: false, silent: true });
+      setDocumentPreviewFollowingEnabled(documentPreviewFollowingEnabled, { persist: false });
 
       const storedResponseHighlightEnabled = readStoredResponseHighlightEnabled();
       const initialResponseHighlightEnabled = storedResponseHighlightEnabled ?? Boolean(responseHighlightSelect && responseHighlightSelect.value === "on");
@@ -28772,15 +31528,25 @@
         // HTML already supplied this launch's source. Even failed/aborted recovery must
         // not let the later websocket handshake overwrite intervening local typing.
         initialDocumentApplied = true;
-        const initialRecoveryOwner = captureBufferRecoveryInitializationOwner();
         try {
+          if (documentHostingEnabled) {
+            connect(); await waitForDocumentHostingLease();
+            if (document.body.dataset.hostingResume === "1" && !await openStudioDecision({ mode: "confirm", title: "Resume this retained workspace?",
+              message: "A disconnected tab may contain newer edits than the server checkpoint. Prefer reconnecting that original tab. Resume here only if you intend this tab to own the Document; this tab's browser recovery will also be checked.",
+              confirmLabel: "Resume here", cancelLabel: "Keep closed" })) {
+              documentHostingRetired = true; bufferPageClosed = true; ws?.close(); throw new Error("The retained workspace was not reopened. Other recovery copies were kept.");
+            }
+          }
+          const initialRecoveryOwner = captureBufferRecoveryInitializationOwner();
           const helpers = await import("/buffer-modules/studio-buffer-client.js?token=" + encodeURIComponent(getToken()));
           let recoveryStorage = null;
           try { recoveryStorage = window.sessionStorage; } catch {}
           const bufferRequest = requestBufferRecovery;
           const client = helpers.createStudioBufferClient({
             workspaceId: studioTabStateId, mode: isEditorOnlyMode ? "editor-only" : "full", storage: recoveryStorage,
-            switching: bufferSwitchingEnabled,
+            switching: bufferSwitchingEnabled, hosting: documentHostingEnabled,
+            getHostingGeneration: () => documentHostingGeneration,
+            onHostingAuthority: info => { if (info?.boundBufferId) documentHostingDomId = info.boundBufferId; syncDocumentHostingReadiness(); },
             decideLegacyPromptRole: async state => {
               const entry = state.buffers.find(b => b.id === state.selectedBufferId);
               const choice = await openStudioDecision({ mode: "confirm", title: "Which text should be the Prompt?",
@@ -28789,17 +31555,19 @@
               return choice === true ? "visible-prompt" : (choice === "keep-roles" ? choice : null);
             },
             makeBufferId: makeStudioDraftId,
-            canRestore: (state) => skipInitialWorkspaceRestore
+            canRestore: (state) => documentHostingEnabled ? true : skipInitialWorkspaceRestore
               ? getWorkspaceStateIdentity(state.sourceState) === getWorkspaceStateIdentity(initialSourceState)
               : shouldRestorePersistedWorkspaceState(state),
-            readRemote: () => bufferRequest("GET"),
-            writeRemote: (state, expectedRevision) => bufferRequest("POST", { state, expectedRevision }),
+            readRemote: async () => { const result = await bufferRequest("GET"); if (documentHostingEnabled) documentHostingLastRemote = result; return result; },
+            writeRemote: (state, expectedRevision, documents) => bufferRequest("POST", { state, expectedRevision,
+              ...(documentHostingEnabled ? { generation: documentHostingGeneration, documents } : {}) }),
             readLegacyRemote: async () => {
               const legacy = await readServerWorkspaceRecoveryState();
               return legacy.status === "unavailable" ? { ok: false, reason: "unavailable", message: "Legacy server recovery could not be checked." } : { ok: true, state: legacy.state };
             },
             onIssue: (message) => { bufferRecoveryIssue = message; renderStatus(); },
           });
+          try { promptRunIndicatorFresh = !recoveryStorage?.getItem("piStudio.bufferWorkspace.v2:" + studioTabStateId) && document.body.dataset.hostingResume !== "1"; } catch { promptRunIndicatorFresh = false; }
           const restored = await client.initialize(buildWorkspacePersistencePayload(), fileBackedBaselineText,
             () => bufferRecoveryInitializationOwnerIsCurrent(initialRecoveryOwner));
           if (!restored.ok) { bufferRecoveryIssue = restored.message; client.dispose(); }
@@ -28808,6 +31576,7 @@
               const snapshot = client.snapshot();
               const selected = snapshot.buffers.find((entry) => entry.id === snapshot.selectedBufferId);
               applyPersistedWorkspaceState(restored.editor, {
+                verifiedBuffer: documentHostingEnabled,
                 metadataAssociations: selected && selected.metadata,
               });
               if (sourceState.path) fileBackedBaselineText = restored.baselineText;
@@ -28822,7 +31591,8 @@
               }
             }
             bufferRecoveryClient = client;
-            if (bufferSwitchingEnabled) {
+            client.notifyHostingViewBound(client.snapshot().selectedBufferId);
+            if (bufferSwitchingEnabled || documentHostingEnabled) {
               const state = client.snapshot(), entry = state.buffers.find(b => b.id === state.selectedBufferId);
               bufferViewRestore = { bufferId: entry.id, source: entry.view.previewScrollTop, right: entry.view.rightScrollTop ?? 0,
                 owners: { source: captureStudioBufferScrollOwner("source"), right: captureStudioBufferScrollOwner("right") } };
@@ -28850,14 +31620,22 @@
       if (!scratchpadAssociationInitialized) loadScratchpadForCurrentDocument();
       if (!reviewNotesAssociationInitialized) void loadReviewNotesForCurrentDocument();
       setEditorView(editorView);
-      setRightView(rightView);
+      const restoredFollowBuffer = bufferSwitchingEnabled ? getStudioSelectedBuffer() : null;
+      setRightView(restoredFollowBuffer ? documentPreviewFollowingView(restoredFollowBuffer, rightView) : rightView, { bufferSwitch: true });
+      if (getDocumentPreviewFollowOwner()) restoreDocumentFollowScroll(documentPreviewFollowScrolls.get(restoredFollowBuffer.id) ?? 0);
       renderSourcePreview();
       workspacePersistenceReady = true;
+      initializePromptRunIndicator();
+      syncStudioRunFollowingFromMessage({ type: "initialization" });
+      // Hosting connects before recovery initialization; no later socket-ready
+      // event is guaranteed to refresh actions that were disabled during restore.
+      if (documentHostingEnabled) syncActionButtons();
       persistWorkspaceStateNow({ skipServer: serverWorkspaceRecovery.status === "unavailable" });
       if (workspaceRestoredFromBrowser) {
         setStatus(bufferSwitchingEnabled ? "Restored Prompt and Document in this browser tab. Both texts were kept." : "Restored editor workspace from this browser tab. Use Reset editor to discard it.", "success");
       }
       connect();
+      if (documentHostingEnabled && bufferRecoveryClient) { await bufferRecoveryClient.settled(); await setupDocumentHosting(); }
       } catch (error) {
         hardFail("Studio UI init failed", error);
       }

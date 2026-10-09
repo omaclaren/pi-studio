@@ -42,13 +42,23 @@ function freeze(value) {
 function failure(error) {
 	return { ok: false, reason: error.reason || "invalid-state", message: error instanceof StudioBufferStateError ? error.message : "Invalid buffer state; nothing was changed." };
 }
+function provenance(value) {
+	object(value, ["version", "kind", "responseId", "responseNumber", "annotated"], "Source provenance");
+	requireState(value.version === 1 && value.kind === "response" && typeof value.annotated === "boolean", "invalid-state", "Unsupported source provenance; keep the original recovery data.");
+	const responseId = string(value.responseId, 256, "Response identity", true);
+	requireState(responseId === null || (responseId.length > 0 && !responseId.includes("\0")), "invalid-state", "Invalid response identity.");
+	const responseNumber = value.responseNumber === null ? null : integer(value.responseNumber, "Response position", 1);
+	requireState(responseNumber === null || responseNumber <= 1_000_000_000, "limit-exceeded", "Response position exceeds its limit.");
+	return { version: 1, kind: "response", responseId, responseNumber, annotated: value.annotated };
+}
 function source(value) {
-	object(value, ["source", "label", "path", "draftId"], "Source identity");
+	object(value, ["source", "label", "path", "draftId", "provenance"], "Source identity");
 	const path = string(value.path, 16_384, "Source path", true);
 	requireState(path === null || (path.length > 0 && !path.includes("\0")), "invalid-state", "Invalid source path.");
 	const draftId = string(value.draftId, 256, "Source draft ID", true);
 	requireState(!path || draftId === null, "invalid-state", "A file source cannot also have a draft identity.");
-	return { source: string(value.source, 100, "Source kind"), label: string(value.label, 4_000, "Source label"), path, draftId };
+	return { source: string(value.source, 100, "Source kind"), label: string(value.label, 4_000, "Source label"), path, draftId,
+		...(Object.prototype.hasOwnProperty.call(value, "provenance") ? { provenance: provenance(value.provenance) } : {}) };
 }
 function buffer(value) {
 	object(value, BUFFER_KEYS, "Buffer");

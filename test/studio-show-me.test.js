@@ -116,6 +116,8 @@ test("Studio wires Show me as a normal cancellable Pi turn with preserved histor
 	assert.match(clientSource, /pendingKind === "show-me"/);
 	assert.match(clientSource, /requestCancelForPendingRequest\("show-me"\)/);
 	assert.match(clientSource, /if \(kind === "show-me"\) return "show-me"/);
-	assert.match(cssSource, /\.studio-refresh-review-anchor \{[^}]*position: static;/);
+	// The existing Review opener owns its menu after the accepted menu-placement
+	// repair; bounded menu dimensions and right-edge fallback remain unchanged.
+	assert.match(cssSource, /\.studio-refresh-review-anchor \{[^}]*position: relative;/);
 	assert.match(cssSource, /\.studio-refresh-review-anchor \.studio-refresh-menu \{[^}]*max-width: calc\(100cqi - 18px\);[^}]*left: auto;[^}]*right: 0;/);
 });

@@ -9,7 +9,8 @@ const source=fs.readFileSync(new URL('../client/studio-client.js',import.meta.ur
 const fixtureSource=fs.readFileSync(new URL('./studio-buffer-switching-ui.test.js',import.meta.url),'utf8');
 function section(text,start,end){const a=text.indexOf(start),b=text.indexOf(end,a);assert(a>=0&&b>a,start);return text.slice(a,b);}
 function load(c,start,end){vm.runInContext(section(source,start,end),c);}
-const helpers=vm.createContext({assert,load,context:values=>vm.createContext(values)});
+const helpers=vm.createContext({assert,load,vm});
+vm.runInContext(section(fixtureSource,'function context(values)', 'test("switching requires'),helpers);
 for(const [start,end] of [['function bindingHarness(', 'test("returning to a following Prompt'],['function historyBindingHarness(', 'const shiftedHistory ='],['function traceReadingHarness(', 'for (const variant of ["same"']])vm.runInContext(section(fixtureSource,start,end),helpers);
 const tick=()=>new Promise(r=>setImmediate(r));
 class Pane {

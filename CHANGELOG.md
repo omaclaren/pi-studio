@@ -4,6 +4,30 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.10.0-alpha.1] — local candidate, not published
+
+### Added
+- Separately gated single-owner Document hosting, requiring recovery + switching + `PI_STUDIO_DOCUMENT_HOSTING=1`: move, independent copy, registered blank/text-file editor creation, owner reuse and atomic file replacement. Prompt stays anchored; uncertain operations retain their identities/backups. Save As metadata attachment uses an explicit verified decision. See README for deliberately unsupported hosting entrypoints.
+- Opt-in **one Prompt ↔ one Document** workflow in full editable workspaces, requiring both `PI_STUDIO_BUFFER_RECOVERY=1` and `PI_STUDIO_BUFFER_SWITCHING=1`. Keep independent edits, previews, source/baseline metadata and reading positions; Return to Prompt does not send. Selecting kept buffers during an identified direct Run preserves the submitted Prompt snapshot and global Stop.
+- Explicit **Add selection to Prompt** and **Add document to Prompt** actions: append labelled, detached raw-text snapshots including unsaved edits and inline annotations, without copying external comment records, switching, saving or submitting.
+- Experimental v2 recovery with acknowledged bounded process-memory fallback, guarded migration, inspection/export, explicit recovery choices and persistence retry. Retain unsupported/conflicting copies rather than partially adopting or discarding them. This is temporary recovery, not durable storage.
+
+### Changed
+- Compact the opt-in buffer strip: **Add to Prompt → Selection / Whole document** replaces the separate append buttons; **Open / load** groups opening Document with destination-labelled import/Pi-draft replacements. Keep routine help/capacity descriptions in accessible disclosures and tooltips, without permanent help or duplicate Run-target rows. Editor-selection ownership survives opening Add; other fields/previews still revoke it. Single-editor and editor-only controls are unchanged.
+- In opt-in Prompt, Annotation header adds/removes only the recognised leading explanation; copied body text and existing end markers remain intact. Document/default/editor-only header behaviour is unchanged.
+- Recognise compatible leading `annotations below` aliases alongside `annotated reply below` forms without changing Studio's generated wording or treating prose/fenced examples as headers.
+
+### Fixed
+- Bind hosted Refresh to its current canonical backing and independent resource permission; refuse legacy hosting entrypoints that bypass registered ownership. Preserve the copy unload warning during unresolved rechecks/disconnects and revoke stale live confirmations after failed queries.
+- Retain originating editor/buffer/source/connection ownership across delayed file, preview, metadata, save and replacement decisions. Protect unread comments/scratchpads and stale or cancelled append gestures.
+- Preserve response/Working reading state, history ownership and pending response-scroll reset through buffer round trips; bind delayed restoration to its originating view/content owner.
+- Retire pane-activation scroll snapshots after DOM/view-generation or editor-owner changes, preserving same-view and unaffected-pane restoration. The stale-callback mechanism also existed in `0.9.60`; this is not a blank-paint fix.
+
+### Alpha boundary
+- Stable `0.9.60` and all three flag defaults remain unchanged. Eventual publication requires a separate decision and the explicit npm `next` tag.
+- No general role switching, simultaneous linked views, parked prompts, companion-to-Prompt role migration or automatic preservation of unfinished Prompts during response annotation. Additional independent Document hosts require the third flag; the two-flag workflow retains its fixed pair.
+- The blank-looking Working report remains unreproduced. Actual background-tab/visible-browser painting, current Safari/full mobile coverage and live-provider acceptance of this exact artifact remain unverified. See README for activation and backup/rollback requirements; historical test counts are not exact-artifact sign-off.
+
 ## [0.9.60] — 2026-09-07
 
 ### Added

@@ -33,19 +33,24 @@ function fixture(mode = "switching", raf = true) {
     closest() { return this.control ? this : null; }
   }
   const c = vm.createContext({
+    studioRunFollowing: null, studioRunFollowingAvailable: () => false, getStudioRunWorkingOwner: () => null,
+    getStudioSelectedBuffer: () => null, pauseStudioRunFollowing() {}, syncStudioFollowMenu() {},
     Element: Pane, sourceTextEl: new Pane(120), sourcePreviewEl: new Pane(90), critiqueViewEl: new Pane(),
     leftPaneEl: new Pane(), rightPaneEl: new Pane(), activePane: "left", paneFocusTarget: "off",
     rightView: "preview", editorView: "markdown", studioEditorViewGeneration: 0, studioRightViewGeneration: 0,
-    bufferSwitchingEnabled: mode === "switching", bufferRecoveryEnabled: mode !== "default",
+    bufferSwitchingEnabled: mode === "switching", bufferRecoveryEnabled: mode !== "default", documentHostingEnabled: false,
     bufferViewRestore: null, bufferPageClosed: false, bufferConnectionGeneration: 0, editorContentGeneration: 0,
     selectedBufferId: "prompt", sourceKey: "prompt-source", sourcePreviewRenderNonce: 0, responsePreviewRenderNonce: 0,
     activityTrackingOwnsWorkingView: false, replQuickFocusRequested: false, responseEditorPreviewTimer: null,
+    documentPreviewFollowingEnabled: false, documentPreviewFollowOwner: null, documentPreviewFollowScrolls: new Map(),
     sourcePreviewRenderTimer: null, rightViewSelect: { value: "preview" }, editorViewSelect: { value: "markdown" },
     sourceEditorWrapEl: { style: {} }, normalizeRightViewValue: value => value, latestResponseMarkdown: "",
     traceAutoScroll: false, shouldStickTraceToBottom: () => false, traceFilter: "all", traceDisplayContext: { mode: "live" },
     traceState: { status: "complete", entries: [{ id: "one", type: "assistant", text: "SYNTHETIC WORKING", thinking: "", status: "complete" }] },
     normalizeTraceFilter: value => value, formatReferenceTime: () => "", escapeHtml: text => text,
     renderTraceOutput: text => "<p>" + text + "</p>", previewPendingTimers: new Map(),
+    traceOpenDetails: new Set(), traceClosedDetails: new Set(), traceSectionDefaults: new Map(), traceExpandedOutputs: new Set(),
+    TRACE_SECTION_AUTO_OPEN_MAX_LINES: 6, TRACE_SECTION_AUTO_OPEN_MAX_CHARS: 600, formatCompactNumber: value => String(value),
     window: { setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {} },
   });
   if (raf) c.window.requestAnimationFrame = fn => { frames.push(fn); return frames.length; };
@@ -61,8 +66,11 @@ function fixture(mode = "switching", raf = true) {
     "updateEditorSelectionCommentUi", "updateOutlineUi", "syncStudioSelectionAppendAction", "applyPendingResponseScrollReset",
   ]) c[name] = () => {};
   for (const [start, end] of [
+    ["function readDocumentPreviewFollowingEnabled()", "function isStackedStudioPaneLayout()"],
     ["function snapshotStudioScrollablePositions()", "function focusPaneViewControl("],
     ["function finishPreviewRender(", "function scheduleResponsePaneRepaintNudge("],
+    ["function countTraceTextLines(", "function renderTraceToolField("],
+    ["function traceSectionIsOpen(", "function formatTraceEntryDuration("],
     ["function buildTracePanelHtml()", "function renderReplView()"],
     ["function renderActiveResult()", "function updateResultActionButtons("],
     ["function refreshResponseUi()", "function normalizeStudioResourceDirValue("],

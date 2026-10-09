@@ -4,7 +4,7 @@ import { type ModelThinkingLevel, type ThinkingLevel } from "@earendil-works/pi-
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { Type } from "@sinclair/typebox";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -24,6 +24,7 @@ import {
 } from "./shared/studio-annotation-scanner.js";
 import { stripStudioMarkdownHtmlComments } from "./shared/studio-markdown-html-comments.js";
 import { createStudioFileWatcher } from "./shared/studio-file-watcher.js";
+import { createStudioRunLifecycle } from "./shared/studio-run-lifecycle.js";
 import {
 	readStudioDiskFileSnapshot,
 	saveStudioDiskFileAs,
@@ -84,6 +85,10 @@ import {
 	normalizeStudioPendingKind,
 } from "./shared/studio-tab-launcher.js";
 import { createStudioBufferServerStore, STUDIO_BUFFER_REQUEST_MAX_BYTES } from "./shared/studio-buffer-server.js";
+import { canonicalStudioDocumentPath, studioDocumentPathsReferToSameFile } from "./shared/studio-document-paths.js";
+import { resolveStudioHostingPage, studioHostingCommandError, studioHostingLocalLinkError } from "./shared/studio-document-entrypoints.js";
+import { systemThemeLacksTrueColor } from "./shared/studio-system-theme.js";
+import { buildStudioReadOnlyMediaUrl, buildStudioReadOnlyImagePage } from "./shared/studio-read-only-media.js";
 import { createStudioMetadataWriteOrderTracker } from "./shared/studio-metadata-write-order.js";
 import {
 	createStudioWorkspaceStateStore,
@@ -203,10 +208,21 @@ const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
 // Experimental, process-scoped opt-in; stable/default browser workflows remain on v1.
 const STUDIO_BUFFER_RECOVERY_ENABLED = process.env.PI_STUDIO_BUFFER_RECOVERY === "1";
 const STUDIO_BUFFER_SWITCHING_ENABLED = STUDIO_BUFFER_RECOVERY_ENABLED && process.env.PI_STUDIO_BUFFER_SWITCHING === "1";
+// Development gate until the complete hosting slice passes application acceptance.
+const STUDIO_DOCUMENT_HOSTING_ENABLED = STUDIO_BUFFER_SWITCHING_ENABLED && process.env.PI_STUDIO_DOCUMENT_HOSTING === "1";
 const STUDIO_BUFFER_MODULE_URLS = new Map([
 	["studio-buffer-store.js", new URL("./shared/studio-buffer-store.js", import.meta.url)],
 	["studio-buffer-recovery.js", new URL("./shared/studio-buffer-recovery.js", import.meta.url)],
 	["studio-buffer-client.js", new URL("./shared/studio-buffer-client.js", import.meta.url)],
+	["studio-buffer-lineage.js", new URL("./shared/studio-buffer-lineage.js", import.meta.url)],
+	["studio-document-escrow.js", new URL("./shared/studio-document-escrow.js", import.meta.url)],
+	["studio-document-host-client.js", new URL("./shared/studio-document-host-client.js", import.meta.url)],
+	["studio-document-launch-client.js", new URL("./shared/studio-document-launch-client.js", import.meta.url)],
+	["studio-document-open-client.js", new URL("./shared/studio-document-open-client.js", import.meta.url)],
+	["studio-document-open-storage.js", new URL("./shared/studio-document-open-storage.js", import.meta.url)],
+	["studio-linked-reader.js", new URL("./shared/studio-linked-reader.js", import.meta.url)],
+	["studio-linked-reader-ui.js", new URL("./shared/studio-linked-reader-ui.js", import.meta.url)],
+	["studio-document-hosting.js", new URL("./shared/studio-document-hosting.js", import.meta.url)],
 	["studio-buffer-switching.js", new URL("./shared/studio-buffer-switching.js", import.meta.url)],
 	["studio-buffer-decisions.js", new URL("./shared/studio-buffer-decisions.js", import.meta.url)],
 	["studio-buffer-recovery-panel.js", new URL("./shared/studio-buffer-recovery-panel.js", import.meta.url)],
@@ -269,6 +285,7 @@ interface StudioTraceSnapshotSummary {
 
 interface StudioResponseHistoryItem extends StudioPromptDescriptor {
 	id: string;
+	studioRunId?: string | null;
 	markdown: string;
 	thinking: string | null;
 	timestamp: number;
@@ -352,6 +369,7 @@ interface PreparedStudioHtmlExport {
 	filePath?: string;
 	tempDirPath?: string;
 	persistent?: boolean;
+	documentExport?: { workspaceId: string; bufferId: string; documentEpoch: number; expectedRevision: string; resourceDir: string; diskRevision: string | null };
 }
 
 interface StudioHtmlAnnotationPlaceholder {
@@ -414,6 +432,7 @@ interface StudioLaunchSelection {
 interface StudioUrlOptions {
 	skipWorkspaceRestore?: boolean;
 	paneFocus?: "left" | "right";
+	hostedWorkspaceId?: string;
 }
 
 type PersistedStudioReviewNoteAnchorKind = "source" | "html-selection" | "html-element" | "html-page";
@@ -448,7 +467,8 @@ interface StudioPersistentState {
 	reviewNotesByDocument: Record<string, PersistedStudioReviewNote[]>;
 }
 
-type StudioTraceRunStatus = "idle" | "running" | "complete";
+type StudioTraceRunStatus = "idle" | "running" | "complete" | "stopped" | "error";
+type StudioRunOutcome = "completed" | "stopped" | "failed";
 type StudioTraceEntryStatus = "streaming" | "pending" | "complete" | "error";
 
 interface StudioTraceAssistantEntry {
@@ -914,6 +934,7 @@ interface OpenEditorOnlyRequestMessage {
 interface CancelRequestMessage {
 	type: "cancel_request";
 	requestId: string;
+	runId?: string;
 }
 
 interface WorkspaceStateUpdateMessage {
@@ -1314,6 +1335,8 @@ $body$
 `;
 
 let studioPersistentStateCache: StudioPersistentState | null = null;
+let studioPersistentStateRevision: string | null = null;
+let studioPersistentStateReadFailed = false;
 let studioPersistentStateQueue: Promise<void> = Promise.resolve();
 const studioMetadataWriteOrder = createStudioMetadataWriteOrderTracker();
 type StudioMetadataWriteOwnership = { writerId: string; writeVersion: number };
@@ -1426,14 +1449,31 @@ function normalizeStudioPersistentState(value: unknown): StudioPersistentState {
 	};
 }
 
+// Adding default fields is harmless; dropping unknown fields, records, or
+// changing supplied values is not an authorized metadata transfer/migration.
+function studioMetadataNormalizationPreserves(value: unknown, normalized: unknown): boolean {
+	if (Array.isArray(value)) return Array.isArray(normalized) && value.length === normalized.length
+		&& value.every((item, index) => studioMetadataNormalizationPreserves(item, normalized[index]));
+	if (value && typeof value === "object") return Boolean(normalized && typeof normalized === "object" && !Array.isArray(normalized)
+		&& Object.entries(value).every(([key, item]) => Object.prototype.hasOwnProperty.call(normalized, key)
+			&& studioMetadataNormalizationPreserves(item, (normalized as Record<string, unknown>)[key])));
+	return Object.is(value, normalized);
+}
+
 async function loadStudioPersistentState(): Promise<StudioPersistentState> {
 	if (studioPersistentStateCache) return studioPersistentStateCache;
 	try {
 		const raw = await readFile(STUDIO_PERSISTENT_STATE_PATH, "utf-8");
-		studioPersistentStateCache = normalizeStudioPersistentState(JSON.parse(raw));
+		const parsed: unknown = JSON.parse(raw);
+		studioPersistentStateCache = normalizeStudioPersistentState(parsed);
+		if (!parsed || typeof parsed !== "object" || (parsed as { version?: unknown }).version !== 2
+			|| !studioMetadataNormalizationPreserves(parsed, studioPersistentStateCache)) studioPersistentStateReadFailed = true;
+		studioPersistentStateRevision = "sha256:" + createHash("sha256").update(raw).digest("hex");
 	} catch (error) {
 		if (!(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT")) {
-			// Ignore parse/read errors and fall back to a fresh local state blob.
+			// Legacy callers retain their fallback; hosted transfer must not overwrite
+			// an unreadable blob using that empty fallback as authoritative metadata.
+			studioPersistentStateReadFailed = true;
 		}
 		studioPersistentStateCache = createEmptyStudioPersistentState();
 	}
@@ -1442,8 +1482,37 @@ async function loadStudioPersistentState(): Promise<StudioPersistentState> {
 
 async function saveStudioPersistentState(state: StudioPersistentState): Promise<void> {
 	await mkdir(STUDIO_PERSISTENT_STATE_DIR, { recursive: true });
-	await writeFile(STUDIO_PERSISTENT_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+	const content = `${JSON.stringify(state, null, 2)}\n`;
+	await writeFile(STUDIO_PERSISTENT_STATE_PATH, content, "utf-8");
+	studioPersistentStateRevision = "sha256:" + createHash("sha256").update(content).digest("hex");
 	studioPersistentStateCache = state;
+}
+
+async function saveStudioTransferredMetadataAtomically(state: StudioPersistentState): Promise<void> {
+	if (studioPersistentStateReadFailed) throw new Error("Existing metadata could not be read; transfer refused.");
+	await mkdir(STUDIO_PERSISTENT_STATE_DIR, { recursive: true });
+	const content = `${JSON.stringify(state, null, 2)}\n`;
+	const saved = saveStudioDiskFileAs({ path: STUDIO_PERSISTENT_STATE_PATH, content, overwrite: true, expectedRevision: studioPersistentStateRevision });
+	if (!saved.ok) throw new Error(saved.message || "Metadata changed or could not be atomically saved.");
+	studioPersistentStateRevision = "sha256:" + createHash("sha256").update(content).digest("hex");
+	studioPersistentStateCache = state;
+}
+
+type StudioSavedMetadataStep = { persist?: boolean; result: { ok: boolean; [key: string]: unknown }; committed?: () => void };
+async function runStudioSavedMetadataTransaction(resolveMetadata: (state: StudioPersistentState) => StudioSavedMetadataStep) {
+	let step: StudioSavedMetadataStep | undefined;
+	await mutateStudioPersistentState(state => {
+		if (studioPersistentStateReadFailed) throw new Error("Existing metadata could not be read; transfer refused.");
+		let diskRevision: string | null = null;
+		try { diskRevision = readStudioDiskFileSnapshot(STUDIO_PERSISTENT_STATE_PATH).revision; }
+		catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error; }
+		if (diskRevision !== studioPersistentStateRevision) throw new Error("Metadata changed on disk; keep both copies and recheck before transfer.");
+		step = resolveMetadata(state);
+		if (!step.persist) { step.committed?.(); return false; }
+		return step.committed;
+	}, saveStudioTransferredMetadataAtomically);
+	if (!step) throw new Error("Metadata transaction was not evaluated.");
+	return step.result;
 }
 
 function parseStudioMetadataWriteOwnership(value: unknown): { ok: true; ownership: StudioMetadataWriteOwnership | null } | { ok: false } {
@@ -1463,12 +1532,12 @@ function prepareStudioMetadataWrite(kind: "scratchpad" | "review-notes", documen
 	return studioMetadataWriteOrder.prepare(kind, documentKey, ownership);
 }
 
-async function mutateStudioPersistentState(mutator: (state: StudioPersistentState) => void | false | (() => void)): Promise<void> {
+async function mutateStudioPersistentState(mutator: (state: StudioPersistentState) => void | false | (() => void), persist = saveStudioPersistentState): Promise<void> {
 	const run = studioPersistentStateQueue.catch(() => undefined).then(async () => {
 		const state = normalizeStudioPersistentState(await loadStudioPersistentState());
 		const onPersisted = mutator(state);
 		if (onPersisted === false) return;
-		await saveStudioPersistentState(state);
+		await persist(state);
 		if (typeof onPersisted === "function") onPersisted();
 	});
 	studioPersistentStateQueue = run.then(() => undefined, () => undefined);
@@ -1511,10 +1580,12 @@ async function listRecentPersistedStudioScratchpads(limit = 20): Promise<Array<{
 		.slice(0, Math.max(1, Math.min(100, Math.floor(limit) || 20)));
 }
 
-async function writePersistedStudioScratchpadText(documentKey: string, text: string, label?: string, ownership: StudioMetadataWriteOwnership | null = null): Promise<void> {
+async function writePersistedStudioScratchpadText(documentKey: string, text: string, label?: string, ownership: StudioMetadataWriteOwnership | null = null, authorize?: () => void): Promise<void> {
 	const key = String(documentKey ?? "").trim();
 	if (!key) return;
 	await mutateStudioPersistentState((state) => {
+		authorize?.();
+		if (authorize && studioPersistentStateReadFailed) throw new Error("Existing metadata could not be read; keep the unsynced browser copy.");
 		const orderClaim = prepareStudioMetadataWrite("scratchpad", key, ownership);
 		if (!orderClaim) return false;
 		const normalized = String(text ?? "");
@@ -1545,7 +1616,7 @@ async function readPersistedStudioReviewNotes(documentKey: string): Promise<Pers
 	return Array.isArray(notes) ? clonePersistedStudioReviewNotes(notes) : [];
 }
 
-async function writePersistedStudioReviewNotes(documentKey: string, notes: PersistedStudioReviewNote[], ownership: StudioMetadataWriteOwnership | null = null): Promise<void> {
+async function writePersistedStudioReviewNotes(documentKey: string, notes: PersistedStudioReviewNote[], ownership: StudioMetadataWriteOwnership | null = null, authorize?: () => void): Promise<void> {
 	const key = String(documentKey ?? "").trim();
 	if (!key) return;
 	const normalizedNotes = Array.isArray(notes)
@@ -1554,6 +1625,8 @@ async function writePersistedStudioReviewNotes(documentKey: string, notes: Persi
 			.filter((note): note is PersistedStudioReviewNote => Boolean(note))
 		: [];
 	await mutateStudioPersistentState((state) => {
+		authorize?.();
+		if (authorize && studioPersistentStateReadFailed) throw new Error("Existing metadata could not be read; keep the unsynced browser copy.");
 		const orderClaim = prepareStudioMetadataWrite("review-notes", key, ownership);
 		if (!orderClaim) return false;
 		if (normalizedNotes.length === 0) {
@@ -2403,7 +2476,7 @@ function getStudioThemeStyle(theme?: Theme): StudioThemeStyle {
 	const mode = getStudioThemeMode(theme);
 	const fallback = mode === "light" ? LIGHT_STUDIO_PALETTE : DARK_STUDIO_PALETTE;
 
-	if (!theme) {
+	if (!theme || systemThemeLacksTrueColor(theme)) {
 		return {
 			mode,
 			palette: fallback,
@@ -3040,11 +3113,69 @@ function writeStudioPreviewExportFile(path: string | null, data: Buffer): { file
 	}
 }
 
-function writeStudioFile(pathArg: string, cwd: string, content: string, overwrite = false, expectedRevision?: string):
+// Classic HTML still replaces unowned files, but in hosting mode it uses the
+// existing canonical/revision-checked atomic writer and a final owner/claim fence.
+// This helper is never used by flags-off writers or by PDF export.
+function writeStudioClassicHtmlExportFile(
+	path: string | null, data: Buffer, cwd: string,
+	authorizeCommit: ((path: string) => { ok: boolean; message?: string }) | undefined,
+	createParents = false,
+): { filePath: string | null; error: string | null } {
+	if (!path || path !== path.trim() || typeof authorizeCommit !== "function") {
+		return { filePath: null, error: "An exact HTML target and synchronous Document ownership check are required." };
+	}
+	try {
+		const requestedPath = resolve(cwd, path);
+		const check = (canonical: string) => {
+			const result = authorizeCommit(canonical);
+			return result?.ok === true ? { ok: true } : { ok: false, message: result?.message || "The HTML export target's Document ownership could not be verified; nothing was written." };
+		};
+		const initial = check(requestedPath);
+		if (!initial.ok) return { filePath: null, error: initial.message || "Document ownership could not be verified." };
+		if (createParents) mkdirSync(dirname(requestedPath), { recursive: true });
+		let expectedRevision: string | undefined;
+		try { expectedRevision = readStudioDiskFileSnapshot(requestedPath).revision; }
+		catch (error) { if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error; }
+		const result = saveStudioDiskFileAs({ path: requestedPath, cwd, content: data, overwrite: true, expectedRevision, authorizeCommit: check });
+		return result.ok === true ? { filePath: result.path, error: null }
+			: { filePath: null, error: result.message || "HTML project writing was refused; existing work was kept." };
+	} catch (error) {
+		return { filePath: null, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+// Hosted HTML-to-Document exports must never overwrite an existing target.
+// The registered bridge supplies a synchronous final owner/claim check; absent
+// or ambiguous authority keeps the generated bytes unsaved instead of guessing.
+function writeStudioHostedHtmlDocumentExport(
+	path: string | null,
+	data: Buffer,
+	cwd: string,
+	authorizeCommit: (path: string) => { ok: boolean; message?: string },
+): { filePath: string | null; diskRevision: string | null; error: string | null } {
+	if (!path || typeof authorizeCommit !== "function") {
+		return { filePath: null, diskRevision: null, error: "A resolved export target and current Document authority are required." };
+	}
+	try {
+		const result = saveStudioDiskFileAs({
+			path, cwd, content: data, overwrite: false,
+			authorizeCommit: (canonical: string) => {
+				const authority = authorizeCommit(canonical);
+				return authority?.ok === true ? { ok: true } : { ok: false, message: authority?.message || "The export target's Document authority could not be verified." };
+			},
+		});
+		if (result.ok === false) return { filePath: null, diskRevision: null, error: result.message || "Project writing failed; generated HTML was kept." };
+		return { filePath: result.path, diskRevision: result.revision, error: null };
+	} catch (error) {
+		return { filePath: null, diskRevision: null, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+function writeStudioFile(pathArg: string, cwd: string, content: string, overwrite = false, expectedRevision?: string, authorizeCommit?: (path: string) => { ok: boolean; message?: string }):
 	| { ok: true; label: string; resolvedPath: string; diskRevision: string }
 	| { ok: false; conflict?: boolean; reason?: string; path?: string; currentRevision?: string | null; message: string } {
 	const normalizedLabel = normalizePathInput(pathArg);
-	const result = saveStudioDiskFileAs({ path: pathArg, cwd, content, overwrite, expectedRevision }) as StudioDiskWriteResult;
+	const result = saveStudioDiskFileAs({ path: pathArg, cwd, content, overwrite, expectedRevision, authorizeCommit }) as StudioDiskWriteResult;
 	if (result.ok === false) return result;
 	return {
 		ok: true,
@@ -3284,6 +3415,7 @@ const STUDIO_HTML_PREVIEW_MEDIA_MIME_BY_EXT = new Map<string, string>([
 	[".jpeg", "image/jpeg"],
 	[".gif", "image/gif"],
 	[".webp", "image/webp"],
+	[".svg", "image/svg+xml"],
 	[".pdf", "application/pdf"],
 ]);
 const STUDIO_LOCAL_LINK_TEXT_EXTENSIONS = new Set([
@@ -3294,7 +3426,7 @@ const STUDIO_LOCAL_LINK_TEXT_EXTENSIONS = new Set([
 	".jl", ".f90", ".f95", ".f03", ".f", ".for", ".r", ".m", ".java", ".go", ".rb", ".swift", ".lua",
 	".diff", ".patch",
 ]);
-const STUDIO_LOCAL_LINK_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const STUDIO_LOCAL_LINK_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
 const STUDIO_LOCAL_LINK_OFFICE_EXTENSIONS = new Set([".docx", ".odt"]);
 const STUDIO_LOCAL_LINK_TEXT_FILENAMES = new Set([
 	".dockerignore", ".editorconfig", ".env", ".env.example", ".eslintignore", ".gitattributes",
@@ -8013,6 +8145,7 @@ function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: str
 	const commonHeaders = {
 		"Content-Type": "application/pdf",
 		"Content-Disposition": `inline; filename="${basename(filePath).replace(/["\\]/g, "") || "document.pdf"}"`,
+		"Referrer-Policy": "no-referrer",
 		"Cache-Control": "no-store",
 		"X-Content-Type-Options": "nosniff",
 		"Cross-Origin-Resource-Policy": "same-origin",
@@ -8045,6 +8178,20 @@ function respondHtmlPreviewResourceJson(req: IncomingMessage, res: ServerRespons
 		filename: basename(filePath),
 		dataUrl: method === "HEAD" ? "" : `data:${mimeType};base64,${data}`,
 	});
+}
+
+function respondStudioReadOnlyImage(req: IncomingMessage, res: ServerResponse, filePath: string, mimeType: string): void {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "GET" && method !== "HEAD") { res.setHeader("Allow", "GET, HEAD"); respondText(res, 405, "Use GET or HEAD."); return; }
+	const nonce = randomBytes(24).toString("hex");
+	const headers = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+		"Referrer-Policy": "no-referrer", "Cross-Origin-Resource-Policy": "same-origin",
+		"Content-Security-Policy": `default-src 'none'; img-src data:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox allow-scripts` };
+	if (method === "HEAD") { res.writeHead(200, headers); res.end(); return; }
+	// Same bounded authorized image transport as the in-Studio media resolver;
+	// SVG is only an img source, never markup in this trusted page.
+	const html = buildStudioReadOnlyImagePage({ label: basename(filePath), dataUrl: `data:${mimeType};base64,${readFileSync(filePath).toString("base64")}`, nonce });
+	res.writeHead(200, headers); res.end(html);
 }
 
 function formatStudioMarkdownAngleTarget(pathText: string): string {
@@ -8132,6 +8279,8 @@ async function respondLocalPreviewLinkJson(
 	}
 
 	const action = (requestUrl.searchParams.get("action") ?? "resolve").trim().toLowerCase();
+	const hostingError = studioHostingLocalLinkError({ enabled: STUDIO_DOCUMENT_HOSTING_ENABLED, action, kind: resource.kind });
+	if (hostingError) { respondJson(res, 409, { ok: false, error: hostingError }); return; }
 	const originDocId = (requestUrl.searchParams.get("docId") ?? "").trim();
 	const originDocument = originDocId ? readTransientStudioDocument(originDocId) : null;
 	const originatesFromWatchedPreview = requestUrl.searchParams.get("watchedFile") === "1" || originDocument?.watchFile === true;
@@ -8151,6 +8300,36 @@ async function respondLocalPreviewLinkJson(
 
 	if (method === "HEAD" || action === "resolve") {
 		respondJson(res, 200, basePayload);
+		return;
+	}
+
+	if (action === "reader") {
+		if (resource.kind !== "text") {
+			respondJson(res, 400, { ok: false, error: "The linked reader accepts readable text files." });
+			return;
+		}
+		const file = readStudioFile(resource.filePath, dirname(resource.filePath));
+		if (file.ok === false) {
+			respondJson(res, 400, { ok: false, error: file.message });
+			return;
+		}
+		if (file.resolvedPath !== resource.filePath) {
+			respondJson(res, 409, { ok: false, error: "The file identity changed while preparing the reading snapshot. Open its link again." });
+			return;
+		}
+		if (file.text.length > PREVIEW_RENDER_MAX_CHARS) {
+			respondJson(res, 413, { ok: false, error: `Reader source exceeds ${PREVIEW_RENDER_MAX_CHARS.toLocaleString()} characters.` });
+			return;
+		}
+		// Resolution already checked the session's file/folder authority. Reading
+		// this snapshot must not register an editor or grant its parent folder.
+		respondJson(res, 200, { ...basePayload, text: file.text, readOnly: true });
+		return;
+	}
+
+	if (action === "viewer-url") {
+		if (resource.kind !== "pdf" && resource.kind !== "image") { respondJson(res, 400, { ok: false, error: "Only PDF/images have a separate read-only viewer." }); return; }
+		respondJson(res, 200, { ...basePayload, readOnly: true, relativeUrl: buildStudioReadOnlyMediaUrl({ token: serverState.token, kind: resource.kind, path: resource.filePath, resourceDir: resource.resourceDir, page: resource.page }) });
 		return;
 	}
 
@@ -9844,7 +10023,7 @@ function parseStudioReplJournalEntryInput(value: unknown): Partial<StudioReplJou
 	};
 }
 
-function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
+function parseIncomingMessage(data: RawData, captureEnvelope?: (message: Record<string, unknown>) => void): IncomingStudioMessage | null {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(rawDataToString(data));
@@ -9854,6 +10033,7 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 
 	if (!parsed || typeof parsed !== "object") return null;
 	const msg = parsed as Record<string, unknown>;
+	captureEnvelope?.(msg);
 
 	if (msg.type === "hello") return { type: "hello" };
 	if (msg.type === "ping") return { type: "ping" };
@@ -10344,9 +10524,11 @@ function parseIncomingMessage(data: RawData): IncomingStudioMessage | null {
 	}
 
 	if (msg.type === "cancel_request" && typeof msg.requestId === "string") {
+		if (msg.runId !== undefined && (typeof msg.runId !== "string" || !msg.runId)) return null;
 		return {
 			type: "cancel_request",
 			requestId: msg.requestId,
+			...(typeof msg.runId === "string" ? { runId: msg.runId } : {}),
 		};
 	}
 
@@ -11969,6 +12151,10 @@ function buildStudioRelativeUrl(
 	if (doc?.watchFile) params.set("watchFile", "1");
 	if (options?.skipWorkspaceRestore) params.set("skipWorkspaceRestore", "1");
 	if (options?.paneFocus) params.set("paneFocus", options.paneFocus);
+	if (options?.hostedWorkspaceId) {
+		params.set("studioTabState", options.hostedWorkspaceId);
+		params.set("hostedWorkspace", options.hostedWorkspaceId);
+	}
 	return `/?${params.toString()}`;
 }
 
@@ -12143,10 +12329,8 @@ function formatStudioModelOptionLabel(model: { provider?: string; id?: string; n
 
 function buildTerminalSessionLabel(cwd: string, sessionName?: string): string {
 	const cwdBase = basename(cwd || process.cwd() || "") || cwd || "~";
-	const termProgram = String(process.env.TERM_PROGRAM ?? "").trim();
 	const name = String(sessionName ?? "").trim();
 	const parts: string[] = [];
-	if (termProgram) parts.push(termProgram);
 	if (name) parts.push(name);
 	parts.push(cwdBase);
 	return parts.join(" · ");
@@ -12369,7 +12553,7 @@ function buildStudioHtml(
 	initialTerminalDetail?: string,
 	initialContextUsage?: StudioContextUsageSnapshot,
 	studioMode: StudioUiMode = "full",
-	bufferRecovery: { workspaceId: string; capability: string } | null = null,
+	bufferRecovery: { workspaceId: string; capability: string; hosting?: boolean; resuming?: boolean } | null = null,
 ): string {
 	const initialText = escapeHtmlForInline(initialDocument?.text ?? "");
 	const initialSource = initialDocument?.source ?? "blank";
@@ -12456,7 +12640,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-buffer-switching="${STUDIO_BUFFER_SWITCHING_ENABLED && bufferRecovery && studioMode === "full" && initialWatchFile !== "1" ? "1" : "0"}" data-buffer-workspace-id="${escapeHtmlForInline(bufferRecovery?.workspaceId ?? "")}" data-buffer-capability="${escapeHtmlForInline(bufferRecovery?.capability ?? "")}" data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
+<body data-hosting-resume="${bufferRecovery?.resuming ? "1" : "0"}" data-document-hosting="${bufferRecovery?.hosting ? "1" : "0"}" data-buffer-switching="${STUDIO_BUFFER_SWITCHING_ENABLED && bufferRecovery && studioMode === "full" && initialWatchFile !== "1" ? "1" : "0"}" data-buffer-workspace-id="${escapeHtmlForInline(bufferRecovery?.workspaceId ?? "")}" data-buffer-capability="${escapeHtmlForInline(bufferRecovery?.capability ?? "")}" data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
   <header id="studioHeader">
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -12523,7 +12707,7 @@ ${cssVarsBlock}
               </select>
             </div>
             <div class="source-actions-row">
-              <button id="copyDraftBtn" type="button" title="Copy the current editor text to the clipboard.">Copy</button>
+              <button id="copyDraftBtn" type="button" title="Copy the editor text to the clipboard.">Copy text</button>
               <button id="suggestCompletionBtn" type="button" title="Ask the current model for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.">Suggest</button>
               <button id="suggestCompletionOptionsBtn" type="button" hidden title="Suggestion context options">▾</button>
               <select id="completionContextSelect" class="studio-flat-select" hidden aria-label="Suggestion context mode" title="Choose how much context Suggest includes.">
@@ -12557,7 +12741,7 @@ ${cssVarsBlock}
               <button id="showMeResponseBtn" type="button" hidden title="Explain the response displayed in the right pane using the smallest useful visual or structural representation.">Explain displayed response</button>
               <button id="askAsideBtn" type="button" title="Open a separate side-question thread without adding it to the main Pi conversation.">Side question</button>
               <button id="quizBtn" type="button" title="Open an active quiz for the current editor selection or document.">Quiz me</button>
-              <select id="highlightSelect" class="studio-flat-select" aria-label="Editor syntax highlighting">
+              <select id="highlightSelect" class="studio-flat-select" aria-label="Editor syntax highlighting" aria-keyshortcuts="Control+Shift+H">
                 <option value="off">Syntax highlight: Off</option>
                 <option value="bash">Syntax highlight: Bash</option>
                 <option value="c">Syntax highlight: C</option>
@@ -12596,9 +12780,13 @@ ${cssVarsBlock}
                 <option value="editor-top">Layout: Editor above</option>
                 <option value="response-top">Layout: Response above</option>
               </select>
-              <select id="activityTrackingSelect" class="studio-flat-select" aria-label="Follow main Pi activity" aria-keyshortcuts="Meta+Alt+A Control+Alt+A" title="Optionally follow main Pi activity from Working to the response view; off by default. Shortcut: Cmd/Ctrl+Option/Alt+A.">
+              <select id="activityTrackingSelect" class="studio-flat-select" aria-label="Follow main Pi activity" aria-keyshortcuts="Meta+Alt+A Control+Alt+A" title="Show Working temporarily during main Pi activity, then hand back. Full-workspace fresh default is On; explicit Off is remembered. Shortcut: Cmd/Ctrl+Option/Alt+A.">
                 <option value="off">Follow activity: Off</option>
                 <option value="on">Follow activity: On</option>
+              </select>
+              <select id="documentPreviewFollowSelect" class="studio-flat-select" aria-label="Follow Document preview" title="Show Document preview automatically when selecting Document. Manual view choices take precedence; turning this off restores Document's own view.">
+                <option value="on">Document preview: On</option>
+                <option value="off">Document preview: Off</option>
               </select>
               <select id="editorFontSizeSelect" class="studio-flat-select" aria-label="Editor text size" title="Adjust raw editor text size.">
                 <option value="10">Editor text: 10px</option>
@@ -12624,7 +12812,7 @@ ${cssVarsBlock}
               </div>
               <div id="lineNumberMeasure" class="editor-line-number-measure" aria-hidden="true"></div>
               <pre id="sourceHighlight" class="editor-highlight" aria-hidden="true"></pre>
-              <textarea id="sourceText" placeholder="Paste or edit text here.">${initialText}</textarea>
+              <textarea id="sourceText" ${bufferRecovery?.hosting ? "readonly" : ""} placeholder="Paste or edit text here.">${initialText}</textarea>
               <div id="editorSelectionActions" class="editor-selection-actions" hidden>
                 <button id="editorSelectionCommentBtn" type="button" class="editor-selection-action-btn" hidden title="Create a new local comment from the current editor selection.">Comment</button>
                 <button id="editorSelectionJumpBtn" type="button" class="editor-selection-action-btn" hidden title="Jump to the current editor selection in the preview.">Jump</button>
@@ -12779,6 +12967,7 @@ ${cssVarsBlock}
             <button id="loadCritiqueNotesBtn" type="button" hidden>Load critique notes into editor</button>
             <button id="loadCritiqueFullBtn" type="button" hidden>Load full critique into editor</button>
             <button id="loadHistoryPromptBtn" type="button" title="Load the prompt that generated the selected response into the editor.">Load response prompt into editor</button>
+            <button id="copyResponsePromptBtn" type="button" title="Select a response with a recorded prompt." disabled>Copy response prompt (unavailable)</button>
             <button id="copyResponseBtn" type="button">Copy response text</button>
           </div>
         </div>
@@ -12811,11 +13000,13 @@ ${cssVarsBlock}
           <h3>Navigation</h3>
           <dl>
             <div><dt>F6</dt><dd>Switch between editor and right pane</dd></div>
+            <div class="shortcuts-full-only shortcuts-buffer-switching-only"><dt>Cmd/Ctrl+Shift+1 / 2</dt><dd>Select Prompt / Document in the left pane</dd></div>
             <div><dt>F7 / Shift+F7</dt><dd>Cycle the active pane's view</dd></div>
             <div><dt>Cmd/Ctrl+Option/Alt+1–8</dt><dd>Switch the right pane directly: Response Raw, Response Preview, Editor Preview, Working, Changes, Files, REPL, Side questions</dd></div>
             <div><dt>Cmd/Ctrl+Option/Alt+P</dt><dd>Switch the right pane directly to Response Preview; in editor-only views, Editor Preview</dd></div>
             <div><dt>Cmd/Ctrl+Option/Alt+E</dt><dd>Switch the right pane directly to Editor Preview</dd></div>
             <div><dt>Cmd/Ctrl+Option/Alt+W</dt><dd>Switch the right pane directly to Working</dd></div>
+            <div><dt>Control+Shift+[ / ]</dt><dd>Collapse / expand displayed Working sections, while focused in Working (not editable controls)</dd></div>
             <div><dt>Cmd/Ctrl+Option/Alt+F</dt><dd>Switch the right pane directly to Files</dd></div>
             <div><dt>Cmd/Ctrl+Option/Alt+R</dt><dd>Switch the right pane directly to REPL and focus Quick send when a session is selected</dd></div>
             <div><dt>Cmd/Ctrl+Option/Alt+Q</dt><dd>Switch the right pane directly to Side questions</dd></div>
@@ -12848,6 +13039,7 @@ ${cssVarsBlock}
             <div><dt>Tab</dt><dd>Insert a visible completion suggestion; otherwise indent selected editor text</dd></div>
             <div><dt>Esc</dt><dd>Dismiss a visible completion suggestion, close overlays, exit pane focus, or stop an active request</dd></div>
             <div><dt>Shift+Tab</dt><dd>Unindent selected editor text</dd></div>
+            <div><dt>Ctrl+Shift+H</dt><dd>Toggle editor syntax highlighting while editing</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group shortcuts-full-only">
@@ -12921,12 +13113,36 @@ ${cssVarsBlock}
 export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
 	const studioWorkspaceStateStore = createStudioWorkspaceStateStore();
-	const studioBufferStateStore = createStudioBufferServerStore({ legacyState: (id: string) => studioWorkspaceStateStore.get(id) });
+	const studioBufferStateStore = createStudioBufferServerStore({ legacyState: (id: string) => studioWorkspaceStateStore.get(id),
+		...(STUDIO_DOCUMENT_HOSTING_ENABLED ? { hosting: { requireView: true,
+			canonicalPath: (path: string) => canonicalStudioDocumentPath(path, studioCwd), sameFile: studioDocumentPathsReferToSameFile } } : {}) });
+	const writeClassicStudioHtml = async (outputPath: string, html: Buffer, cwd: string): Promise<void> => {
+		if (!STUDIO_DOCUMENT_HOSTING_ENABLED) {
+			await writeFile(outputPath, html);
+			return;
+		}
+		await studioPersistentStateQueue.catch(() => undefined);
+		const result = writeStudioClassicHtmlExportFile(outputPath, html, cwd, canonical => studioBufferStateStore.checkUnownedHostedFile(canonical));
+		if (!result.filePath) throw new Error(result.error || "HTML project writing was refused; existing work was kept.");
+	};
+	const hostedConnections = new Map<WebSocket, { capability: string; generation: number; workspaceId: string }>();
 	const studioResourceGrantRegistry = createStudioResourceGrantRegistry();
 	const studioFileWatchers = new Map<WebSocket, ReturnType<typeof createStudioFileWatcher>>();
 	const studioWatchedClientPaths = new Map<WebSocket, string>();
 	const studioFileWatchSubscriptionGenerations = new Map<WebSocket, number>();
 	let activeRequest: ActiveStudioRequest | null = null;
+	const studioRunLifecycle = createStudioRunLifecycle({ makeId: randomUUID });
+	// Evidence for how the current run ends: the last assistant stop reason, and
+	// every input receipt accepted during the run (steering included).
+	let studioRunLastStopReason: string | null = null;
+	const studioRunInputRequestIds = new Set<string>();
+	// Informational correlation only; never used for SDK/run authority. Keep
+	// per-input provenance so a later queued Studio input cannot credit an
+	// earlier outside input with the same text.
+	let studioPromptInputs: Array<{ text: string; requestId: string | null }> = [];
+	// Once observation loses an input, same-text matching cannot prove origin
+	// again in this server lifetime. Prefer unknown over borrowing later proof.
+	let studioPromptInputProvenanceLost = false;
 	let studioDirectRunChain: StudioDirectRunChain | null = null;
 	let queuedStudioDirectRequests: QueuedStudioDirectRequest[] = [];
 	let pendingStudioPromptMetadata: StudioPromptDescriptor | null = null;
@@ -12934,6 +13150,9 @@ export default function (pi: ExtensionAPI) {
 	let preparedPdfExports = new Map<string, PreparedStudioPdfExport>();
 	let preparedHtmlExports = new Map<string, PreparedStudioHtmlExport>();
 	let initialStudioDocument: InitialStudioDocument | null = null;
+	let lastHostedFullWorkspaceId: string | null = null;
+	const currentFullStudioUrl = (state: StudioServerState) => buildStudioUrl(state.port, state.token, "full", undefined, undefined,
+		STUDIO_DOCUMENT_HOSTING_ENABLED ? { hostedWorkspaceId: studioBufferStateStore.activeHostingWorkspaces("full")[0] || lastHostedFullWorkspaceId || undefined } : undefined);
 	let studioCwd = process.cwd();
 	let lastCommandCtx: ExtensionCommandContext | null = null;
 	let latestModelRequestCtx: StudioModelRequestContext | null = null;
@@ -13341,10 +13560,11 @@ export default function (pi: ExtensionAPI) {
 	const clearStudioDirectRunState = () => {
 		studioDirectRunChain = null;
 		queuedStudioDirectRequests = [];
+		studioPromptInputs = [];
 		pendingStudioPromptMetadata = null;
 	};
 
-	const isStudioBusy = () => agentBusy || activeRequest !== null || compactInProgress;
+	const isStudioBusy = () => agentBusy || activeRequest !== null || compactInProgress || studioRunLifecycle.snapshot().compaction !== null;
 
 	const getSessionNameSafe = (): string | undefined => {
 		try {
@@ -13660,7 +13880,7 @@ export default function (pi: ExtensionAPI) {
 
 	const attachStudioTraceSummariesToHistory = (items: StudioResponseHistoryItem[]): StudioResponseHistoryItem[] => items.map((item) => {
 		const stored = studioTraceHistory.get(item.id);
-		return stored ? { ...item, traceSummary: stored.summary } : item;
+		return stored ? { ...item, traceSummary: stored.summary, studioRunId: stored.traceState.runId } : item;
 	});
 
 	const pruneStudioTraceHistory = () => {
@@ -13683,7 +13903,7 @@ export default function (pi: ExtensionAPI) {
 		const summary = summarizeStudioTraceSnapshot(snapshot.traceState, snapshot.truncated);
 		if (!summary.hasTrace) return null;
 		studioTraceHistory.set(id, { traceState: snapshot.traceState, summary });
-		studioResponseHistory = studioResponseHistory.map((item) => item.id === id ? { ...item, traceSummary: summary } : item);
+		studioResponseHistory = studioResponseHistory.map((item) => item.id === id ? { ...item, traceSummary: summary, studioRunId: snapshot.traceState.runId } : item);
 		pruneStudioTraceHistory();
 		return summary;
 	};
@@ -14167,7 +14387,7 @@ export default function (pi: ExtensionAPI) {
 	const resetStudioTraceForRun = () => {
 		const now = Date.now();
 		studioTraceState = {
-			runId: randomUUID(),
+			runId: studioRunLifecycle.snapshot().run?.id ?? randomUUID(),
 			requestId: activeRequest?.id ?? null,
 			requestKind: activeRequest?.kind ?? null,
 			status: "running",
@@ -14450,9 +14670,10 @@ export default function (pi: ExtensionAPI) {
 			contextTokens: contextUsageSnapshot.tokens,
 			contextWindow: contextUsageSnapshot.contextWindow,
 			contextPercent: contextUsageSnapshot.percent,
-			compactInProgress,
-			activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
-			activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
+			compactInProgress: compactInProgress || studioRunLifecycle.snapshot().compaction !== null,
+			runtimeActivity: studioRunLifecycle.snapshot(),
+			activeRequestId: activeRequest?.id ?? studioRunLifecycle.snapshot().run?.requestId ?? compactRequestId ?? null,
+			activeRequestKind: activeRequest?.kind ?? studioRunLifecycle.snapshot().run?.kind ?? (compactInProgress ? "compact" : null),
 			studioRunChainActive: isStudioDirectRunChainActive(),
 			queuedSteeringCount: getQueuedStudioSteeringCount(),
 		});
@@ -14467,6 +14688,7 @@ export default function (pi: ExtensionAPI) {
 		if (!activeRequest) return;
 		const completedRequestId = activeRequest.id;
 		const completedKind = activeRequest.kind;
+		studioPromptInputs = studioPromptInputs.filter(input => input.requestId !== completedRequestId);
 		clearTimeout(activeRequest.timer);
 		activeRequest = null;
 		syncCmuxStudioStatus();
@@ -14488,7 +14710,24 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const cancelActiveRequest = (requestId: string): { ok: true; kind: StudioRequestKind } | { ok: false; message: string } => {
+	const cancelActiveRequest = (requestId: string, runId?: string): { ok: true; kind: StudioRequestKind } | { ok: false; message: string } => {
+		const run = studioRunLifecycle.snapshot().run;
+		if (run) {
+			if (!lastCommandCtx) return { ok: false, message: "No interactive pi context is available to stop the request." };
+			const result = studioRunLifecycle.stop(requestId, runId, () => lastCommandCtx!.abort());
+			if (!result.ok) return { ok: false, message: result.message || "Could not request cancellation." };
+			const kind = result.kind as StudioRequestKind;
+			const stillTarget = studioRunLifecycle.snapshot().run?.id === run.id;
+			if (stillTarget) {
+				if (kind === "direct") clearStudioDirectRunState();
+				clearPendingStudioCompletion();
+				suppressedStudioResponse = { requestId, kind };
+			}
+			broadcastState(); // delivery does not clear an unsettled target
+			broadcast({ type: "info", message: stillTarget ? "Stopping request…" : "Cancellation requested.", level: "warning" });
+			return { ok: true, kind };
+		}
+		if (runId) return { ok: false, message: "That Studio run has already settled." };
 		if (!activeRequest) {
 			return { ok: false, message: "No studio request is currently running." };
 		}
@@ -15314,12 +15553,23 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const handleStudioMessage = (client: WebSocket, msg: IncomingStudioMessage) => {
+	const handleStudioMessage = (client: WebSocket, msg: IncomingStudioMessage, hostingProof?: Record<string, unknown>) => {
+		const hosted = hostedConnections.get(client);
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED && msg.type === "open_editor_only_request") {
+			sendToClient(client, { type: "error", requestId: msg.requestId, message: "Use Move Document or explicitly Copy Document in the hosting controls." }); return;
+		}
+		if (hosted && ["save_as_request", "save_over_request", "refresh_from_disk_request", "open_editor_only_request"].includes(msg.type)) {
+			const authority = hostingProof?.generation === hosted.generation
+				? studioBufferStateStore.hostingAuthority(hosted.capability, hosted.generation, hostingProof.bufferId, hostingProof.documentEpoch)
+				: { ok: false, message: "The Document's owning connection is not ready." };
+			if (!authority.ok) { sendToClient(client, { type: "error", requestId: "requestId" in msg ? msg.requestId : undefined, message: "message" in authority ? authority.message : "Document ownership could not be verified." }); return; }
+		}
 		if (msg.type === "ping") {
 			sendToClient(client, { type: "pong", timestamp: Date.now() });
 			return;
 		}
 		if (msg.type === "workspace_state_update") {
+			if (STUDIO_DOCUMENT_HOSTING_ENABLED && (hosted || studioBufferStateStore.hostedWorkspace(msg.tabStateId))) return;
 			studioWorkspaceStateStore.set(msg.tabStateId, msg.state);
 			return;
 		}
@@ -15364,15 +15614,17 @@ export default function (pi: ExtensionAPI) {
 				contextTokens: contextUsageSnapshot.tokens,
 				contextWindow: contextUsageSnapshot.contextWindow,
 				contextPercent: contextUsageSnapshot.percent,
-				compactInProgress,
-				activeRequestId: activeRequest?.id ?? compactRequestId ?? null,
-				activeRequestKind: activeRequest?.kind ?? (compactInProgress ? "compact" : null),
+				compactInProgress: compactInProgress || studioRunLifecycle.snapshot().compaction !== null,
+				runtimeActivity: studioRunLifecycle.snapshot(),
+				activeRequestId: activeRequest?.id ?? studioRunLifecycle.snapshot().run?.requestId ?? compactRequestId ?? null,
+				activeRequestKind: activeRequest?.kind ?? studioRunLifecycle.snapshot().run?.kind ?? (compactInProgress ? "compact" : null),
 				studioRunChainActive: isStudioDirectRunChainActive(),
 				queuedSteeringCount: getQueuedStudioSteeringCount(),
 				lastResponse: lastStudioResponse,
 				responseHistory: studioResponseHistory,
 				traceState: studioTraceState,
-				initialDocument: initialStudioDocument,
+				initialDocument: hosted ? null : initialStudioDocument,
+				...(hosted ? { documentHosting: { workspaceId: hosted.workspaceId, generation: hosted.generation } } : {}),
 				resourceGrants: studioResourceGrantRegistry.snapshot(),
 				quartoPreview: getStudioQuartoPreviewSnapshot(),
 				sideQuestion: getStudioSideQuestionPublicState(),
@@ -15711,9 +15963,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const result = cancelActiveRequest(msg.requestId);
+			const result = cancelActiveRequest(msg.requestId, msg.runId);
 			if (result.ok === false) {
-				sendToClient(client, { type: "error", requestId: msg.requestId, message: result.message });
+				sendToClient(client, { type: msg.runId ? "cancel_rejected" : "error", requestId: msg.requestId, runId: msg.runId, message: result.message });
 			}
 			return;
 		}
@@ -16437,7 +16689,10 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const result = writeStudioFile(msg.path, studioCwd, msg.content, msg.overwrite === true, msg.expectedRevision);
+			const writer = (authorizeCommit?: (path: string) => { ok: boolean; message?: string }) => writeStudioFile(msg.path, studioCwd, msg.content, msg.overwrite === true, msg.expectedRevision, authorizeCommit);
+			const result = (hosted ? studioBufferStateStore.hostingSave(hosted.capability, { ...hostingProof,
+				kind: "save-as", path: msg.path, content: msg.content, overwrite: msg.overwrite === true, expectedDiskRevision: msg.expectedRevision }, writer)
+				: writer()) as ReturnType<typeof writeStudioFile> & { documents?: Record<string, number>; operationId?: string; claimStatus?: string };
 			if (result.ok === false) {
 				if (result.conflict) {
 					sendToClient(client, {
@@ -16472,6 +16727,7 @@ export default function (pi: ExtensionAPI) {
 				resourceDir: dirname(result.resolvedPath),
 				diskRevision: result.diskRevision,
 				message: `Saved editor text to ${result.label}`,
+				...(hosted ? { hosting: { documents: result.documents, operationId: result.operationId, claimStatus: result.claimStatus } } : {}),
 			});
 			return;
 		}
@@ -16490,12 +16746,12 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const result = saveStudioDiskFileIfRevision({
-				path: msg.path,
-				content: msg.content,
-				expectedRevision: msg.expectedRevision,
-				force: msg.force === true,
-			}) as StudioDiskWriteResult;
+			const writer = (authorizeCommit?: (path: string) => { ok: boolean; message?: string }) => saveStudioDiskFileIfRevision({
+				path: msg.path, content: msg.content, expectedRevision: msg.expectedRevision, force: msg.force === true, authorizeCommit,
+			});
+			const result = (hosted ? studioBufferStateStore.hostingSave(hosted.capability, { ...hostingProof,
+				kind: "save-over", path: msg.path, content: msg.content, force: msg.force === true, expectedDiskRevision: msg.expectedRevision }, writer)
+				: writer()) as StudioDiskWriteResult & { documents?: Record<string, number>; operationId?: string; claimStatus?: string };
 			if (result.ok === false) {
 				if (result.conflict) {
 					sendToClient(client, {
@@ -16534,6 +16790,7 @@ export default function (pi: ExtensionAPI) {
 				resourceDir: dirname(result.path),
 				diskRevision: result.revision,
 				message: `Saved over ${existingLabel}`,
+				...(hosted ? { hosting: { documents: result.documents, operationId: result.operationId, claimStatus: result.claimStatus } } : {}),
 			});
 			return;
 		}
@@ -16558,7 +16815,16 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const refreshed = readStudioFile(refreshPath, studioCwd, { requireCanonicalPath: true });
+			const refreshed = hosted
+				? studioBufferStateStore.hostingRefresh(hosted.capability, { ...hostingProof, path: requestedPath },
+					(canonical: string, buffer: { sourceState: { path: string | null }; resourceDir: string }) => {
+						// Use the verified checkpoint's context, never request-supplied hints;
+						// ownership does not bypass the existing resource permission check.
+						const resource = resolveStudioLocalPreviewResourcePath(canonical, buffer.sourceState.path ?? undefined, buffer.resourceDir, studioCwd, studioResourceGrantRegistry);
+						if (resource.kind !== "text" || resource.filePath !== canonical) return { ok: false, message: "Refresh requires a permitted text file at the same canonical location." };
+						return readStudioFile(canonical, studioCwd, { requireCanonicalPath: true });
+					})
+				: readStudioFile(refreshPath, studioCwd, { requireCanonicalPath: true });
 			if (refreshed.ok === false) {
 				sendToClient(client, {
 					type: "error",
@@ -16576,7 +16842,7 @@ export default function (pi: ExtensionAPI) {
 				resourceDir: dirname(refreshed.resolvedPath),
 				diskRevision: refreshed.diskRevision,
 			};
-			if (!requestedPath || initialStudioDocument?.path === refreshed.resolvedPath) {
+			if (!hosted && (!requestedPath || initialStudioDocument?.path === refreshed.resolvedPath)) {
 				initialStudioDocument = refreshedDocument;
 				recordStudioDocumentResourceGrants(refreshedDocument);
 			}
@@ -16796,6 +17062,7 @@ export default function (pi: ExtensionAPI) {
 			"X-Content-Type-Options": "nosniff",
 			"Content-Disposition": `inline; filename="${safeAsciiName}"; filename*=UTF-8''${encodeURIComponent(prepared.filename)}`,
 			"Content-Length": String(prepared.pdf.length),
+			"Referrer-Policy": "no-referrer",
 		};
 		if (prepared.warning) headers["X-Pi-Studio-Export-Warning"] = prepared.warning;
 
@@ -16895,12 +17162,20 @@ export default function (pi: ExtensionAPI) {
 			"Content-Length": String(prepared.html.length),
 		};
 		if (prepared.warning) headers["X-Pi-Studio-Export-Warning"] = prepared.warning;
+		if (prepared.documentExport) {
+			// Generated HTML is editable only inside a registered/sandboxed Document.
+			// Its retained download must never execute at the privileged Studio origin.
+			headers["Content-Disposition"] = headers["Content-Disposition"].replace(/^inline;/, "attachment;");
+			headers["Content-Security-Policy"] = "sandbox; default-src 'none'";
+			headers["Referrer-Policy"] = "no-referrer";
+		}
 
 		res.writeHead(200, headers);
 		res.end(prepared.html);
 	};
 
 	const handleScratchpadStateRequest = async (req: IncomingMessage, res: ServerResponse, requestUrl: URL) => {
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED) await studioPersistentStateQueue.catch(() => undefined);
 		const method = (req.method ?? "GET").toUpperCase();
 		if (method === "GET") {
 			const action = (requestUrl.searchParams.get("action") ?? "").trim().toLowerCase();
@@ -16968,7 +17243,15 @@ export default function (pi: ExtensionAPI) {
 			respondJson(res, 400, { ok: false, error: "Invalid metadata write ownership." });
 			return;
 		}
-		await writePersistedStudioScratchpadText(documentKey, text, label, writeOwnership.ownership);
+		const proof = (parsedBody as { hosting?: Record<string, unknown> }).hosting;
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED && proof) {
+			const result = await studioBufferStateStore.hostingMetadata(proof.capability, proof, "scratchpad", documentKey,
+				(authorize: () => void) => writePersistedStudioScratchpadText(documentKey, text, label, writeOwnership.ownership, authorize));
+			respondJson(res, result.ok ? 200 : 409, { ...result, ...(!result.ok ? { error: result.message } : {}) }); return;
+		}
+		await writePersistedStudioScratchpadText(documentKey, text, label, writeOwnership.ownership, STUDIO_DOCUMENT_HOSTING_ENABLED ? () => {
+			if (studioBufferStateStore.ownsMetadataKey("scratchpad", documentKey)) throw new Error("Edit this scratchpad in its owning Document.");
+		} : undefined);
 		respondJson(res, 200, { ok: true });
 	};
 
@@ -17021,6 +17304,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const handleReviewNotesRequest = async (req: IncomingMessage, res: ServerResponse, requestUrl: URL) => {
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED) await studioPersistentStateQueue.catch(() => undefined);
 		const method = (req.method ?? "GET").toUpperCase();
 		if (method === "GET") {
 			const documentKey = (requestUrl.searchParams.get("documentKey") ?? "").trim();
@@ -17078,7 +17362,15 @@ export default function (pi: ExtensionAPI) {
 			respondJson(res, 400, { ok: false, error: "Invalid metadata write ownership." });
 			return;
 		}
-		await writePersistedStudioReviewNotes(documentKey, notes, writeOwnership.ownership);
+		const proof = (parsedBody as { hosting?: Record<string, unknown> }).hosting;
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED && proof) {
+			const result = await studioBufferStateStore.hostingMetadata(proof.capability, proof, "review-notes", documentKey,
+				(authorize: () => void) => writePersistedStudioReviewNotes(documentKey, notes, writeOwnership.ownership, authorize));
+			respondJson(res, result.ok ? 200 : 409, { ...result, ...(!result.ok ? { error: result.message } : {}) }); return;
+		}
+		await writePersistedStudioReviewNotes(documentKey, notes, writeOwnership.ownership, STUDIO_DOCUMENT_HOSTING_ENABLED ? () => {
+			if (studioBufferStateStore.ownsMetadataKey("review-notes", documentKey)) throw new Error("Edit these comments in their owning Document.");
+		} : undefined);
 		respondJson(res, 200, { ok: true });
 	};
 
@@ -17311,6 +17603,14 @@ export default function (pi: ExtensionAPI) {
 			const writeResult = writeStudioPreviewExportFile(buildStudioPreviewExportPath(sourcePath || undefined, userResourceDir || undefined, studioCwd, filename), pdf);
 			const exportId = storePreparedPdfExport(pdf, filename, warning, writeResult.filePath ?? undefined);
 			const token = serverState?.token ?? "";
+			if (openTarget === "studio" && STUDIO_DOCUMENT_HOSTING_ENABLED) {
+				// The resident export bytes remain viewable even when project writing
+				// fails. No editable wrapper, file grant or Document is created.
+				respondJson(res, 200, { ok: true, filename, path: writeResult.filePath, writeError: writeResult.error, warning: warning ?? null,
+					openedStudio: false, readOnly: true, relativeUrl: `/export-pdf?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}`,
+					downloadUrl: `/export-pdf?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}` });
+				return;
+			}
 			if (openTarget === "studio" && serverState && writeResult.filePath) {
 				const exportedPath = writeResult.filePath;
 				const title = sanitizeStudioPreviewBlockLine(filename || basename(exportedPath) || "PDF preview");
@@ -17433,6 +17733,15 @@ export default function (pi: ExtensionAPI) {
 				? (parsedBody as { openTarget: string }).openTarget.trim().toLowerCase()
 				: "browser";
 		const openTarget = requestedOpenTarget === "studio" ? "studio" : "browser";
+		const hostedDocumentExport = openTarget === "studio" && STUDIO_DOCUMENT_HOSTING_ENABLED;
+		const exportCapability = req.headers["x-studio-buffer-capability"];
+		const exportProof = parsedBody && typeof parsedBody === "object" ? (parsedBody as { hosting?: Record<string, unknown> }).hosting : undefined;
+		let exportAuthority: ReturnType<typeof studioBufferStateStore.hostingExportAuthority> | null = null;
+		if (hostedDocumentExport) {
+			await studioPersistentStateQueue.catch(() => undefined);
+			exportAuthority = typeof exportCapability === "string" ? studioBufferStateStore.hostingExportAuthority(exportCapability, exportProof) : null;
+			if (!exportAuthority?.ok) { respondJson(res, 409, { ok: false, error: exportAuthority?.message || "A current owning export checkpoint is required; current work was kept." }); return; }
+		}
 		const editorHtmlLanguage = inferStudioPdfLanguage(markdown, requestedEditorHtmlLanguage);
 		const isLatex = editorHtmlLanguage === "latex"
 			|| (
@@ -17455,9 +17764,33 @@ export default function (pi: ExtensionAPI) {
 					themeVars,
 				},
 			);
-			const writeResult = writeStudioPreviewExportFile(buildStudioPreviewExportPath(sourcePath || undefined, userResourceDir || undefined, studioCwd, filename), html);
-			const exportId = storePreparedHtmlExport(html, filename, warning, writeResult.filePath ?? undefined);
+			const targetPath = buildStudioPreviewExportPath(sourcePath || undefined, userResourceDir || undefined, studioCwd, filename);
 			const token = serverState?.token ?? "";
+			if (hostedDocumentExport && exportAuthority?.ok && typeof exportCapability === "string") {
+				// Retain generated bytes BEFORE any filesystem attempt; no Document is
+				// registered until a separate original-identity launch transaction.
+				const exportId = storePreparedHtmlExport(html, filename, warning);
+				const prepared = preparedHtmlExports.get(exportId)!;
+				prepared.documentExport = { workspaceId: exportAuthority.workspaceId, bufferId: exportAuthority.bufferId,
+					documentEpoch: exportProof!.documentEpoch as number, expectedRevision: exportProof!.expectedRevision as string,
+					resourceDir: resourcePath || studioCwd, diskRevision: null };
+				const writeResult = writeStudioHostedHtmlDocumentExport(targetPath, html, studioCwd, (canonical) => {
+					const current = studioBufferStateStore.hostingExportAuthority(exportCapability, exportProof);
+					if (!current.ok) return { ok: false, message: current.message };
+					const found = studioBufferStateStore.hostingOwner(exportCapability, canonical);
+					return found.ok && "owner" in found && !found.owner ? { ok: true } : { ok: false, message: "The export target is owned or claimed by a Document; its file and work were kept." };
+				});
+				if (writeResult.filePath) { prepared.filePath = writeResult.filePath; prepared.persistent = true; prepared.documentExport.diskRevision = writeResult.diskRevision; }
+				respondJson(res, 200, { ok: true, filename, path: writeResult.filePath, writeError: writeResult.error, warning: warning ?? null,
+					openedStudio: false, preparedDocument: { exportId, kind: writeResult.filePath ? "file" : "blank", path: writeResult.filePath || "" },
+					downloadUrl: `/export-html?token=${encodeURIComponent(token)}&id=${encodeURIComponent(exportId)}` });
+				return;
+			}
+			if (STUDIO_DOCUMENT_HOSTING_ENABLED) await studioPersistentStateQueue.catch(() => undefined);
+			const writeResult = STUDIO_DOCUMENT_HOSTING_ENABLED
+				? writeStudioClassicHtmlExportFile(targetPath, html, studioCwd, canonical => studioBufferStateStore.checkUnownedHostedFile(canonical), true)
+				: writeStudioPreviewExportFile(targetPath, html);
+			const exportId = storePreparedHtmlExport(html, filename, warning, writeResult.filePath ?? undefined);
 			if (openTarget === "studio" && serverState) {
 				const exportedPath = writeResult.filePath ?? "";
 				const document: InitialStudioDocument = {
@@ -17683,6 +18016,117 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/document-hosting") {
+			const capability = req.headers["x-studio-buffer-capability"];
+			if (!STUDIO_DOCUMENT_HOSTING_ENABLED || requestUrl.searchParams.get("token") !== serverState.token || typeof capability !== "string") {
+				respondJson(res, 403, { ok: false, message: "Document hosting authorization unavailable." }); return;
+			}
+			if (req.method !== "POST") { respondJson(res, 405, { ok: false, message: "Use POST." }); return; }
+			void (async () => {
+				const body = JSON.parse(await readRequestBody(req, 64_000)) as Record<string, unknown>;
+				if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid request");
+				const current = studioBufferStateStore.read(capability);
+				if (!current.ok) { respondJson(res, 403, current); return; }
+				const url = (id: string, mode: StudioUiMode) => buildStudioRelativeUrl(serverState!.token, mode) + "&studioTabState=" + encodeURIComponent(id) + "&hostedWorkspace=" + encodeURIComponent(id);
+				if (body.operation === "hosts") {
+					respondJson(res, 200, { ok: true, workspaces: studioBufferStateStore.activeHostingWorkspaces("full") }); return;
+				}
+				if (body.operation === "owner") {
+					// Retained buffer identity covers draft/moved Documents without a path.
+					// Neither lookup reads file contents, creates an owner or grants access.
+					let found: ReturnType<typeof studioBufferStateStore.hostingOwner>;
+					if (body.bufferId !== undefined) {
+						if (typeof body.bufferId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(body.bufferId) || body.path) {
+							respondJson(res, 400, { ok: false, reason: "invalid-request", message: "A bounded retained Document identity is required." }); return;
+						}
+						found = { ok: true, owner: studioBufferStateStore.hostedDocumentOwner(body.bufferId) };
+					} else {
+						const rawPath = typeof body.path === "string" ? body.path.trim() : "";
+						if (!rawPath || rawPath.includes("\0") || rawPath.startsWith("//") || (/^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^file:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath))) {
+							respondJson(res, 400, { ok: false, reason: "invalid-request", message: "A local Document path is required." }); return;
+						}
+						const context = resolveStudioPreviewResourceContext(typeof body.sourcePath === "string" ? body.sourcePath : undefined,
+							typeof body.resourceDir === "string" ? body.resourceDir : undefined, studioCwd);
+						const reference = recoverLikelyDroppedLeadingSlashPath(expandHome(decodeStudioLocalPreviewResourceReference(rawPath)));
+						found = studioBufferStateStore.hostingOwner(capability, isAbsolute(reference) ? reference : resolve(context.baseDir, reference));
+					}
+					if (!("owner" in found) || !found.owner) { respondJson(res, 200, found); return; }
+					const owner = found.owner;
+					const expectedOwner = body.expectedOwner as Record<string, unknown> | undefined;
+					if (expectedOwner && (expectedOwner.workspaceId !== owner.workspaceId || expectedOwner.bufferId !== owner.bufferId)) {
+						respondJson(res, 409, { ok: false, reason: "owner-changed", message: "The Document owner changed. Recheck it without opening an independent copy." }); return;
+					}
+					if (body.focus === true) {
+						const authority = studioBufferStateStore.hostingViewAuthority(capability, body.generation);
+						if (!authority.ok) { respondJson(res, 409, authority); return; }
+					}
+					const live = [...hostedConnections].filter(([socket, value]) => value.workspaceId === owner.workspaceId && socket.readyState === WebSocket.OPEN);
+					if (body.focus === true) for (const [socket] of live) sendToClient(socket, { type: "document_hosting_focus", bufferId: owner.bufferId });
+					respondJson(res, 200, { ...found, seen: studioBufferStateStore.seenHostingView(owner.workspaceId), live: live.length > 0, url: url(owner.workspaceId, owner.mode as StudioUiMode) }); return;
+				}
+				await studioPersistentStateQueue.catch(() => undefined);
+				let launchRequest = body;
+				const opening = ["open", "open-cancel", "open-ack"].includes(String(body.operation));
+				if (opening || (body.operation === "launch" && body.kind === "file")) {
+					const raw = typeof body.path === "string" ? body.path.trim() : "";
+					if (!raw || raw.includes("\0") || raw.startsWith("//") || (/^[a-z][a-z0-9+.-]*:/i.test(raw) && !/^file:/i.test(raw) && !/^[a-z]:[\\/]/i.test(raw))) {
+						respondJson(res, 400, { ok: false, reason: "invalid-request", message: "A local file path is required." }); return;
+					}
+					const context = resolveStudioPreviewResourceContext(typeof body.sourcePath === "string" ? body.sourcePath : undefined, typeof body.resourceDir === "string" ? body.resourceDir : undefined, studioCwd);
+					const reference = recoverLikelyDroppedLeadingSlashPath(expandHome(decodeStudioLocalPreviewResourceReference(raw)));
+					launchRequest = { ...body, path: isAbsolute(reference) ? reference : resolve(context.baseDir, reference) };
+				}
+				const loadHostedFile = (canonical: string, prepared?: { path: string | null }) => {
+					if (!prepared) {
+						const resource = resolveStudioLocalPreviewResourcePath(String(body.path), typeof body.sourcePath === "string" ? body.sourcePath : undefined, typeof body.resourceDir === "string" ? body.resourceDir : undefined, studioCwd, studioResourceGrantRegistry);
+						if (resource.kind !== "text" || resource.filePath !== canonical) return { ok: false, reason: "source-changed", message: "Choose a readable text file whose canonical location has not changed." };
+					} else if (prepared.path !== canonical) return { ok: false, reason: "source-changed", message: "The generated HTML file identity changed." };
+					const file = readStudioFile(canonical, studioCwd, { requireCanonicalPath: true });
+					return file.ok === false ? file : { ...file, path: file.resolvedPath, resourceDir: dirname(file.resolvedPath), editorLanguage: inferStudioPdfLanguageFromPath(file.resolvedPath) || "markdown" };
+				};
+				const loadHostedExport = (request: Record<string, unknown>, scope: { workspaceId: string }) => {
+					const prepared = typeof request.exportId === "string" ? getPreparedHtmlExport(request.exportId) : null;
+					const origin = prepared?.documentExport;
+					if (!prepared || !origin || origin.workspaceId !== scope.workspaceId || origin.bufferId !== request.bufferId || origin.documentEpoch !== request.documentEpoch || origin.expectedRevision !== request.expectedRevision) return { ok: false, reason: "export-unavailable", message: "The prepared HTML expired or belongs to another source. Keep existing Documents and re-export explicitly." };
+					const path = prepared.persistent ? prepared.filePath || null : null;
+					if ((path ? request.kind !== "file" || request.path !== path : request.kind !== "blank")) return { ok: false, reason: "source-changed", message: "The prepared HTML backing does not match its original request." };
+					return { ok: true, kind: path ? "file" : "blank", path, text: prepared.html.toString("utf-8"), label: prepared.filename,
+						resourceDir: path ? dirname(path) : origin.resourceDir, diskRevision: path ? origin.diskRevision : null, editorLanguage: "html" };
+				};
+				const result = (opening ? studioBufferStateStore.hostingOpen(capability, launchRequest, loadHostedFile)
+					: body.operation === "launch" ? studioBufferStateStore.hostingLaunch(capability, launchRequest, loadHostedFile, loadHostedExport)
+					: body.operation === "copy" ? studioBufferStateStore.hostingCopy(capability, body)
+					: body.operation === "save-metadata" ? await studioBufferStateStore.hostingSaveMetadata(capability, body, runStudioSavedMetadataTransaction)
+					: body.operation === "discard-save" ? studioBufferStateStore.discardHostingSave(capability, body)
+					: studioBufferStateStore.hostingMove(capability, body)) as Record<string, unknown>;
+				if (opening) { respondJson(res, result.ok ? 200 : 409, result); return; }
+				if (result.ok) {
+					if (body.operation === "launch" && typeof body.exportId === "string" && body.kind === "file") {
+						const prepared = getPreparedHtmlExport(body.exportId);
+						if (prepared?.documentExport && prepared.persistent && prepared.filePath) {
+							try { studioResourceGrantRegistry.grantFile(prepared.filePath, { cwd: studioCwd, source: "generated-html", expectedCanonicalPath: prepared.filePath }); } catch { /* Never broaden a failed exact-file grant. */ }
+						}
+					}
+					const owner = typeof result.bufferId === "string" ? studioBufferStateStore.hostedDocumentOwner(result.bufferId) : null;
+					if (owner && (result.status === "committed" || body.operation === "copy" || body.operation === "launch")) {
+						result.seen = studioBufferStateStore.seenHostingView(owner.workspaceId);
+						result.url = url(owner.workspaceId, owner.mode as StudioUiMode);
+						const live = [...hostedConnections].filter(([socket, value]) => value.workspaceId === owner.workspaceId && socket.readyState === WebSocket.OPEN);
+						result.live = live.length > 0;
+						if (body.focus === true) for (const [socket] of live) sendToClient(socket, { type: "document_hosting_focus", bufferId: result.bufferId });
+					}
+					if (body.operation !== "status" && typeof result.moveId === "string") for (const [socket, value] of hostedConnections) {
+						if ([result.sourceWorkspaceId, result.targetWorkspaceId].includes(value.workspaceId)) sendToClient(socket, { type: "document_hosting_changed", moveId: result.moveId });
+					}
+				}
+				respondJson(res, result.ok ? 200 : 409, result);
+			})().catch(error => {
+				if (error instanceof StudioResourceGrantRequiredError) { respondStudioResourceGrantRequiredJson(res, error); return; }
+				respondJson(res, 500, { ok: false, reason: "unavailable", message: "The outcome could not be checked. Keep all copies and recheck; do not resume a frozen Document." });
+			});
+			return;
+		}
+
 		if (requestUrl.pathname === "/tab-buffer-state") {
 			if (!STUDIO_BUFFER_RECOVERY_ENABLED || requestUrl.searchParams.get("token") !== serverState.token) {
 				respondJson(res, 403, { ok: false, reason: "forbidden", message: "Buffer recovery authorization unavailable." });
@@ -17711,9 +18155,10 @@ export default function (pi: ExtensionAPI) {
 				let body: Record<string, unknown>;
 				try {
 					body = JSON.parse(raw);
-					if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => !["state", "expectedRevision"].includes(key))) throw new Error();
+					if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => !["state", "expectedRevision", "generation", "documents"].includes(key))) throw new Error();
 				} catch { respondJson(res, 400, { ok: false, reason: "invalid-request", message: "Invalid buffer request." }); return; }
-				const result = studioBufferStateStore.write(capability, body.expectedRevision, body.state);
+				if (STUDIO_DOCUMENT_HOSTING_ENABLED) await studioPersistentStateQueue.catch(() => undefined);
+				const result = studioBufferStateStore.write(capability, body.expectedRevision, body.state, body.generation, body.documents);
 				respondJson(res, result.ok ? 200 : 409, result);
 			})().catch(() => respondJson(res, 500, { ok: false, reason: "unavailable", message: "Buffer recovery failed; keep the current editor text." }));
 			return;
@@ -17767,6 +18212,9 @@ export default function (pi: ExtensionAPI) {
 				if (!state) {
 					respondJson(res, 400, { ok: false, error: "Invalid or oversized Studio workspace state." });
 					return;
+				}
+				if (STUDIO_DOCUMENT_HOSTING_ENABLED && studioBufferStateStore.hostedWorkspace(tabStateId)) {
+					respondJson(res, 409, { ok: false, error: "Use the owning Document's buffer recovery; legacy publication is disabled for this workspace." }); return;
 				}
 				const stored = studioWorkspaceStateStore.set(tabStateId, state);
 				respondJson(res, 200, { ok: true, stored });
@@ -18146,6 +18594,21 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/image-viewer") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) { respondText(res, 403, "Invalid or expired studio token. Re-run /studio."); return; }
+			try {
+				const resource = resolveStudioHtmlPreviewResourcePath(requestUrl.searchParams.get("path") ?? "", requestUrl.searchParams.get("sourcePath") ?? undefined,
+					requestUrl.searchParams.get("resourceDir") ?? undefined, studioCwd, studioResourceGrantRegistry);
+				if (!resource.mimeType.startsWith("image/")) { respondText(res, 400, "Only images can open in this read-only viewer."); return; }
+				respondStudioReadOnlyImage(req, res, resource.filePath, resource.mimeType);
+			} catch (error) {
+				if (error instanceof StudioResourceGrantRequiredError) { respondStudioResourceGrantRequiredJson(res, error); return; }
+				respondText(res, 404, "Image unavailable; its identity or permission changed.");
+			}
+			return;
+		}
+
 		if (requestUrl.pathname !== "/") {
 			respondText(res, 404, "Not found");
 			return;
@@ -18159,14 +18622,23 @@ export default function (pi: ExtensionAPI) {
 
 		refreshContextUsage();
 		const studioMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
-		const requestInitialDocument = resolveRequestedStudioDocumentFromUrl(requestUrl, initialStudioDocument, studioCwd, lastStudioResponse);
-		let bufferRecovery: { workspaceId: string; capability: string } | null = null;
+		const hostingPage = resolveStudioHostingPage({ enabled: STUDIO_DOCUMENT_HOSTING_ENABLED, requestUrl, mode: studioMode,
+			workspace: (id: string) => studioBufferStateStore.hostedWorkspace(id), transient: readTransientStudioDocument });
+		if (!hostingPage.ok) { respondText(res, 409, "message" in hostingPage ? hostingPage.message : "This editing page is unavailable."); return; }
+		const hostedId = "workspaceId" in hostingPage ? hostingPage.workspaceId : undefined;
+		// Neither path hints nor watch flags authorize reads. Owned recovery uses
+		// a neutral surface; watched pages require a retained read-only capability.
+		const requestInitialDocument: InitialStudioDocument | null = "legacy" in hostingPage && hostingPage.legacy
+			? resolveRequestedStudioDocumentFromUrl(requestUrl, initialStudioDocument, studioCwd, lastStudioResponse)
+			: "document" in hostingPage ? hostingPage.document as InitialStudioDocument : null;
+		let bufferRecovery: { workspaceId: string; capability: string; hosting?: boolean; resuming?: boolean } | null = null;
 		if (STUDIO_BUFFER_RECOVERY_ENABLED && !requestInitialDocument?.watchFile && requestUrl.searchParams.get("watchedFile") !== "1") {
-			const requestedId = requestUrl.searchParams.get("studioTabState") ?? "";
-			const workspaceId = requestUrl.searchParams.get("skipWorkspaceRestore") !== "1" && isValidStudioTabStateId(requestedId) ? requestedId : "tab_" + createSessionToken().slice(0, 40);
+			const requestedId = hostedId || requestUrl.searchParams.get("studioTabState") || "";
+			const workspaceId = hostedId || (requestUrl.searchParams.get("skipWorkspaceRestore") !== "1" && isValidStudioTabStateId(requestedId) ? requestedId : "tab_" + createSessionToken().slice(0, 40));
 			const issued = studioBufferStateStore.issue({ workspaceId, mode: studioMode });
 			if (!("capability" in issued)) { respondText(res, 503, "Buffer recovery page capacity reached. Existing recovery was retained; close unused test pages before retrying."); return; }
-			bufferRecovery = { workspaceId, capability: issued.capability };
+			bufferRecovery = { workspaceId, capability: issued.capability, hosting: STUDIO_DOCUMENT_HOSTING_ENABLED,
+				resuming: STUDIO_DOCUMENT_HOSTING_ENABLED && studioBufferStateStore.seenHostingView(workspaceId) && requestUrl.searchParams.get("resumeAcknowledged") !== "1" };
 		}
 		res.writeHead(200, {
 			"Content-Type": "text/html; charset=utf-8",
@@ -18283,6 +18755,12 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 			}
+			if (STUDIO_DOCUMENT_HOSTING_ENABLED && !canonicalWatchedPath) {
+				const capability = requestUrl.searchParams.get("bufferCapability") || "";
+				const binding = studioBufferStateStore.bindHostingView(capability, clientMode, ws);
+				if (!("generation" in binding)) { ws.close(4005, "Document editing view unavailable or already open"); return; }
+				hostedConnections.set(ws, { capability, workspaceId: binding.workspaceId, generation: binding.generation });
+			}
 			clients.add(ws);
 			clientModes.set(ws, clientMode);
 			if (canonicalWatchedPath) studioWatchedClientPaths.set(ws, canonicalWatchedPath);
@@ -18290,15 +18768,20 @@ export default function (pi: ExtensionAPI) {
 			broadcastState();
 
 			ws.on("message", (data) => {
-				const parsed = parseIncomingMessage(data);
+				let proof: Record<string, unknown> | undefined;
+				const parsed = parseIncomingMessage(data, envelope => {
+					if (envelope.hosting && typeof envelope.hosting === "object" && !Array.isArray(envelope.hosting)) proof = envelope.hosting as Record<string, unknown>;
+				});
 				if (!parsed) {
 					sendToClient(ws, { type: "error", message: "Invalid message payload." });
 					return;
 				}
-				handleStudioMessage(ws, parsed);
+				handleStudioMessage(ws, parsed, proof);
 			});
 
 			const cleanupClient = () => {
+				const hosted = hostedConnections.get(ws);
+				if (hosted) { studioBufferStateStore.releaseHostingView(hosted.capability, ws); hostedConnections.delete(ws); }
 				clients.delete(ws);
 				clientModes.delete(ws);
 				studioWatchedClientPaths.delete(ws);
@@ -18427,6 +18910,7 @@ export default function (pi: ExtensionAPI) {
 		studioFileWatchSubscriptionGenerations.clear();
 		studioWorkspaceStateStore.clear();
 		studioBufferStateStore.clear();
+		lastHostedFullWorkspaceId = null;
 		studioResourceGrantRegistry.clear();
 	};
 
@@ -18518,9 +19002,49 @@ export default function (pi: ExtensionAPI) {
 		broadcastState();
 	});
 
-	pi.on("agent_start", async () => {
+	pi.on("input", async (event) => {
+		studioRunLifecycle.input(event.source);
+		const text = normalizePromptText(event.text);
+		if (!text) return;
+		if (text.length > 900_000) { studioPromptInputProvenanceLost = true; return; }
+		while (studioPromptInputs.length && (studioPromptInputs.length >= 16 || studioPromptInputs.reduce((sum, input) => sum + input.text.length, 0) + text.length > 2_700_000)) {
+			studioPromptInputProvenanceLost = true;
+			studioPromptInputs.shift();
+		}
+		const candidates = [...queuedStudioDirectRequests.map(request => ({ ...request, id: request.requestId })),
+			...(activeRequest?.kind === "direct" ? [activeRequest] : [])];
+		const candidate = event.source === "extension" ? candidates.find(request =>
+			normalizePromptText(request.promptTriggerText ?? request.prompt) === text && !studioPromptInputs.some(input => input.requestId === request.id)) : null;
+		studioPromptInputs.push({ text, requestId: candidate?.id ?? null });
+	});
+	pi.on("session_before_compact", async (event) => {
+		// Automatic pre-prompt compaction is already inside the SDK run, even
+		// before agent_start. Manual compaction alone grants no main-run target.
+		if (event.reason !== "manual" && !studioRunLifecycle.snapshot().run) {
+			studioRunLifecycle.start(activeRequest);
+			agentBusy = true;
+			resetStudioTraceForRun();
+		}
+		if (studioRunLifecycle.snapshot().run?.stopping) return { cancel: true };
+		studioRunLifecycle.compactStart(event);
+		broadcastState();
+	});
+	pi.on("session_compact", async () => { studioRunLifecycle.compactEnd(); refreshContextUsage(); broadcastState(); });
+	pi.on("session_compact_failed", async () => { studioRunLifecycle.compactEnd(); broadcastState(); });
+	pi.on("before_provider_request", async (_event, ctx) => {
+		// Also fence delayed observer dispatch before a continued agent's
+		// provider request. This does not pretend to abort the SDK compactor.
+		if (studioRunLifecycle.snapshot().run?.stopping) ctx.abort();
+	});
+
+	pi.on("agent_start", async (_event, ctx) => {
+		// ctx.abort does not cancel an already-running SDK compactor. Fence an
+		// automatic continuation of a stopped run at its fresh agent signal.
+		if (studioRunLifecycle.snapshot().run?.stopping) ctx.abort();
+		const continuingRun = studioRunLifecycle.snapshot().run !== null;
+		studioRunLifecycle.start(activeRequest);
 		agentBusy = true;
-		resetStudioTraceForRun();
+		if (!continuingRun) resetStudioTraceForRun();
 		emitDebugEvent("agent_start", { activeRequestId: activeRequest?.id ?? null, activeRequestKind: activeRequest?.kind ?? null });
 		setTerminalActivity("running");
 	});
@@ -18604,6 +19128,7 @@ export default function (pi: ExtensionAPI) {
 		const message = event.message as { stopReason?: string; role?: string };
 		const stopReason = typeof message.stopReason === "string" ? message.stopReason : "";
 		const role = typeof message.role === "string" ? message.role : "";
+		if (role === "assistant" && studioRunLifecycle.snapshot().run) studioRunLastStopReason = stopReason || null;
 		const markdown = extractAssistantText(event.message);
 		const thinking = extractAssistantThinking(event.message);
 		emitDebugEvent("message_end", {
@@ -18620,6 +19145,8 @@ export default function (pi: ExtensionAPI) {
 		if (role === "user") {
 			const userPrompt = extractUserText(event.message);
 			pendingTurnPrompt = userPrompt;
+			const inputIndex = studioPromptInputs.findIndex(input => input.text === normalizePromptText(userPrompt));
+			const registeredInput = inputIndex >= 0 ? studioPromptInputs.splice(inputIndex, 1)[0] : null;
 			const activatedQueuedRequest = activateQueuedStudioDirectRequestForPrompt(userPrompt);
 			if (activatedQueuedRequest) {
 				emitDebugEvent("activate_queued_request", {
@@ -18632,6 +19159,16 @@ export default function (pi: ExtensionAPI) {
 				stageStudioPromptMetadata(getPromptDescriptorForActiveRequest(activeRequest));
 			} else {
 				pendingStudioPromptMetadata = null;
+			}
+			// Informational input receipt is independent of response/consent ownership:
+			// steering can register while the original response request stays active.
+			const receiptRequestId = registeredInput?.requestId ?? (activeRequest?.kind === "direct" ? activeRequest.id : null);
+			if (receiptRequestId) {
+				const timestamp = (event.message as { timestamp?: unknown }).timestamp;
+				const studioOwned = !studioPromptInputProvenanceLost && registeredInput?.requestId === receiptRequestId;
+				if (studioRunLifecycle.snapshot().run) studioRunInputRequestIds.add(receiptRequestId);
+				broadcast({ type: "prompt_submitted", requestId: receiptRequestId, studioOwned,
+					sentAt: typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now() });
 			}
 			return;
 		}
@@ -18688,7 +19225,8 @@ export default function (pi: ExtensionAPI) {
 		const responseTimestamp = latestItem?.timestamp ?? Date.now();
 		const responseThinking = latestItem?.thinking ?? thinking ?? null;
 		pendingTurnPrompt = null;
-		setStudioTraceRunStatus("complete");
+		// Only settlement ends a tracked run; a message end may precede retry or compaction.
+		if (!studioRunLifecycle.snapshot().run) setStudioTraceRunStatus("complete");
 		if (latestItem) {
 			storeStudioTraceSnapshotForResponse(latestItem.id);
 		}
@@ -18717,6 +19255,8 @@ export default function (pi: ExtensionAPI) {
 				thinking: lastStudioResponse.thinking,
 				timestamp: lastStudioResponse.timestamp,
 				responseHistory: studioResponseHistory,
+				runtimeActivity: studioRunLifecycle.snapshot(),
+				busy: isStudioBusy(),
 			});
 			broadcastResponseHistory();
 			pendingStudioCompletionKind = kind;
@@ -18744,11 +19284,26 @@ export default function (pi: ExtensionAPI) {
 			thinking: lastStudioResponse.thinking,
 			timestamp: lastStudioResponse.timestamp,
 			responseHistory: studioResponseHistory,
+			runtimeActivity: studioRunLifecycle.snapshot(),
+			busy: isStudioBusy(),
 		});
 		broadcastResponseHistory();
 	});
 
-	pi.on("agent_end", async () => {
+	// agent_end precedes SDK retry/compaction/queued continuation. It is not
+	// final settlement and must not retire a cancellable Studio run.
+	pi.on("agent_settled", async () => {
+		const settlingRun = studioRunLifecycle.snapshot().run;
+		const stopping = settlingRun?.stopping === true;
+		// Settlement, not Stop delivery or a model toolUse pause, decides the outcome.
+		const lastStop = studioRunLastStopReason, owned = settlingRun?.origin === "studio";
+		const ended = lastStop === "stop" || lastStop === "length";
+		const outcome: StudioRunOutcome = stopping || lastStop === "aborted" ? "stopped"
+			: activeRequest || lastStop === "error" || (owned && !ended) ? "failed" : "completed";
+		const outcomeRequestId = settlingRun?.requestId ?? activeRequest?.id ?? null;
+		const outcomeRequestIds = [...new Set([outcomeRequestId, ...studioRunInputRequestIds].filter((id): id is string => Boolean(id)))];
+		studioRunLastStopReason = null; studioRunInputRequestIds.clear();
+		studioRunLifecycle.settled();
 		agentBusy = false;
 		pendingTurnPrompt = null;
 		pendingStudioPromptMetadata = null;
@@ -18766,10 +19321,13 @@ export default function (pi: ExtensionAPI) {
 		});
 		clearStudioDirectRunState();
 		setTerminalActivity("idle");
-		setStudioTraceRunStatus("complete");
+		setStudioTraceRunStatus(outcome === "stopped" ? "stopped" : outcome === "failed" ? "error" : "complete");
+		if (settlingRun && outcomeRequestId) {
+			broadcast({ type: "run_settled", runId: settlingRun.id, requestId: outcomeRequestId, requestIds: outcomeRequestIds, outcome, settledAt: Date.now() });
+		}
 		if (activeRequest) {
 			const requestId = activeRequest.id;
-			broadcast({
+			if (!stopping) broadcast({
 				type: "error",
 				requestId,
 				message: "Request ended without a complete assistant response.",
@@ -18784,8 +19342,10 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		studioRunLastStopReason = null; studioRunInputRequestIds.clear();
 		lastCommandCtx = null;
 		latestModelRequestCtx = null;
+		studioRunLifecycle.settled();
 		agentBusy = false;
 		clearStudioDirectRunState();
 		clearPendingStudioCompletion();
@@ -19192,12 +19752,68 @@ export default function (pi: ExtensionAPI) {
 					themeVars,
 				},
 			);
-			await writeFile(source.outputPath, html);
+			await writeClassicStudioHtml(source.outputPath, html, ctx.cwd);
 			const openError = await maybeOpenStudioExportPath(source.outputPath, params.open);
 			return { ok: true, format: "html", path: source.outputPath, source: source.sourceLabel, bytes: html.length, warning, openError: openError ?? undefined };
 		} catch (error) {
 			return { ok: false, format: "html", error: `Studio HTML export failed: ${error instanceof Error ? error.message : String(error)}` };
 		}
+	};
+
+	const openHostedStudioView = async (
+		launchArgs: string, ctx: ExtensionCommandContext, flags: StudioLaunchFlags,
+		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string },
+	) => {
+		if (hasConnectedFullStudioView() && serverState) {
+			ctx.ui.notify("The existing full Studio was kept. Use its opening controls.", "warning");
+			ctx.ui.notify(`Studio URL: ${currentFullStudioUrl(serverState)}`, "info");
+			return;
+		}
+		let path: string | undefined;
+		if (launchArgs && !["--blank", "blank", "--last", "last"].includes(launchArgs) && !launchArgs.startsWith("-")) {
+			const argument = parsePathArgument(launchArgs);
+			if (!argument) { ctx.ui.notify("Invalid file path argument.", "error"); return; }
+			const resolved = resolveStudioPath(argument, ctx.cwd);
+			if (!resolved.ok) { ctx.ui.notify(resolved.message, "error"); return; }
+			path = resolved.resolved;
+		}
+		try {
+			const state = await ensureServer(flags.port, flags.listenAll);
+			const result = studioBufferStateStore.hostingBootstrap({ path }, () => {
+				const selection = resolveStudioLaunchDocument(launchArgs, ctx, options);
+				if (!selection) return { ok: false, message: "The initial document was not loaded." };
+				return { ok: true, document: selection.document,
+					editorLanguage: selection.document.path ? inferStudioPdfLanguageFromPath(selection.document.path) || "markdown" : "markdown" };
+			});
+			if (!result.ok || !("owner" in result) || !result.owner) {
+				ctx.ui.notify("message" in result ? result.message : "The workspace could not be registered. Existing work was kept.", "warning"); return;
+			}
+			const owner = result.owner;
+			if (result.status === "created" && "document" in result) {
+				initialStudioDocument = result.document;
+				recordStudioDocumentResourceGrants(result.document, ctx.cwd);
+			}
+			if (owner.mode === "full") lastHostedFullWorkspaceId = owner.workspaceId;
+			const url = buildStudioUrl(state.port, state.token, owner.mode as StudioUiMode, undefined, undefined, { hostedWorkspaceId: owner.workspaceId });
+			const live = [...hostedConnections].filter(([socket, value]) => value.workspaceId === owner.workspaceId && socket.readyState === WebSocket.OPEN);
+			try {
+				if (live.length) {
+					for (const [socket] of live) sendToClient(socket, { type: "document_hosting_focus", bufferId: owner.bufferId });
+					ctx.ui.notify("Requested focus in the existing editor. Its unsaved work was kept; no independent copy was opened.", "info");
+				} else if (shouldAutoOpenStudioBrowser(flags)) {
+					await openStudioUrlInBrowser(url);
+					ctx.ui.notify(result.status === "reused" ? "Opening the retained owner. Confirm resuming if its previous browser may still contain newer work." : "Opened a registered Studio workspace.", "info");
+				} else ctx.ui.notify("Studio workspace is registered. Browser auto-open was skipped; use the same URL to open or resume it.", "info");
+			} catch (error) {
+				ctx.ui.notify(`Browser opening failed; the same workspace is retained: ${error instanceof Error ? error.message : String(error)}`, "warning");
+			} finally {
+				ctx.ui.notify(`Studio URL: ${url}`, "info");
+				const hint = state.listenAll ? null : buildStudioSshTunnelHint(state.port, url)
+					?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
+				if (hint) ctx.ui.notify(hint, "info");
+				if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
+			}
+		} catch (error) { ctx.ui.notify(`Studio launch failed; existing work was kept: ${error instanceof Error ? error.message : String(error)}`, "error"); }
 	};
 
 	const openStudioView = async (
@@ -19230,13 +19846,38 @@ export default function (pi: ExtensionAPI) {
 		}
 		const launchesWatchedTextPreview = Boolean(launchOpenFlags.watchPdf && parsedLaunchPath && !launchesPdfPreview);
 		const requestedLaunchMode: StudioUiMode = launchesPdfPreview || launchesWatchedTextPreview ? "editor-only" : mode;
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED && launchesPdfPreview && !launchOpenFlags.watchPdf && !options?.replaceExistingFull) {
+			await ctx.waitForIdle();
+			try {
+				const target = parseStudioPdfLaunchTarget(normalizePathInput(parsedLaunchPath!));
+				if (!target) throw new Error("A local PDF is required.");
+				// The explicit terminal argument approves exactly this file, never its
+				// folder or an editable owner. Existing full-workspace buffers stay put.
+				const grant = studioResourceGrantRegistry.grantFile(decodeStudioLocalPreviewResourceReference(target.path), { cwd: ctx.cwd, source: "command-media" });
+				// The grant is canonical; this resolver accepts a URI reference.
+				const pdf = resolveStudioPdfResourcePath(encodeURIComponent(grant.path), undefined, undefined, ctx.cwd, studioResourceGrantRegistry);
+				const state = await ensureServer(launchOpenFlags.port, launchOpenFlags.listenAll);
+				const url = `http://127.0.0.1:${state.port}` + buildStudioReadOnlyMediaUrl({ token: state.token, kind: "pdf", path: pdf, resourceDir: ctx.cwd, page: target.page });
+				const automatic = shouldAutoOpenStudioBrowser({ openRemoteBrowser: launchOpenFlags.openRemoteBrowser, noBrowser: launchOpenFlags.noBrowser });
+				if (automatic) await openStudioUrlInBrowser(url);
+				ctx.ui.notify(`Read-only PDF preview${automatic ? " requested" : " ready; browser auto-open skipped"}: ${url}`, "info");
+				const hint = state.listenAll ? null : buildStudioSshTunnelHint(state.port, url) ?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(state.port, url) : null);
+				if (hint) ctx.ui.notify(hint, "info");
+			} catch (error) { ctx.ui.notify(`PDF preview failed: ${error instanceof Error ? error.message : String(error)}`, "error"); }
+			return;
+		}
+		const hostingError = studioHostingCommandError({ enabled: STUDIO_DOCUMENT_HOSTING_ENABLED, mode: requestedLaunchMode,
+			replace: options?.replaceExistingFull, watchedText: launchesWatchedTextPreview });
+		if (hostingError) { ctx.ui.notify(hostingError, "warning"); return; }
 		if (requestedLaunchMode === "full" && hasConnectedFullStudioView()) {
 			if (options?.replaceExistingFull) {
 				closeStudioClientsByMode("full", 4001, "Full Studio replaced");
 			} else {
-				ctx.ui.notify("A full pi Studio view is already open for this session. Close it first, use /studio-replace for a fresh full Studio view, or use /studio-editor-only for a concurrent editor-only Studio view.", "warning");
+				ctx.ui.notify(STUDIO_DOCUMENT_HOSTING_ENABLED
+					? "A full Studio view is already open. Use its Open Document or New editor tab controls; existing work was kept."
+					: "A full pi Studio view is already open for this session. Close it first, use /studio-replace for a fresh full Studio view, or use /studio-editor-only for a concurrent editor-only Studio view.", "warning");
 				if (serverState) {
-					const url = buildStudioUrl(serverState.port, serverState.token, "full");
+					const url = currentFullStudioUrl(serverState);
 					ctx.ui.notify(`Studio URL: ${url}`, "info");
 					const tunnelHint = serverState.listenAll
 						? null
@@ -19264,6 +19905,10 @@ export default function (pi: ExtensionAPI) {
 			// ignore theme read errors
 		}
 
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED && requestedLaunchMode === "full") {
+			await openHostedStudioView(launchArgs, ctx, launchOpenFlags, options);
+			return;
+		}
 		const selection = resolveStudioLaunchDocument(launchArgs, ctx, {
 			...options,
 			watchPdf: launchOpenFlags.watchPdf && launchesPdfPreview,
@@ -19353,7 +19998,7 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const counts = getStudioClientCounts();
-				const url = buildStudioUrl(serverState.port, serverState.token, "full");
+				const url = currentFullStudioUrl(serverState);
 				ctx.ui.notify(
 					`Studio running at ${url} (listening on ${serverState.bindHost}:${serverState.port}; busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
 					"info",
@@ -19652,7 +20297,7 @@ export default function (pi: ExtensionAPI) {
 							themeVars,
 						},
 					);
-					await writeFile(outputPath, html);
+					await writeClassicStudioHtml(outputPath, html, ctx.cwd);
 
 					let openError: string | null = null;
 					try {
@@ -19720,7 +20365,7 @@ export default function (pi: ExtensionAPI) {
 						themeVars,
 					},
 				);
-				await writeFile(outputPath, html);
+				await writeClassicStudioHtml(outputPath, html, ctx.cwd);
 
 				let openError: string | null = null;
 				try {
@@ -19764,6 +20409,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			const hostingError = studioHostingCommandError({ enabled: STUDIO_DOCUMENT_HOSTING_ENABLED, mode: "full", current: true });
+			if (hostingError) { ctx.ui.notify(hostingError, "warning"); return; }
 			const file = readStudioFile(pathArg, ctx.cwd);
 			if (file.ok === false) {
 				ctx.ui.notify(file.message, "error");

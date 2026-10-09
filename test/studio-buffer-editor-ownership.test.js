@@ -9,7 +9,7 @@ function section(start, end) {
 }
 function harness() {
 	let next = 0, decide;
-	const c = { bufferRecoveryEnabled: true, bufferSwitchingEnabled: false, editorContentGeneration: 0, origin: "original", sourceTextEl: { value: "saved snapshot" },
+	const c = { bufferRecoveryEnabled: true, bufferSwitchingEnabled: false, documentHostingEnabled: false, editorContentGeneration: 0, origin: "original", sourceTextEl: { value: "saved snapshot" },
 		sourceState: { path: "/original.md", label: "original.md" }, fileBackedBaselineText: "disk", fileBackedDiskRevision: "old-revision",
 		pendingSaveOperations: new Map(), pendingEditorRefresh: null, pendingRequestId: null, pendingKind: null, stickyStudioKind: null, uiBusy: false,
 		pendingPiEditorLoad: null, pendingPiEditorLink: null, pendingPiEditorClear: null,
@@ -28,6 +28,7 @@ function harness() {
 		editorDiffersFromFileBackedBaseline: () => c.sourceTextEl.value !== c.fileBackedBaselineText,
 	};
 	vm.createContext(c);
+	vm.runInContext(section("function setStudioResourceDirValue(", "function getCurrentResourceDirValue("), c);
 	vm.runInContext(section("function captureEditorConsent()", 'saveAsBtn.addEventListener("click"'), c);
 	return { c, decide: value => decide(value), saved: message => {
 		c.message = message;
@@ -200,7 +201,7 @@ test("opt-in reset forks a canonical blank editor under whole-workspace consent"
 test("navigation consent is single-use and stale consent warns even with acknowledged recovery", () => {
 	for (const valid of [true, false]) {
 		let handler, warnings = 0;
-		const c = { window: { addEventListener: (_, fn) => { handler = fn; } }, bufferRecoveryEnabled: true, bufferRecoveryNavigationConsent: {},
+		const c = { window: { addEventListener: (_, fn) => { handler = fn; } }, documentHostingEnabled: false, bufferRecoveryEnabled: true, bufferRecoveryNavigationConsent: {},
 			recoveryConsentIsCurrent: () => valid, bufferRecoveryClient: { needsUnloadConfirmation: () => false },
 			hasUnsyncedStudioMetadata: () => false,
 			flushStudioNavigationPersistence() {}, stopFooterSpinner() {}, flushWorkspacePersistence() {}, flushScratchpadPersistence() {}, flushReviewNotesPersistence() {}, renderStatus() {}, bufferRecoveryIssue: "",
@@ -286,7 +287,7 @@ test("loading the comments prompt asks before replacing editor text and rechecks
 	for (const stale of ["none", "review", "editor"]) {
 		let decide;
 		const c = {
-			bufferRecoveryEnabled: true,
+			bufferRecoveryEnabled: true, documentHostingEnabled: false,
 			reviewNotesActionGeneration: 0,
 			reviewNotesAssociationGeneration: 2,
 			reviewNotesEditGeneration: 3,
@@ -325,7 +326,7 @@ test("comments-prompt replacement protects empty, whitespace and unknown-baselin
 		for (const outcome of ["accept", "cancel", "edit", "baseline", "revision", "source"]) {
 			let decide;
 			const c = {
-				bufferRecoveryEnabled: true,
+				bufferRecoveryEnabled: true, documentHostingEnabled: false,
 				reviewNotesActionGeneration: 0,
 				reviewNotesAssociationGeneration: 1,
 				reviewNotesEditGeneration: 1,

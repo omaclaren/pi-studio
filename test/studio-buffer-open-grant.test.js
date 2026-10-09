@@ -25,7 +25,7 @@ function fixture() {
   const requests = [], dialogs = [], replacements = [], statuses = [];
   let destination = { id: "document", role: "document", revision: 1, text: "", baselineText: "", sourceState: { path: null }, view: {} };
   const c = vm.createContext({
-    bufferRecoveryEnabled: true, uiBusy: false, modal: false, studioDecisionState: null, generation: 1, previewCurrent: true,
+    bufferRecoveryEnabled: true, documentHostingEnabled: false, uiBusy: false, modal: false, studioDecisionState: null, generation: 1, previewCurrent: true,
     studioModalBlocksDraftAction: allowed => c.modal && (!allowed || c.studioDecisionState !== allowed),
     pendingBufferDocumentOpen: null, fileBackedBaselineText: null, bufferTransientStates: new Map(), fileBrowserState: {},
     studioBuffersCanOpenDocument: (ignoreModal = false) => !c.uiBusy && (ignoreModal || !c.modal),
@@ -34,6 +34,8 @@ function fixture() {
     buildWorkspacePersistencePayload: () => ({}), bufferRecoveryExtra: () => ({}),
     captureStudioBufferOpenConsent: () => ({ generation: c.generation }), recoveryConsentIsCurrent: owner => owner.generation === c.generation,
     confirmPreviewOfficeConversion: async () => true, requestStudioConfirmation: async () => true,
+    // Replacement lifecycle is covered separately; this fixture owns grant/open continuation.
+    retireStudioBufferSourceView() {},
     syncStudioSelectionAppendAction() {}, syncStudioDocumentAppendAction() {}, captureStudioBufferTransientState() {}, bindSelectedStudioBuffer() {},
     setStatus: (...args) => statuses.push(args), normalizeStudioDiskRevision: () => null, normalizeStudioResourceDirValue: value => value,
     detectLanguageFromName: () => "markdown", isWatchedFilePreview: false, initialQueryParams: new URLSearchParams(),

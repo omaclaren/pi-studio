@@ -104,7 +104,23 @@ test("async Studio URL producers return root-relative targets without absolute U
     'downloadUrl: `/export-pdf?',
     'downloadUrl: `/export-html?',
   ]) {
-    const markerIndex = indexSource.indexOf(marker);
+    let markerIndex = indexSource.indexOf(marker);
+    // Hosting now returns a resident read-only PDF, not a root editor URL.
+    // Check that response, then keep the original classic Studio URL check.
+    if (marker === 'downloadUrl: `/export-pdf?' && /readOnly: true/.test(indexSource.slice(markerIndex - 500, markerIndex))) {
+      const readOnlyResponse = indexSource.slice(markerIndex - 500, markerIndex + marker.length);
+      assert.match(readOnlyResponse, /relativeUrl: `\/export-pdf\?/);
+      assert.match(readOnlyResponse, /openedStudio: false/);
+      markerIndex = indexSource.indexOf(marker, markerIndex + marker.length);
+    }
+    // Hosted HTML is a prepared identity, not an editing URL. Its separately
+    // registered launch supplies the root URL only after ownership proof.
+    if (marker === 'downloadUrl: `/export-html?' && /preparedDocument:/.test(indexSource.slice(markerIndex - 500, markerIndex))) {
+      const preparedResponse = indexSource.slice(markerIndex - 500, markerIndex + marker.length);
+      assert.match(preparedResponse, /openedStudio: false/);
+      assert.doesNotMatch(preparedResponse, /relativeUrl:/);
+      markerIndex = indexSource.indexOf(marker, markerIndex + marker.length);
+    }
     assert.ok(markerIndex > 0, `Missing response marker: ${marker}`);
     const responseWindow = indexSource.slice(Math.max(0, markerIndex - 500), markerIndex + 500);
     assert.match(responseWindow, /relativeUrl: buildStudioRelativeUrl/);

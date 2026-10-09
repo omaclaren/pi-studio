@@ -11,7 +11,13 @@ function section(start, end) {
   return source.slice(a, b);
 }
 function load(c, start, end) { vm.runInContext(section(start, end), c); }
-function context(values) { return vm.createContext(values); }
+function context(values) {
+  const c = vm.createContext({ studioRunFollowing: null, studioRunFollowingAvailable: () => false, getStudioRunWorkingOwner: () => null,
+    pauseStudioRunFollowing() {}, syncStudioFollowMenu() {}, documentHostingEnabled: false, documentPreviewFollowingEnabled: false,
+    documentPreviewFollowOwner: null, documentPreviewFollowScrolls: new Map(), ...values });
+  load(c, "function readDocumentPreviewFollowingEnabled()", "function isStackedStudioPaneLayout()");
+  return c;
+}
 
 test("switching requires both process flags and a full editable recovery owner", () => {
   assert.match(index, /STUDIO_BUFFER_SWITCHING_ENABLED = STUDIO_BUFFER_RECOVERY_ENABLED && process\.env\.PI_STUDIO_BUFFER_SWITCHING === "1"/);
@@ -140,7 +146,9 @@ function bindingHarness({ role = "prompt", follow = true, queued = true, history
     view: { editorLanguage: "markdown", editorView: "markdown", rightView, followLatest: follow, responseHistoryIndex: 0,
       selectionStart: 2, selectionEnd: 4, selectionDirection: "backward", scrollTop: 70, previewScrollTop: 90, rightScrollTop: 480 } };
   const pending = { markdown: "R2", kind: "direct", timestamp: 2000 };
-  const c = context({ getStudioSelectedBuffer: () => entry, bufferBindingInProgress: false, bufferViewRestore: null,
+  const c = context({ rightView, documentHostingEnabled: false, getStudioSelectedBuffer: () => entry, bufferBindingInProgress: false, bufferViewRestore: null,
+    isEditorOnlyMode: false, isWatchedFilePreview: false, documentPreviewFollowingEnabled: false,
+    documentPreviewFollowOwner: null, documentPreviewFollowScrolls: new Map(),
     bufferSwitchingEnabled: true, bufferRecoveryClient: { snapshot: () => ({ activePromptId: "prompt" }) },
     pendingResponseScrollReset: false, latestResponseMarkdown: "R1", annotationsEnabled: false, editorLanguage: "markdown",
     captureEditorAsyncConsent: () => ({}), editorAsyncConsentIsCurrent: () => true,
@@ -163,6 +171,8 @@ function bindingHarness({ role = "prompt", follow = true, queued = true, history
     sourceTextEl: { setSelectionRange: () => {}, scrollTop: 0 }, sourcePreviewEl: {}, critiqueViewEl: {}, syncEditorHighlightScroll: () => {},
     scheduleStudioBufferEditorRestore: () => {}, scheduleStudioBufferScrollRestore: () => {},
     persistWorkspaceStateNow: () => assert.equal(c.bufferBindingInProgress, false), syncActionButtons: () => {} });
+  load(c, "function normalizeStudioResourceDirValue(", "function stripImportedFileLabel(");
+  load(c, "function readDocumentPreviewFollowingEnabled()", "function isStackedStudioPaneLayout()");
   load(c, "function captureStudioBufferTransientState()", "function bindSelectedStudioBuffer(");
   load(c, "function bindSelectedStudioBuffer(", "function selectStudioBuffer(");
   return { c, calls, entry, pending, bind: () => c.bindSelectedStudioBuffer() };
@@ -179,6 +189,51 @@ test("returning to a following Prompt applies queued history and discards the ol
   assert.equal(f.c.bufferViewRestore.source, 90);
   assert.equal(f.c.sourceTextEl.scrollTop, 70);
   assert.equal(f.entry.view.rightScrollTop, 480, "binding must not mutate the immutable saved view");
+});
+
+test("Document binding follows preview without adopting it as the buffer's saved view", () => {
+  for (const rightView of ["files", "side-questions"]) {
+    const f = bindingHarness({ role: "document", rightView, queued: false });
+    f.c.documentPreviewFollowingEnabled = true;
+    const original = structuredClone(f.entry);
+    f.bind();
+    assert.equal(f.c.rightView, "editor-preview");
+    assert.equal(f.c.getDocumentPreviewFollowOwner().rightView, rightView);
+    assert.equal(f.c.getDocumentPreviewFollowOwner().rightScrollTop, 480);
+    assert.equal(f.c.bufferViewRestore.right, 0);
+    assert.deepEqual(f.entry, original);
+  }
+});
+
+test("Document-follow Off and Prompt binding retain ordinary per-buffer view restoration", () => {
+  for (const role of ["document", "prompt"]) {
+    const f = bindingHarness({ role, rightView: "files", queued: false });
+    f.c.documentPreviewFollowingEnabled = role === "prompt";
+    f.bind();
+    assert.equal(f.c.rightView, "files"); assert.equal(f.c.bufferViewRestore.right, 480);
+    assert.equal(f.c.getDocumentPreviewFollowOwner(), null);
+  }
+});
+
+test("automatic Document preview reuses only its own current-session preview position", () => {
+  const f = bindingHarness({ role: "document", rightView: "files", queued: false });
+  f.c.documentPreviewFollowingEnabled = true;
+  f.c.documentPreviewFollowScrolls.set("prompt", 220);
+  f.c.documentPreviewFollowScrolls.set("document", 72);
+  f.bind(); assert.equal(f.c.bufferViewRestore.right, 72);
+  assert.equal(f.entry.view.rightScrollTop, 480, "the Files reading position remains independent");
+});
+
+test("source replacement retires automatic-preview position instead of applying the old file's offset", () => {
+  const f = bindingHarness({ role: "document", rightView: "files", queued: false });
+  f.c.documentPreviewFollowingEnabled = true;
+  f.c.documentPreviewFollowScrolls.set("document", 360);
+  f.entry.sourceState = { source: "file", path: "/new.md" };
+  f.entry.view.rightScrollTop = 0;
+  f.c.retireStudioBufferSourceView?.("document");
+  f.bind(); assert.equal(f.c.bufferViewRestore.right, 0);
+  assert.match(source, /replace: bufferId => retireStudioBufferSourceView\(bufferId\)/);
+  assert.match(section("async function openStudioBufferDocument(", "function syncStudioBufferOpenOperation()"), /retireStudioBufferSourceView\(target\.id\)/);
 });
 
 test("a following Prompt also consumes a queued payload when branch history is unavailable", () => {
@@ -207,6 +262,7 @@ function historyBindingHarness({ follow = false, rightView = "preview" } = {}) {
   load(f.c, "function setResponseHistory(", "function getTraceHistoryContextLabel()");
   f.c.captureStudioBufferTransientState();
   f.c.isStudioDocumentBufferView = () => true;
+  f.c.rightView = "editor-preview"; // the Document shows its own preview (responses there are a separate case)
   return { ...f, deliver(items, options = {}) {
     f.c.setResponseHistory(items, { preserveSelection: true, autoSelectLatest: false, ...options });
   }, returnToPrompt() { f.c.isStudioDocumentBufferView = () => false; f.calls.length = 0; f.bind(); } };
@@ -456,7 +512,7 @@ function activityPolicyHarness() {
   Object.assign(f.c, { bufferSwitchingEnabled: true, isEditorOnlyMode: false, isWatchedFilePreview: false,
     bufferRecoveryClient: { snapshot: () => ({ activePromptId: "prompt" }) },
     isStudioDocumentBufferView: () => document, activityTrackingSelect: {},
-    activityTrackingRequestId: "", activityTrackingOwnsWorkingView: false,
+    activityTrackingRequestId: "", activityTrackingOwnsWorkingView: false, studioRuntimeActivity: null,
     window: { localStorage: { setItem() {} } }, ACTIVITY_TRACKING_STORAGE_KEY: "activity",
     syncStudioUiRefreshSummaries() {}, setStatus() {}, agentBusyFromServer: true, uiBusy: true, pendingRequestId: "run-1", rightView: "editor-preview" });
   f.c.bufferTransientStates.get("prompt").activityTracking = { requestId: "run-1", ownsWorkingView: true };
@@ -590,4 +646,72 @@ test("file opening checks captured origin, destination revision and authorized p
     resolveFetch({ text: "Fetched file", path: "/other.md" });
     assert.equal(await pending, false, change); assert.deepEqual(calls, [], change);
   }
+});
+
+// The Document may show responses by explicit choice (Oliver and Sol, 8 Oct 2026).
+test("a response the Document shows stays put when history arrives, and the Prompt keeps its own selection", () => {
+  const f = historyBindingHarness();
+  f.c.rightView = "preview"; f.c.responseHistoryIndex = 7; // the Document is reading R8; the Prompt left at R10
+  f.deliver(shiftedHistory(2), { preserveSelection: true, autoSelectLatest: true });
+  assert.equal(f.c.getSelectedHistoryItem().id, "r8", "arrivals never navigate the Document");
+  assert(f.calls.some(c => c.type === "history" && c.render !== false && c.reset === false), "repainted from its new entry, scroll kept");
+  f.returnToPrompt(); assert.equal(f.c.getSelectedHistoryItem().id, "r10", "the Prompt's own selection");
+});
+
+test("if the response the Document shows is pruned, the new choice is rendered there", () => {
+  const f = historyBindingHarness();
+  f.c.rightView = "preview"; f.c.responseHistoryIndex = 0; // R1, about to be pruned
+  f.deliver(shiftedHistory(5));
+  assert(f.calls.some(c => c.type === "history" && c.render !== false), "a visible replacement, not a stale render");
+  assert(f.calls.some(c => c.type === "trace"));
+});
+
+test("the Document keeps and restores its own response; the Prompt's saved selection is untouched", () => {
+  const f = bindingHarness({ role: "document", rightView: "preview", queued: false });
+  f.c.responseHistory = Array.from({ length: 30 }, (_, i) => ({ id: "r" + (i + 1), markdown: "R" + (i + 1) }));
+  f.c.responseHistoryIndex = 9; // whatever the Prompt was reading
+  f.c.bufferTransientStates.set("document", { ...f.c.bufferTransientStates.get("document"), historySelection: { id: "r4", index: 3 } });
+  f.c.bufferTransientStates.set("prompt", { historySelection: { id: "r10", index: 9 } });
+  f.bind();
+  assert.equal(f.c.rightView, "preview"); assert.equal(f.c.getSelectedHistoryItem().id, "r4");
+  assert.deepEqual(f.calls.slice(0, 2), [{ type: "history", index: 3, reset: false, render: false }, { type: "trace" }]);
+  assert.equal(f.c.bufferViewRestore.right, 480, "its own scroll, not a reset");
+  f.c.responseHistoryIndex = 5; f.c.captureStudioBufferTransientState();
+  assert.equal(f.c.bufferTransientStates.get("document").historySelection.id, "r6");
+  assert.equal(f.c.bufferTransientStates.get("prompt").historySelection.id, "r10");
+});
+
+test("a Document showing its preview leaves the response selection alone", () => {
+  const f = bindingHarness({ role: "document", rightView: "editor-preview", queued: false });
+  f.c.responseHistoryIndex = 1; f.bind();
+  assert.equal(f.c.responseHistoryIndex, 1); assert(!f.calls.some(c => c.type === "history"));
+  f.c.captureStudioBufferTransientState();
+  assert.equal(f.c.bufferTransientStates.get("document").historySelection, undefined, "no reading identity invented");
+});
+
+test("browsing responses in the Document doesn't pause the Prompt's Run; loaders there say why", () => {
+  assert.match(source, /if \(entry\?\.role !== "document"\) pauseStudioRunFollowing\(\);/);
+  for (const name of ["loadSelectedHistoryPromptIntoEditor()", "loadSelectedResponseIntoEditor(options)", "loadSelectedCritiqueIntoEditor(mode)"]) {
+    const start = source.indexOf("      async function " + name);
+    assert(start > 0, name);
+    assert.match(source.slice(start, start + 300), /if \(bufferSwitchingEnabled && isStudioDocumentBufferView\(\)\) \{ setStatus\("Return to Prompt to load or annotate this response\.", "warning"\); return false; \}/, name);
+  }
+});
+
+test("a Response or Working view chosen in the Document survives returning to it, even with Document-preview Follow on", () => {
+  for (const rightView of ["preview", "markdown", "trace"]) {
+    const f = bindingHarness({ role: "document", rightView, queued: false });
+    f.c.documentPreviewFollowingEnabled = true; f.bind();
+    assert.equal(f.c.rightView, rightView); assert.equal(f.c.getDocumentPreviewFollowOwner(), null);
+  }
+});
+
+test("history emptying while the Document shows a response or Working clears that display and resyncs Working", () => {
+  for (const view of ["preview", "trace"]) {
+    const f = historyBindingHarness(); f.c.rightView = view; f.c.responseHistoryIndex = 3;
+    f.deliver([]);
+    assert.deepEqual(f.calls.filter(c => c.type === "clear" || c.type === "trace"), [{ type: "clear", render: true }, { type: "trace" }], view);
+  }
+  const f = historyBindingHarness(); f.c.responseHistoryIndex = 3; f.deliver([]); // Document showing its own preview
+  assert.deepEqual(f.calls.filter(c => c.type === "clear" || c.type === "trace"), [{ type: "clear", render: false }]);
 });

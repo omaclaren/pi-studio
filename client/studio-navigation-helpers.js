@@ -224,6 +224,25 @@
     return parsed.pathname + parsed.search + parsed.hash;
   }
 
+  // A separate viewer protocol, not permission to navigate an editable launch
+  // to arbitrary endpoints. Resources are still authenticated/revalidated by
+  // their server routes. Raw SVG/HTML and root editing URLs are not viewers.
+  function normalizeStudioReadOnlyTarget(target, locationLike, token) {
+    if (typeof target !== "string" || !target || target.length > STUDIO_LAUNCH_TARGET_MAX_CHARS
+      || target.includes("\\") || /[\u0000-\u001f\u007f]/.test(target)) throw new Error("Invalid read-only viewer target.");
+    const path = target.split(/[?#]/, 1)[0];
+    if (!["/image-viewer", "/pdf-resource", "/export-pdf"].includes(path)) throw new Error("Only Studio PDF/image viewers can use this launch.");
+    const base = new URL(locationLike.href), parsed = new URL(target, base);
+    if (!["http:", "https:"].includes(base.protocol) || parsed.origin !== base.origin || parsed.pathname !== path || parsed.username || parsed.password) throw new Error("Read-only viewers must stay on this Studio origin.");
+    const tokens = parsed.searchParams.getAll("token");
+    if (tokens.length !== 1 || tokens[0] !== token) throw new Error("Read-only viewer token did not match this session.");
+    const prepared = path === "/export-pdf", allowed = prepared ? ["token", "id", "download"] : ["token", "path", "sourcePath", "resourceDir"];
+    for (const key of parsed.searchParams.keys()) if (!allowed.includes(key) || parsed.searchParams.getAll(key).length !== 1) throw new Error("Unexpected read-only viewer parameter.");
+    if (!parsed.searchParams.get(prepared ? "id" : "path")) throw new Error("Missing read-only viewer identity.");
+    if (parsed.hash && (path === "/image-viewer" || !/^#page=[1-9][0-9]*$/.test(parsed.hash))) throw new Error("Invalid PDF/image fragment.");
+    return parsed.pathname + parsed.search + parsed.hash;
+  }
+
   function openStudioTabDirect(windowLike, targetUrl) {
     if (!windowLike || typeof windowLike.open !== "function") {
       throw new Error("Opening browser tabs is unavailable.");
@@ -406,6 +425,10 @@
         const normalizedTarget = normalizeStudioRelativeTarget(target, windowLike.location, token);
         return setTerminal("navigate", { target: normalizedTarget });
       },
+      navigateReadOnly(target) {
+        if (kind === "document") throw new Error("An editable Document launch cannot become a read-only viewer.");
+        return setTerminal("navigate-read-only", { target: normalizeStudioReadOnlyTarget(target, windowLike.location, token) });
+      },
       fail(message) {
         return setTerminal("error", { message: normalizeStudioLaunchMessage(message) });
       },
@@ -514,19 +537,21 @@
       const message = event && event.data;
       if (!message || typeof message !== "object" || terminalHandled) return;
       if (message.protocol !== STUDIO_LAUNCH_PROTOCOL_VERSION || message.launchId !== launchId) return;
-      if (message.type === "navigate") {
+      if (message.type === "navigate" || message.type === "navigate-read-only") {
         terminalHandled = true;
         let relativeTarget = "";
+        const readOnly = message.type === "navigate-read-only";
         try {
-          relativeTarget = normalizeStudioRelativeTarget(message.target, windowLike.location, token);
+          if (readOnly && kind === "document") throw new Error("A Document launch is not a read-only viewer.");
+          relativeTarget = (readOnly ? normalizeStudioReadOnlyTarget : normalizeStudioRelativeTarget)(message.target, windowLike.location, token);
         } catch {
-          acknowledge("navigate", false);
+          acknowledge(message.type, false);
           render("Could not open Studio tab", "Studio rejected an invalid or unsafe navigation target.", true);
           setTimer(cleanup, 50);
           return;
         }
-        acknowledge("navigate", true);
-        render("Opening Studio tab…", "The requested Studio view is ready.", false);
+        acknowledge(message.type, true);
+        render(readOnly ? "Opening read-only viewer…" : "Opening Studio tab…", readOnly ? "The requested PDF/image is ready." : "The requested Studio view is ready.", false);
         setTimer(() => {
           cleanup();
           try {
@@ -611,6 +636,7 @@
     normalizeStudioLaunchMessage,
     normalizeStudioPendingKind,
     normalizeStudioRelativeTarget,
+    normalizeStudioReadOnlyTarget,
     openStudioTabDirect,
     persistStudioWorkspaceState,
     readPaneFocusTarget,

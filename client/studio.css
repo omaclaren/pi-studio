@@ -722,22 +722,38 @@
       }
     }
 
-    .studio-buffer-document-info {
-      flex: 1 1 100%;
-      min-width: 0;
-      color: var(--muted);
-      font-size: 11px;
-      overflow-wrap: anywhere;
+    .studio-buffer-menu-anchor {
+      position: relative;
+      flex: 0 0 auto;
     }
 
-    .studio-buffer-target {
-      flex: 1 1 100%;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    /* Same disclosure treatment as the existing toolbar menus; help belongs
+       inside the popup, never in another permanent row above the editor. */
+    .studio-buffer-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 80;
+      width: min(340px, calc(100vw - 32px));
+      max-height: min(440px, 65vh);
+      overflow-y: auto;
+      padding: 6px;
+      border: 1px solid var(--control-border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+    }
+
+    .studio-buffer-menu[hidden] { display: none; }
+    .studio-buffer-menu-item + .studio-buffer-menu-item { border-top: 1px solid var(--panel-border); }
+    .studio-buffer-menu-item { padding: 4px; }
+    .studio-buffer-menu-item button { width: 100%; text-align: left; white-space: normal; }
+    .studio-buffer-menu-help {
+      padding: 4px 6px;
       color: var(--muted);
       font-size: 11px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
     }
 
     .source-body {
@@ -4337,6 +4353,16 @@
       font-size: var(--studio-working-font-size);
     }
 
+    .trace-output.trace-output-code {
+      white-space: pre;
+      overflow-wrap: normal;
+      tab-size: 4;
+    }
+
+    .trace-section-fold { margin-top: 8px; }
+    .trace-section-fold.is-error > summary { color: var(--error); }
+    .trace-section-fold > summary:focus-visible { outline: 2px solid var(--studio-info-text, var(--text)); outline-offset: -2px; }
+
     .trace-section > .trace-output {
       border: 1px solid var(--panel-border);
       border-radius: 8px;
@@ -6537,14 +6563,14 @@
       line-height: 1.2;
     }
 
-    body.studio-ui-refresh .studio-refresh-toolbar button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active),
-    body.studio-ui-refresh .studio-refresh-toolbar select {
+    body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active),
+    body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > select {
       color: color-mix(in srgb, var(--text) 72%, var(--muted));
       font-weight: 500;
     }
 
-    body.studio-ui-refresh .studio-refresh-toolbar button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active):hover,
-    body.studio-ui-refresh .studio-refresh-toolbar select:not(:disabled):hover {
+    body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active):hover,
+    body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > select:not(:disabled):hover {
       color: var(--text);
     }
 
@@ -6588,6 +6614,10 @@
     }
 
     body.studio-ui-refresh .studio-refresh-menu {
+      box-sizing: border-box;
+      min-width: 0;
+      overflow: auto;
+      overflow-wrap: anywhere;
       position: absolute;
       top: calc(100% + 8px);
       right: 0;
@@ -6601,7 +6631,7 @@
     }
 
     body.studio-ui-refresh .studio-refresh-review-anchor {
-      position: static;
+      position: relative;
     }
 
     body.studio-ui-refresh .studio-refresh-review-anchor .studio-refresh-menu {
@@ -6649,6 +6679,34 @@
       font-weight: 650;
       text-transform: uppercase;
       letter-spacing: 0.06em;
+    }
+
+    body.studio-ui-refresh details.studio-refresh-menu-section > summary {
+      cursor: pointer;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: normal;
+    }
+
+    body.studio-ui-refresh details.studio-refresh-menu-section > summary:focus-visible {
+      outline: none;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    body:not([data-buffer-switching="1"]) .shortcuts-buffer-switching-only {
+      display: none;
+    }
+
+    body.studio-ui-refresh .studio-prompt-run-indicator {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 20px;
+      padding: 2px 0;
+      background: transparent;
+      border: 0;
     }
 
     body.studio-ui-refresh .studio-refresh-menu-item {
@@ -6731,21 +6789,20 @@
     }
 
     body.studio-ui-refresh #sendRunBtn,
-    body.studio-ui-refresh #queueSteerBtn,
     body.studio-ui-refresh #sendReplBtn {
       min-width: 8.6rem;
     }
 
+    /* Stop is the one filled action while running; steering stays plain. */
     body.studio-ui-refresh #queueSteerBtn:not(:disabled) {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-contrast);
+      background: transparent;
+      border-color: transparent;
+      color: var(--accent);
       font-weight: 600;
     }
 
     body.studio-ui-refresh #queueSteerBtn:not(:disabled):hover {
-      background: var(--accent);
-      filter: brightness(0.95);
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
     }
 
     body.studio-ui-refresh .studio-refresh-review-btn.request-stop-active {
@@ -7231,7 +7288,7 @@
       opacity: 0.5;
     }
 
-    .side-question-actions .side-question-primary {
+    .side-question-actions .side-question-primary:not(:disabled) {
       border-color: var(--accent);
       background: var(--accent);
       color: var(--accent-contrast);
@@ -7464,3 +7521,205 @@
         flex-wrap: wrap;
       }
     }
+
+    /* Honor existing handler eligibility after controls are regrouped. */
+    body.studio-ui-refresh [hidden] { display: none !important; }
+    /* Dogfood workspace: two logical rows, with normal wrapping in small panes. */
+    .studio-run-status { color: var(--muted); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+    body.studio-ui-refresh #rightSectionHeader .studio-follow-button {
+      color: var(--muted); border: 0; border-radius: 0; background: transparent;
+    }
+    body.studio-ui-refresh #rightSectionHeader .studio-follow-button.studio-refresh-chip:hover,
+    body.studio-ui-refresh #rightSectionHeader .studio-follow-button.studio-refresh-chip.is-open { color: var(--muted); background: transparent; }
+    body.studio-ui-refresh #rightSectionHeader .studio-follow-button:focus-visible {
+      outline: none; text-decoration: underline; text-underline-offset: 3px;
+    }
+    .studio-operation-notices { padding: 4px 12px; font-size: 12px; color: var(--warn); }
+    .studio-operation-notice { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 3px 0; overflow-wrap: anywhere; }
+    .studio-operation-notice button { font-size: 12px; padding: 1px 4px; }
+    body.studio-workspace-layout .studio-workspace-row-one { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 12px; }
+    body.studio-workspace-layout .studio-workspace-tabs-host { min-width: 0; }
+    body.studio-workspace-layout .studio-buffer-tabs { gap: 16px; flex-wrap: wrap; }
+    body.studio-workspace-layout #leftSectionHeader .studio-buffer-tabs > .studio-buffer-menu-anchor > button {
+      border: 0; border-radius: 0; background: transparent; padding: 3px 0; font-size: 14px; font-weight: 500; line-height: 20px; text-align: left; white-space: nowrap;
+    }
+    body.studio-workspace-layout #leftSectionHeader .studio-buffer-tabs > .studio-buffer-menu-anchor > button[aria-selected="true"] {
+      background: transparent; box-shadow: none; color: var(--text); font-weight: 700;
+    }
+    body.studio-workspace-layout #leftSectionHeader .studio-buffer-tabs > .studio-buffer-menu-anchor > button[aria-selected="false"] {
+      color: var(--muted);
+    }
+    /* Natural widths with a small gap (Oliver, trial48): the unselected label may shift a little on switching. */
+    body.studio-workspace-layout .studio-workspace-file-controls { min-width: 0; margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    body.studio-workspace-layout .studio-workspace-filename { min-width: 0; max-width: min(180px, 35cqi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+    body.studio-workspace-layout .studio-refresh-toolbar-main { display: block; }
+    body.studio-workspace-layout .studio-refresh-toolbar-actions { gap: 0; min-width: 0; width: 100%; }
+    body.studio-workspace-layout .studio-refresh-toolbar-actions > .studio-refresh-action-line { min-width: 0; width: 100%; }
+    body.studio-workspace-layout .studio-refresh-toolbar-state:empty,
+    body.studio-workspace-layout .studio-refresh-action-line:empty,
+    body.studio-workspace-layout .response-options-row:empty,
+    body.studio-workspace-layout .response-option-select-wrap:not(:has(select)) { display: none; }
+    body.studio-workspace-layout .reference-meta .source-badge,
+    body.studio-workspace-layout #historyIndexBadge { border: 0; border-radius: 0; background: transparent; }
+    body.studio-workspace-layout .studio-refresh-action-line { flex-wrap: wrap; gap: 6px 10px; }
+    body.studio-workspace-layout .studio-refresh-menu > button { display: block; width: 100%; text-align: left; white-space: normal; }
+    body.studio-workspace-layout .response-result-row { flex-wrap: wrap; }
+    body.studio-workspace-layout .side-question-intro h2,
+    body.studio-workspace-layout .side-question-thread-header h2 { font-size: 1rem; font-weight: 500; }
+    body.studio-workspace-layout .side-question-scope { color: var(--muted); font-size: 0.82rem; overflow-wrap: anywhere; margin: 12px 0 6px; }
+    body.studio-workspace-layout .side-question-options { color: var(--muted); font-size: 0.85rem; }
+    body.studio-workspace-layout .side-question-options > summary { cursor: pointer; width: fit-content; }
+    body.studio-workspace-layout .side-question-message { border: 0; border-radius: 0; background: transparent; padding: 10px 0; }
+    body.studio-workspace-layout .side-question-message-user { margin-left: 0; border-color: transparent; background: transparent; }
+    body.studio-workspace-layout .side-question-message-label { font-weight: 500; }
+    body.studio-workspace-layout .side-question-live { animation: none; color: var(--muted); }
+    body.studio-workspace-layout .side-question-context-summary { background: transparent; border: 0; border-radius: 0; padding: 0; }
+    body.studio-workspace-layout .side-question-activity { border: 0; border-radius: 0; background: transparent; padding: 0; }
+    body.studio-workspace-layout .side-question-activity li > span { width: auto; }
+
+    /* The live pane keeps its dimensions and ownership beneath the reader. */
+    #rightPane:has(.studio-reader-surface) { position: relative; }
+    #rightPane[data-linked-reader-active="1"] > #critiqueView,
+    #rightPane[data-linked-reader-active="1"] > .response-wrap,
+    #rightPane[data-linked-reader-active="1"] > .reference-meta { visibility: hidden; }
+    #rightPane[data-linked-reader-active="1"] > .studio-reader-toolbar { position: absolute; left: 0; right: 0; }
+    .studio-reader-toolbar { position: relative; z-index: 4; flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; padding: 6px 11px; border-bottom: 1px solid var(--control-border); background: var(--panel); }
+    .studio-reader-surface { position: absolute; z-index: 3; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+    .studio-reader-toolbar[hidden], .studio-reader-surface[hidden] { display: none; }
+    .studio-reader-content { flex: 1 1 auto; min-height: 0; }
+    .studio-reader-toolbar button.studio-reader-action { min-width: 0; max-width: 100%; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); background: transparent; border: 0; border-radius: 0; font-size: 12px; line-height: 20px; }
+    .studio-reader-toolbar button.studio-reader-action:hover:not(:disabled) { color: var(--accent); background: transparent; }
+    .studio-reader-toolbar button.studio-reader-action:disabled { color: var(--muted); }
+    .studio-reader-toolbar button.studio-reader-action:focus-visible { outline: none; text-decoration: underline; text-underline-offset: 3px; }
+    .studio-reader-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 10px; max-width: 100%; margin-left: auto; }
+    .studio-reader-snapshot { max-width: 100%; color: var(--muted); font-size: 11px; }
+
+    /* Trial48 style sweep (finding 3): actions and state are plain text, a fill marks only an
+       enabled primary action, and keyboard focus is an underline rather than a box. */
+    body.studio-workspace-layout #scratchpadBtn.has-content,
+    body.studio-workspace-layout #reviewNotesBtn.has-content,
+    body.studio-workspace-layout #reviewNotesBtn.is-active,
+    body.studio-workspace-layout #outlineBtn.is-active,
+    body.studio-workspace-layout .source-badge,
+    body.studio-workspace-layout .trace-summary-badge,
+    body.studio-workspace-layout .trace-summary-status,
+    body.studio-workspace-layout .trace-entry-status,
+    body.studio-workspace-layout .trace-kind-badge,
+    body.studio-workspace-layout .trace-filter-btn,
+    body.studio-workspace-layout .trace-filter-btn.is-active,
+    body.studio-workspace-layout .trace-action-btn,
+    body.studio-workspace-layout .files-toolbar-actions button,
+    body.studio-workspace-layout .files-actions button,
+    body.studio-workspace-layout .repl-journal-actions button,
+    body.studio-workspace-layout .repl-journal-chip,
+    body.studio-workspace-layout .repl-start-btn,
+    body.studio-workspace-layout .side-question-actions .side-question-primary:disabled {
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+    }
+    body.studio-workspace-layout .source-badge,
+    body.studio-workspace-layout .trace-summary-badge,
+    body.studio-workspace-layout .trace-summary-status,
+    body.studio-workspace-layout .trace-entry-status,
+    body.studio-workspace-layout .trace-kind-badge,
+    body.studio-workspace-layout .repl-journal-chip { border-radius: 0; padding-left: 0; padding-right: 0; }
+    body.studio-workspace-layout .trace-summary-badge { color: var(--text); font-size: 13px; font-weight: 700; }
+    body.studio-workspace-layout .trace-filter-btn.is-active { color: var(--accent); }
+    body.studio-workspace-layout #scratchpadBtn.has-content:not(:disabled):hover,
+    body.studio-workspace-layout #reviewNotesBtn.has-content:not(:disabled):hover,
+    body.studio-workspace-layout #reviewNotesBtn.is-active:not(:disabled):hover,
+    body.studio-workspace-layout #outlineBtn.is-active:not(:disabled):hover,
+    body.studio-workspace-layout .trace-filter-btn:not(:disabled):hover,
+    body.studio-workspace-layout .trace-action-btn:not(:disabled):hover,
+    body.studio-workspace-layout .files-toolbar-actions button:not(:disabled):hover,
+    body.studio-workspace-layout .files-actions button:not(:disabled):hover,
+    body.studio-workspace-layout .repl-journal-actions button:not(:disabled):hover,
+    body.studio-workspace-layout .repl-start-btn:not(:disabled):hover {
+      border-color: transparent;
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
+    }
+    body.studio-workspace-layout .trace-filter-btn:focus-visible,
+    body.studio-workspace-layout .trace-action-btn:focus-visible,
+    body.studio-workspace-layout .files-toolbar-actions button:focus-visible,
+    body.studio-workspace-layout .files-actions button:focus-visible,
+    body.studio-workspace-layout .repl-journal-actions button:focus-visible,
+    body.studio-workspace-layout .repl-start-btn:focus-visible,
+    body.studio-workspace-layout .side-question-options > summary:focus-visible {
+      outline: none;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    body.studio-workspace-layout .side-question-composer-label textarea:focus,
+    body.studio-workspace-layout .side-question-composer-label textarea:focus-visible {
+      outline: none;
+      box-shadow: none;
+      border-color: var(--control-border);
+    }
+
+    /* Trial48 wording (finding 5): menus show labels only; status has no dot. */
+    body.studio-workspace-layout .studio-buffer-menu-help { display: none; }
+    body.studio-workspace-layout #syncBadge::before { display: none; }
+
+    /* Candidate50 trial: the panel toggles are plain in their default state too (light theme showed boxes). */
+    body.studio-workspace-layout #reviewNotesBtn,
+    body.studio-workspace-layout #outlineBtn,
+    body.studio-workspace-layout #scratchpadBtn { border-color: transparent; background: transparent; box-shadow: none; }
+    body.studio-workspace-layout #reviewNotesBtn:not(:disabled):hover,
+    body.studio-workspace-layout #outlineBtn:not(:disabled):hover,
+    body.studio-workspace-layout #scratchpadBtn:not(:disabled):hover { background: var(--studio-header-action-hover-bg, var(--panel-2)); }
+
+    /* Oliver, 8 Oct: the remaining bordered buttons are plain too (polish item 13). Annotate response
+       keeps its fill only as the enabled primary; header buttons show keyboard focus as an underline. */
+    body.studio-workspace-layout #responseActions button:not(#annotateResponseBtn),
+    body.studio-workspace-layout #responseActions #annotateResponseBtn:disabled,
+    body.studio-workspace-layout .studio-operation-notice button {
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+    }
+    body.studio-workspace-layout #responseActions button:not(#annotateResponseBtn):not(:disabled):hover,
+    body.studio-workspace-layout .studio-operation-notice button:not(:disabled):hover {
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
+    }
+    body.studio-workspace-layout #responseActions button:focus-visible,
+    body.studio-workspace-layout .studio-operation-notice button:focus-visible,
+    body.studio-workspace-layout #leftSectionHeader button:focus-visible,
+    body.studio-workspace-layout #rightSectionHeader button:focus-visible {
+      outline: none;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    /* Batch B: Files rows keep the name visible; Edit / Use as Prompt; the rest under ⋯. */
+    body.studio-workspace-layout .files-row { display: flex; align-items: center; gap: 8px; }
+    body.studio-workspace-layout .files-row .files-open-btn { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; text-align: left; }
+    body.studio-workspace-layout .files-row .files-name { min-width: 6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+    body.studio-workspace-layout .files-row .files-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 0; color: var(--muted); }
+    body.studio-workspace-layout .files-row .files-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; }
+    body.studio-workspace-layout .files-more { position: relative; }
+    body.studio-workspace-layout .files-more > summary { list-style: none; cursor: pointer; padding: 2px 8px; border-radius: 6px; color: var(--muted); }
+    body.studio-workspace-layout .files-more > summary::-webkit-details-marker { display: none; }
+    body.studio-workspace-layout .files-more > summary:hover { background: var(--studio-header-action-hover-bg, var(--panel-2)); color: var(--text); }
+    body.studio-workspace-layout .files-more > summary:focus-visible { outline: none; text-decoration: underline; text-underline-offset: 3px; }
+    body.studio-workspace-layout .files-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 6; min-width: 170px; display: flex; flex-direction: column;
+      padding: 4px; background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; box-shadow: var(--panel-shadow); }
+    body.studio-workspace-layout .files-more-menu button { text-align: left; border-color: transparent; background: transparent; }
+    body.studio-workspace-layout .files-more-menu button:hover { background: var(--studio-header-action-hover-bg, var(--panel-2)); }
+    /* Picker mode: one obvious action per row — click the name. */
+    body.studio-workspace-layout .files-picking .files-actions { display: none; }
+    body.studio-workspace-layout .files-picking :is(.files-kind-pdf, .files-kind-image) .files-open-btn,
+    body.studio-workspace-layout .files-picking-copy .files-kind-office .files-open-btn { opacity: 0.45; }
+    body.studio-workspace-layout .files-pick-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 10px; margin-bottom: 8px;
+      border-bottom: 1px solid var(--panel-border); background: var(--panel-2); }
+    body.studio-workspace-layout .files-pick-what { font-weight: 600; }
+    body.studio-workspace-layout .files-pick-path { flex: 1 1 180px; min-width: 0; padding: 4px 8px; border: 1px solid var(--control-border); border-radius: 6px;
+      background: var(--panel); color: var(--text); font: 12px var(--font-mono); outline: none; }
+    body.studio-workspace-layout .files-pick-strip button { border-color: transparent; background: transparent; }
+
+    /* Unsaved text: the name slot reads *Untitled*, in italics (Oliver, 8 Oct). */
+    .studio-workspace-filename.is-untitled { font-style: italic; }
+
+    /* A named file's own menu: its full path, then the file actions (Oliver, 9 Oct). */
+    body.studio-workspace-layout .studio-file-menu-path { padding: 4px 8px 6px; color: var(--muted); font-size: 0.82rem; font-weight: 400; overflow-wrap: anywhere; user-select: text; }
+    body.studio-workspace-layout #studioWorkspaceFilenameMenu > button { display: block; width: 100%; text-align: left; }

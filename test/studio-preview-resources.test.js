@@ -204,7 +204,7 @@ test("Studio hydrates rendered local images and refreshes previews when their re
   assert.match(clientSource, /fetchLocalPreviewResourceDataUrl\(/);
   assert.match(clientSource, /function refreshPreviewsForResourceContextChange\(\) \{\s*renderSourcePreview\(\);\s*if \(rightView === "preview"\) \{\s*renderActiveResult\(\);/);
 
-  const applyStart = clientSource.indexOf("function applyResourceDir()");
+  const applyStart = clientSource.indexOf("function applyResourceDir(");
   const applyEnd = clientSource.indexOf("if (sourceBadgeEl)", applyStart);
   assert.ok(applyStart >= 0 && applyEnd > applyStart);
   assert.match(clientSource.slice(applyStart, applyEnd), /refreshPreviewsForResourceContextChange\(\)/);

@@ -32,7 +32,7 @@ test("disk conflicts preserve editor text and expose Reload, Overwrite, Save As,
 
 test("Save As is conflict-safe and revalidates explicit replacement consent", () => {
   assert.match(indexSource, /interface SaveAsRequestMessage \{[\s\S]*?overwrite\?: boolean;[\s\S]*?expectedRevision\?: string;/);
-  assert.match(indexSource, /writeStudioFile\(msg\.path, studioCwd, msg\.content, msg\.overwrite === true, msg\.expectedRevision\)/);
+  assert.match(indexSource, /writeStudioFile\(msg\.path, studioCwd, msg\.content, msg\.overwrite === true, msg\.expectedRevision, authorizeCommit\)/);
   assert.match(indexSource, /type: "save_as_conflict"[\s\S]*?currentRevision:/);
   assert.match(clientSource, /title: unsafeReplacement \? "Cannot replace existing file"[\s\S]*?secondaryLabel: "Choose another…"[\s\S]*?confirmDisabled: !canCommitHere/);
   assert.match(clientSource, /sendEditorSaveAsRequest\(conflictPath, operation\.content, true, message\.currentRevision\)/);
@@ -46,7 +46,7 @@ test("Save shortcuts distinguish direct save from Save As", () => {
 
 test("refresh refuses to follow a replaced canonical file path", () => {
   assert.match(indexSource, /function readStudioFile\(pathArg: string, cwd: string, options\?: \{ requireCanonicalPath\?: boolean \}\)/);
-  assert.match(indexSource, /const refreshed = readStudioFile\(refreshPath, studioCwd, \{ requireCanonicalPath: true \}\)/);
+  assert.match(indexSource, /:\s*readStudioFile\(refreshPath, studioCwd, \{ requireCanonicalPath: true \}\)/);
   assert.match(indexSource, /the file location now resolves somewhere else/);
 });
 

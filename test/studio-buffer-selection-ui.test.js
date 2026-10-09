@@ -105,6 +105,33 @@ test("preview/iframe/other-field selection revokes the retained textarea range; 
   }
 });
 
+test("Add to Prompt disclosure preserves an existing editor selection without granting a new one", () => {
+  for (const active of [true, false]) {
+    const f = setup(), trigger = {}, whole = {}, help = {};
+    f.c.bufferSwitcherUi = { addMenu: { button: trigger, anchor: { contains: target => [trigger, whole, help].includes(target) } }, addDocument: whole };
+    f.c.studioSelectionAppendSourceActive = active;
+    f.c.setupStudioSelectionAppendAction(f.button);
+    for (const target of [trigger, whole]) {
+      f.documentHandlers.pointerdown({ target });
+      assert.equal(f.c.studioSelectionAppendSourceActive, active);
+      assert.equal(f.c.sourceTextEl.selectionStart, 0); assert.equal(f.c.sourceTextEl.selectionEnd, 8);
+    }
+    if (active) { f.handlers.pointerdown({ button: 0 }); f.handlers.click({ detail: 1 }); assert.equal(f.appends.length, 1); }
+    f.documentHandlers.pointerdown({ target: help });
+    assert.equal(f.c.studioSelectionAppendSourceActive, false, "selecting menu help is not editor selection ownership");
+    f.fieldHandlers.focus(); f.documentHandlers.pointerdown({ target: {} });
+    assert.equal(f.c.studioSelectionAppendSourceActive, false, "other menus still revoke the selection source");
+  }
+});
+
+test("returning to the Add disclosure cannot revive a held selection press", () => {
+  const f = setup(), trigger = {};
+  f.c.bufferSwitcherUi = { addMenu: { button: trigger, anchor: { contains: target => target === trigger } } };
+  f.c.setupStudioSelectionAppendAction(f.button); f.handlers.pointerdown({ button: 0 });
+  f.documentHandlers.pointerdown({ target: trigger }); f.handlers.click({ detail: 1 });
+  assert.equal(f.appends.length, 0);
+});
+
 test("source refocus or a new source gesture retires a held press even while ownership remains active", () => {
   for (const type of ["focus", "pointerdown", "keydown"]) {
     const f = setup(); f.c.setupStudioSelectionAppendAction(f.button); f.handlers.pointerdown({ button: 0 });

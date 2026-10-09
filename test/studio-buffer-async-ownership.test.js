@@ -12,7 +12,7 @@ function harness() {
 	const requests = [], reads = [], inserts = [], focuses = [], timers = [], imports = [];
 	class Element {}
 	const c = {
-		bufferRecoveryEnabled: true, bufferPageClosed: false, bufferConnectionGeneration: 0,
+		bufferRecoveryEnabled: true, documentHostingEnabled: false, bufferPageClosed: false, bufferConnectionGeneration: 0,
 		bufferId: "one", sourceKey: "source-a", editorContentGeneration: 0, editorView: "markdown", editorLanguage: "markdown",
 		sourceTextEl: { value: "original text", selectionStart: 3, selectionEnd: 3, focus() { focuses.push("editor"); } },
 		sourceState: { label: "A", path: "/a.md" },

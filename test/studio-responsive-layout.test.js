@@ -34,6 +34,44 @@ test("buffer selection uses a quiet fill distinct from keyboard focus", () => {
   assert.match(highContrast, /border-style: dashed;/, 'selection remains visible when fills are suppressed');
 });
 
+test("workspace inactive roles are muted and Follow is plain text with visible non-box keyboard focus", () => {
+  const inactive = extractRuleBlock(css, 'body.studio-workspace-layout #leftSectionHeader .studio-buffer-tabs > .studio-buffer-menu-anchor > button[aria-selected="false"] {');
+  assert.match(inactive, /color: var\(--muted\);/);
+  const follow = extractRuleBlock(css, 'body.studio-ui-refresh #rightSectionHeader .studio-follow-button {');
+  assert.match(follow, /color: var\(--muted\);/); assert.match(follow, /border: 0;/); assert.match(follow, /border-radius: 0;/);
+  const focus = extractRuleBlock(css, 'body.studio-ui-refresh #rightSectionHeader .studio-follow-button:focus-visible {');
+  assert.match(focus, /outline: none;/); assert.match(focus, /text-decoration: underline;/);
+  const hover = extractRuleBlock(css, 'body.studio-ui-refresh #rightSectionHeader .studio-follow-button.studio-refresh-chip:hover,');
+  assert.match(hover, /background: transparent;/, "specificity beats generic header button:not(:disabled):hover fill");
+});
+
+test("native File disclosures use a visible underline focus without the browser outline", () => {
+  const focus = extractRuleBlock(css, 'body.studio-ui-refresh details.studio-refresh-menu-section > summary:focus-visible {');
+  assert.match(focus, /outline: none;/, "only the new disclosures suppress the native outline");
+  assert.match(focus, /text-decoration: underline;/, "keyboard focus remains visible");
+  assert.match(focus, /text-underline-offset: 3px;/, "use the existing subtle Follow focus treatment");
+  const sharedFocus = extractRuleBlock(css, 'button:focus-visible,');
+  assert.match(sharedFocus, /outline: 2px solid var\(--accent-soft-strong\);/, "unrelated control focus remains unchanged");
+});
+
+test("selected buffer has pane-title typography and natural-width labels with a small gap, without shrinking menu controls", () => {
+  const selected = extractRuleBlock(css, 'body.studio-workspace-layout #leftSectionHeader .studio-buffer-tabs > .studio-buffer-menu-anchor > button[aria-selected="true"] {');
+  assert.match(selected, /font-weight: 700;/); assert.match(selected, /color: var\(--text\);/);
+  const button = extractRuleBlock(css, 'body.studio-workspace-layout #leftSectionHeader .studio-buffer-tabs > .studio-buffer-menu-anchor > button {');
+  assert.match(button, /font-size: 14px;/); assert.match(button, /line-height: 20px;/, "bold and muted roles retain the same target height");
+  const row = extractRuleBlock(css, 'body.studio-workspace-layout .studio-workspace-row-one {');
+  assert.match(row, /align-items: flex-start;/, "file-controls wrapping must not vertically centre-shift the title targets");
+  assert.doesNotMatch(css, /#studioPromptBufferBtn::before|#studioDocumentBufferBtn::before/, "no reserved longest-label width (trial48 finding 14)");
+  assert.match(css, /body\.studio-workspace-layout \.studio-buffer-tabs \{ gap: 16px; flex-wrap: wrap; \}/);
+});
+
+test("muted toolbar foreground is scoped to direct line controls, not enabled menu descendants", () => {
+  assert.doesNotMatch(css, /body\.studio-ui-refresh \.studio-refresh-toolbar button:not\(#sendRunBtn\):not\(#queueSteerBtn\):not\(#sendReplBtn\):not\(\.request-stop-active\),/);
+  assert.match(css, /\.studio-refresh-toolbar-actions > \.studio-refresh-action-line > button:not\(#sendRunBtn\)/);
+  const menu = extractRuleBlock(css, 'body.studio-ui-refresh .studio-refresh-menu-item > button,');
+  assert.match(menu, /color: var\(--text\);/);
+});
+
 test("Studio controls use browser-neutral control chrome", () => {
   assert.match(css, /\n\s*button \{\s*-webkit-appearance: none;\s*appearance: none;/);
   const flatSelectRule = extractRuleBlock(css, ".studio-flat-select {");
@@ -44,7 +82,7 @@ test("Studio controls use browser-neutral control chrome", () => {
   assert.match(flatSelectRule, /padding-right: 26px !important;/);
   assert.match(indexSource, /id="editorViewSelectWrap" class="studio-header-select-wrap"/);
   assert.match(indexSource, /id="rightViewSelectWrap" class="studio-header-select-wrap"/);
-  assert.match(clientSource, /titleGroupEl\.appendChild\(editorViewSelectWrap \|\| editorViewSelect\)/);
+  assert.match(clientSource, /tabsHost\.appendChild\(editorViewSelectWrap \|\| editorViewSelect\)/);
   assert.match(clientSource, /rightTitleGroupEl\.appendChild\(rightViewSelectWrap \|\| rightViewSelect\)/);
 
   const selectWrapRule = extractRuleBlock(css, ".studio-header-select-wrap::after {");
@@ -126,7 +164,7 @@ test("Studio supports persisted side-by-side and ordered vertical pane layouts",
   assert.match(css, /body\[data-studio-layout="response-top"\]\.pane-focus-right main[\s\S]*?grid-template-rows: minmax\(0, 1fr\)/);
 });
 
-test("Studio activity view tracking is explicit, off by default, and event-driven", () => {
+test("legacy activity tracking remains explicit and event-driven; full workspace has a scoped fresh default", () => {
   assert.match(indexSource, /id="activityTrackingSelect"/);
   const selectStart = indexSource.indexOf('id="activityTrackingSelect"');
   const selectEnd = indexSource.indexOf("</select>", selectStart);
@@ -139,7 +177,8 @@ test("Studio activity view tracking is explicit, off by default, and event-drive
   assert.match(clientSource, /Studio will show Working during main Pi activity, then return to Response Preview\./);
   assert.match(clientSource, /Activity following disabled\./);
   assert.match(clientSource, /const ACTIVITY_TRACKING_STORAGE_KEY = "piStudio\.trackActivity"/);
-  assert.match(clientSource, /window\.localStorage\.getItem\(ACTIVITY_TRACKING_STORAGE_KEY\) === "on"/);
+  assert.match(clientSource, /window\.localStorage\?\.getItem\(ACTIVITY_TRACKING_STORAGE_KEY\)/);
+  assert.match(clientSource, /saved === "off" \? false : saved === "on" \? true : freshDefault/);
   assert.match(clientSource, /beginTrackedStudioActivity\(pendingRequestId \|\| "active"\)/);
   assert.match(clientSource, /if \(shouldReturn\) setRightView\("preview", \{ activityTracking: true \}\)/);
   assert.match(clientSource, /activityTrackingOwnsWorkingView && !automatedActivityChange/);
@@ -153,6 +192,8 @@ test("Studio activity view tracking is explicit, off by default, and event-drive
     let activityTrackingEnabled = false;
     let activityTrackingOwnsWorkingView = false;
     let activityTrackingRequestId = "";
+    const studioRuntimeActivity = null; // legacy packet / no SDK run snapshot
+    function studioRunFollowingAvailable() { return false; }
     let rightView = "preview";
     const isEditorOnlyMode = false;
     const isWatchedFilePreview = false;

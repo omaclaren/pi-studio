@@ -20,10 +20,10 @@ function harness(overrides = {}) {
   const calls = [], listeners = {};
   let resolveConfirmation, rejectConfirmation, lastPromise;
   const c = {
-    sourceTextEl: { value: "Unsent Prompt\n\nFrom `notes.md` (whole document, snapshot):\n\nNew context. [an: keep]\n" },
+    sourceTextEl: { value: "Unsent Prompt\n\nFrom `notes.md` (whole document):\n\nNew context. [an: keep]\n" },
     sourceState: { source: "blank", label: "my draft", path: null, draftId: "draft-one" },
     editorSourceGeneration: 0, editorContentGeneration: 0,
-    bufferRecoveryEnabled: true, bufferSwitchingEnabled: true, selectedId: "prompt-one", documentSelected: false,
+    bufferRecoveryEnabled: true, bufferSwitchingEnabled: true, documentHostingEnabled: false, selectedId: "prompt-one", documentSelected: false,
     bufferTransientStates: new Map(), latestResponseMarkdown: critique, latestResponseIsStructuredCritique: true,
     latestResponseTimestamp: 123, responseHistoryIndex: 1, fileBackedDiskRevision: null,
     isEditorOnlyMode: false, isWatchedFilePreview: false, uiBusy: false, responseReplacementPending: false,

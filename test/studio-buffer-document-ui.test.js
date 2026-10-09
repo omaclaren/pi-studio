@@ -9,7 +9,7 @@ function setup() {
   const prompt = { id: "prompt", role: "prompt", revision: 7, text: "keep Prompt", view: {} };
   const state = { selectedBufferId: "doc", activePromptId: "prompt", buffers: [doc, prompt] };
   const button = { disabled: false, addEventListener: (type, fn) => { handlers[type] = fn; } }, info = { textContent: "" };
-  const c = vm.createContext({ bufferSwitchingEnabled: true, studioDocumentAppendOwnerGeneration: 0, bufferBindingInProgress: false,
+  const c = vm.createContext({ bufferSwitchingEnabled: true, documentHostingEnabled: false, studioDocumentAppendOwnerGeneration: 0, bufferBindingInProgress: false,
     // Neither selection ownership nor a nonempty native range is required.
     studioSelectionAppendSourceActive: false, studioSelectionAppendOwnerGeneration: 10,
     uiBusy: false, agentBusyFromServer: false, ws: { readyState: 1 }, WebSocket: { OPEN: 1 }, wsState: "Ready", pendingKind: null,
@@ -57,9 +57,10 @@ test("raw-editor capability, connection and unsafe-operation fences stay intact"
     assert.equal(f.c.captureStudioDocumentAppend(), null); assert(!f.calls.includes("append")); }
 });
 
-test("size description is visible and exact; empty/oversize preflight disables with a reason", () => {
+test("size and refusal details remain available in menu help and the action tooltip", () => {
   const f = setup(); f.c.syncStudioDocumentAppendAction(); assert.equal(f.button.disabled, false);
   assert.match(f.info.textContent, /60/); assert.match(f.info.textContent, /899,?989/); assert.match(f.info.textContent, /UTF-16/);
+  assert(f.button.title.includes(f.info.textContent), "capacity help is also available on hover");
   for (const failure of [{ ok: false, reason: "empty-document", message: "Document is empty." },
     { ok: false, reason: "limit-exceeded", message: "Too large; nothing added.", addedCharacters: 901000, availableCharacters: 899989 }]) {
     f.c.infoFailure = failure; f.c.syncStudioDocumentAppendAction(); assert.equal(f.button.disabled, true); assert(f.info.textContent.includes(failure.message));
@@ -221,7 +222,7 @@ for (const outcome of ["stale", "error"]) {
     if (outcome === "stale") { f.resolve({ text: "new file", path: "/next.md" }); assert.equal(await pending, false); }
     else { const rejected = assert.rejects(pending, /read failed/); f.reject(new Error("read failed")); await rejected; }
     assert.equal(f.c.pendingBufferDocumentOpen, null);
-    assert.equal(f.button.disabled, false); assert.match(f.info.textContent, /UTF-16 units, label included/);
+    assert.equal(f.button.disabled, false); assert.match(f.info.textContent, /Add the whole Document to the Prompt\./);
     assert.equal(f.appends.length, 0); assert.equal(f.prompt.text, "keep Prompt");
     assert.equal(f.doc.text, outcome === "stale" ? "whole Document unsaved" : "whole Document");
   });

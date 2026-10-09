@@ -44,7 +44,7 @@ test("selection append changes only Prompt text/revision, keeps both identities/
   const f = await setup(), before = f.client.snapshot(), prompt = role(f.client, "prompt"), doc = role(f.client, "document");
   const result = f.client.appendSelectionToPrompt(f.request()); assert.equal(result.ok, true);
   const after = role(f.client, "prompt");
-  assert.equal(after.text, prompt.text + "\n\nFrom `notes.md` (editor lines 1–3, snapshot):\n\n" + doc.text);
+  assert.equal(after.text, prompt.text + "\n\nFrom `notes.md` (lines 1–3):\n\n" + doc.text);
   assert.deepEqual({ ...after, text: prompt.text, revision: prompt.revision }, prompt);
   assert.deepEqual(role(f.client, "document"), doc);
   assert.equal(f.client.snapshot().selectedBufferId, before.selectedBufferId); assert.equal(f.client.snapshot().activePromptId, before.activePromptId);
@@ -73,7 +73,7 @@ test("snapshot keeps exact selected whitespace, CRLF, annotations and Unicode wi
   assert(f.client.capture({ ...editor(text, "/source/notes.md"), selectionStart: start, selectionEnd: end }, "disk document").ok);
   const before = role(f.client, "prompt").text;
   assert(f.client.appendSelectionToPrompt(f.request()).ok);
-  assert.equal(role(f.client, "prompt").text, before + "\n\nFrom `notes.md` (editor line 2, snapshot):\n\n" + text.slice(start, end));
+  assert.equal(role(f.client, "prompt").text, before + "\n\nFrom `notes.md` (line 2):\n\n" + text.slice(start, end));
   await f.client.settled();
 });
 
@@ -82,7 +82,7 @@ test("labels are literal code spans with bounded escaped controls, not Markdown,
   const label = "![x](https://example.test) ` <img>\n[an: filename]";
   assert(f.client.replace(doc.id, doc.revision, { ...editor("part"), sourceState: { ...editor("").sourceState, label }, selectionEnd: 4 }, null).ok);
   assert(f.client.appendSelectionToPrompt(f.request()).ok);
-  assert(role(f.client, "prompt").text.includes("From ``![x](https://example.test) ` <img>\\n[an: filename]`` (editor line 1, snapshot):\n\npart"));
+  assert(role(f.client, "prompt").text.includes("From ``![x](https://example.test) ` <img>\\n[an: filename]`` (line 1):\n\npart"));
   await f.client.settled();
 });
 
@@ -93,7 +93,7 @@ test("boundary backticks are separated from provenance delimiters without changi
     assert(f.client.replace(doc.id, doc.revision, { ...editor(selected), sourceState: { ...editor("").sourceState, label }, selectionEnd: selected.length }, null).ok);
     const before = f.client.snapshot(), prompt = role(f.client, "prompt"), ticks = "`".repeat(1 + Math.max(...label.match(/`+/g).map(run => run.length)));
     assert(f.client.appendSelectionToPrompt(f.request()).ok);
-    assert.equal(role(f.client, "prompt").text, prompt.text + "\n\nFrom " + ticks + " " + label + " " + ticks + " (editor line 1, snapshot):\n\n" + selected);
+    assert.equal(role(f.client, "prompt").text, prompt.text + "\n\nFrom " + ticks + " " + label + " " + ticks + " (line 1):\n\n" + selected);
     assert.deepEqual(role(f.client, "document"), before.buffers.find(b => b.role === "document"));
     assert.deepEqual({ ...role(f.client, "prompt"), text: prompt.text, revision: prompt.revision }, prompt);
     await f.client.settled();

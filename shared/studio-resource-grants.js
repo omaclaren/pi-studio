@@ -99,6 +99,9 @@ export function createStudioResourceGrantRegistry(options = {}) {
 
 	function grantFile(pathInput, details = {}) {
 		const resolved = canonicalExistingPath(pathInput, fallbackCwd(details), "file");
+		// Producers holding an already-canonical file identity may require exact
+		// equality before registration. A replaced symlink must add no new grant.
+		if (details.expectedCanonicalPath !== undefined && resolved.canonicalPath !== details.expectedCanonicalPath) throw new Error("The exact canonical file identity changed; no grant was added.");
 		return addGrant("file", resolved.canonicalPath, normalizeGrantSource(details.source, "explicit-file"));
 	}
 

@@ -41,7 +41,8 @@ test("confirmation buttons retain their accent contrast on hover", () => {
 test("comment deletion and save paths use the in-page dialogs", () => {
   assert.match(clientSource, /async function deleteReviewNote\([\s\S]*?await requestStudioConfirmation\("Delete this local comment\?"/);
   assert.match(clientSource, /async function deleteAllReviewNotes\([\s\S]*?await requestStudioConfirmation\(/);
-  assert.match(clientSource, /async function openEditorSaveAsDialog\([\s\S]*?await requestStudioTextInput\("Save editor content as:"/);
+  assert.match(clientSource, /async function openEditorSaveAsDialog\([\s\S]*?await requestStudioTextInput\(workspace \? "Save the " \+ role \+ " as:" : "Save editor content as:"/);
+  assert.match(clientSource, /title: workspace \? "Save as" : "Save editor as",/); // classic wording unchanged
   assert.match(clientSource, /saveAsBtn\.addEventListener\("click", \(\) => \{[\s\S]*?openEditorSaveAsDialog\(\)/);
   assert.match(clientSource, /saveAnnotatedBtn\.addEventListener\("click", async \(\) => \{[\s\S]*?await requestStudioTextInput\("Save annotated editor content as:"/);
   assert.match(clientSource, /confirmLabel: "Delete"[\s\S]*?destructive: true/);

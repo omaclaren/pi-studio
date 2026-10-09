@@ -338,9 +338,10 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(indexSource, /studio-side-question-helpers\.js/);
 
 	assert.match(clientSource, /value="side-questions"|"side-questions": "Side questions"/);
-	assert.match(clientSource, /<h2>Side question<\/h2>/);
+	assert.match(clientSource, /<h2>Side questions<\/h2>/);
 	assert.match(clientSource, /askAsideBtn\.textContent = isEditorOnlyMode\s*\? "Side questions"/);
-	assert.match(clientSource, /<label>Starting text<select class='studio-flat-select' data-side-question-field='focusMode' aria-describedby='sideQuestionContextRule'/);
+	assert.match(clientSource, /<label>Starting text<select" \+ nextAttribute \+ " class='studio-flat-select' data-side-question-field='focusMode' aria-describedby='/);
+	assert.match(clientSource, /const ruleId = nextThread \? "sideQuestionNextContextRule" : "sideQuestionContextRule"/);
 	assert.match(clientSource, /\["auto", "Automatic"\]/);
 	assert.match(clientSource, /Automatic: selection → heading block at cursor → nearby text/);
 	assert.match(clientSource, /nearest Markdown\/LaTeX heading above the cursor/);
@@ -356,9 +357,9 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(indexSource, /Ask the initial side question or a follow-up while its question box is focused/);
 	assert.match(clientSource, /attachmentText: attachment/);
 	assert.match(clientSource, /relatedFilesText:/);
-	assert.match(clientSource, /<dt>Starting text<\/dt>/);
-	assert.match(clientSource, /<dt>Related files<\/dt>/);
-	assert.match(clientSource, /<label>Also use files from<select class='studio-flat-select' data-side-question-field='gatherScope'/);
+	assert.match(clientSource, /const scopeText = \[summary\.attachmentText, summary\.relatedFilesText/);
+	assert.match(clientSource, /side-question-scope'>Scope: " \+ escapeHtml\(scopeText\)/);
+	assert.match(clientSource, /<label>Also use files from<select" \+ nextAttribute \+ " class='studio-flat-select' data-side-question-field='gatherScope'/);
 	assert.match(clientSource, /ensureSideQuestionContextRootAuthorized\(context\)/);
 	assert.match(clientSource, /fetchStudioJson\("\/side-question-context-root"/);
 	assert.match(clientSource, /requestStudioDirectoryGrant\(request/);
@@ -372,7 +373,7 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /function copySideQuestionTranscriptMarkdown/);
 	assert.match(clientSource, /function openSideQuestionTranscriptInEditor/);
 	assert.match(clientSource, /exportPdfBtn\.textContent = previewExportInProgress[\s\S]*?"Export thread"/);
-	assert.match(clientSource, /exportPreviewControlsEl\.hidden = rightView === "editor-quarto-preview"/);
+	assert.match(clientSource, /exportPreviewControlsEl\.hidden = readerActive \|\| rightView === "editor-quarto-preview"/);
 	assert.match(clientSource, /startsWith\("side-markdown-"\) && rightView !== "side-questions"/);
 	assert.match(cssSource, /\.export-preview-menu button\[hidden\]\s*\{[\s\S]*?display:\s*none !important;/);
 	assert.match(clientSource, /data-side-question-field='gitContext'/);

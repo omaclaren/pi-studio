@@ -13,7 +13,7 @@ test("watched preview documents are server-created, transient, and read-only", (
   assert.match(indexSource, /transient: true,[\s\S]*?skipWorkspaceRestore: true,[\s\S]*?paneFocus: "right"/);
   assert.match(clientSource, /sourceTextEl\.readOnly = true/);
   assert.match(clientSource, /sourceTextEl\.setAttribute\("aria-readonly", "true"\)/);
-  assert.match(clientSource, /isWatchedFilePreview \? "Source" : "Editor \(Raw\)"/);
+  assert.match(clientSource, /isWatchedFilePreview \? "Source" : "Document \(Raw\)"/);
   assert.match(clientSource, /Source, read-only\. Follows the file on disk\./);
   assert.match(clientSource, /Read-only · follows disk/);
   assert.match(clientSource, /isWatchedFilePreview \? "watched preview" : "response"/);
