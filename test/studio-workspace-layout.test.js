@@ -225,7 +225,7 @@ test("preview options follow the selected buffer role without changing routes or
   f.c.rightViewSelect.options = ["preview", "editor-preview", "editor-quarto-preview"].map(value => ({ value, textContent: "Editor (Preview)" }));
   load(f.c, "syncRightViewModeOptions", "restrictedStudioRightViews"); f.c.syncRightViewModeOptions();
   assert.equal(f.c.rightViewSelect.options[1].textContent, "Document (Preview)");
-  assert.equal(f.c.rightViewSelect.options[2].textContent, "Document (Quarto Preview)");
+  assert.equal(f.c.rightViewSelect.options[2].textContent, "Document (Quarto)");
   assert.equal(f.c.rightViewSelect.options[0].disabled, false, "the Document can choose to show a response (Oliver and Sol, 8 Oct)");
   f.c.isEditorOnlyMode = true; f.c.syncRightViewModeOptions();
   assert.equal(f.c.rightViewSelect.options[0].disabled, true, "editor-only windows still can't"); f.c.isEditorOnlyMode = false;

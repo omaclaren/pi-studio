@@ -912,6 +912,7 @@
       background: var(--studio-header-action-hover-bg, var(--panel-2));
     }
 
+    #sendRunBtn[hidden],
     #sendReplBtn[hidden],
     #replSendModeSelect[hidden] {
       display: none !important;
@@ -6564,12 +6565,14 @@
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active),
+    body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > .studio-refresh-tools > button,
     body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > select {
       color: color-mix(in srgb, var(--text) 72%, var(--muted));
       font-weight: 500;
     }
 
     body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active):hover,
+    body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > .studio-refresh-tools > button:hover,
     body.studio-ui-refresh .studio-refresh-toolbar-actions > .studio-refresh-action-line > select:not(:disabled):hover {
       color: var(--text);
     }
@@ -7694,6 +7697,31 @@
     body.studio-workspace-layout .side-question-run-settings label { display: inline-flex; align-items: center; gap: 6px; }
     body.studio-workspace-layout .side-question-thread-header > div:empty { flex: 1 1 auto; }
 
+    /* Oliver, 10 Oct: slightly less space between toolbar items, so View fits on a laptop. */
+    body.studio-workspace-layout .studio-refresh-toolbar-actions .studio-refresh-action-line { column-gap: 8px; }
+    body.studio-workspace-layout .studio-refresh-toolbar-actions .studio-refresh-action-line button:not(#sendRunBtn):not(#queueSteerBtn):not(#sendReplBtn):not(.request-stop-active) { padding-left: 6px; padding-right: 6px; }
+
+    /* Row 2 mirrors row 1: tools sit on the right and wrap on the right (Oliver, 10 Oct). */
+    body.studio-workspace-layout .studio-refresh-tools { margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 8px; min-width: 0; }
+
+    /* Files, new layout (Oliver, 10 Oct): one plain location line, plain rows, and row actions only
+       on the row under the mouse or keyboard focus. They overlay the row's end, so names keep their width. */
+    body.studio-workspace-layout .files-location-line { display: flex; align-items: center; gap: 6px; min-width: 0; padding-bottom: 6px; border-bottom: 1px solid var(--panel-border); }
+    body.studio-workspace-layout .files-location-line .files-up { flex: 0 0 auto; min-height: 0; padding: 0 8px; border-color: transparent; background: transparent; font-size: 16px; line-height: 1.5; }
+    body.studio-workspace-layout .files-location-line .files-up:not(:disabled):hover { background: var(--studio-header-action-hover-bg, var(--panel-2)); }
+    body.studio-workspace-layout .files-location-line .files-path { flex: 1 1 auto; min-width: 0; color: var(--text); font-family: var(--font-ui); font-size: 13px; }
+    body.studio-workspace-layout .files-location-tools { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+    body.studio-workspace-layout .files-location-line :is(.files-sort-select, .files-location-select) { border-color: transparent; background: transparent; }
+    body.studio-workspace-layout .files-panel-workspace .files-list { gap: 0; grid-template-columns: minmax(0, 1fr); }
+    body.studio-workspace-layout .files-panel-workspace .files-row { position: relative; padding: 3px 6px; border-color: transparent; border-radius: 6px; background: transparent; }
+    body.studio-workspace-layout .files-panel-workspace .files-row { min-width: 0; } /* long names shorten; rows never outgrow the pane */
+    body.studio-workspace-layout .files-panel-workspace .files-row:is(:hover, :focus-within) { border-color: transparent; background: var(--studio-header-action-hover-bg, var(--panel-2)); }
+    body.studio-workspace-layout .files-panel-workspace .files-row .files-actions { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); padding-left: 10px;
+      background: var(--studio-header-action-hover-bg, var(--panel-2)); visibility: hidden; }
+    body.studio-workspace-layout .files-panel-workspace .files-row:is(:hover, :focus-within) .files-actions,
+    body.studio-workspace-layout .files-panel-workspace .files-row:has(.files-more[open]) .files-actions { visibility: visible; }
+    body.studio-workspace-layout .files-panel-workspace .files-row:has(.files-more[open]) { z-index: 5; }
+
     /* Trial48 wording (finding 5): menus show labels only; status has no dot. */
     body.studio-workspace-layout .studio-buffer-menu-help { display: none; }
     body.studio-workspace-layout #syncBadge::before { display: none; }
@@ -7749,7 +7777,16 @@
     body.studio-workspace-layout .files-picking-copy .files-kind-office .files-open-btn { opacity: 0.45; }
     body.studio-workspace-layout .files-pick-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 10px; margin-bottom: 8px;
       border-bottom: 1px solid var(--panel-border); background: var(--panel-2); }
+    /* The strip and its Cancel stay in view while the list scrolls (Oliver, 10 Oct). */
+    body.studio-workspace-layout .files-pick-strip { position: sticky; top: 0; z-index: 3; }
     body.studio-workspace-layout .files-pick-what { font-weight: 600; }
+    /* REPL More stacks plain items like the other menus (Oliver, 10 Oct). */
+    body.studio-workspace-layout .repl-more-menu { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 2px; width: max-content; min-width: 180px; max-width: min(340px, 80vw); }
+    body.studio-workspace-layout .repl-more-menu button { display: block; width: 100%; min-height: 0; padding: 5px 8px; text-align: left; border-color: transparent; background: transparent; box-shadow: none; }
+    body.studio-workspace-layout .repl-more-menu button:not(:disabled):hover { border-color: transparent; background: var(--studio-header-action-hover-bg, var(--panel-2)); }
+    body.studio-workspace-layout .repl-more-menu button:disabled { color: var(--muted); }
+    body.studio-workspace-layout .repl-more-menu button:focus-visible { outline: none; text-decoration: underline; text-underline-offset: 3px; }
+    body.studio-workspace-layout .repl-more-send-mode { display: flex; align-items: center; gap: 6px; padding: 3px 8px 6px; margin-bottom: 2px; border-bottom: 1px solid var(--panel-border); color: var(--muted); font-size: 12px; }
     body.studio-workspace-layout .files-pick-path { flex: 1 1 180px; min-width: 0; padding: 4px 8px; border: 1px solid var(--control-border); border-radius: 6px;
       background: var(--panel); color: var(--text); font: 12px var(--font-mono); outline: none; }
     body.studio-workspace-layout .files-pick-strip button { border-color: transparent; background: transparent; }

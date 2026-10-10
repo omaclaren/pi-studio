@@ -67,8 +67,9 @@ test("production indicator uses prepared text, hides in Document and stays indep
  f.select({id:"p",role:"prompt",sourceState:{path:"/saved-as.md"}});f.c.syncPromptRunIndicator();assert.match(f.element.textContent,/^Sent /);
  f.c.persistPromptRunIndicator();assert(![...f.storage.values()][0].includes("raw annotation"));
 });
-test("production recovery renders unknown instead of falsely claiming a recovered Prompt was never run",()=>{
- const f=ui();f.c.promptRunIndicatorFresh=false;f.c.initializePromptRunIndicator();assert.equal(f.element.textContent,"Run history unknown");assert.match(f.element.title,/unavailable/);
+test("production recovery shows nothing rather than falsely claiming a recovered Prompt was never run",()=>{
+ // Oliver, 10 Oct: an unknown history says nothing useful, so the indicator is hidden.
+ const f=ui();f.c.promptRunIndicatorFresh=false;f.c.initializePromptRunIndicator();assert.equal(f.element.hidden,true);assert.equal(f.element.textContent,"");
 });
 function registeredSdkFixture(){
  const events=[],handlers={};const c=vm.createContext({pi:{on:(name,fn)=>handlers[name]=fn},activeRequest:{id:"r",kind:"direct",promptTriggerText:"prompt"},studioPromptInputProvenanceLost:false,studioPromptInputs:[],queuedStudioDirectRequests:[],studioRunLifecycle:{snapshot(){return {run:null};},input(){}},normalizePromptText:t=>typeof t==="string"?t.trim():null,pendingTurnPrompt:null,pendingStudioPromptMetadata:null,
@@ -105,7 +106,7 @@ test("failed indicator storage writes cannot recover an old Not run hint after a
  const before=ui();before.c.initializePromptRunIndicator();const key="piStudio.promptRun.v1:workspace",old=before.storage.get(key);
  before.c.window.sessionStorage.setItem=()=>{throw Error("fixture storage write failed");};
  before.c.rememberPromptRun("r","raw");before.t.submitted("r",100);before.c.persistPromptRunIndicator();before.c.syncPromptRunIndicator();assert.match(before.element.textContent,/^Sent /);assert.equal(before.storage.get(key),old);
- const after=ui();after.storage.set(key,old);after.c.promptRunIndicatorFresh=false;after.c.initializePromptRunIndicator();assert.equal(after.element.textContent,"Run history unknown");
+ const after=ui();after.storage.set(key,old);after.c.promptRunIndicatorFresh=false;after.c.initializePromptRunIndicator();assert.equal(after.element.hidden,true);assert.equal(after.element.textContent,"");
 });
 test("server emits informational receipt only on registered SDK user messages, including exact queued identity",async()=>{
  const {events,handlers,c}=registeredSdkFixture();await handlers.input({source:"extension",text:"prompt"});await handlers.message_end({message:{role:"user",text:"prompt",timestamp:100}});

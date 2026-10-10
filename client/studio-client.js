@@ -500,7 +500,8 @@
           if (isWatchedFilePreview && option.value === "editor-preview") option.textContent = "Watched preview";
           else if (option.value === "editor-preview" || isQuartoOption) {
             const name = bufferSwitchingEnabled ? (isStudioDocumentBufferView() ? "Document" : "Prompt") : (isEditorOnlyMode ? "Document" : "Editor");
-            option.textContent = name + (isQuartoOption ? " (Quarto Preview)" : " (Preview)");
+            // New layout: "(Quarto)" keeps the picker as wide as "Response (Preview)" (Oliver, 10 Oct).
+            option.textContent = name + (isQuartoOption ? (bufferSwitchingEnabled ? " (Quarto)" : " (Quarto Preview)") : " (Preview)");
           }
           if (isQuartoOption) option.hidden = !quartoRelevant;
           option.disabled = (isWatchedFilePreview && option.value !== "editor-preview")
@@ -3702,11 +3703,14 @@
           (isEditorOnlyMode || isWatchedFilePreview || followMenu) ? null : activityTrackingSelect,
           (bufferSwitchingEnabled && !followMenu) ? documentPreviewFollowSelect : null]);
         appendStudioUiRefreshMenuSection(viewMenu.menu, "Annotations", [annotationModeSelect, insertHeaderBtn, stripAnnotationsBtn, saveAnnotatedBtn]);
-        if (reviewNotesBtn) actionLineOneEl.appendChild(reviewNotesBtn);
-        if (scratchpadBtn) actionLineOneEl.appendChild(scratchpadBtn);
-        if (isEditorOnlyMode && askAsideBtn) actionLineOneEl.appendChild(askAsideBtn);
-        if (reviewMenu) actionLineOneEl.appendChild(reviewMenu.anchor);
-        actionLineOneEl.appendChild(viewMenu.anchor);
+        // Row 2 mirrors row 1: the main action on the left, the tools on the right (Oliver, 10 Oct).
+        const toolsEl = makeStudioUiRefreshElement("span", "studio-refresh-tools");
+        if (reviewNotesBtn) toolsEl.appendChild(reviewNotesBtn);
+        if (scratchpadBtn) toolsEl.appendChild(scratchpadBtn);
+        if (isEditorOnlyMode && askAsideBtn) toolsEl.appendChild(askAsideBtn);
+        if (reviewMenu) toolsEl.appendChild(reviewMenu.anchor);
+        toolsEl.appendChild(viewMenu.anchor);
+        actionLineOneEl.appendChild(toolsEl);
 
         toolbarMainEl.appendChild(actionsEl);
         toolbarMainEl.appendChild(stateEl);
@@ -7017,7 +7021,7 @@
       function updateReferenceBadge() {
         if (!referenceBadgeEl) return;
         const referenceMetaEl = referenceBadgeEl.closest(".reference-meta");
-        if (rightView === "repl" || (studioUiRefreshUi && rightView === "editor-preview")) {
+        if (rightView === "repl" || (studioUiRefreshUi && rightView === "editor-preview") || (bufferSwitchingEnabled && studioUiRefreshUi && rightView === "files")) {
           if (referenceMetaEl instanceof HTMLElement) referenceMetaEl.hidden = true;
           if (rightView === "editor-preview") referenceBadgeEl.textContent = "";
           return;
@@ -11683,6 +11687,13 @@
           renderReplViewIfActive({ force: true });
           return;
         }
+        const sendModeSelect = target.closest("[data-repl-send-mode]");
+        if (sendModeSelect && "value" in sendModeSelect) {
+          setReplSendMode(sendModeSelect.value);
+          syncActionButtons();
+          renderReplViewIfActive({ force: true });
+          return;
+        }
         const commandInput = target.closest("[data-repl-command]");
         if (commandInput && "value" in commandInput) {
           setReplCommandOverride(replRuntime, commandInput.value);
@@ -13789,6 +13800,9 @@
           + "<details class='repl-more-controls'>"
           + "<summary title='More REPL actions'>More</summary>"
           + "<div class='repl-more-menu'>"
+          // New layout: how Send to REPL reads the editor lives here, not in the Prompt toolbar (Oliver, 10 Oct).
+          + (bufferSwitchingEnabled && studioUiRefreshUi ? "<label class='repl-more-send-mode' title='Raw sends the selection or all the text. Literate sends the selection, the code chunk at the cursor, or all matching chunks.'>Send mode <select class='studio-flat-select' data-repl-send-mode aria-label='Send mode'" + (wsState === "Disconnected" || uiBusy || replBusy ? " disabled" : "") + ">"
+            + [["raw", "Raw"], ["literate", "Literate"]].map(([value, label]) => "<option value='" + value + "'" + (replSendMode === value ? " selected" : "") + ">" + label + "</option>").join("") + "</select></label>" : "")
           + "<button type='button' data-repl-action='stop-session'" + (canStopActiveSession ? "" : " disabled") + " title='Stop the selected Studio-owned REPL session.'>Stop session</button>"
           + "<button type='button' data-repl-action='interrupt'" + (activeSession && !replBusy ? "" : " disabled") + " title='Send Ctrl+C to the active REPL session.'>Interrupt</button>"
           + "<button type='button' data-repl-action='copy-attach-command'" + (activeSession ? "" : " disabled") + " title='Copy command for attaching to this tmux session in a terminal.'>Copy attach command</button>"
@@ -14102,6 +14116,31 @@
         return "<select class='files-location-select studio-flat-select' data-files-location aria-label='Allowed Files location' title='Choose a folder allowed for this Studio session on the computer running Pi.'>" + options + "</select>";
       }
 
+      // New layout (Oliver, 10 Oct): one location line instead of a boxed toolbar and an
+      // "Allowed root" line. ‹ goes up a folder, the path is relative to the allowed folder (full
+      // path on hover), Sort stays visible and everything else is under ⋯.
+      function buildStudioFilesLocationLineHtml(state) {
+        const currentDir = state.currentDir || "", rootDir = state.rootDir || "", relativeDir = state.relativeDir || ".";
+        const locations = Array.isArray(state.locations) ? state.locations : [];
+        // A literal basename: folder names can contain # or ? (Sol).
+        const rootName = String(rootDir).replace(/[\\/]+$/, "").split(/[\\/]/).pop() || rootDir;
+        const shown = !rootDir ? "No folder allowed" : rootName + (relativeDir && relativeDir !== "." ? " / " + relativeDir : "");
+        const title = rootDir ? currentDir + "\nAllowed folder on the computer running Pi: " + rootDir : "";
+        const item = (action, label, path, extra = "") => "<button type='button' data-files-action='" + action + "'" + (path ? " data-files-path='" + escapeHtml(path) + "'" : "") + extra + ">" + label + "</button>";
+        return "<div class='files-location-line'>"
+          + "<button type='button' class='files-up' data-files-action='parent' title='Up a folder' aria-label='Up a folder'" + (state.parentDir ? "" : " disabled") + ">‹</button>"
+          + (locations.length > 1 ? buildFileBrowserLocationSelectHtml(state) : "")
+          + "<span class='files-path' title='" + escapeHtml(title) + "'>" + escapeHtml(shown) + "</span>"
+          + "<span class='files-location-tools'>" + buildFileBrowserSortSelectHtml()
+          + "<details class='files-more'><summary aria-label='More Files actions'>⋯</summary><div class='files-more-menu'>"
+          + item("refresh", "Refresh")
+          + (currentDir ? item("copy-current", "Copy path", currentDir) + item("use-working-dir", "Use as working dir", currentDir) : "")
+          // Show in folder opens the folder you're looking at, not the allowed root (Oliver, 10 Oct).
+          + (rootDir ? item("open-root", "Show in folder", currentDir || rootDir, " title='Open this folder in Finder or the file manager on the computer running Pi.'") + item("copy-root", "Copy root", rootDir) : "")
+          + item("allow-folder", "Allow folder…")
+          + "</div></details></span></div>";
+      }
+
       function buildFileBrowserPanelHtml() {
         const state = fileBrowserState || {};
         const entries = Array.isArray(state.entries) ? state.entries : [];
@@ -14126,8 +14165,8 @@
             + "</span><input type='text' class='files-pick-path' data-files-pick-path placeholder='or paste a path' aria-label='File path'>"
             + "<button type='button' data-files-action='pick-cancel'>Cancel</button></div>"
           : "";
-        return "<div class='files-panel" + (pick ? " files-picking files-picking-" + escapeHtml(pick.mode) : "") + "'>" + pickStrip
-          + "<div class='files-toolbar'>"
+        const workspace = bufferSwitchingEnabled && Boolean(studioUiRefreshUi);
+        const head = workspace ? buildStudioFilesLocationLineHtml(state) : "<div class='files-toolbar'>"
           + "<div class='files-path-group'><span class='files-label'>Files</span><span class='files-path' title='" + escapeHtml(currentDir) + "'>" + escapeHtml(relativeDir || ".") + "</span></div>"
           + "<div class='files-toolbar-actions'>"
           + buildFileBrowserLocationSelectHtml(state)
@@ -14141,7 +14180,9 @@
           + (rootDir ? "<button type='button' data-files-action='copy-root' data-files-path='" + escapeHtml(rootDir) + "'>Copy root</button>" : "")
           + "</div>"
           + "</div>"
-          + "<div class='files-subtitle'>Allowed root on the computer running Pi: <span title='" + escapeHtml(rootDir) + "'>" + escapeHtml(rootDir || "none selected") + "</span></div>"
+          + "<div class='files-subtitle'>Allowed root on the computer running Pi: <span title='" + escapeHtml(rootDir) + "'>" + escapeHtml(rootDir || "none selected") + "</span></div>";
+        return "<div class='files-panel" + (workspace ? " files-panel-workspace" : "") + (pick ? " files-picking files-picking-" + escapeHtml(pick.mode) : "") + "'>" + pickStrip
+          + head
           + notices.join("")
           + (exactRows ? "<section class='files-exact-section'><div class='files-section-title'>Allowed exact files</div><div class='files-list' role='list'>" + exactRows + "</div></section>" : "")
           + "<div class='files-list' role='list'>" + rows + "</div>"
@@ -14407,7 +14448,9 @@
         const target = event.target;
         const actionEl = target instanceof Element ? target.closest("[data-files-action]") : null;
         if (!actionEl) return;
-        actionEl.closest("details.files-more")?.removeAttribute("open");
+        // Hand focus to the visible ⋯ before closing it, so a dialog the action opens returns there (Sol).
+        const moreMenu = actionEl.closest("details.files-more");
+        if (moreMenu) { if (moreMenu.contains(document.activeElement)) moreMenu.querySelector("summary")?.focus({ preventScroll: true }); moreMenu.removeAttribute("open"); }
         event.preventDefault();
         const action = actionEl.getAttribute("data-files-action") || "";
         const path = actionEl.getAttribute("data-files-path") || "";
@@ -17948,11 +17991,13 @@
           || Boolean(studioUiRefreshUi?.runStatus && !studioUiRefreshUi.runStatus.hidden);
         if (element.hidden) return;
         const state = promptRunIndicatorTracker.state(selected.id, prepareEditorTextForRunRequest(sourceTextEl.value));
+        // An unknown history says nothing useful and pushed the toolbar onto a second line (Oliver, 10 Oct).
+        if (!["not-run", "sent", "stopped", "failed", "edited"].includes(state.phase)) { element.hidden = true; element.textContent = ""; return; }
         const clock = at => at ? new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "";
         const time = clock(state.sentAt), ended = clock(state.settledAt);
         const label = state.phase === "not-run" ? "Not run" : state.phase === "sent" ? "Sent " + time
           : state.phase === "stopped" ? "Stopped " + ended : state.phase === "failed" ? "Failed " + ended
-          : state.phase === "edited" ? "Edited since " + time : "Run history unknown";
+          : "Edited since " + time;
         if (element.textContent !== label) element.textContent = label;
         element.title = state.phase === "not-run" ? "Not run yet."
           : state.phase === "sent" ? "This text was sent at " + time + "."
@@ -27514,6 +27559,8 @@
 
         if (sendRunBtn) {
           sendRunBtn.textContent = directIsStop ? "Stop" : (documentView ? "Return to Prompt" : (bufferSwitchingEnabled ? "Run Prompt" : (rightView === "repl" ? withStudioShortcutLabel("Run editor text", "run") : "Run editor text")));
+          // The new-layout Document has the Prompt tab just above, so no Return to Prompt here (Oliver, 10 Oct).
+          sendRunBtn.hidden = workspaceLayout && documentView && !directIsStop;
           sendRunBtn.classList.toggle("request-stop-active", directIsStop);
           sendRunBtn.classList.toggle("repl-secondary-action", rightView === "repl" && !directIsStop && !workspaceLayout);
           sendRunBtn.disabled = documentView && !directIsStop ? !studioBuffersCanSwitch(true)
@@ -27561,7 +27608,7 @@
           if (replActionLine instanceof HTMLElement) replActionLine.hidden = !showReplSend;
         }
         if (replSendModeSelect) {
-          replSendModeSelect.hidden = rightView !== "repl";
+          replSendModeSelect.hidden = rightView !== "repl" || workspaceLayout; // the REPL pane's More has it (Oliver, 10 Oct)
           replSendModeSelect.disabled = wsState === "Disconnected" || uiBusy || replBusy;
           replSendModeSelect.value = replSendMode;
           replSendModeSelect.title = replSendMode === "literate"
