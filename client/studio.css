@@ -7657,6 +7657,43 @@
       border-color: var(--control-border);
     }
 
+    /* Oliver, 10 Oct: teal means Run Prompt only. Send to REPL and Quick send's buttons are
+       plain, and the Quick send box shows focus without a ring. */
+    body.studio-workspace-layout #sendReplBtn,
+    body.studio-workspace-layout .repl-quick-actions button {
+      min-width: 0;
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+      color: var(--text);
+      font-weight: 500;
+    }
+    body.studio-workspace-layout #sendReplBtn:disabled,
+    body.studio-workspace-layout .repl-quick-actions button:disabled { color: var(--muted); }
+    body.studio-workspace-layout #sendReplBtn:not(:disabled):hover,
+    body.studio-workspace-layout .repl-quick-actions button:not(:disabled):hover {
+      border-color: transparent;
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
+    }
+    body.studio-workspace-layout #sendReplBtn:focus-visible,
+    body.studio-workspace-layout .repl-quick-actions button:focus-visible {
+      outline: none;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    body.studio-workspace-layout .repl-quick-composer textarea:focus,
+    body.studio-workspace-layout .repl-quick-composer textarea:focus-visible {
+      outline: none;
+      box-shadow: none;
+      border-color: var(--control-border);
+    }
+
+    /* Oliver, 10 Oct: the side thread's model and Thinking sit beside its Ask button. */
+    body.studio-workspace-layout .side-question-actions { align-items: center; }
+    body.studio-workspace-layout .side-question-run-settings { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--muted); font-size: 0.82rem; }
+    body.studio-workspace-layout .side-question-run-settings label { display: inline-flex; align-items: center; gap: 6px; }
+    body.studio-workspace-layout .side-question-thread-header > div:empty { flex: 1 1 auto; }
+
     /* Trial48 wording (finding 5): menus show labels only; status has no dot. */
     body.studio-workspace-layout .studio-buffer-menu-help { display: none; }
     body.studio-workspace-layout #syncBadge::before { display: none; }

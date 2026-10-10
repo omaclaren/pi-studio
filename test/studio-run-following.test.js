@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 function section(start, end) { const a = source.indexOf(start), b = source.indexOf(end, a); assert(a >= 0 && b > a, start); return source.slice(a, b); }
-function harness({ view = "files", working = true, latest = true, role = "prompt", history = true } = {}) {
+function harness({ view = "editor-preview", working = true, latest = true, role = "prompt", history = true } = {}) {
   const buffers = [{ id: "prompt", role: "prompt", view: { rightView: view, rightScrollTop: 480, followLatest: true, responseHistoryIndex: history ? 0 : -1 } },
     { id: "document", role: "document", view: { rightView: "editor-preview", rightScrollTop: 72, followLatest: false, responseHistoryIndex: 0 } }];
   const transitions = [], writes = [], sent = [];
@@ -64,10 +64,25 @@ test("latest migration reads Prompt preference, never Document's forced Off", ()
   h.c.latestResponseFollowingEnabled = true; h.c.ensureLatestResponseFollowingPreference(); assert.equal(h.c.latestResponseFollowingEnabled, true);
 });
 
-for (const view of ["files", "changes", "repl", "markdown", "editor-preview", "trace", "side-questions"]) test("no-response settlement restores " + view + " and its reading position without advancing selection", () => {
+for (const view of ["markdown", "editor-preview", "trace"]) test("no-response settlement restores " + view + " and its reading position without advancing selection", () => {
   const h = harness({ view }); h.start(); assert.equal(h.c.rightView, "trace");
   h.observe(null); assert.equal(h.c.rightView, view); assert.equal(h.c.critiqueViewEl.scrollTop, 480);
   assert.equal(h.c.responseHistoryIndex, 0); assert.equal(h.c.getSelectedHistoryItem().id, "old");
+});
+
+// Oliver, 10 Oct: Follow moves between the response views only.
+for (const view of ["files", "changes", "repl", "side-questions"]) test("a Prompt showing " + view + " stays there through a Run; the newest response is ready for Response", () => {
+  const h = harness({ view }); h.start(); assert.equal(h.c.rightView, view); assert.equal(h.c.studioRunFollowing.working, null);
+  h.arrive(); assert.equal(h.c.rightView, view); assert.equal(h.c.critiqueViewEl.scrollTop, 480);
+  h.observe(null); assert.equal(h.c.rightView, view); assert.equal(h.c.critiqueViewEl.scrollTop, 480);
+  assert.equal(h.c.getSelectedHistoryItem().id, "new"); assert.deepEqual(h.transitions, []);
+});
+
+test("a hidden Prompt left on the REPL keeps it while the Document is shown", () => {
+  const h = harness({ view: "repl", role: "document" }); h.start(); h.arrive(); h.observe(null);
+  assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.bufferTransientStates.get("prompt").runFollowingView, undefined);
+  assert.equal(h.c.bufferTransientStates.get("prompt").historySelection.id, "new");
+  h.select("prompt"); assert.equal(h.c.rightView, "repl");
 });
 
 test("Working hands back only on SDK settlement, to an actual new response when latest is enabled", () => {
@@ -79,18 +94,18 @@ test("Working hands back only on SDK settlement, to an actual new response when 
 
 test("latest Off restores prior view and does not advance response selection despite an arrival", () => {
   const h = harness({ latest: false }); h.start(); h.arrive(); h.observe(null);
-  assert.equal(h.c.rightView, "files"); assert.equal(h.c.responseHistoryIndex, 0);
+  assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.responseHistoryIndex, 0);
 });
 
 test("latest On works independently when Working is Off", () => {
-  const h = harness({ working: false }); h.start(); assert.equal(h.c.rightView, "files");
+  const h = harness({ working: false }); h.start(); assert.equal(h.c.rightView, "editor-preview");
   h.arrive(); assert.equal(h.c.rightView, "preview"); assert.equal(h.c.getSelectedHistoryItem().id, "new");
   h.observe(null); assert.equal(h.c.rightView, "preview");
 });
 
 test("all run options Off leave own view and response selection unchanged", () => {
   const h = harness({ working: false, latest: false }); h.start(); h.arrive(); h.observe(null);
-  assert.equal(h.c.rightView, "files"); assert.equal(h.c.responseHistoryIndex, 0);
+  assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.responseHistoryIndex, 0);
 });
 
 for (const response of [false, true]) test("hidden Prompt settles independently of visible Document, new response=" + response, () => {
@@ -99,7 +114,7 @@ for (const response of [false, true]) test("hidden Prompt settles independently 
   assert.equal(h.c.bufferTransientStates.get("prompt").runFollowingView.rightView, "trace");
   if (response) h.arrive(); h.observe(null);
   assert.equal(h.c.rightView, "editor-preview"); h.select("prompt");
-  assert.equal(h.c.rightView, response ? "preview" : "files"); assert.equal(h.c.critiqueViewEl.scrollTop, response ? 0 : 480);
+  assert.equal(h.c.rightView, response ? "preview" : "editor-preview"); assert.equal(h.c.critiqueViewEl.scrollTop, response ? 0 : 480);
 });
 
 test("manual view navigation pauses run options until the next distinct SDK run; Document following remains independent", () => {
@@ -107,7 +122,8 @@ test("manual view navigation pauses run options until the next distinct SDK run;
   assert.equal(h.c.rightView, "repl"); assert.equal(h.c.responseHistoryIndex, 0);
   assert.equal(h.c.studioRunFollowing.paused, true); assert.match(h.c.studioUiRefreshUi.followButton.textContent, /run paused/);
   assert.equal(h.c.documentPreviewFollowingEnabled, true);
-  h.start("run-2"); assert.equal(h.c.rightView, "trace"); assert.equal(h.c.studioRunFollowing.paused, false);
+  h.start("run-2"); assert.equal(h.c.rightView, "repl"); assert.equal(h.c.studioRunFollowing.paused, false); // the REPL stays (Oliver, 10 Oct)
+  h.observe(null); h.c.setRightView("markdown"); h.start("run-3"); assert.equal(h.c.rightView, "trace"); assert.equal(h.c.studioRunFollowing.paused, false);
 });
 
 test("manual history selection pauses even without a view transition", () => {
@@ -128,19 +144,19 @@ test("manual Document navigation leaves the Prompt's Run to hand back on its own
 test("Off restores a still-owned Working override immediately, including hidden Prompt", () => {
   for (const role of ["prompt", "document"]) {
     const h = harness({ role }); h.start(); h.c.activityTrackingEnabled = false; h.c.relinquishStudioRunWorking(true);
-    assert.equal(h.c.studioRunFollowing.working, null); h.select("prompt"); assert.equal(h.c.rightView, "files");
+    assert.equal(h.c.studioRunFollowing.working, null); h.select("prompt"); assert.equal(h.c.rightView, "editor-preview");
   }
 });
 
 test("re-enabling a preference never unpauses a manually navigated run", () => {
-  const h = harness(); h.start(); h.c.setRightView("files"); h.c.setLatestResponseFollowingEnabled(true);
+  const h = harness(); h.start(); h.c.setRightView("editor-preview"); h.c.setLatestResponseFollowingEnabled(true);
   h.c.activityTrackingEnabled = true; h.c.acquireStudioRunWorking(); h.arrive();
-  assert.equal(h.c.rightView, "files"); assert.equal(h.c.studioRunFollowing.paused, true);
+  assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.studioRunFollowing.paused, true);
 });
 
 test("reconnect does not mistake existing history for a fresh response", () => {
   const h = harness(); h.start(); h.observe({ id: "run-1" }, "hello_ack"); h.observe(null, "hello_ack");
-  assert.equal(h.c.rightView, "files"); assert.equal(h.c.responseHistoryIndex, 0);
+  assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.responseHistoryIndex, 0);
 });
 
 test("a new response attributed to this SDK run is settled after an offline completion", () => {
@@ -150,7 +166,7 @@ test("a new response attributed to this SDK run is settled after an offline comp
 
 test("unattributed historical entries on reconnect do not justify hand-back to latest", () => {
   const h = harness(); h.start(); h.c.responseHistory.push({ id: "branch-old", markdown: "branch-old" });
-  h.observe(null, "hello_ack"); assert.equal(h.c.rightView, "files"); assert.equal(h.c.responseHistoryIndex, 0);
+  h.observe(null, "hello_ack"); assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.responseHistoryIndex, 0);
 });
 
 test("source replacement retires Working authority and stale reading cache", () => {
@@ -200,6 +216,23 @@ test("actual production binding preserves a current Working reading offset indep
   assert.equal(f.entry.view.rightView, "files");
 });
 
+// Sol (candidate63): a hidden Prompt left on the REPL, Files or Changes gets the newest response
+// selected for later, but returning to it must not reset that pane's scroll.
+for (const view of ["files", "repl", "changes"]) test("actual binding after a hidden " + view + " arrival keeps the pane's scroll and leaves the reset for Response", () => {
+  const f = actualBindingHarness(); f.entry.view.rightView = view;
+  let selected = "document";
+  f.c.bufferRecoveryClient.snapshot = () => ({ activePromptId: "prompt", selectedBufferId: selected, buffers: [f.entry] });
+  Object.assign(f.c, { scheduleWorkspacePersistence() {}, studioRunFollowing: { promptId: "prompt", runId: "run-1", active: true, paused: false, working: null } });
+  assert.equal(f.c.setStudioPromptRunView("preview", 0, "r2"), true);
+  const saved = f.c.bufferTransientStates.get("prompt");
+  assert.deepEqual({ ...saved.historySelection }, { id: "r2", index: 1, resetScroll: false }); assert.equal(saved.responseScrollPending, true);
+  assert.equal(saved.runFollowingView, undefined);
+  selected = "prompt"; f.bind();
+  assert.equal(f.c.rightView, view); assert.equal(f.c.bufferViewRestore.right, 480, "the pane keeps its scroll");
+  assert.equal(f.c.getSelectedHistoryItem().id, "r2"); assert.equal(f.c.pendingResponseScrollReset, false);
+  assert.equal(f.c.bufferTransientStates.get("prompt").responseScrollPending, true, "Response resets when it next renders");
+});
+
 test("first hosted persistence migrates recovered Prompt Off before capturing any null preference as On", () => {
   const h = harness({ latest: null }); h.buffers[0].view.followLatest = false; h.c.followLatest = false;
   Object.assign(h.c, { lastWorkspacePersistenceSavedAt: 0, pendingStudioBufferEditorView: () => null,
@@ -219,6 +252,6 @@ test("Working persistence stores own view and scroll, not the automatic view; la
     annotationsEnabled: true, getCurrentMetadataAssociationSnapshot: () => ({}), getDocumentPreviewFollowOwner: () => null });
   vm.runInContext(section("function buildWorkspacePersistencePayload()", "function sendServerWorkspaceRecoveryState("), h.c);
   vm.runInContext(section("function bufferRecoveryExtra()", "function getStudioSelectedBuffer()"), h.c);
-  assert.equal(h.c.buildWorkspacePersistencePayload().rightView, "files"); assert.equal(h.c.bufferRecoveryExtra().view.rightScrollTop, 480);
+  assert.equal(h.c.buildWorkspacePersistencePayload().rightView, "editor-preview"); assert.equal(h.c.bufferRecoveryExtra().view.rightScrollTop, 480);
   assert.equal(h.c.rightView, "trace"); assert.equal(h.c.buildWorkspacePersistencePayload().text, "kept");
 });

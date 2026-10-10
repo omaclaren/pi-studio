@@ -64,7 +64,8 @@ test("Files rows keep the name visible, read on click, and put the rest under �
   assert.match(html, /data-files-action='read'[^>]*class='files-open-btn'/); assert.match(html, /<span class='files-name'>a\.md<\/span>/);
   assert.match(html, />Open in Document<\/button>/); assert.match(html, />Open in Prompt<\/button>/);
   const more = html.slice(html.indexOf("<details class='files-more'>"));
-  for (const label of ["Follow changes", "Open in new window", "Copy path", "Show in folder"]) assert.ok(more.includes(">" + label + "<"), label + " under ⋯");
+  // One window (Oliver, 10 Oct): ⋯ has Show in folder and Copy path only.
+  assert.deepEqual([...more.matchAll(/>([^<>]+)<\/button>/g)].map(m => m[1]), ["Show in folder", "Copy path"]);
   const dir = c.buildStudioFilesRowHtml({ type: "directory", kind: "directory", path: "/n/sub", name: "sub", icon: "📁", meta: "folder" });
   assert.match(dir, /data-files-action='open-dir'/); assert.doesNotMatch(dir, />Open in Document</);
 });

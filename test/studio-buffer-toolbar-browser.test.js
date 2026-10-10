@@ -29,7 +29,7 @@ const getStudioSelectedBuffer = () => state.buffers.find(b => b.id === state.sel
 const isStudioDocumentBufferView = () => getStudioSelectedBuffer().role === 'document';
 const studioBuffersCanSwitch = () => true, studioBuffersCanOpenDocument = () => true, pendingStudioBufferEditorView = () => null;
 const basenameForStudioPath = p => p.split('/').at(-1), getPreviewSelectionPaneIdForNode = e => e === sourcePreviewEl ? 'source' : null;
-const closeStudioUiRefreshMenus = () => {}, scheduleWorkspacePersistence = () => {};
+const closeStudioUiRefreshMenus = () => {}, scheduleWorkspacePersistence = () => {}, syncStudioReplSendLabel = () => {};
 const buildWorkspacePersistencePayload = () => ({}), bufferRecoveryExtra = () => ({});
 const captureRecoveryConsent = () => ({generation, buffer:state.selectedBufferId, text:sourceTextEl.value});
 const recoveryConsentIsCurrent = c => c.generation === generation && c.buffer === state.selectedBufferId && c.text === sourceTextEl.value;

@@ -11,7 +11,7 @@ function harness() {
     documentHostingController: { copyState: () => copy, moveState: () => move }, documentOpenController: { state: () => opening },
     bufferRecoveryClient: { handoffBackup: () => backup, pendingHostingSaves: () => saves }, basenameForStudioPath: value => value?.split("/").at(-1),
     selected: "doc", getStudioSelectedBuffer: () => ({ id: c.selected }), studioOperationNotices: new Map(), studioOperationNoticesEl: null,
-    document: { getElementById: id => controls.get(id) }, statusEl: {}, statusMessage: "Copied!", statusLevel: "success", bufferRecoveryIssue: null,
+    document: { getElementById: id => controls.get(id) }, statusEl: {}, statusMessage: "Copied!", statusLevel: "success", bufferRecoveryIssue: null, bufferRecoveryKeptClosed: false,
     shouldAnimateFooterSpinner: () => false, statusLineEl: null, statusSpinnerEl: null, updateFooterMeta() {},
   });
   vm.runInContext(section("function collectStudioOperationNotices()", "function setWsState(nextState)"), c);

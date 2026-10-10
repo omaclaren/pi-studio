@@ -41,8 +41,9 @@ function harness() {
     buildSideQuestionContextPayload: () => { throw new Error('active follow-up must not gather future context'); },
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll("'", '&#39;'),
     getLatestCompletedSideQuestionAnswer: () => null, formatReferenceTime: value => value,
+    bufferSwitchingEnabled: false, studioUiRefreshUi: null,
   });
-  for (const name of ['cloneSideQuestionSettings', 'getSideQuestionNextSettings', 'getSideQuestionControlSettings', 'sideQuestionSettingsAreCurrent', 'getSideQuestionGatherScope', 'persistSideQuestionToolSelection', 'getSideQuestionThinkingOptions', 'renderSideQuestionPiToolPicker', 'sideQuestionSelectOptions', 'renderSideQuestionOptions', 'renderSideQuestionThread', 'startNewSideQuestionThread', 'handleSideQuestionInput', 'handleSideQuestionChange', 'submitSideQuestion', 'clampSideQuestionThinkingLevel', 'applySideQuestionThinkingLevels', 'applySideQuestionToolCatalog']) vm.runInContext(declaration(name), c);
+  for (const name of ['cloneSideQuestionSettings', 'getSideQuestionNextSettings', 'getSideQuestionControlSettings', 'sideQuestionSettingsAreCurrent', 'getSideQuestionGatherScope', 'persistSideQuestionToolSelection', 'getSideQuestionThinkingOptions', 'renderSideQuestionPiToolPicker', 'sideQuestionSelectOptions', 'renderSideQuestionOptions', 'sideQuestionsSimplified', 'sideQuestionModelText', 'sideQuestionFolderText', 'renderSideQuestionThread', 'startNewSideQuestionThread', 'handleSideQuestionInput', 'handleSideQuestionChange', 'submitSideQuestion', 'clampSideQuestionThinkingLevel', 'applySideQuestionThinkingLevels', 'applySideQuestionToolCatalog']) vm.runInContext(declaration(name), c);
   return { c, sent, statuses, stored, ask };
 }
 test('next settings are independent copies and preserve legacy New defaults without capturing editor bytes', () => {

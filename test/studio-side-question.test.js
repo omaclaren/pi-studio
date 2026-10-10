@@ -357,8 +357,8 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(indexSource, /Ask the initial side question or a follow-up while its question box is focused/);
 	assert.match(clientSource, /attachmentText: attachment/);
 	assert.match(clientSource, /relatedFilesText:/);
-	assert.match(clientSource, /const scopeText = \[summary\.attachmentText, summary\.relatedFilesText/);
-	assert.match(clientSource, /side-question-scope'>Scope: " \+ escapeHtml\(scopeText\)/);
+	assert.match(clientSource, /const scopeText = simple \? [\s\S]{0,1200}: \[summary\.attachmentText, summary\.relatedFilesText/);
+	assert.match(clientSource, /side-question-scope'" \+ \(simple && \(scope === "folder" \|\| scope === "custom"\) && summary\.rootHint \? " title='" \+ escapeHtml\(summary\.rootHint\) \+ "'" : ""\) \+ ">Scope: " \+ escapeHtml\(scopeText\)/);
 	assert.match(clientSource, /<label>Also use files from<select" \+ nextAttribute \+ " class='studio-flat-select' data-side-question-field='gatherScope'/);
 	assert.match(clientSource, /ensureSideQuestionContextRootAuthorized\(context\)/);
 	assert.match(clientSource, /fetchStudioJson\("\/side-question-context-root"/);

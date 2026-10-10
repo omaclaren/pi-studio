@@ -65,7 +65,7 @@
       let scratchpadHostingProduction = null, reviewNotesHostingProduction = null;
       const documentHostingWaiters = new Set();
       let bufferRecoveryClient = null;
-      let bufferRecoveryIssue = "";
+      let bufferRecoveryIssue = "", bufferRecoveryKeptClosed = false;
       let bufferRecoveryPanel = null;
       let bufferRecoveryInitializing = false;
       let bufferRecoveryNavigationConsent = null;
@@ -1570,6 +1570,19 @@
       function withStudioShortcutLabel(label, kind) {
         const shortcut = getStudioShortcutLabel(kind);
         return shortcut ? (label + " " + shortcut) : label;
+      }
+
+      // New layout: Run Prompt keeps the accent, and Send to REPL is a plain button that
+      // says what it sends (Oliver, 10 Oct).
+      function studioReplSendLabel() {
+        const selected = sourceTextEl.selectionEnd > sourceTextEl.selectionStart;
+        return withStudioShortcutLabel(selected ? "Send selection to REPL" : (replSendMode === "literate" ? "Send code to REPL" : "Send all to REPL"), "repl-send");
+      }
+
+      function syncStudioReplSendLabel() {
+        if (!sendReplBtn || sendReplBtn.hidden || !bufferSwitchingEnabled || !studioUiRefreshUi) return;
+        const label = studioReplSendLabel();
+        if (sendReplBtn.textContent !== label) sendReplBtn.textContent = label;
       }
 
       function setReplSendMode(mode) {
@@ -4700,7 +4713,7 @@
         // confirmation; retain a fallback if notice rendering is unavailable.
         const operationInNotice = operation && studioOperationNoticesEl?.isConnected && !studioOperationNoticesEl.hidden;
         statusEl.textContent = bufferRecoveryIssue
-          ? "Recovery: " + bufferRecoveryIssue + " Save/copy current text before refreshing. " + (operationInNotice ? "" : (operation?.message || statusMessage))
+          ? "Recovery: " + bufferRecoveryIssue + (bufferRecoveryKeptClosed ? "" : " Save or copy your text before reloading. " + (operationInNotice ? "" : (operation?.message || statusMessage)))
           : operationInNotice ? "" : operation?.message || statusMessage;
         statusEl.className = bufferRecoveryIssue ? "warning" : operationInNotice ? "" : operation?.severity || (statusLevel || "");
         statusEl.title = bufferRecoveryIssue || (!operationInNotice && operation?.message) || "";
@@ -5274,11 +5287,24 @@
         return owner && getStudioSelectedBuffer()?.id === owner.bufferId ? owner : null;
       }
 
+      // Follow moves between Response, Working and the Prompt preview only. A Prompt showing the
+      // REPL, Files or Side questions stays there (Oliver, 10 Oct).
+      const STUDIO_RUN_FOLLOW_VIEWS = new Set(["markdown", "preview", "trace", "editor-preview"]);
+
       function setStudioPromptRunView(view, scrollTop, responseId) {
         const target = getStudioPromptRunView();
         if (!target || target.entry.id !== studioRunFollowing?.promptId) return false;
         const saved = bufferTransientStates.get(target.entry.id) || {};
         const index = responseId ? responseHistory.findIndex(item => item.id === responseId) : -1;
+        if (!STUDIO_RUN_FOLLOW_VIEWS.has(target.rightView)) {
+          // Keep the chosen view; the newest response is what Response shows next. Only a later
+          // response render takes the pending reset; the REPL, Files or Changes keep their scroll (Sol).
+          if (index < 0) return false;
+          bufferTransientStates.set(target.entry.id, { ...saved, historySelection: { id: responseId, index, resetScroll: false }, responseScrollPending: true });
+          if (target.selected) selectHistoryIndex(index, { silent: true, automatic: true });
+          scheduleWorkspacePersistence();
+          return true;
+        }
         bufferTransientStates.set(target.entry.id, { ...saved, runFollowingView: { rightView: view, rightScrollTop: scrollTop },
           ...(index >= 0 ? { historySelection: { id: responseId, index, resetScroll: true }, responseScrollPending: true } : {}) });
         if (target.selected) {
@@ -5316,7 +5342,7 @@
         const state = studioRunFollowing;
         if (!state?.active || state.paused || state.working || !activityTrackingEnabled) return false;
         const target = getStudioPromptRunView();
-        if (!target || target.entry.id !== state.promptId) return false;
+        if (!target || target.entry.id !== state.promptId || !STUDIO_RUN_FOLLOW_VIEWS.has(target.rightView)) return false;
         state.working = { bufferId: target.entry.id, rightView: target.rightView, rightScrollTop: target.rightScrollTop };
         return setStudioPromptRunView("trace", 0);
       }
@@ -7015,11 +7041,13 @@
         if (rightView === "side-questions") {
           if (sideQuestionState && sideQuestionState.threadId) {
             const count = sideQuestionState.messages.filter((entry) => entry.role === "assistant" && entry.status === "complete").length;
-            referenceBadgeEl.textContent = "Side thread: " + (sideQuestionState.status === "running" ? "answering" : "ready")
+            referenceBadgeEl.textContent = sideQuestionsSimplified()
+              ? (sideQuestionState.status === "running" ? "Answering" : count + " answer" + (count === 1 ? "" : "s")) + " · separate from the main conversation"
+              : "Side thread: " + (sideQuestionState.status === "running" ? "answering" : "ready")
               + " · " + count + " answer" + (count === 1 ? "" : "s")
               + " · outside main context";
           } else {
-            referenceBadgeEl.textContent = "Side questions: no active thread · outside main context";
+            referenceBadgeEl.textContent = sideQuestionsSimplified() ? "Separate from the main conversation" : "Side questions: no active thread · outside main context";
           }
           return;
         }
@@ -13992,7 +14020,7 @@
       }
 
       // New-layout Files row (trial48 finding 6): the name is always visible and reads the file;
-      // Edit and Use as Prompt are the visible actions; everything else is under ⋯.
+      // Open in Document and Open in Prompt are the visible actions; the rest is under ⋯.
       function buildStudioFilesRowHtml({ type, kind, path, name, icon, meta }) {
         const attrs = (action, extra = "") => "type='button' data-files-action='" + action + "' data-files-path='" + escapeHtml(path) + "' data-files-kind='" + escapeHtml(kind) + "'" + extra;
         const editable = kind === "text" || kind === "office";
@@ -14002,10 +14030,9 @@
           ? "<button " + attrs("edit", " title='Edit this file in the Document. Save writes the file.'") + ">Open in Document</button>"
             + "<button " + attrs("open-prompt", " title='Edit this file as the Prompt. Save writes the file.'") + ">Open in Prompt</button>"
           : (kind === "pdf" || kind === "image" ? "<button " + attrs("open-preview-new") + ">" + (documentHostingEnabled ? "Open separately" : "Preview tab") + "</button>" : "");
-        const more = (kind === "text" ? "<button " + attrs("watch-new") + ">Follow changes</button>" : "")
-          + (editable ? "<button " + attrs("open-new") + ">" + (kind === "office" ? "Convert in new window" : "Open in new window") + "</button>" : "")
-          + "<button " + attrs("copy-path") + ">Copy path</button>"
-          + (type === "file" ? "<button " + attrs("reveal") + ">Show in folder</button>" : "");
+        // One window: no Follow changes or new-window items here (Oliver, 10 Oct).
+        const more = (type === "file" ? "<button " + attrs("reveal") + ">Show in folder</button>" : "")
+          + "<button " + attrs("copy-path") + ">Copy path</button>";
         return "<div class='files-row files-row-" + escapeHtml(type) + " files-kind-" + escapeHtml(kind) + "'>"
           + "<button " + attrs(mainAction, " class='files-open-btn' title='" + escapeHtml(mainTitle) + "'") + ">"
           + "<span class='files-icon' aria-hidden='true'>" + icon + "</span>"
@@ -15184,6 +15211,7 @@
           sourcePath,
           resourceDir,
           attachmentText: attachment,
+          lineRange,
           relatedFilesText: scope === "none" ? "None" : (rootHint || scope) + " · read only as needed",
           gitContextText: scope === "repo" && sideQuestionUi.gitContext
             ? "Status, staged and unstaged changes, and up to 20 recent commits · read only · frozen when thread starts"
@@ -15356,7 +15384,7 @@
           + "</details>";
       }
 
-      function renderSideQuestionOptions(settings, scope, nextThread = false) {
+      function renderSideQuestionOptions(settings, scope, nextThread = false, withThinking = true) {
         const webDisabled = !sideQuestionWebSearchAvailable;
         const nextAttribute = nextThread ? " data-side-question-next" : "";
         const ruleId = nextThread ? "sideQuestionNextContextRule" : "sideQuestionContextRule";
@@ -15367,9 +15395,9 @@
           + "<label>Also use files from<select" + nextAttribute + " class='studio-flat-select' data-side-question-field='gatherScope'>" + sideQuestionSelectOptions([
             ["none", "No other files"], ["folder", "Same folder as document"], ["repo", "Repository"], ["custom", "Choose a folder"],
           ], scope) + "</select></label>"
-          + "<label>Thinking<select" + nextAttribute + " class='studio-flat-select' data-side-question-field='thinking'>" + sideQuestionSelectOptions(
+          + (withThinking ? "<label>Thinking<select" + nextAttribute + " class='studio-flat-select' data-side-question-field='thinking'>" + sideQuestionSelectOptions(
             getSideQuestionThinkingOptions(), settings.thinking
-          ) + "</select></label>"
+          ) + "</select></label>" : "")
           + "</div>"
           + "<details class='side-question-context-rule'><summary id='" + ruleId + "'>Automatic: selection → heading block at cursor → nearby text</summary><p>A heading block starts at the nearest Markdown/LaTeX heading above the cursor and ends before the next heading of the same or higher level. With no heading, Studio uses the surrounding text block or a nearby excerpt.</p></details>"
           + (scope === "none" ? "" : "<p class='side-question-context-access-note'>Related-file access is limited to folders allowed for this Studio session. Studio asks before starting if this folder is not already allowed.</p>")
@@ -15383,21 +15411,47 @@
         return options;
       }
 
+      // New layout (Oliver, 10 Oct): the model and Thinking sit by the Ask button, the pane's
+      // title isn't repeated, and the scope names the folder rather than its full path.
+      function sideQuestionsSimplified() {
+        return bufferSwitchingEnabled && Boolean(studioUiRefreshUi);
+      }
+
+      // "GPT-6.1 Sol (openai/gpt-6.1-sol)" or "openai/gpt-6.1-sol (medium)" → "openai/gpt-6.1-sol".
+      function sideQuestionModelText(label) {
+        const text = String(label || "").trim();
+        const id = text.match(/\(([^()]*\/[^()]*)\)\s*$/), model = id ? id[1] : text.replace(/\s*\([^)]*\)\s*$/, "");
+        return !model ? "Pi's model" : /^(?:none|unknown(?:\/unknown)?)$/i.test(model) ? "No model" : model;
+      }
+
+      function sideQuestionFolderText(path) {
+        const text = String(path || "").replace(/[\\/]+$/, "");
+        return text.split(/[\\/]/).pop() || text;
+      }
+
       function renderSideQuestionSetup() {
         const summary = getSideQuestionContextSummary();
         const scope = summary.scope;
         const webDisabled = !sideQuestionWebSearchAvailable;
-        const options = renderSideQuestionOptions(sideQuestionUi, scope);
-        const scopeText = [summary.attachmentText, summary.relatedFilesText,
+        const simple = sideQuestionsSimplified();
+        const options = renderSideQuestionOptions(sideQuestionUi, scope, false, !simple);
+        const filesText = scope === "none" ? "no other files" : scope === "repo" ? "files in this repository, as needed" : "files in " + sideQuestionFolderText(summary.rootHint) + ", as needed";
+        const scopeText = simple ? [summary.focus.focusLabel + (summary.focus.focusKind !== "none" && summary.lineRange ? " (" + summary.lineRange + ")" : ""), filesText,
+          sideQuestionUi.includeConversation ? "main conversation snapshot" : "", summary.gitContextText ? "Git context" : "",
+          sideQuestionUi.webSearch ? (webDisabled ? "web search unavailable" : "web search") : "",
+          sideQuestionUi.toolIds.length ? sideQuestionUi.toolIds.length + " more Pi tool" + (sideQuestionUi.toolIds.length === 1 ? "" : "s") : ""].filter(Boolean).join(" · ")
+          : [summary.attachmentText, summary.relatedFilesText,
           sideQuestionUi.includeConversation ? "main conversation snapshot" : "", summary.gitContextText,
           sideQuestionUi.webSearch ? (webDisabled ? "web search unavailable" : "web search selected") : "",
           sideQuestionUi.toolIds.length ? sideQuestionUi.toolIds.length + " additional Pi tool(s) selected" : ""].filter(Boolean).join(" · ");
+        const thinking = "<span class='side-question-run-settings'><span title='Side questions use Pi&#39;s current model.'>" + escapeHtml(sideQuestionModelText(modelLabel)) + "</span>"
+          + "<label>Thinking<select class='studio-flat-select' data-side-question-field='thinking'>" + sideQuestionSelectOptions(getSideQuestionThinkingOptions(), sideQuestionUi.thinking) + "</select></label></span>";
         return "<div class='side-question-empty'>"
-          + "<div class='side-question-intro'><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div>"
+          + (simple ? "" : "<div class='side-question-intro'><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div>")
           + "<label class='side-question-composer-label'>Question<textarea data-side-question-field='draft' rows='4' title='Enter adds a new line. Cmd/Ctrl+Enter asks the side question.' placeholder='Ask about the starting text or anything you want checked…'>" + escapeHtml(sideQuestionUi.draft) + "</textarea></label>"
           + (sideQuestionState && sideQuestionState.error ? "<div class='side-question-error'>" + escapeHtml(sideQuestionState.error) + "</div>" : "")
-          + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask side question (Cmd/Ctrl+Enter)'" + (sideQuestionContextGrantPending || !isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionContextGrantPending ? "Checking related-file access…" : (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question")) + "</button></div>"
-          + "<p class='side-question-scope'>Scope: " + escapeHtml(scopeText) + "</p>"
+          + "<div class='side-question-actions'><button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask side question (Cmd/Ctrl+Enter)'" + (sideQuestionContextGrantPending || !isSideQuestionConnectionReady() || (sideQuestionState && sideQuestionState.status === "running") || !sideQuestionUi.draft.trim() || (scope === "custom" && !sideQuestionUi.customPath.trim()) ? " disabled" : "") + ">" + (sideQuestionContextGrantPending ? "Checking related-file access…" : (sideQuestionState && sideQuestionState.status === "running" ? "Preparing side thread…" : "Ask side question")) + "</button>" + (simple ? thinking : "") + "</div>"
+          + "<p class='side-question-scope'" + (simple && (scope === "folder" || scope === "custom") && summary.rootHint ? " title='" + escapeHtml(summary.rootHint) + "'" : "") + ">Scope: " + escapeHtml(scopeText) + "</p>"
           + "<details class='side-question-options' data-side-question-options" + (sideQuestionUi.optionsOpen ? " open" : "") + "><summary>Options</summary>" + options + "</details>"
           + "</div>";
       }
@@ -15430,8 +15484,10 @@
         const gitLabel = gitSnapshot
           ? "Git snapshot: " + (gitSnapshot.branch || "repository") + " · " + gitSnapshot.changeCount + " change" + (gitSnapshot.changeCount === 1 ? "" : "s") + " · " + gitSnapshot.recentCommitCount + " commit" + (gitSnapshot.recentCommitCount === 1 ? "" : "s") + (gitCapturedLabel ? " · captured " + gitCapturedLabel : "") + (gitSnapshot.truncated ? " · truncated" : "")
           : "";
+        const simple = sideQuestionsSimplified();
+        const runSettings = "<span class='side-question-run-settings'>" + escapeHtml(sideQuestionModelText(state.modelLabel) + " · thinking " + state.thinking) + "</span>";
         return "<div class='side-question-thread'>"
-          + "<div class='side-question-thread-header'><div><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div><button type='button' data-side-question-action='new'" + (state.status === "running" ? " disabled" : "") + ">New thread</button></div>"
+          + "<div class='side-question-thread-header'>" + (simple ? "<div></div>" : "<div><h2>Side questions</h2><p>Separate from the main Pi conversation.</p></div>") + "<button type='button' data-side-question-action='new'" + (state.status === "running" ? " disabled" : "") + ">New thread</button></div>"
           + "<div class='side-question-transcript'>" + messageHtml + "</div>"
           + (state.error ? "<div class='side-question-error'>" + escapeHtml(state.error) + "</div>" : "")
           + (latestAnswer ? "<div class='side-question-result-actions'><button type='button' data-side-question-action='copy'>Copy latest answer</button><button type='button' data-side-question-action='insert'>Insert at editor cursor</button><button type='button' data-side-question-action='promote'>Bring to main conversation</button></div>" : "")
@@ -15440,16 +15496,20 @@
           + (state.status === "running"
             ? "<button type='button' class='side-question-stop' data-side-question-action='stop'>Stop</button>"
             : "<button type='button' class='side-question-primary' data-side-question-action='ask' aria-keyshortcuts='Meta+Enter Control+Enter' title='Ask follow-up (Cmd/Ctrl+Enter)'" + (!isSideQuestionConnectionReady() || !sideQuestionUi.draft.trim() ? " disabled" : "") + ">Ask follow-up</button>")
+          + (simple ? runSettings : "")
           + "</div>"
-          + "<p class='side-question-scope'>Scope: " + escapeHtml([context.focusLabel || "Editor context",
-            context.gatherScope === "none" ? "no other files" : (context.contextRoot || context.gatherScope || "local context"),
+          + "<p class='side-question-scope'" + (simple && context.contextRoot ? " title='" + escapeHtml(context.contextRoot) + "'" : "") + ">Scope: " + escapeHtml([context.focusLabel || "Editor context",
+            context.gatherScope === "none" ? "no other files" : (simple && context.contextRoot ? "files in " + sideQuestionFolderText(context.contextRoot) : (context.contextRoot || context.gatherScope || "local context")),
             context.includeConversation ? "main conversation snapshot" : "", gitLabel,
             context.webSearchRequested ? webLabel : "", Array.isArray(context.tools) && context.tools.length ? selectedToolLabel : ""].filter(Boolean).join(" · ")) + "</p>"
           + "<details class='side-question-options' data-side-question-options" + (sideQuestionUi.optionsOpen || state.status === "running" ? " open" : "") + "><summary>Options</summary>"
-          + "<p>" + escapeHtml(state.modelLabel + " · " + state.thinking + " · " + webLabel + " · " + selectedToolLabel) + "</p>"
-          + "<p>This thread keeps its captured context. Start a New thread to change scope or tools.</p>" + activityHtml + "</details>"
+          + (simple
+            ? "<p>" + escapeHtml(webLabel + " · " + selectedToolLabel) + "</p><p>These stay the same for this thread. Use New thread to change them.</p>"
+            : "<p>" + escapeHtml(state.modelLabel + " · " + state.thinking + " · " + webLabel + " · " + selectedToolLabel) + "</p>"
+              + "<p>This thread keeps its captured context. Start a New thread to change scope or tools.</p>") + activityHtml + "</details>"
           + "<details class='side-question-options' data-side-question-next-options" + (sideQuestionNextOptionsOpen ? " open" : "") + "><summary>Next thread settings</summary>"
-          + "<p>These settings apply only after you choose New thread. Remembered preferences change when New is accepted; reload discards unapplied choices. Follow-ups keep this thread's captured context and tools. Starting text and file access are checked when you ask the first question.</p>"
+          + (simple ? "<p>Used when you start a New thread.</p>"
+            : "<p>These settings apply only after you choose New thread. Remembered preferences change when New is accepted; reload discards unapplied choices. Follow-ups keep this thread's captured context and tools. Starting text and file access are checked when you ask the first question.</p>")
           + renderSideQuestionOptions(nextSettings, getSideQuestionGatherScope(nextSettings), true) + "</details></div>";
       }
 
@@ -17542,6 +17602,7 @@
         document.addEventListener("selectionchange", () => {
           observeSelection();
           syncStudioSelectionAppendAction(); // Observation alone cannot reclaim source ownership.
+          syncStudioReplSendLabel();
         });
         // Focus/selection inside a sandboxed preview iframe does not bubble.
         window.addEventListener("blur", () => setSourceActive(false));
@@ -17709,7 +17770,7 @@
         for (const menu of [bufferSwitcherUi?.addMenu, bufferSwitcherUi?.loadMenu, bufferSwitcherUi?.nameMenu, ...(bufferSwitcherUi?.viewMenus || [])]) menu?.close();
       }
       // A named file's own menu (Oliver, 9 Oct): the same file actions as Files' ⋯, plus Save As and
-      // Reload for the open file. Untitled text goes straight to Save As instead (filename click).
+      // Reload for the open file. No Follow changes: one window (Oliver, 10 Oct). Untitled text goes straight to Save As instead (filename click).
       function setupStudioFileNameMenu() {
         const nameButton = studioUiRefreshUi?.filenameButton, host = nameButton?.parentElement;
         if (!nameButton || !host) return null;
@@ -17731,7 +17792,6 @@
           const ok = await writeTextToClipboard(path); setStatus(ok ? "Copied path." : "Clipboard write failed.", ok ? "success" : "warning");
         });
         const reveal = item("Show in folder", path => revealPreviewLocalLink(studioLiteralPathToLinkRef(path), context()));
-        const follow = item("Follow changes", path => openPreviewDocumentInWatchedPreview(studioLiteralPathToLinkRef(path), context()));
         const saveAs = item("Save As…", () => { if (saveAsBtn && !saveAsBtn.disabled) saveAsBtn.click(); });
         const reload = item("Reload from disk", () => { if (refreshFromDiskBtn && !refreshFromDiskBtn.disabled) refreshFromDiskBtn.click(); });
         const nameMenu = makeStudioBufferActionMenu("studioWorkspaceFilename", "This file", {
@@ -17742,7 +17802,7 @@
             saveAs.disabled = !saveAsBtn || saveAsBtn.disabled; reload.disabled = !refreshFromDiskBtn || refreshFromDiskBtn.disabled;
           },
         });
-        nameMenu.menu.append(pathEl, copy, reveal, follow, saveAs, reload);
+        nameMenu.menu.append(pathEl, reveal, copy, saveAs, reload);
         host.insertBefore(nameMenu.anchor, next);
         return nameMenu;
       }
@@ -19921,6 +19981,18 @@
         return anchor;
       }
 
+      // A web link in rendered text opens a new tab rather than replacing Studio. In Muxy one
+      // click left Studio, and coming back reloaded it (Oliver, 10 Oct). No referrer: Studio's
+      // address carries its token (Sol).
+      function openRenderedWebLinkInNewTab(event) {
+        const target = event && event.target;
+        const anchor = target instanceof Element ? target.closest("#sourcePreview a[href], #critiqueView a[href], #studioLinkedReaderContent a[href]") : null;
+        if (!anchor || !/^(?:https?:)?\/\//i.test(String(anchor.getAttribute("href") || "").trim())) return false;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        return true;
+      }
+
       function closePreviewLinkMenu() {
         previewLinkMenuRequestId += 1;
         activePreviewLinkContext = null;
@@ -19995,7 +20067,14 @@
         const menu = ensurePreviewLinkMenu();
         menu.innerHTML = "";
         activePreviewLinkContext = nextContext;
-        if (kind === "pdf") {
+        // New layout: the same few actions as Files and the filename menu, and no second
+        // window (Oliver, 10 Oct). Open in Document is what Open here did.
+        const workspace = bufferSwitchingEnabled && Boolean(studioUiRefreshUi);
+        if (workspace && (kind === "text" || kind === "office")) {
+          if (kind === "text" && studioLinkedReaderAvailable()) appendPreviewLinkMenuButton(menu, "Read", "read-here");
+          appendPreviewLinkMenuButton(menu, "Open in Document", "open-here");
+          appendPreviewLinkMenuButton(menu, "Open in Prompt", "open-prompt");
+        } else if (kind === "pdf") {
           appendPreviewLinkMenuButton(menu, "Open PDF preview", "open-pdf");
           appendPreviewLinkMenuButton(menu, documentHostingEnabled ? "Open separately" : "Open in new Studio tab", "open-preview-new");
           appendPreviewLinkMenuButton(menu, "Open in system viewer", "open-system");
@@ -20011,7 +20090,7 @@
           appendPreviewLinkMenuButton(menu, "Open image preview", "open-image");
           appendPreviewLinkMenuButton(menu, documentHostingEnabled ? "Open separately" : "Open in new Studio tab", "open-preview-new");
         }
-        appendPreviewLinkMenuButton(menu, "Reveal in file manager", "reveal");
+        appendPreviewLinkMenuButton(menu, workspace ? "Show in folder" : "Reveal in file manager", "reveal");
         appendPreviewLinkMenuButton(menu, "Copy path", "copy-path");
         positionPreviewLinkMenu(menu, menuPoint.clientX, menuPoint.clientY);
         const firstButton = menu.querySelector("button");
@@ -20445,6 +20524,10 @@
           }
           if (action === "open-here") {
             await openPreviewDocumentHere(href, context);
+            return;
+          }
+          if (action === "open-prompt" && bufferSwitchingEnabled) {
+            await openStudioBufferDocument(href, context, "prompt");
             return;
           }
           if (action === "open-image") {
@@ -27376,6 +27459,7 @@
         const hasReplSession = Boolean(getActiveReplSessionForCurrentRuntime());
         const showReplSend = rightView === "repl";
         const replSendShortcut = getStudioShortcutDescription("repl-send");
+        const workspaceLayout = bufferSwitchingEnabled && Boolean(studioUiRefreshUi);
 
         if (isEditorOnlyMode) {
           if (sendRunBtn) {
@@ -27431,7 +27515,7 @@
         if (sendRunBtn) {
           sendRunBtn.textContent = directIsStop ? "Stop" : (documentView ? "Return to Prompt" : (bufferSwitchingEnabled ? "Run Prompt" : (rightView === "repl" ? withStudioShortcutLabel("Run editor text", "run") : "Run editor text")));
           sendRunBtn.classList.toggle("request-stop-active", directIsStop);
-          sendRunBtn.classList.toggle("repl-secondary-action", rightView === "repl" && !directIsStop);
+          sendRunBtn.classList.toggle("repl-secondary-action", rightView === "repl" && !directIsStop && !workspaceLayout);
           sendRunBtn.disabled = documentView && !directIsStop ? !studioBuffersCanSwitch(true)
             : wsState === "Disconnected" || (!directIsStop && (uiBusy || critiqueIsStop || !promptReady));
           const replHint = rightView === "repl" && getActiveReplSessionForCurrentRuntime()
@@ -27462,10 +27546,14 @@
         if (sendReplBtn) {
           sendReplBtn.hidden = !showReplSend;
           sendReplBtn.disabled = !showReplSend || wsState === "Disconnected" || uiBusy || replBusy || !hasReplSession;
-          sendReplBtn.classList.toggle("repl-primary-action", showReplSend);
-          sendReplBtn.textContent = showReplSend ? withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send") : "Send to REPL";
+          sendReplBtn.classList.toggle("repl-primary-action", showReplSend && !workspaceLayout);
+          sendReplBtn.textContent = showReplSend ? (workspaceLayout ? studioReplSendLabel() : withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send")) : "Send to REPL";
           sendReplBtn.title = hasReplSession
-            ? (replSendMode === "literate"
+            ? (workspaceLayout
+              ? (replSendMode === "literate"
+                ? "Run code in the REPL directly, not through Pi: the selection, the code chunk at the cursor, or all matching chunks. " + replSendShortcut + "."
+                : "Run code in the REPL directly, not through Pi: the selection, or all the text. " + replSendShortcut + ".")
+              : replSendMode === "literate"
               ? "Literate send: selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk. Shortcut: " + replSendShortcut + "."
               : "Raw send: selection, or full editor if no selection. Shortcut: " + replSendShortcut + ".")
             : "Start or select a REPL session in the right pane first.";
@@ -28948,6 +29036,8 @@
       }
 
       function scheduleReconnect(reasonMessage) {
+        // Keep closed means this page stays off the workspace: no reconnect (Sol).
+        if (bufferRecoveryKeptClosed) { clearScheduledReconnect(); setWsState("Disconnected"); return; }
         if (reconnectTimer !== null) return;
 
         reconnectAttempt += 1;
@@ -28964,6 +29054,7 @@
 
       function connect() {
         clearScheduledReconnect();
+        if (bufferRecoveryKeptClosed) { setWsState("Disconnected"); return; }
 
         if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
           return;
@@ -29072,7 +29163,7 @@
         };
 
         socket.addEventListener("open", () => {
-          if (ws !== socket) {
+          if (ws !== socket || bufferRecoveryKeptClosed) {
             try { socket.close(); } catch {}
             return;
           }
@@ -31050,6 +31141,7 @@
         // capture-phase click must not cancel the continuation it approves.
         if (previewLinkDecisionOwnsClick(target)) return;
         closePreviewLinkMenu();
+        openRenderedWebLinkInNewTab(event);
         handlePreviewLocalLinkClick(event);
       }, true);
 
@@ -31588,7 +31680,9 @@
             if (document.body.dataset.hostingResume === "1" && !await openStudioDecision({ mode: "confirm", title: "Resume this retained workspace?",
               message: "A disconnected tab may contain newer edits than the server checkpoint. Prefer reconnecting that original tab. Resume here only if you intend this tab to own the Document; this tab's browser recovery will also be checked.",
               confirmLabel: "Resume here", cancelLabel: "Keep closed" })) {
-              documentHostingRetired = true; bufferPageClosed = true; ws?.close(); throw new Error("The retained workspace was not reopened. Other recovery copies were kept.");
+              // A deliberate choice, not a failure to start (Sol).
+              documentHostingRetired = true; bufferPageClosed = true; bufferRecoveryKeptClosed = true; ws?.close();
+              throw new Error("Workspace kept closed. Retained recovery wasn't discarded. Reload and choose “Resume here” to reopen it.");
             }
           }
           const initialRecoveryOwner = captureBufferRecoveryInitializationOwner();
@@ -31652,7 +31746,7 @@
                 owners: { source: captureStudioBufferScrollOwner("source"), right: captureStudioBufferScrollOwner("right") } };
             }
           }
-        } catch (error) { bufferRecoveryIssue = "Buffer recovery could not initialize. Existing snapshots were retained. " + (error.message || ""); }
+        } catch (error) { bufferRecoveryIssue = (bufferRecoveryKeptClosed ? "" : "Buffer recovery could not initialize. Existing snapshots were retained. ") + (error.message || ""); }
         finally { bufferRecoveryInitializing = false; }
       } else {
         const sessionWorkspaceState = readPersistedWorkspaceState();

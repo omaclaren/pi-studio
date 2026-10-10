@@ -620,7 +620,7 @@ export function createStudioBufferClient(options) {
 		},
 		invalidateRemoteRecovery() {
 			recoveryEpoch++; lastRemoteSnapshot = null; remoteBlocked = true; queued = null;
-			issue("remote", fail("connection-lost", "The Studio connection closed. Server recovery is paused; save or copy the text before reloading."));
+			issue("remote", fail("connection-lost", "Connection closed. New edits aren't being checkpointed to the server."));
 		},
 		async settled() { while (draining) await draining; },
 		dispose() { disposed = true; queued = null; store?.clearPendingOperations(); },

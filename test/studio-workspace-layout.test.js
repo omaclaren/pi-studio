@@ -338,7 +338,7 @@ test("a named file's name opens its own menu (path, then file actions), Untitled
   if (!stopped) for (const callback of f.docEvents.click || []) callback({ target: ui.filenameButton });
   assert.equal(name.menu.hidden, false, "the file's own menu"); assert.equal(file.menu.hidden, true, "not File");
   assert.match(name.menu.children[0].textContent, /\/NOTES\.md$/);
-  assert.deepEqual(name.menu.children.slice(1).map(button => button.textContent), ["Copy path", "Show in folder", "Follow changes", "Save As…", "Reload from disk"]);
+  assert.deepEqual(name.menu.children.slice(1).map(button => button.textContent), ["Show in folder", "Copy path", "Save As…", "Reload from disk"]);
   assert.equal(ui.filenameButton.getAttribute("aria-expanded"), "true");
   f.c.closeStudioUiRefreshMenus(); // a click inside the menu reaches the page-wide closer
   assert.equal(name.menu.hidden, false); assert.equal(ui.filenameButton.getAttribute("aria-expanded"), "true", "File's closer leaves the name's own menu state alone");
@@ -400,8 +400,9 @@ function sideHarness() {
     sideQuestionSelectOptions: () => "<option>existing choices</option>", getSideQuestionThinkingOptions: () => [], renderSideQuestionPiToolPicker: () => "<div>Existing tool picker</div>",
     escapeHtml: value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll("'", "&#39;"), isSideQuestionConnectionReady: () => true,
     getLatestCompletedSideQuestionAnswer: () => "answer", formatReferenceTime: value => value,
+    bufferSwitchingEnabled: false, studioUiRefreshUi: null, modelLabel: "openai/gpt-6.1-sol (medium)",
   });
-  load(c, "cloneSideQuestionSettings", "getSideQuestionNextSettings", "getSideQuestionGatherScope", "renderSideQuestionOptions", "renderSideQuestionSetup", "renderSideQuestionThread"); return c;
+  load(c, "cloneSideQuestionSettings", "getSideQuestionNextSettings", "getSideQuestionGatherScope", "renderSideQuestionOptions", "sideQuestionsSimplified", "sideQuestionModelText", "sideQuestionFolderText", "renderSideQuestionSetup", "renderSideQuestionThread"); return c;
 }
 test("side-question setup puts question/action before scope and collapsed Options, retaining all controls", () => {
   const c = sideHarness(), html = c.renderSideQuestionSetup();
@@ -433,6 +434,39 @@ test("running side thread keeps its own Stop and captured settings, with words r
   const c = sideHarness(); c.sideQuestionState = { threadId: "thread", status: "running", modelLabel: "Model", thinking: "off", activity: [{ status: "running", label: "Reading allowed file" }], messages: [{ role: "assistant", status: "streaming" }], context: { gatherScope: "none" } };
   const html = c.renderSideQuestionThread(); assert.match(html, /action='stop'/); assert.match(html, /Running/); assert.doesNotMatch(html, /●/);
   assert.match(html, /field='draft'[^>]* disabled/);
+});
+
+// Oliver, 10 Oct: in the new layout the model and Thinking sit by Ask, the title isn't repeated,
+// and the scope names the folder rather than its path.
+test("new-layout side-question setup shows the model and Thinking beside Ask, and a short scope", () => {
+  const c = sideHarness(); Object.assign(c, { bufferSwitchingEnabled: true, studioUiRefreshUi: {} });
+  c.getSideQuestionContextSummary = () => ({ scope: "folder", rootHint: "/Users/o/teaching/course-304", lineRange: "line 1", focus: { focusKind: "section", focusLabel: "Text around cursor" }, gitContextText: "" });
+  const html = c.renderSideQuestionSetup(), actions = html.slice(html.indexOf("side-question-actions"), html.indexOf("side-question-scope"));
+  assert.doesNotMatch(html, /<h2>/);
+  assert.match(actions, /action='ask'[\s\S]*openai\/gpt-6\.1-sol<\/span>[\s\S]*Thinking<select[^>]*field='thinking'/);
+  assert.equal((html.match(/field='thinking'/g) || []).length, 1, "Thinking appears once, beside Ask");
+  assert.match(html, /title='\/Users\/o\/teaching\/course-304'>Scope: Text around cursor \(line 1\) · files in course-304, as needed/);
+});
+
+test("new-layout side thread shows its captured model and Thinking by Ask, and short notes", () => {
+  const c = sideHarness(); Object.assign(c, { bufferSwitchingEnabled: true, studioUiRefreshUi: {} });
+  c.sideQuestionState = { threadId: "thread", status: "complete", modelLabel: "GPT-6.1 Sol (openai/gpt-6.1-sol)", thinking: "high", activity: [], messages: [{ role: "assistant", text: "Answer", status: "complete" }],
+    context: { focusLabel: "Text around cursor", contextRoot: "/FROZEN/root", gatherScope: "folder", webSearchRequested: false, tools: [] } };
+  const html = c.renderSideQuestionThread(), actions = html.slice(html.indexOf("<div class='side-question-actions'>"), html.indexOf("side-question-scope"));
+  assert.doesNotMatch(html, /<h2>/); assert.match(html, /action='new'/);
+  assert.match(actions, /openai\/gpt-6\.1-sol · thinking high/);
+  assert.match(html, /title='\/FROZEN\/root'>Scope: Text around cursor · files in root/);
+  assert.match(html, /These stay the same for this thread\. Use New thread to change them\./); assert.match(html, /Used when you start a New thread\./);
+  assert.doesNotMatch(html, /Remembered preferences change/);
+});
+
+test("the side-question model text is the model id, without the main thinking level", () => {
+  const c = sideHarness();
+  assert.equal(c.sideQuestionModelText("GPT-6.1 Sol (openai/gpt-6.1-sol)"), "openai/gpt-6.1-sol");
+  assert.equal(c.sideQuestionModelText("openai/gpt-6.1-sol (medium)"), "openai/gpt-6.1-sol");
+  assert.equal(c.sideQuestionModelText(""), "Pi's model");
+  for (const label of ["unknown/unknown (off)", "none", "none (off)"]) assert.equal(c.sideQuestionModelText(label), "No model", label);
+  assert.equal(c.sideQuestionFolderText("/a/b/course/"), "course");
 });
 
 test("a file action that fails is reported, not left as an unhandled rejection", async () => {

@@ -28,7 +28,7 @@ function setup() {
     captureRecoveryConsent: () => ({ generation: c.generation }), recoveryConsentIsCurrent: owner => owner.generation === c.generation,
     generation: 1, getStudioSelectedBuffer: () => state.buffers.find(b => b.id === state.selectedBufferId),
     isStudioDocumentBufferView: () => state.selectedBufferId === "doc", syncStudioBufferSwitcher: () => calls.push("controls"),
-    setStatus: (...args) => calls.push(args), bufferSwitcherUi: null });
+    setStatus: (...args) => calls.push(args), bufferSwitcherUi: null, syncStudioReplSendLabel() {} });
   load(c, "function studioBuffersCanAddSelection(", "function syncStudioBufferSwitcher()");
   const button = { addEventListener: (type, fn) => { handlers[type] = fn; } };
   c.document.activeElement = c.sourceTextEl;
