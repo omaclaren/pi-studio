@@ -116,6 +116,15 @@ test("Forget copy cancels safely and removes tracking only after explicit consen
 	assert.equal(f.storage.map.size, 0); assert.equal(f.calls.length, 1);
 	await f.controller.copy(); assert.notEqual(f.calls[0].operationId, f.calls[1].operationId);
 });
+// Oliver, 13 Oct: Stop checking pressed during an automatic recheck used to do nothing at all.
+test("Forget copy pressed while a recheck is in flight waits for it, then asks", async t => {
+	let asked = 0; const f = fixture(t, { confirmCopy: async () => { asked++; return true; } }); f.response = () => { throw Error("unknown creation"); }; await f.controller.copy();
+	const held = deferred(); f.response = () => held.promise;
+	const recheck = f.controller.copy(); const forgetting = f.controller.forgetCopy();
+	await Promise.resolve(); assert.equal(asked, 0, "not while the check is running");
+	held.reject(Error("still unknown")); await recheck; await forgetting;
+	assert.equal(asked, 1, "the click was answered"); assert.equal(f.storage.map.size, 0, "tracking forgotten after consent");
+});
 test("Forget copy cannot clear independently changed tracking during consent", async t => {
 	const held = deferred(), f = fixture(t, { confirmCopy: () => held.promise }); f.response = () => { throw Error("unknown creation"); }; await f.controller.copy();
 	const key = [...f.storage.map.keys()][0], pending = f.controller.forgetCopy();

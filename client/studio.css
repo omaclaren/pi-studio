@@ -7803,3 +7803,10 @@
     body.studio-workspace-layout .studio-file-menu-path { padding: 4px 8px 6px; color: var(--muted); font-size: 0.82rem; font-weight: 400; overflow-wrap: anywhere; user-select: text; }
     /* Small buffer menus (view, file name, Add to Prompt) list their actions vertically. */
     body.studio-workspace-layout .studio-buffer-menu > button { display: block; width: 100%; text-align: left; }
+
+    /* Oliver, 13 Oct: every File ▾ item lines up with the rest. */
+    body.studio-workspace-layout .studio-refresh-menu-item > #copyDraftBtn,
+    body.studio-workspace-layout .studio-refresh-menu-item > button.studio-buffer-menu-item,
+    body.studio-workspace-layout .studio-refresh-menu > button.studio-buffer-menu-item { padding: 8px 10px; }
+    /* A row whose only control is hidden takes no space. */
+    body.studio-workspace-layout .studio-refresh-menu-item:has(> :only-child[hidden]) { display: none; }

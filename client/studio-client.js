@@ -3542,7 +3542,10 @@
             if (contextMenu.piEditorSection) contextMenu.piEditorSection.appendChild(sourceSessionSummaryEl);
             else statusItems.push(sourceSessionSummaryEl);
           }
-          if (syncBadgeEl) {
+          // Oliver, 13 Oct: the new layout's File ▾ has no Status. It said whether the editor matched
+          // the latest response, which isn't about the file.
+          if (syncBadgeEl && bufferSwitchingEnabled) syncBadgeEl.remove();
+          else if (syncBadgeEl) {
             syncBadgeEl.hidden = false;
             statusItems.push(syncBadgeEl);
           }
@@ -3553,7 +3556,8 @@
 
         if (contextMenu) {
           if (clearWorkspaceBtn) clearWorkspaceBtn.hidden = documentHostingEnabled || isWatchedFilePreview;
-          appendStudioUiRefreshMenuSection(contextMenu.menu, "Workspace", [clearWorkspaceBtn]);
+          // No heading with nothing under it.
+          if (clearWorkspaceBtn && !clearWorkspaceBtn.hidden) appendStudioUiRefreshMenuSection(contextMenu.menu, "Workspace", [clearWorkspaceBtn]);
         }
         const openButton = makeStudioUiRefreshElement("button", "", "Open");
         const openMenu = makeStudioUiRefreshMenu(openButton, "open", "studio-refresh-open-anchor");
@@ -16895,7 +16899,8 @@
         update("studioForgetCopyBtn", !copy.record);
         const launch = documentHostingController.launchState?.();
         update("studioRecheckLaunchBtn", !launch?.record || launch.busy || !documentHostingGeneration);
-        update("studioForgetLaunchBtn", !launch?.record || launch.busy);
+        // Stays reachable during a recheck: forget() waits for it, then asks (Sol, candidate68).
+        update("studioForgetLaunchBtn", !launch?.record);
         const opening = documentOpenController?.state();
         update("studioRecheckOpenBtn", !opening?.record || opening.busy || opening.cancelling || !documentHostingGeneration);
         update("studioCancelOpenBtn", !opening?.record || opening.cancelling || !documentHostingGeneration);
@@ -16908,6 +16913,20 @@
           openCompanionBtn.disabled = !available || Boolean(active) || Boolean(launch?.busy);
         }
         update("studioCancelMoveBtn", !active);
+        // Oliver, 13 Oct: in the new layout File ▾ shows a recovery item only while it applies.
+        // Hidden items stay in place: operation notices still dispatch to them.
+        if (bufferSwitcherUi?.workspaceLayout) {
+          const move = documentHostingController.moveState?.(), backup = bufferRecoveryClient?.handoffBackup();
+          const applies = (id, value) => { const button = document.getElementById(id); if (button) button.hidden = !value; };
+          applies("studioForgetCopyBtn", copy.record);
+          applies("studioRecheckLaunchBtn", launch?.record); applies("studioForgetLaunchBtn", launch?.record);
+          applies("studioResolveSaveBtn", bufferRecoveryClient?.pendingHostingSaves().length);
+          applies("studioRecheckMoveBtn", move?.pending || backup?.record || move?.adoptionPending);
+          applies("studioCancelMoveBtn", active);
+          applies("studioFindMovedDocumentBtn", backup?.record || move?.receipt);
+          applies("studioDownloadHandoffBtn", backup?.record || backup?.error);
+          applies("studioDiscardHandoffBtn", backup?.record);
+        }
         if (sourceOpenCurrentTextCopyTabBtn) {
           sourceOpenCurrentTextCopyTabBtn.textContent = copy.record ? "Find retained text copy" : "Copy to new window";
           sourceOpenCurrentTextCopyTabBtn.title = copy.record ? "Recheck the original copy attempt without creating a duplicate." : "Make an independent snapshot of current text. Confirmed copies remain in File.";

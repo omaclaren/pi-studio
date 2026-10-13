@@ -38,6 +38,7 @@ function harness({ only = false, watched = false } = {}) {
     append(...nodes) { for (const node of nodes) this.appendChild(node); }
     appendChild(node) { node.parentElement?.removeChild(node); this.children.push(node); node.parentElement = this; return node; }
     removeChild(node) { this.children.splice(this.children.indexOf(node), 1); node.parentElement = null; }
+    remove() { this.parentElement?.removeChild(this); }
     replaceChildren(...nodes) { for (const node of [...this.children]) this.removeChild(node); this.append(...nodes); }
     insertBefore(node, next) { node.parentElement?.removeChild(node); const index = next ? this.children.indexOf(next) : this.children.length; assert(index >= 0); this.children.splice(index, 0, node); node.parentElement = this; }
     replaceWith(node) { const parent = this.parentElement; parent.insertBefore(node, this); parent.removeChild(this); }

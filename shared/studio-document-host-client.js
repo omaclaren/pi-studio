@@ -234,7 +234,9 @@ export function createStudioDocumentHostController(options) {
 			receipt: latest ? { moveId: latest.moveId, bufferId: latest.bufferId, status: latest.status, adopted: latest.adopted === true } : null }),
 		needsUnloadConfirmation: () => Boolean(copyFlight || forgettingCopy || destinationFlights.size || launch?.needsUnloadConfirmation() || copies.peek().error || copies.peek().record || destinations().some(d => !d.live || !options.generation())),
 		async forgetCopy() {
-			if (closed || copyFlight || preparing) return;
+			if (closed || preparing) return;
+			// Oliver, 13 Oct: a click during an automatic recheck waits for it, then asks.
+			while (copyFlight) { await copyFlight.catch(() => {}); if (closed || preparing) return; }
 			const original = copies.peek().record; if (!original) return;
 			forgettingCopy = true; let agreed;
 			try { agreed = await options.confirmCopy("Forget this copy attempt?", "An existing copy will NOT be deleted. If its outcome is uncertain, forgetting this identity may leave a retained copy you cannot find here. Recheck first unless you deliberately want another independent copy."); }

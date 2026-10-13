@@ -21,6 +21,13 @@ test('live owner reuse does not open; a disconnected owner needs consent and a f
  live=false;f.options.confirm=async()=>false;await f.c.recheck();assert.equal(f.opened.length,0);assert(f.c.needsUnloadConfirmation());
  f.options.confirm=async()=>{live=true;return true;};await f.c.recheck();assert.equal(f.opened.length,0);assert.equal(f.c.state().live,true);
 });
+// Oliver, 13 Oct: Stop checking pressed during an automatic recheck used to do nothing at all.
+test('Forget pressed while a recheck is in flight waits for it, then asks',async t=>{
+ let asked=0;const f=fixture(t,{confirm:async()=>{asked++;return true;}});f.options.request=async r=>{f.requests.push(r);throw Error('unknown creation');};await f.c.start({kind:'blank'});
+ const held=pause();f.options.request=async r=>{f.requests.push(r);await held.promise;throw Error('still unknown');};
+ const recheck=f.c.recheck(),forgetting=f.c.forget();await Promise.resolve();assert.equal(asked,0,'not while the check is running');
+ held.resolve();await recheck;assert.equal(await forgetting,true);assert.equal(asked,1);assert.equal(f.map.has(key),false);
+});
 test('Forget is explicit pending removal, not destination deletion or mutation of a foreign record',async t=>{
  const f=fixture(t);f.options.request=async r=>{f.requests.push(r);throw Error('unknown creation');};await f.c.start({kind:'blank'});f.options.confirm=async()=>false;assert.equal(await f.c.forget(),false);assert(f.map.has(key));
  f.options.confirm=async()=>true;assert(await f.c.forget());assert.equal(f.requests.length,1);assert.equal(f.map.has(key),false);await f.c.start({kind:'blank'});assert.notEqual(f.requests[0].operationId,f.requests[1].operationId);

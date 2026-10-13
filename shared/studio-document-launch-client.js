@@ -139,7 +139,9 @@ export function createStudioDocumentLaunchController(options) {
   openDestination: show, state: peek, busy: () => !!flight || !!ownerFlights.size,
   needsUnloadConfirmation: () => Boolean(flight || forgetting || ownerFlights.size || peek().error || peek().record || peek().destinations.some(d => !d.live || !options.generation())),
   async forget() {
-   if (closed || flight || !intents.peek().record) return false; const before = intents.peek().record;
+   // Oliver, 13 Oct: a click during an automatic recheck waits for it, then asks.
+   while (flight && !closed) await flight.catch(() => {});
+   if (closed || !intents.peek().record) return false; const before = intents.peek().record;
    forgetting = true; let agreed;
    try { agreed = await options.confirm("Forget editor request tracking?", "This does not delete any Document. An uncertain editor may become harder to find. Recheck first. Forget tracking to start another independent request?"); } finally { forgetting = false; }
    if (!agreed || closed || flight || intents.peek().record !== before) return false;
