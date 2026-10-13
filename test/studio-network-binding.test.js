@@ -64,7 +64,7 @@ test("request-target parsing never trusts an inbound Host authority", () => {
   assert.equal(parseStudioRequestTarget("/\\attacker.invalid/?token=x"), null);
 
   const handlerStart = indexSource.indexOf("const handleHttpRequest =");
-  const handlerEnd = indexSource.indexOf("const ensureServer = async", handlerStart);
+  const handlerEnd = indexSource.indexOf("const ensureServer = (", handlerStart);
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, "expected Studio HTTP handler");
   const handlerSource = indexSource.slice(handlerStart, handlerEnd);
   assert.match(handlerSource, /parseStudioRequestTarget\(req\.url\)/);
@@ -111,8 +111,8 @@ test("Studio parses and applies listen-all as an explicit server-lifetime option
   assert.match(parserSource, /listenAll = true/);
   assert.match(parserSource, /remaining\.join\(" "\)[\s\S]*?listenAll/);
 
-  const ensureStart = indexSource.indexOf("const ensureServer = async");
-  const ensureEnd = indexSource.indexOf("const stopServer = async", ensureStart);
+  const ensureStart = indexSource.indexOf("const startServerNow = async");
+  const ensureEnd = indexSource.indexOf("const stopServer = () =>", ensureStart);
   assert.ok(ensureStart >= 0 && ensureEnd > ensureStart, "expected Studio server setup");
   const ensureSource = indexSource.slice(ensureStart, ensureEnd);
   assert.match(ensureSource, /resolveStudioNetworkBinding\(listenAll\)/);

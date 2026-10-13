@@ -174,7 +174,7 @@ test("Studio exposes session resource grants and clears them with the server", (
 	assert.match(indexSource, /recordStudioDocumentResourceGrants\(selected, ctx\.cwd\)/);
 	assert.match(indexSource, /resourceGrants: studioResourceGrantRegistry\.snapshot\(\)/);
 
-	const stopServerStart = indexSource.indexOf("const stopServer = async () =>");
+	const stopServerStart = indexSource.indexOf("const stopServerNow = async () =>");
 	const serverClose = indexSource.indexOf("state.server.close", stopServerStart);
 	const grantsClear = indexSource.indexOf("studioResourceGrantRegistry.clear()", stopServerStart);
 	assert.ok(stopServerStart >= 0 && serverClose > stopServerStart && grantsClear > serverClose);

@@ -11,6 +11,23 @@ const fail = (reason, message) => ({ ok: false, reason, message });
 
 // Process-memory fallback only. Page capabilities bind the HTML launch mode and tab;
 // a client-supplied body cannot promote an editor-only/watched view to a full workspace.
+// The workspace a launch registers: the document as Prompt, beside an empty Document.
+// Also checks, without any store, that a carried Prompt fits before a mode switch (Sol, candidate69).
+export function buildStudioHostingBootstrapState(document, canonical = null, editorLanguage = "markdown", savedAt = Date.now()) {
+	let state;
+	try {
+		const prompt = createStudioBuffer({ id: "prompt_" + token(), role: "prompt", text: document.text,
+			baselineText: canonical ? document.text : "", diskRevision: canonical ? document.diskRevision : null,
+			sourceState: { source: document.source, label: document.label, path: canonical, ...(document.draftId && !canonical ? { draftId: document.draftId } : {}) },
+			resourceDir: document.resourceDir || "", view: { editorLanguage: editorLanguage || "markdown", followLatest: true } });
+		const placeholder = createStudioBuffer({ id: "document_" + token(), role: "document", sourceState: { label: "Document" }, resourceDir: document.resourceDir || "" });
+		state = { version: 2, workspaceId: "host_" + token(), mode: "full", revision: 1, savedAt,
+			selectedBufferId: prompt.id, activePromptId: prompt.id, order: [prompt.id, placeholder.id], buffers: [prompt, placeholder] };
+	} catch { return fail("invalid-state", "The initial document cannot be represented safely. Nothing was registered."); }
+	const encoded = encodeStudioBufferRecovery(state, state); if (!encoded.ok) return encoded;
+	return { ok: true, state, encoded };
+}
+
 export function createStudioBufferServerStore(options = {}) {
 	const maxEntries = options.maxEntries ?? 16;
 	const maxTotalTextChars = options.maxTotalTextChars ?? 12_000_000;
@@ -22,6 +39,8 @@ export function createStudioBufferServerStore(options = {}) {
 	// A departing owner's word that it held nothing beyond the stored checkpoint (Sol,
 	// candidate67). Single use, voided by any later activity, and consumed by the next lease.
 	const cleanLeaves = new Map(), releasedGenerations = new Map();
+	const operationIdentities = new WeakMap(); let nextOperationIdentity = 0;
+	const operationIdentity = value => { if (!operationIdentities.has(value)) operationIdentities.set(value, ++nextOperationIdentity); return operationIdentities.get(value); };
 	let nextViewGeneration = 0;
 	const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 	const hosting = options.hosting ? createStudioDocumentHostingStore({ ...options.hosting, now,
@@ -149,17 +168,9 @@ export function createStudioBufferServerStore(options = {}) {
 					: document.source === "file" || document.path) return fail("source-changed", "The authorized file snapshot changed location.");
 			} catch { return fail("source-changed", "The authorized file location could not be checked again."); }
 			owner = findOwner(); if (owner) return { ok: true, status: "reused", owner };
-			let state;
-			try {
-				const prompt = createStudioBuffer({ id: "prompt_" + token(), role: "prompt", text: document.text,
-					baselineText: canonical ? document.text : "", diskRevision: canonical ? document.diskRevision : null,
-					sourceState: { source: document.source, label: document.label, path: canonical, ...(document.draftId && !canonical ? { draftId: document.draftId } : {}) },
-					resourceDir: document.resourceDir || "", view: { editorLanguage: loaded.editorLanguage || "markdown", followLatest: true } });
-				const placeholder = createStudioBuffer({ id: "document_" + token(), role: "document", sourceState: { label: "Document" }, resourceDir: document.resourceDir || "" });
-				state = { version: 2, workspaceId: "host_" + token(), mode: "full", revision: 1, savedAt: now(),
-					selectedBufferId: prompt.id, activePromptId: prompt.id, order: [prompt.id, placeholder.id], buffers: [prompt, placeholder] };
-			} catch { return fail("invalid-state", "The initial document cannot be represented safely. Nothing was registered."); }
-			const encoded = encodeStudioBufferRecovery(state, state); if (!encoded.ok) return encoded;
+			const built = buildStudioHostingBootstrapState(document, canonical, loaded.editorLanguage, now());
+			if (!built.ok) return built;
+			const { state, encoded } = built;
 			const chars = encoded.state.buffers.reduce((n, b) => n + b.text.length + (b.baselineText?.length || 0), 0);
 			if (entries.size >= maxEntries || [...entries.values()].reduce((n, e) => n + e.chars, chars) > maxTotalTextChars) return fail("capacity", "Server recovery cannot hold this document. Existing work was kept.");
 			const checked = hosting.checkpoint(encoded.state); if (!checked.ok) return checked;
@@ -286,6 +297,30 @@ export function createStudioBufferServerStore(options = {}) {
 			return { ok: true, released: false };
 		},
 		seenHostingView(workspaceId) { return seenHostingViews.has(workspaceId); },
+		// Oliver, 13 Oct: switching editor mode restarts Studio and drops every retained copy.
+		// Reports work in flight, and each workspace holding a buffer not saved anywhere else.
+		// Only the carried Prompt (the asking page's active Prompt) is exempt (Sol, candidate69).
+		// Document text already in the carried text (what Add to Prompt makes) is kept too.
+		// pendingKeys names each operation in flight, so consent to drop one can't cover
+		// another that replaced it (Sol, candidate69).
+		/** @param {string | null} [carriedWorkspaceId] @param {string} [carriedText] */
+		retainedWork(carriedWorkspaceId = null, carriedText = "") {
+			cleanup();
+			const kept = (id, entry, b) => id === carriedWorkspaceId && (b.id === entry.state.activePromptId || (b.role === "document" && b.text.length > 0 && carriedText.includes(b.text)));
+			const keys = new Set(), unsaved = [];
+			for (const [key, writes] of metadataWrites) for (const write of writes) keys.add("metadata:" + key + ":" + operationIdentity(write));
+			for (const [key, receipt] of openReceipts) if (receipt.result.status !== "acknowledged") keys.add("open:" + key + ":" + receipt.result.status);
+			for (const [id, entry] of entries) {
+				if (hosting) {
+					if (hosting.hasPending(id)) keys.add("hosting:" + id + ":" + hosting.pendingId(id));
+					for (const move of hosting.pendingMoves(id)) keys.add("move:" + move.moveId);
+					for (const save of fileClaims.list(id)) keys.add("save:" + id + ":" + save.operationId); // Save ids are per workspace.
+				}
+				if (entry.state.buffers.some(b => !kept(id, entry, b) && (b.baselineText === null || b.text !== b.baselineText))) unsaved.push(id);
+			}
+			const pendingKeys = [...keys].sort();
+			return { pending: pendingKeys.length > 0, pendingKeys, unsaved };
+		},
 		activeHostingWorkspaces(mode) {
 			return [...hostingViews].filter(([, view]) => view.mode === mode).map(([workspaceId]) => workspaceId);
 		},

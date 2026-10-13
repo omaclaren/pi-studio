@@ -191,6 +191,7 @@
       const annotationModeSelect = document.getElementById("annotationModeSelect");
       const compactBtn = document.getElementById("compactBtn");
       const shortcutsBtn = document.getElementById("shortcutsBtn");
+      const editorModeBtn = document.getElementById("editorModeBtn");
       const shortcutsOverlayEl = document.getElementById("shortcutsOverlay");
       const shortcutsDialogEl = document.getElementById("shortcutsDialog");
       const shortcutsBodyEl = document.getElementById("shortcutsBody");
@@ -238,6 +239,12 @@
       const isWatchedFilePreview = Boolean(document.body && document.body.dataset && document.body.dataset.watchedFilePreview === "1");
       const isSshStudioSession = Boolean(document.body && document.body.dataset && document.body.dataset.sshSession === "1");
       const bufferSwitchingEnabled = bufferRecoveryEnabled && document.body.dataset.bufferSwitching === "1" && !isEditorOnlyMode && !isWatchedFilePreview;
+      // Oliver, 13 Oct: dual editor mode (Prompt and Document) or single editor mode. Switching
+      // restarts Studio and reopens this tab; the Prompt's text comes along.
+      const studioEditorMode = document.body.dataset.editorMode === "single" ? "single" : "dual";
+      const studioEditorModeSwitchable = document.body.dataset.editorModeLocked !== "1" && studioMode === "full" && !isEditorOnlyMode && !isWatchedFilePreview
+        && (studioEditorMode === "single" ? !bufferRecoveryEnabled : bufferSwitchingEnabled && documentHostingEnabled);
+      let studioEditorModeSwitchRequestId = null, studioEditorModeLanding = null, studioEditorModeLanded = false, studioEditorModeAttempt = null;
       const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "editor-quarto-preview", "files", "changes", "repl", "side-questions"]);
       // In the Document the right pane may also show responses and Working, by explicit choice only:
       // Follow and new responses never switch it there (Oliver and Sol, 8 Oct).
@@ -4958,6 +4965,7 @@
         studioDecisionInputEl.placeholder = mode === "prompt" ? String(settings.placeholder || "") : "";
         studioDecisionInputEl.setAttribute("aria-label", String(settings.inputLabel || "Value"));
         studioDecisionCancelBtn.textContent = String(settings.cancelLabel || "Cancel");
+        studioDecisionCancelBtn.hidden = settings.hideCancel === true;
         studioDecisionTertiaryBtn.hidden = !tertiaryLabel;
         studioDecisionTertiaryBtn.disabled = settings.tertiaryDisabled === true;
         studioDecisionTertiaryBtn.textContent = tertiaryLabel;
@@ -16411,6 +16419,7 @@
 
       function syncActionButtons() {
         syncStudioBufferOpenOperation();
+        if (typeof syncStudioEditorModeButton === "function") syncStudioEditorModeButton();
         if (typeof syncPromptRunIndicator === "function") syncPromptRunIndicator();
         if (typeof syncStudioPromptAddUndo === "function") syncStudioPromptAddUndo();
         const canRefreshFromDisk = hasRefreshableFilePath();
@@ -16852,6 +16861,7 @@
         sourceTextEl.readOnly = !ready; sourceTextEl.setAttribute("aria-readonly", String(!ready));
         if (documentHostingReady !== ready) {
           documentHostingReady = ready;
+          if (typeof syncStudioEditorModeButton === "function") syncStudioEditorModeButton();
           renderReviewNotesList();
           if (scratchpadTextEl) scratchpadTextEl.readOnly = !ready || !studioMetadataKeyCanEdit(scratchpadLoadedKeys, scratchpadAssociation?.key);
           if (!ready) for (const textarea of document.querySelectorAll("#reviewNotesList textarea")) textarea.readOnly = true;
@@ -16889,6 +16899,7 @@
         for (const button of studioDocumentDestinationsSection.querySelectorAll("button")) button.disabled = !documentHostingGeneration || wsState !== "Ready" || uiBusy || studioModalBlocksDraftAction();
       }
       function syncDocumentHostingControls() {
+        if (typeof syncStudioEditorModeButton === "function") syncStudioEditorModeButton();
         if (!documentHostingEnabled || !documentHostingController) return;
         const copy = documentHostingController.copyState(), active = documentHostingController.active();
         const selected = getStudioSelectedBuffer();
@@ -27981,6 +27992,10 @@
 
         debugTrace("server_message", summarizeServerMessage(message));
 
+        if (message.type === "editor_mode_switch_result") {
+          handleStudioEditorModeSwitchResult(message);
+          return;
+        }
         if (message.type === "watched_file_update") {
           handleWatchedFileUpdate(message);
           return;
@@ -29261,6 +29276,8 @@
         const handleDisconnect = (kind, code) => {
           if (disconnectHandled) return;
           disconnectHandled = true;
+          // No answer came: nothing was switched from here, so give the page back.
+          if (studioEditorModeSwitchRequestId) { studioEditorModeSwitchRequestId = null; sealStudioForEditorModeSwitch(false); }
           bufferConnectionGeneration++;
           documentHostingGeneration = 0; documentHostingContinuation = null; syncDocumentHostingReadiness();
           clearEditorAsyncOperations();
@@ -29312,7 +29329,7 @@
             clearScheduledReconnect();
             reconnectAttempt = 0;
             setWsState("Disconnected");
-            setStatus("Studio server shut down. Re-run /studio.", "warning");
+            setStatus(studioEditorModeLanding ? "Restarting Studio…" : "Studio server shut down. Re-run /studio.", "warning");
             return;
           }
 
@@ -29697,6 +29714,144 @@
 
       // Sol (candidate67): the only evidence that lets the next page skip the resume question.
       // Every check must hold now; agreeing to leave despite a warning never counts.
+      function studioEditorModeSwitchWaitReason() {
+        if (studioEditorModeSwitchRequestId || studioEditorModeLanding) return "Switching…";
+        if (!ws || ws.readyState !== WebSocket.OPEN || wsState === "Connecting") return "Studio isn't connected.";
+        if (uiBusy) return "Wait for the current run to finish.";
+        if (sideQuestionState && sideQuestionState.status === "running") return "Wait for the side question to finish.";
+        if (pendingSaveOperations.size > 0 || hasUnsyncedStudioMetadata()) return "Wait for saving to finish.";
+        if (studioEditorMode === "single") return null;
+        if (!bufferRecoveryClient || !documentHostingController || bufferRecoveryInitializing || !documentHostingReady || bufferPageClosed || documentHostingRetired) return "Wait for Studio to finish starting.";
+        const launch = documentHostingController.launchState(), copy = documentHostingController.copyState(), backup = bufferRecoveryClient.handoffBackup();
+        if (documentHostingSaveResolution || documentHostingPreparingFile || copy.record || copy.error || launch?.record || launch?.error
+          || documentHostingController.operationPending() || documentHostingController.moveState().adoptionPending
+          || documentOpenController?.active() || backup?.record || backup?.error || bufferRecoveryClient.pendingHostingSaves().length) {
+          return "Finish the save, move or open in progress first.";
+        }
+        return null;
+      }
+      function syncStudioEditorModeButton() {
+        if (!editorModeBtn) return;
+        editorModeBtn.hidden = !studioEditorModeSwitchable;
+        if (!studioEditorModeSwitchable) return;
+        editorModeBtn.textContent = studioEditorMode === "dual" ? "Switch to single editor" : "Switch to dual editor";
+        const wait = studioEditorModeAttempt ? "Switching…" : studioEditorModeSwitchWaitReason();
+        editorModeBtn.disabled = Boolean(wait);
+        editorModeBtn.title = wait || (studioEditorMode === "dual" ? "Use one editor, as in earlier Studio. Studio restarts and reopens here."
+          : "Use a Prompt and a Document. Studio restarts and reopens here.");
+      }
+      // The text to carry, or why not. In dual mode only the active Prompt comes along, so
+      // every other buffer must be saved or pristine; Document text already in the Prompt
+      // counts as kept. An emptied file is an unsaved edit (Sol, candidate69).
+      function studioEditorModeCarry() {
+        if (studioEditorMode === "single") return { text: String(sourceTextEl.value || "") };
+        const client = bufferRecoveryClient;
+        const captured = client.capture(buildWorkspacePersistencePayload(), fileBackedBaselineText, bufferRecoveryExtra());
+        if (!captured.ok) return { message: captured.message };
+        const state = client.snapshot(), prompt = state.buffers.find(b => b.id === state.activePromptId);
+        if (!prompt) return { message: "The Prompt couldn't be found. Nothing changed." };
+        const unsaved = state.buffers.filter(b => b.id !== prompt.id && (b.baselineText === null || b.text !== b.baselineText)
+          && !(b.role === "document" && b.text.length > 0 && prompt.text.includes(b.text)));
+        if (unsaved.some(b => b.role === "document")) return { message: "The Document has unsaved text. Save it, or add it to the Prompt, before switching." };
+        if (unsaved.length) return { message: "This workspace has unsaved text that can't come along. Save it first." };
+        return { text: prompt.text };
+      }
+      // A File notice can own the footer, so the reason goes in the dialog.
+      function showStudioEditorModeRefusal(message) {
+        return openStudioDecision({ mode: "confirm", title: "Can't switch yet", message, confirmLabel: "OK", hideCancel: true });
+      }
+      // While the switch is in flight nothing on the page may change: the carried text is a snapshot.
+      function sealStudioForEditorModeSwitch(sealed) {
+        const main = document.querySelector("main");
+        if (main) main.inert = sealed;
+      }
+      async function switchStudioEditorMode() {
+        // One attempt at a time, reserved before asking; only it releases its seal (Sol, candidate69).
+        if (!studioEditorModeSwitchable || studioEditorModeAttempt) return;
+        const target = studioEditorMode === "dual" ? "single" : "dual";
+        const check = () => {
+          const wait = studioEditorModeSwitchWaitReason();
+          if (wait) return { message: wait };
+          return studioEditorModeCarry();
+        };
+        const attempt = {};
+        studioEditorModeAttempt = attempt;
+        let sent = false;
+        try {
+          let carry = check();
+          if (carry.message) { syncStudioEditorModeButton(); await showStudioEditorModeRefusal(carry.message); return; }
+          // From the question to the answer nothing on the page may change: the carried text,
+          // and what the question names, are a snapshot (Sol, candidate69).
+          sealStudioForEditorModeSwitch(true);
+          const sideQuestions = Boolean((sideQuestionState && sideQuestionState.threadId) || String(sideQuestionUi?.draft || "").trim());
+          const confirmed = await openStudioDecision({ mode: "confirm", title: target === "single" ? "Switch to single editor mode?" : "Switch to dual editor mode?",
+            message: (target === "single" ? "Studio restarts and reopens here. The Prompt's text comes with you." : "Studio restarts and reopens here. The editor's text becomes the Prompt.")
+              + (sideQuestions ? " Side questions are cleared." : ""),
+            confirmLabel: "Switch", cancelLabel: "Cancel" });
+          if (!confirmed) return;
+          // Let the server see the latest text, then check again: anything may have changed.
+          if (studioEditorMode === "dual" && bufferRecoveryClient) {
+            flushWorkspacePersistence({});
+            await bufferRecoveryClient.settled();
+          }
+          carry = check();
+          if (carry.message) { syncStudioEditorModeButton(); await showStudioEditorModeRefusal(carry.message); return; }
+          const requestId = makeRequestId();
+          try { ws.send(JSON.stringify({ type: "editor_mode_switch_request", requestId, mode: target, text: carry.text, sideQuestions })); }
+          catch { await showStudioEditorModeRefusal("Studio isn't connected. Nothing changed."); return; }
+          sent = true;
+          studioEditorModeSwitchRequestId = requestId;
+          setBusy(true);
+          setStatus("Switching to " + target + " editor mode…", "warning");
+        } finally {
+          if (studioEditorModeAttempt === attempt) {
+            studioEditorModeAttempt = null;
+            if (!sent) sealStudioForEditorModeSwitch(false);
+            syncStudioEditorModeButton();
+          }
+        }
+      }
+      function handleStudioEditorModeSwitchResult(message) {
+        if (!studioEditorModeSwitchRequestId || message.requestId !== studioEditorModeSwitchRequestId) return;
+        studioEditorModeSwitchRequestId = null;
+        if (!message.ok || typeof message.landing !== "string" || !message.landing.startsWith("/?")) {
+          sealStudioForEditorModeSwitch(false);
+          setBusy(false);
+          void showStudioEditorModeRefusal(message.message || "Studio couldn't switch. Nothing changed.");
+          return;
+        }
+        studioEditorModeLanding = message.landing;
+        syncStudioEditorModeButton();
+        setStatus("Restarting Studio…", "warning");
+        void landStudioEditorModeSwitch(message.landing);
+      }
+      // The old server answers the new link with 403 or 503 until it stops; the new one
+      // redirects. Each check is bounded. Only a reached landing skips the leave warning;
+      // on failure the page unseals and keeps its text and warnings (Sol, candidate69).
+      async function landStudioEditorModeSwitch(landing) {
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline && studioEditorModeLanding === landing) {
+          await new Promise(resolve => window.setTimeout(resolve, 300));
+          const controller = typeof AbortController === "function" ? new AbortController() : null;
+          const timer = controller ? window.setTimeout(() => controller.abort(), 2000) : null;
+          try {
+            const response = await fetch(landing, { redirect: "manual", cache: "no-store", signal: controller?.signal });
+            if (response.type === "opaqueredirect" && studioEditorModeLanding === landing) {
+              studioEditorModeLanded = true;
+              window.location.replace(landing);
+              return;
+            }
+          } catch {}
+          finally { if (timer !== null) window.clearTimeout(timer); }
+        }
+        if (studioEditorModeLanding !== landing) return;
+        studioEditorModeLanding = null;
+        sealStudioForEditorModeSwitch(false);
+        setBusy(false);
+        setStatus("Studio didn't restart. Run /studio in Pi to open it. This tab's text is still here.", "error");
+        void openStudioDecision({ mode: "confirm", title: "Studio didn't restart", message: "Run /studio in Pi to open it. This tab's text is still here.", confirmLabel: "OK", hideCancel: true });
+      }
+
       function studioCleanDepartureRevision() {
         if (!documentHostingEnabled || !documentHostingGeneration || !ws || ws.readyState !== WebSocket.OPEN || bufferPageClosed || bufferRecoveryKeptClosed || bufferRecoveryInitializing) return null;
         if (!bufferRecoveryClient || !documentHostingController || documentHostingRetired || documentHostingSaveResolution || documentHostingPreparingFile || pendingSaveOperations.size > 0 || hasUnsyncedStudioMetadata()) return null;
@@ -29768,6 +29923,7 @@
         abandonAllStudioTabLaunches("The originating Studio page was closed before this tab finished opening.");
       });
       window.addEventListener("beforeunload", (event) => {
+        if (typeof studioEditorModeLanded !== "undefined" && studioEditorModeLanded) return; // The text went with the switch.
         if (documentHostingEnabled && documentHostingCanCloseRetired()) return;
         const unsafeRetirement = documentHostingEnabled && documentHostingRetired;
         const unresolvedCopy = documentHostingEnabled && documentHostingController?.needsUnloadConfirmation();
@@ -31374,6 +31530,11 @@
         shortcutsBtn.addEventListener("click", () => {
           toggleShortcuts();
         });
+      }
+
+      if (editorModeBtn) {
+        editorModeBtn.addEventListener("click", () => { void switchStudioEditorMode(); });
+        syncStudioEditorModeButton();
       }
 
       if (shortcutsCloseBtn) {

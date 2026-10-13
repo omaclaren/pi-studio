@@ -140,6 +140,7 @@ export function createStudioDocumentHostingStore(options) {
 	const api = {
 		sweep() { expireOffers(); },
 		hasPending: workspaceId => pending.has(workspaceId),
+		pendingId: workspaceId => pending.get(workspaceId) ?? null,
 		pendingMoves: workspaceId => [...moves.values()].filter(m => m.status === "offered" && (m.sourceWorkspaceId === workspaceId || m.targetWorkspaceId === workspaceId)).map(outcome),
 		cancelPending(workspaceId) {
 			const move = moves.get(pending.get(workspaceId));

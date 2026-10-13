@@ -104,7 +104,7 @@ test("Studio wires tab recovery through its authenticated server endpoint", () =
 	assert.match(clientSource, /fetchStudioJson\("\/tab-workspace-state"/);
 	assert.match(clientSource, /ws\.send\(JSON\.stringify\(\{ type: "workspace_state_update", \.\.\.body \}\)\)/);
 	assert.match(clientSource, /trySendStudioJsonBeacon\("\/tab-workspace-state", body\)/);
-	const stopServerStart = indexSource.indexOf("const stopServer = async () =>");
+	const stopServerStart = indexSource.indexOf("const stopServerNow = async () =>");
 	const serverClose = indexSource.indexOf("state.server.close", stopServerStart);
 	const recoveryClear = indexSource.indexOf("studioWorkspaceStateStore.clear()", stopServerStart);
 	assert.ok(stopServerStart >= 0 && serverClose > stopServerStart && recoveryClear > serverClose, "Workspace recovery should clear only after in-flight HTTP requests finish.");

@@ -19,8 +19,8 @@ function context(values) {
   return c;
 }
 
-test("switching requires both process flags and a full editable recovery owner", () => {
-  assert.match(index, /STUDIO_BUFFER_SWITCHING_ENABLED = STUDIO_BUFFER_RECOVERY_ENABLED && process\.env\.PI_STUDIO_BUFFER_SWITCHING === "1"/);
+test("switching requires dual editor mode and a full editable recovery owner", () => {
+  assert.match(index, /STUDIO_BUFFER_SWITCHING_ENABLED = STUDIO_EDITOR_FLAGS\.switching;/);
   assert.match(index, /STUDIO_BUFFER_SWITCHING_ENABLED && bufferRecovery && studioMode === "full" && initialWatchFile !== "1"/);
   assert.match(source, /const bufferSwitchingEnabled = bufferRecoveryEnabled && document\.body\.dataset\.bufferSwitching === "1" && !isEditorOnlyMode && !isWatchedFilePreview/);
 });

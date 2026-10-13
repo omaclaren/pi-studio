@@ -84,7 +84,8 @@ import {
 	isValidStudioLaunchId,
 	normalizeStudioPendingKind,
 } from "./shared/studio-tab-launcher.js";
-import { createStudioBufferServerStore, STUDIO_BUFFER_REQUEST_MAX_BYTES } from "./shared/studio-buffer-server.js";
+import { buildStudioHostingBootstrapState, createStudioBufferServerStore, STUDIO_BUFFER_REQUEST_MAX_BYTES } from "./shared/studio-buffer-server.js";
+import { createStudioTurns, readStudioEditorMode, resolveStudioEditorFlags, writeStudioEditorMode } from "./shared/studio-editor-mode.js";
 import { canonicalStudioDocumentPath, studioDocumentPathsReferToSameFile } from "./shared/studio-document-paths.js";
 import { resolveStudioHostingPage, studioHostingCommandError, studioHostingLocalLinkError } from "./shared/studio-document-entrypoints.js";
 import { systemThemeLacksTrueColor } from "./shared/studio-system-theme.js";
@@ -205,11 +206,20 @@ const STUDIO_SHOW_ME_HELPERS_URL = new URL("./client/studio-show-me-helpers.js",
 const STUDIO_SIDE_QUESTION_HELPERS_URL = new URL("./client/studio-side-question-helpers.js", import.meta.url);
 const STUDIO_EDITOR_DRAFT_HELPERS_URL = new URL("./client/studio-editor-draft-helpers.js", import.meta.url);
 const STUDIO_CLIENT_URL = new URL("./client/studio-client.js", import.meta.url);
-// Experimental, process-scoped opt-in; stable/default browser workflows remain on v1.
-const STUDIO_BUFFER_RECOVERY_ENABLED = process.env.PI_STUDIO_BUFFER_RECOVERY === "1";
-const STUDIO_BUFFER_SWITCHING_ENABLED = STUDIO_BUFFER_RECOVERY_ENABLED && process.env.PI_STUDIO_BUFFER_SWITCHING === "1";
-// Development gate until the complete hosting slice passes application acceptance.
-const STUDIO_DOCUMENT_HOSTING_ENABLED = STUDIO_BUFFER_SWITCHING_ENABLED && process.env.PI_STUDIO_DOCUMENT_HOSTING === "1";
+// Dual editor mode (Prompt and Document) unless this Pi profile chose single editor mode.
+// The development flags, when set, still decide. Changes only while Studio's server is
+// stopped, so one server lifetime sees one mode.
+const STUDIO_EDITOR_MODE_PATH = join(getAgentDir(), "pi-studio", "editor-mode.json");
+let STUDIO_EDITOR_FLAGS = resolveStudioEditorFlags(process.env, readStudioEditorMode(STUDIO_EDITOR_MODE_PATH));
+let STUDIO_BUFFER_RECOVERY_ENABLED = STUDIO_EDITOR_FLAGS.recovery;
+let STUDIO_BUFFER_SWITCHING_ENABLED = STUDIO_EDITOR_FLAGS.switching;
+let STUDIO_DOCUMENT_HOSTING_ENABLED = STUDIO_EDITOR_FLAGS.hosting;
+function applyStudioEditorMode(mode: "single" | "dual") {
+	STUDIO_EDITOR_FLAGS = resolveStudioEditorFlags(process.env, mode);
+	STUDIO_BUFFER_RECOVERY_ENABLED = STUDIO_EDITOR_FLAGS.recovery;
+	STUDIO_BUFFER_SWITCHING_ENABLED = STUDIO_EDITOR_FLAGS.switching;
+	STUDIO_DOCUMENT_HOSTING_ENABLED = STUDIO_EDITOR_FLAGS.hosting;
+}
 const STUDIO_BUFFER_MODULE_URLS = new Map([
 	["studio-buffer-store.js", new URL("./shared/studio-buffer-store.js", import.meta.url)],
 	["studio-buffer-recovery.js", new URL("./shared/studio-buffer-recovery.js", import.meta.url)],
@@ -949,6 +959,14 @@ interface HostingCleanLeaveMessage {
 	revision: string;
 }
 
+interface EditorModeSwitchRequestMessage {
+	type: "editor_mode_switch_request";
+	requestId: string;
+	mode: "single" | "dual";
+	text: string;
+	sideQuestions: boolean;
+}
+
 type IncomingStudioMessage =
 	| HelloMessage
 	| PingMessage
@@ -996,10 +1014,12 @@ type IncomingStudioMessage =
 	| OpenEditorOnlyRequestMessage
 	| CancelRequestMessage
 	| WorkspaceStateUpdateMessage
-	| HostingCleanLeaveMessage;
+	| HostingCleanLeaveMessage
+	| EditorModeSwitchRequestMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
+const STUDIO_EDITOR_MODE_CARRY_MAX_CHARS = 4_000_000;
 const STUDIO_WATCHED_FILE_MAX_CLIENTS = 16;
 const STUDIO_COMPLETION_MAX_TEXT_CHARS = 250_000;
 const STUDIO_COMPLETION_MAX_CONTEXT_CHARS = 12_000;
@@ -10051,6 +10071,9 @@ function parseIncomingMessage(data: RawData, captureEnvelope?: (message: Record<
 	if (msg.type === "hosting_clean_leave" && Number.isSafeInteger(msg.generation) && typeof msg.revision === "string" && /^[a-f0-9]{48}$/.test(msg.revision)) {
 		return { type: "hosting_clean_leave", generation: msg.generation as number, revision: msg.revision };
 	}
+	if (msg.type === "editor_mode_switch_request" && typeof msg.requestId === "string" && (msg.mode === "single" || msg.mode === "dual") && typeof msg.text === "string") {
+		return { type: "editor_mode_switch_request", requestId: msg.requestId, mode: msg.mode, text: msg.text, sideQuestions: msg.sideQuestions === true };
+	}
 	if (msg.type === "get_latest_response") return { type: "get_latest_response" };
 	if (msg.type === "get_trace_snapshot" && typeof msg.responseHistoryId === "string") {
 		return {
@@ -12186,6 +12209,7 @@ interface StudioLaunchFlags {
 	watchPdf: boolean;
 	listenAll: boolean;
 	port?: number;
+	editorMode?: "single" | "dual";
 	error?: string;
 }
 
@@ -12198,8 +12222,14 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 	let watchPdf = false;
 	let listenAll = false;
 	let port: number | undefined;
+	let editorMode: "single" | "dual" | undefined;
 	for (let i = 0; i < parsed.tokens.length; i += 1) {
 		const token = parsed.tokens[i]!;
+		if (token === "--single" || token === "--dual") {
+			if (editorMode && editorMode !== token.slice(2)) return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, listenAll, error: "Use either --single or --dual, not both." };
+			editorMode = token === "--single" ? "single" : "dual";
+			continue;
+		}
 		if (token === "--open-remote" || token === "--open-remote-browser" || token === "--open-browser") {
 			openRemoteBrowser = true;
 			continue;
@@ -12233,7 +12263,7 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 	if (openRemoteBrowser && noBrowser) {
 		return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, listenAll, port, error: "Use either --no-browser or --open-browser, not both." };
 	}
-	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, watchPdf, listenAll, port };
+	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, watchPdf, listenAll, port, ...(editorMode ? { editorMode } : {}) };
 }
 
 function shouldAutoOpenStudioBrowser(options?: { openRemoteBrowser?: boolean; noBrowser?: boolean }): boolean {
@@ -12650,7 +12680,7 @@ ${cssVarsBlock}
   </style>
   <link rel="stylesheet" href="${stylesheetHref}" />
 </head>
-<body data-hosting-resume="${bufferRecovery?.resuming ? "1" : "0"}" data-document-hosting="${bufferRecovery?.hosting ? "1" : "0"}" data-buffer-switching="${STUDIO_BUFFER_SWITCHING_ENABLED && bufferRecovery && studioMode === "full" && initialWatchFile !== "1" ? "1" : "0"}" data-buffer-workspace-id="${escapeHtmlForInline(bufferRecovery?.workspaceId ?? "")}" data-buffer-capability="${escapeHtmlForInline(bufferRecovery?.capability ?? "")}" data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
+<body data-editor-mode="${STUDIO_EDITOR_FLAGS.mode}" data-editor-mode-locked="${STUDIO_EDITOR_FLAGS.forced ? "1" : "0"}" data-hosting-resume="${bufferRecovery?.resuming ? "1" : "0"}" data-document-hosting="${bufferRecovery?.hosting ? "1" : "0"}" data-buffer-switching="${STUDIO_BUFFER_SWITCHING_ENABLED && bufferRecovery && studioMode === "full" && initialWatchFile !== "1" ? "1" : "0"}" data-buffer-workspace-id="${escapeHtmlForInline(bufferRecovery?.workspaceId ?? "")}" data-buffer-capability="${escapeHtmlForInline(bufferRecovery?.capability ?? "")}" data-initial-source="${initialSource}" data-initial-label="${initialLabel}" data-initial-path="${initialPath}" data-initial-draft-id="${initialDraftId}" data-initial-resource-dir="${initialResourceDir}" data-initial-disk-revision="${initialDiskRevision}" data-watched-file-preview="${initialWatchFile}" data-model-label="${initialModel}" data-terminal-label="${initialTerminal}" data-terminal-detail="${initialTerminalDetailAttr}" data-theme-name="${initialTheme}" data-context-tokens="${initialContextTokens}" data-context-window="${initialContextWindow}" data-context-percent="${initialContextPercent}" data-studio-mode="${studioMode}" data-ssh-session="${initialSshSession}">
   <header id="studioHeader">
     <h1><span class="app-logo" aria-hidden="true">π</span> Studio <span class="app-subtitle">${appSubtitle}</span></h1>
     <div class="controls">
@@ -12991,6 +13021,7 @@ ${cssVarsBlock}
     <div id="footerModelMenu" class="footer-model-menu" hidden></div>
     <div id="footerThemeMenu" class="footer-theme-menu" hidden></div>
     <span class="footer-actions">
+      <button id="editorModeBtn" class="shortcut-hint" type="button" hidden></button>
       <button id="footerThemeBtn" class="shortcut-hint footer-theme-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Switch the active Pi theme. This affects terminal Pi and Studio.">Theme: ${initialTheme}</button>
       <button id="shortcutsBtn" class="shortcut-hint" type="button" title="Show Studio keyboard shortcuts. Press ? when not editing text.">Shortcuts (?)</button>
     </span>
@@ -13123,8 +13154,9 @@ ${cssVarsBlock}
 export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
 	const studioWorkspaceStateStore = createStudioWorkspaceStateStore();
+	// Hosting-capable unless the env flags turned hosting off; single editor mode doesn't use it.
 	const studioBufferStateStore = createStudioBufferServerStore({ legacyState: (id: string) => studioWorkspaceStateStore.get(id),
-		...(STUDIO_DOCUMENT_HOSTING_ENABLED ? { hosting: { requireView: true,
+		...(!STUDIO_EDITOR_FLAGS.forced || STUDIO_DOCUMENT_HOSTING_ENABLED ? { hosting: { requireView: true,
 			canonicalPath: (path: string) => canonicalStudioDocumentPath(path, studioCwd), sameFile: studioDocumentPathsReferToSameFile } } : {}) });
 	const writeClassicStudioHtml = async (outputPath: string, html: Buffer, cwd: string): Promise<void> => {
 		if (!STUDIO_DOCUMENT_HOSTING_ENABLED) {
@@ -15582,6 +15614,18 @@ export default function (pi: ExtensionAPI) {
 			if (hosted) studioBufferStateStore.hostingCleanLeave(hosted.capability, client, { generation: msg.generation, revision: msg.revision });
 			return;
 		}
+		if (msg.type === "editor_mode_switch_request") {
+			const refusal = studioEditorModeSwitchRefusal(client, msg);
+			if (refusal) { sendToClient(client, { type: "editor_mode_switch_result", requestId: msg.requestId, ok: false, message: refusal }); return; }
+			const state = serverState!, token = createSessionToken(), nonce = randomUUID();
+			try { writeStudioEditorMode(STUDIO_EDITOR_MODE_PATH, msg.mode); }
+			catch { sendToClient(client, { type: "editor_mode_switch_result", requestId: msg.requestId, ok: false, message: "Couldn't save the editor mode setting. Nothing changed." }); return; }
+			studioRestarting = true;
+			const switching = withStudioLifecycle(() => restartStudioInEditorModeNow(msg.mode, state.port, state.listenAll, token, { nonce, text: msg.text }));
+			sendToClient(client, { type: "editor_mode_switch_result", requestId: msg.requestId, ok: true, landing: `/?token=${token}&modeSwitch=${nonce}` });
+			void switching;
+			return;
+		}
 		if (msg.type === "workspace_state_update") {
 			if (STUDIO_DOCUMENT_HOSTING_ENABLED && (hosted || studioBufferStateStore.hostedWorkspace(msg.tabStateId))) return;
 			studioWorkspaceStateStore.set(msg.tabStateId, msg.state);
@@ -17857,7 +17901,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const handleHttpRequest = (req: IncomingMessage, res: ServerResponse) => {
-		if (!serverState) {
+		if (!serverState || studioRestarting) {
 			respondText(res, 503, "Studio server not ready");
 			return;
 		}
@@ -18633,6 +18677,16 @@ export default function (pi: ExtensionAPI) {
 			respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
 			return;
 		}
+		if (requestUrl.searchParams.has("modeSwitch")) {
+			const landing = pendingEditorModeLanding;
+			if (!landing || landing.nonce !== requestUrl.searchParams.get("modeSwitch") || landing.expiresAt < Date.now()) {
+				respondText(res, 410, "This link has expired. Run /studio in Pi to open Studio.");
+				return;
+			}
+			res.writeHead(302, { Location: landing.path, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+			res.end();
+			return;
+		}
 
 		refreshContextUsage();
 		const studioMode = normalizeStudioUiMode(requestUrl.searchParams.get("mode"));
@@ -18665,7 +18719,11 @@ export default function (pi: ExtensionAPI) {
 		res.end(buildStudioHtml(requestInitialDocument, serverState.token, lastCommandCtx?.ui.theme, currentModelLabel, terminalSessionLabel, terminalSessionDetail, contextUsageSnapshot, studioMode, bufferRecovery));
 	};
 
-	const ensureServer = async (requestedPort?: number, listenAll = false): Promise<StudioServerState> => {
+	// Starting, stopping and switching editor mode take turns (Sol, candidate69). The *Now
+	// forms run inside a turn; ensureServer and stopServer queue for one.
+	const ensureServer = (requestedPort?: number, listenAll = false): Promise<StudioServerState> =>
+		serverState && studioLifecycle.pending() === 0 ? Promise.resolve(serverState) : withStudioLifecycle(() => startServerNow(requestedPort, listenAll));
+	const startServerNow = async (requestedPort?: number, listenAll = false, token = createSessionToken()): Promise<StudioServerState> => {
 		if (serverState) return serverState;
 
 		const binding = resolveStudioNetworkBinding(listenAll);
@@ -18682,10 +18740,15 @@ export default function (pi: ExtensionAPI) {
 			port: 0,
 			bindHost: binding.bindHost,
 			listenAll: binding.listenAll,
-			token: createSessionToken(),
+			token,
 		};
 
 		server.on("upgrade", (req, socket, head) => {
+			if (studioRestarting) {
+				socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+				socket.destroy();
+				return;
+			}
 			const requestUrl = parseStudioRequestTarget(req.url);
 			if (!requestUrl) {
 				socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
@@ -18782,6 +18845,7 @@ export default function (pi: ExtensionAPI) {
 			broadcastState();
 
 			ws.on("message", (data) => {
+				if (studioRestarting) return;
 				let proof: Record<string, unknown> | undefined;
 				const parsed = parseIncomingMessage(data, envelope => {
 					if (envelope.hosting && typeof envelope.hosting === "object" && !Array.isArray(envelope.hosting)) proof = envelope.hosting as Record<string, unknown>;
@@ -18886,7 +18950,81 @@ export default function (pi: ExtensionAPI) {
 		return state;
 	};
 
-	const stopServer = async () => {
+	// Oliver, 13 Oct: switching editor mode restarts Studio's server (Pi keeps running).
+	// The page that asked lands on a fresh workspace holding the Prompt it carried.
+	// The old server takes no new connections, requests or messages while it stops (Sol, candidate69).
+	const studioEditorModeLabel = (mode: "single" | "dual") => mode === "single" ? "single editor mode" : "dual editor mode";
+	let pendingEditorModeLanding: { nonce: string; path: string; expiresAt: number } | null = null;
+	let studioRestarting = false;
+	const studioLifecycle = createStudioTurns();
+	const withStudioLifecycle = <T>(operation: () => Promise<T>): Promise<T> => studioLifecycle.run(operation);
+	const isStudioSideQuestionBusy = () => Boolean(studioSideQuestionStartRequestId || studioSideQuestionRuntime?.publicState.status === "running");
+	const studioEditorModeCarryFits = (mode: "single" | "dual", text: string) => mode === "dual"
+		? buildStudioHostingBootstrapState({ text, label: "blank", source: "blank" }).ok : text.length <= STUDIO_EDITOR_MODE_CARRY_MAX_CHARS;
+	const studioEditorModeSwitchRefusal = (client: WebSocket, msg: EditorModeSwitchRequestMessage): string | null => {
+		const state = serverState;
+		if (!state || !state.clients.has(client) || client.readyState !== WebSocket.OPEN) return "Studio isn't running.";
+		if (studioLifecycle.pending() > 0 || studioRestarting) return "Studio is restarting.";
+		if (STUDIO_EDITOR_FLAGS.forced) return "Studio's editor mode is set by environment variables here.";
+		const hosted = hostedConnections.get(client);
+		if (state.clientModes.get(client) !== "full" || studioWatchedClientPaths.has(client) || (STUDIO_DOCUMENT_HOSTING_ENABLED && !hosted)) return "Switch from Studio's main tab.";
+		if (msg.mode === STUDIO_EDITOR_FLAGS.mode) return `Studio is already in ${studioEditorModeLabel(msg.mode)}.`;
+		if (isStudioBusy()) return "Wait for Pi to finish, then switch.";
+		if (isStudioSideQuestionBusy()) return "Wait for the side question to finish, then switch.";
+		// The page named side questions in its question only if it knew of them.
+		if (studioSideQuestionRuntime?.publicState.threadId && !msg.sideQuestions) return "Side questions changed while you were asked. Try again.";
+		if ([...state.clients].some(other => other !== client && other.readyState === WebSocket.OPEN)) return "Close Studio's other tabs first.";
+		if (!studioEditorModeCarryFits(msg.mode, msg.text)) return "The text is too long to carry over. Save it to a file first.";
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED && hosted) {
+			const work = studioBufferStateStore.retainedWork(hosted.workspaceId, msg.text);
+			if (work.unsaved.includes(hosted.workspaceId)) return "The Document has unsaved text. Save it, or add it to the Prompt, before switching.";
+			if (work.pending || work.unsaved.length) return "Another Studio window still has unsaved text, or a move hasn't finished. Save it first.";
+		}
+		return null;
+	};
+	// Runs inside a lifecycle turn. The footer sets studioRestarting when it accepts.
+	const restartStudioInEditorModeNow = async (mode: "single" | "dual", port: number | undefined, listenAll: boolean, token: string, landing: { nonce: string; text: string } | null): Promise<StudioServerState | null> => {
+		const label = studioEditorModeLabel(mode);
+		studioRestarting = true;
+		try {
+			await studioPersistentStateQueue.catch(() => undefined);
+			await stopServerNow();
+			applyStudioEditorMode(mode);
+			pendingEditorModeLanding = null;
+			if (landing) {
+				try {
+					const document: InitialStudioDocument = { text: landing.text, label: "blank", source: "blank", draftId: createStudioDraftId(), resourceDir: studioCwd };
+					let path: string;
+					if (STUDIO_DOCUMENT_HOSTING_ENABLED) {
+						const result = studioBufferStateStore.hostingBootstrap({}, () => ({ ok: true, document, editorLanguage: "markdown" }));
+						if (!result.ok || !("owner" in result) || !result.owner) throw new Error("message" in result ? String(result.message) : "The new workspace could not be registered.");
+						lastHostedFullWorkspaceId = result.owner.workspaceId;
+						path = buildStudioRelativeUrl(token, "full", undefined, undefined, { hostedWorkspaceId: result.owner.workspaceId });
+					} else {
+						path = buildStudioRelativeUrl(token, "full", document, storeTransientStudioDocument(document));
+					}
+					pendingEditorModeLanding = { nonce: landing.nonce, path, expiresAt: Date.now() + 10 * 60 * 1000 };
+				} catch (error) {
+					lastCommandCtx?.ui.notify(`Studio couldn't reopen the tab: ${error instanceof Error ? error.message : String(error)}. The tab keeps its text.`, "warning");
+				}
+			}
+		} finally {
+			studioRestarting = false;
+		}
+		try {
+			const state = await startServerNow(port, listenAll, token);
+			if (state.token !== token) throw new Error("another Studio server started first");
+			lastCommandCtx?.ui.notify(`Studio switched to ${label}.`, "info");
+			if (pendingEditorModeLanding) lastCommandCtx?.ui.notify(`Studio URL: http://${STUDIO_ADVERTISED_HOST}:${state.port}${pendingEditorModeLanding.path}`, "info");
+			return state;
+		} catch (error) {
+			lastCommandCtx?.ui.notify(`Studio is now in ${label}, but it couldn't restart${port ? ` on port ${port}` : ""}: ${error instanceof Error ? error.message : String(error)}. Run /studio to open it.`, "error");
+			return null;
+		}
+	};
+
+	const stopServer = () => withStudioLifecycle(stopServerNow);
+	const stopServerNow = async () => {
 		studioSideQuestionStartRequestId = null;
 		await disposeStudioSideQuestionRuntime();
 		await closeAllStudioFileWatchers();
@@ -19831,6 +19969,69 @@ export default function (pi: ExtensionAPI) {
 		} catch (error) { ctx.ui.notify(`Studio launch failed; existing work was kept: ${error instanceof Error ? error.message : String(error)}`, "error"); }
 	};
 
+	// /studio --single and --dual: remember the choice, restarting Studio if it's running in
+	// the other mode. Works when the page won't load; open tabs are disconnected, as by --stop.
+	// What a restart would drop that no open tab shows needs a yes first, and the yes covers
+	// only what was named: the final checks rerun inside the lifecycle turn (Sol, candidate69).
+	const studioEditorModeCommandStake = (mode: "single" | "dual"): { key: string; message: string } | null => {
+		if (!serverState || mode === STUDIO_EDITOR_FLAGS.mode) return null;
+		const parts: string[] = [], key: Record<string, unknown> = {};
+		if (STUDIO_DOCUMENT_HOSTING_ENABLED) {
+			const work = studioBufferStateStore.retainedWork();
+			const live = new Set([...hostedConnections].filter(([socket]) => socket.readyState === WebSocket.OPEN).map(([, value]) => value.workspaceId));
+			const offline = work.unsaved.filter(id => !live.has(id)).sort();
+			if (work.pending || offline.length) {
+				parts.push("Studio holds unsaved text that isn't open in a tab, or a save or move hasn't finished. Restarting Studio loses it.");
+				key.work = { pending: work.pendingKeys, offline: offline.map(id => [id, studioBufferStateStore.hostedWorkspace(id)?.revision ?? null]) };
+			}
+		}
+		const side = studioSideQuestionRuntime?.publicState;
+		if (side?.threadId) {
+			parts.push("Side questions are cleared.");
+			key.side = [side.threadId, side.messages.length, side.status];
+		}
+		return parts.length ? { key: JSON.stringify(key), message: parts.join(" ") + " Switch anyway?" } : null;
+	};
+	const chooseStudioEditorMode = async (mode: "single" | "dual", flags: StudioLaunchFlags, ctx: ExtensionCommandContext): Promise<boolean> => {
+		const label = studioEditorModeLabel(mode);
+		const save = () => {
+			try { writeStudioEditorMode(STUDIO_EDITOR_MODE_PATH, mode); return true; }
+			catch (error) { ctx.ui.notify(`Couldn't save the editor mode setting: ${error instanceof Error ? error.message : String(error)}`, "error"); return false; }
+		};
+		let consented: string | null = null;
+		for (;;) {
+			if (STUDIO_EDITOR_FLAGS.forced) { ctx.ui.notify("Studio's editor mode is set by PI_STUDIO_* environment variables here. Unset them to choose a mode.", "warning"); return false; }
+			const stake = studioEditorModeCommandStake(mode);
+			if (stake && stake.key !== consented) {
+				if (!await ctx.ui.confirm(`Switch to ${label}?`, stake.message)) { ctx.ui.notify("Nothing changed.", "info"); return false; }
+				consented = stake.key;
+				continue; // Anything may have changed while asking.
+			}
+			const outcome = await withStudioLifecycle(async (): Promise<"done" | "failed" | "changed"> => {
+				if (STUDIO_EDITOR_FLAGS.forced) return "changed";
+				const now = studioEditorModeCommandStake(mode);
+				if (now && now.key !== consented) return "changed";
+				if (mode === STUDIO_EDITOR_FLAGS.mode) return save() ? "done" : "failed";
+				if (!serverState) {
+					if (!save()) return "failed";
+					applyStudioEditorMode(mode);
+					ctx.ui.notify(`Studio is now in ${label}.`, "info");
+					return "done";
+				}
+				if (isStudioBusy() || isStudioSideQuestionBusy()) { ctx.ui.notify("Wait for Pi to finish, then switch.", "warning"); return "failed"; }
+				if (!save()) return "failed";
+				const previous = serverState, open = getStudioClientCounts();
+				flags.port ??= previous.port;
+				flags.listenAll ||= previous.listenAll;
+				lastCommandCtx = ctx;
+				if (!await restartStudioInEditorModeNow(mode, flags.port, flags.listenAll, createSessionToken(), null)) return "failed";
+				if (open.full + open.editorOnly) ctx.ui.notify("Studio's open tabs were disconnected. Their text is still on screen.", "warning");
+				return "done";
+			});
+			if (outcome !== "changed") return outcome === "done";
+		}
+	};
+
 	const openStudioView = async (
 		trimmed: string,
 		ctx: ExtensionCommandContext,
@@ -19843,6 +20044,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		const launchArgs = launchOpenFlags.args;
+		if (launchOpenFlags.editorMode && !await chooseStudioEditorMode(launchOpenFlags.editorMode, launchOpenFlags, ctx)) return;
 		if (serverState && launchOpenFlags.port && serverState.port !== launchOpenFlags.port) {
 			ctx.ui.notify(`Studio server is already running on port ${serverState.port}; requested port ${launchOpenFlags.port}. Use /studio --stop, then restart Studio with --port ${launchOpenFlags.port} to change it.`, "warning");
 		}
@@ -19997,7 +20199,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("studio", {
-		description: "Open pi Studio browser UI or a read-only watched preview (/studio, /studio <file>, /studio --watch <file>, /studio --blank, /studio --last, /studio --no-browser, /studio --listen-all)",
+		description: "Open pi Studio browser UI or a read-only watched preview (/studio, /studio <file>, /studio --watch <file>, /studio --blank, /studio --last, /studio --no-browser, /studio --listen-all, /studio --single, /studio --dual)",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const trimmed = args.trim();
 
@@ -20038,6 +20240,8 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio --open-remote  Over SSH, open the remote browser anyway\n"
 						+ "  /studio --status  Show studio status\n"
 						+ "  /studio --stop    Stop studio server\n"
+						+ "  /studio --single  Use single editor mode (one editor), and remember it\n"
+						+ "  /studio --dual    Use dual editor mode (Prompt and Document), the default\n"
 						+ "  Note: only one full /studio view is allowed per Pi session; PDF previews open as companions.\n"
 						+ "  /studio-replace [path]  Replace the current full Studio view with a new one\n"
 						+ "  /studio-editor-only [path]  Open another Studio tab in editor-only mode\n"
