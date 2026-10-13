@@ -85,7 +85,7 @@ export function createStudioBufferClient(options) {
 		const checked = validateStudioBufferWorkspace(state, expected);
 		if (!checked.ok) return checked;
 		if (checkCompatibility && !(switching ? isStudioPromptDocumentBufferState(checked.state) : isStudioSingleEditorBufferState(checked.state))) return fail("unsupported-collection", switching
-			? "This prototype displays one Prompt and one document. Other buffers were retained; export them or use a compatible build."
+			? "Studio shows one Prompt and one Document. Other buffers were retained; export them or use a compatible build."
 			: "Recovery contains other buffers that this single-editor build cannot display. They were retained; use a compatible build or copy them before starting fresh.");
 		if (checkCompatibility && !canRestore(projectStudioBufferEditor(checked.state))) return fail("wrong-document", "Recovery belongs to another document. It was retained; open a fresh browser tab for this document.");
 		return checked;

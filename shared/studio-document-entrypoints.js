@@ -22,17 +22,17 @@ export function resolveStudioHostingPage({ enabled, requestUrl, mode, workspace,
 		if (params.has("docPath") && params.get("docPath") !== document.path) return unavailable("The watched preview path does not match its retained authorization.");
 		return { ok: true, watched: true, document };
 	}
-	return unavailable("This editing URL is not registered in the Document-hosting alpha. Start with /studio, then use Open Document, New editor tab, Move or Copy in that workspace. Existing work was kept.");
+	return unavailable("This editing URL is not registered in dual editor mode. Start with /studio, then use Open Document, New editor tab, Move or Copy in that workspace. Existing work was kept.");
 }
 export function studioHostingCommandError({ enabled, mode, replace = false, watchedText = false, current = false }) {
 	if (!enabled) return null;
-	if (current || replace) return "Terminal replacement is unavailable in the Document-hosting alpha. Use Open Document in the owning Studio workspace; current work was kept.";
-	if (mode === "editor-only" && !watchedText) return "This standalone command is unavailable in the Document-hosting alpha. Use New editor tab, Open file in a new editor, Move or Copy in Studio. Read-only watched text previews remain available.";
+	if (current || replace) return "Terminal replacement is unavailable in dual editor mode. Use Open Document in the owning Studio workspace, or switch with /studio --single; current work was kept.";
+	if (mode === "editor-only" && !watchedText) return "This standalone command is unavailable in dual editor mode (/studio --single switches). Use New editor tab, Open file in a new editor, Move or Copy in Studio. Read-only watched text previews remain available.";
 	return null;
 }
 export function studioHostingLocalLinkError({ enabled, action, kind }) {
 	if (!enabled) return null;
-	if (kind === "office" && ["document", "editor-url"].includes(action)) return "Office conversion is unavailable in the Document-hosting alpha. Convert separately and explicitly import a Markdown copy; the original document was not changed.";
-	if (["editor-url", "preview-url"].includes(action)) return "This legacy standalone-tab route is unavailable in the Document-hosting alpha. Use the owning Studio workspace's opening controls or an inline preview.";
+	if (kind === "office" && ["document", "editor-url"].includes(action)) return "Office conversion is unavailable in dual editor mode. Convert separately and explicitly import a Markdown copy; the original document was not changed.";
+	if (["editor-url", "preview-url"].includes(action)) return "This legacy standalone-tab route is unavailable in dual editor mode. Use the owning Studio workspace's opening controls or an inline preview.";
 	return null;
 }

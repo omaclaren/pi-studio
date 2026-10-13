@@ -4,45 +4,22 @@ Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace
 
 See [`ROADMAP.md`](./ROADMAP.md) for the current release plan.
 
-## Local alpha: one Prompt ↔ one Document
+## Single and dual editor mode
 
-`0.10.0-alpha.1` is a local, unpublished candidate. Stable remains `0.9.60`. A later publication would use npm **`next`**, not `latest`; the ordinary install commands below do not opt into this candidate.
+Studio 0.10 has two editor modes.
 
-The alpha keeps two fixed buffers in one shared editor surface. Both are editable and support annotations/comments. **Prompt** is the submission destination, not a different kind of content; a file-backed Prompt still has ordinary Save behaviour. Selecting or editing **Document** never silently changes what Run submits.
+**Dual editor mode** is the default. The left pane holds a **Prompt**, which is what Run sends to Pi, and a **Document**, the file you're working on. Switch between them with the Prompt and Document tabs, or Cmd/Ctrl+Shift+1 and 2. Each keeps its own edits, preview and reading position, and selecting the Document never changes what Run sends.
 
-Enable the workflow only in an isolated alpha process, with **both** `PI_STUDIO_BUFFER_RECOVERY=1` and `PI_STUDIO_BUFFER_SWITCHING=1` set before starting Pi. Restart that process when changing flags; do not add them to normal shell defaults.
+- **Open a file** in the Document from **File**, the **Files** pane or a link's menu. **Add to Prompt** adds the Document's selection, or all of it, to the Prompt as a labelled copy; Undo takes it back.
+- **Document windows:** **File** can open a file in a new Document window, or move or copy the Document to one. Each file has one editor; opening a file that's already open finds that editor.
+- **Recovery:** unsaved Prompt and Document text survives reloads and dropped connections. After a clean exit a reload just reopens; otherwise Studio asks before resuming. Recovery isn't a backup, so save work you want to keep.
+- `/studio-replace`, `/studio-current`, editable `/studio-editor-only` and Office-to-Markdown opening aren't available in dual editor mode. Use Studio's Document controls, or single editor mode.
 
-| Flags | Full editable workspace |
-| --- | --- |
-| Neither (or switching alone) | Existing single-editor/v1 recovery; Run uses visible editor text |
-| Recovery only | Single-editor/v2 temporary recovery; Run still uses visible editor text |
-| Both | Fixed Prompt/Document switcher; Document returns to Prompt without sending |
+**Single editor mode** is the one-editor Studio of earlier versions, where Run sends the editor's text.
 
-Editor-only companions remain independent single editors; watched previews remain read-only and disk-authoritative. Neither gains the switcher. This is not a general tab manager or a new pane layout.
+**Switching:** use the footer button (**Switch to single editor** / **Switch to dual editor**), or `/studio --single` and `/studio --dual`. Studio restarts and reopens the tab, and the Prompt's text comes with you. The choice is kept for your Pi profile. Studio won't switch from the footer while the Document or a closed Document window has unsaved text, other Studio tabs are open, or a run, save or side question is in progress; it says why. The commands work even if the page won't load. Like `/studio --stop`, they disconnect open tabs, which keep their text on screen, and they ask in Pi before dropping text that only Studio's server holds.
 
-**Try the bounded workflow:** write a Prompt → **Open / load → Open file in Document…** → edit Document → **Add to Prompt → Selection / Whole document** in raw-editor view → return and annotate the copy → explicitly **Run Prompt**. Appends keep existing Prompt text, leave Document selected, and neither save nor send. They copy raw text, including inline annotations, not external review-note/scratchpad records or resource permissions. Later edits to either copy remain independent. Return and Run require separate activations. During an identified direct Run you can select the kept buffers; Stop remains global.
-
-**Open / load** also contains **Import file copy into Prompt/Document…** and **Load Pi draft into Prompt/Document**. Those actions replace the selected buffer's text without changing its role; importing makes a detached copy, and loading a Pi draft does not clear it on loading. An empty Pi draft loads blank text. Opening a file in Document keeps Prompt untouched. Routine action help and size/capacity details live in the menus rather than permanent editor rows; keyboard focus and hover expose the descriptions.
-
-**Limits and rollback:** recovery uses browser session storage and a bounded process-memory fallback, not durable draft storage. If you want to keep the work, save/export **both drafts** and verify their contents before closing the trial, stopping Pi or returning to an older build. Disposable test text can instead be deliberately discarded. **Source & context → Recover unsaved text…** offers inspection and a recovery archive; retain the original copies, since older UIs may not display experimental v2 workspaces. Do not test with the only copy of important work.
-
-The reported **Working appears blank until interaction** remains unreproduced, not claimed fixed. A separate stale pane-scroll callback was fixed; headless visibility checks do not establish actual background-tab/visible-browser painting. Current Safari, complete mobile layout and live-provider acceptance are not claimed for this candidate. General role switching and prompt parking are deferred. The two-flag workflow has no additional Document hosts; the separately gated hosting prototype below adds that bounded scope. In particular, **Files → Use as Prompt…** loads file text; it does not promote the existing unsaved Document in place. **Annotate response** still uses guarded replacement rather than automatically parking an unfinished Prompt.
-
-See [BUFFER-DESIGN.md](./BUFFER-DESIGN.md) for the current/future boundary and [PRERELEASE-CHECKLIST.md](./PRERELEASE-CHECKLIST.md) for maintainer gates. Local artifact results and isolated-launch instructions accompany the candidate separately; no publication or normal-install change is implied.
-
-### Additional opt-in prototype: single-owner Document hosting
-
-This candidate also includes the separately approved hosting prototype, absent from the earlier local toolbar tarballs. Exact-package validation is recorded with each private candidate; source-tree checks and older tarballs are not substitutes. The two-flag description above remains the behaviour when this third flag is off.
-
-Hosting requires **all three** flags before starting the isolated process: `PI_STUDIO_BUFFER_RECOVERY=1`, `PI_STUDIO_BUFFER_SWITCHING=1`, and `PI_STUDIO_DOCUMENT_HOSTING=1`. All remain off by default. Use disposable text, not the only copy of important work.
-
-Prompt stays in the full Studio workspace. A Document has one editing owner: **Move** transfers that Document, **Copy** creates independent detached text, and opening an already owned file finds its existing editor without replacing unsaved text. **New editor tab** creates a separate blank Document; the text-file opening controls can open here or in a registered editor tab. Editor-only hosts keep document previews and annotations but have no Prompt/Run controls. Simultaneous linked editing views and Prompt-role migration are not included.
-
-A lost reply, failed focus or refused popup is not permission to create another Document. Use the corresponding **Recheck** controls and keep any opening/handoff backup until the outcome is known. Forgetting copy/new-editor tracking does not delete the created Document. Resuming a retained owner requires confirmation: its checkpoint may lag newer work in a disconnected browser. Save As keeps later typing and original notes; a changed backing transfers notes only after a verified decision. A retained disk-save result can be attached or left detached through **Resolve disk save…** without rewriting the disk output.
-
-**Deliberate hosting restrictions:** start a full workspace through `/studio`; arbitrary editable file URLs cannot create a workspace or grant file access. Existing registered URLs identify retained work rather than reloading their path hints. Editable `/studio-editor-only`, `/studio-replace`, `/studio-current`, Office-to-Markdown opening, legacy standalone preview/editor URL creation, whole-workspace Reset, and recovery-panel creation of a fresh workspace are unavailable in this prototype. Use the supported Document controls instead. Read-only watched **text** previews still require a retained watched capability and remain disk-authoritative; URL watch flags alone cannot create one. PDF/images can **Open separately** in a read-only viewer without creating a Document: native browser PDF, or image Fit/Actual size (SVG remains an image). `/studio report.pdf --no-browser` also requests a separate read-only PDF; `--watch` PDF is still unavailable. **Export PDF and Open separately** uses the prepared PDF bytes even if writing its project copy fails. **Export HTML and Open in Document** prepares HTML and uses registered, original-identity launch tracking. Its project write never overwrites an existing file or Document claim; refused writing produces a labelled detached unsaved HTML Document with guarded Save As. Existing owners are never reloaded. Departure from the originating preview cancels automatic opening while keeping output/discovery. Resident generated HTML downloads are attachments, not privileged top-level pages. In hosting mode, browser/command/tool HTML exports also refuse targets owned or claimed by Documents, including file aliases. Unowned targets can still be replaced, using canonical/revision-checked atomic writing; unsafe or multiply hard-linked targets are refused. With hosting off, classic writers keep their existing behavior. Writing and viewing an export are separate facts; a requested window does not prove it opened.
-
-Ownership, recovery records and resource-directory hints never grant filesystem access. The existing file/folder permission checks still apply. Save/export every valuable draft before stopping Pi or rolling back; neither process memory nor browser session storage is a durable backup. These restrictions apply only to the three-flag prototype, not normal Studio or the two-flag candidate.
+See [BUFFER-DESIGN.md](./BUFFER-DESIGN.md) for the design.
 
 ## Quick demo
 
@@ -115,9 +92,9 @@ Tools such as [`pi-nvim-context`](https://github.com/omaclaren/pi-nvim-context) 
 
 When Pi accepts **Run editor text**, Studio clears the linked terminal draft only if its current fingerprint and byte length still match those captured at load time. Terminal typing, additional Neovim context, or another client changing the draft causes Studio to preserve it silently. A failed or rejected run also leaves it intact. **Send current text to Pi editor** establishes the same safe link, while **Clear Pi editor text…** provides a separate confirmed, unconditional cleanup action. Studio never clears terminal history or its own editor through this handoff.
 
-### Experimental Prompt header behaviour
+### Prompt header behaviour
 
-In the opt-in Prompt/Document alpha (`PI_STUDIO_BUFFER_RECOVERY=1` and `PI_STUDIO_BUFFER_SWITCHING=1`, full editable workspace), Prompt's **Annotation header** button adds or removes only the recognised leading explanation. It does not add an `--- end annotations ---` marker or remove any existing end markers. All text following the header—including copied headers, source labels and whitespace—stays unchanged. The header's source metadata, syntax hint and precedence wording are unchanged.
+In dual editor mode, the Prompt's **Annotation header** button adds or removes only the recognised leading explanation. It does not add an `--- end annotations ---` marker or remove any existing end markers. All text following the header—including copied headers, source labels and whitespace—stays unchanged. The header's source metadata, syntax hint and precedence wording are unchanged.
 
 Use an ordinary heading such as `## Notes` if you want to separate additional material, or move an excerpt into `[an: …]` manually. Studio does not insert/manage Notes sections or remember reply ranges; imported or recovered text needs no section re-selection. Selection/document copying and the Prompt's existing inline-annotation policy are unchanged. Default/foundation-only views, Document and companion editors retain their existing header/footer behaviour.
 
@@ -135,6 +112,8 @@ Use an ordinary heading such as `## Notes` if you want to separate additional ma
 | `/studio --listen-all` | Explicitly bind Studio to all IPv4 interfaces (`0.0.0.0`) for a container or trusted private-network workflow |
 | `/studio --status` | Show studio server status, including its listening address |
 | `/studio --stop` | Stop studio server |
+| `/studio --single` | Use single editor mode, and remember it; restarts Studio if it's running in dual editor mode |
+| `/studio --dual` | Use dual editor mode (the default), and remember it |
 | `/studio --help` | Show help |
 | `/studio-replace [path\|--blank\|--last]` | Replace the current full Studio view with a new full Studio view |
 | `/studio-editor-only [path\|--blank\|--last]` | Open an editor-only view, or a read-only PDF preview; add `--watch <file>` for a followed text/PDF companion view |

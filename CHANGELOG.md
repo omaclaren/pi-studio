@@ -4,29 +4,48 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
-## [0.10.0-alpha.1] — local candidate, not published
+## [0.10.0] — 2026-10-14
 
 ### Added
-- Separately gated single-owner Document hosting, requiring recovery + switching + `PI_STUDIO_DOCUMENT_HOSTING=1`: move, independent copy, registered blank/text-file editor creation, owner reuse and atomic file replacement. Prompt stays anchored; uncertain operations retain their identities/backups. Save As metadata attachment uses an explicit verified decision. See README for deliberately unsupported hosting entrypoints.
-- Opt-in **one Prompt ↔ one Document** workflow in full editable workspaces, requiring both `PI_STUDIO_BUFFER_RECOVERY=1` and `PI_STUDIO_BUFFER_SWITCHING=1`. Keep independent edits, previews, source/baseline metadata and reading positions; Return to Prompt does not send. Selecting kept buffers during an identified direct Run preserves the submitted Prompt snapshot and global Stop.
-- Explicit **Add selection to Prompt** and **Add document to Prompt** actions: append labelled, detached raw-text snapshots including unsaved edits and inline annotations, without copying external comment records, switching, saving or submitting.
-- Experimental v2 recovery with acknowledged bounded process-memory fallback, guarded migration, inspection/export, explicit recovery choices and persistence retry. Retain unsupported/conflicting copies rather than partially adopting or discarding them. This is temporary recovery, not durable storage.
+- **Dual editor mode**, now the default: a **Prompt** for what you send to Pi, and a **Document** for the file you're working on. Each keeps its own edits, preview and reading position. Switch with the Prompt and Document tabs, or Cmd/Ctrl+Shift+1 and 2. Selecting the Document never changes what Run sends.
+- **Single editor mode** keeps the one-editor Studio. Switch from the footer (**Switch to single editor** / **Switch to dual editor**), or with `/studio --single` and `/studio --dual`. Studio restarts and reopens the tab, and the Prompt's text comes with you. The choice is kept per Pi profile. Studio won't switch while the Document or a closed Document window has unsaved text, other Studio tabs are open, or a run, save or side question is in progress; it says why.
+- **Add to Prompt** adds the Document's selection, or the whole Document, to the Prompt as a labelled copy, with Undo.
+- **Document windows:** open a file in a new Document window, or move or copy the Document to one, and find it again from **File**. Each file has one editor, and saving replaces the file atomically.
+- **Recovery:** unsaved Prompt and Document text survives reloads and dropped connections. A reload after a clean exit reopens without asking; otherwise Studio asks before resuming.
+- The **Files** pane lists files to open in the Document or Prompt, read, or show in their folder.
+- Links in rendered pages share one menu: Read, Open in Document, Open in Prompt, Show in folder, Copy path. Web links open in a new tab.
 
 ### Changed
-- Compact the opt-in buffer strip: **Add to Prompt → Selection / Whole document** replaces the separate append buttons; **Open / load** groups opening Document with destination-labelled import/Pi-draft replacements. Keep routine help/capacity descriptions in accessible disclosures and tooltips, without permanent help or duplicate Run-target rows. Editor-selection ownership survives opening Add; other fields/previews still revoke it. Single-editor and editor-only controls are unchanged.
-- In opt-in Prompt, Annotation header adds/removes only the recognised leading explanation; copied body text and existing end markers remain intact. Document/default/editor-only header behaviour is unchanged.
-- Recognise compatible leading `annotations below` aliases alongside `annotated reply below` forms without changing Studio's generated wording or treating prose/fenced examples as headers.
+- A two-row header: the file and its actions on the first row; the main action and tools on the second. The toolbars fit a 13-inch laptop.
+- **File** shows recovery items only while they apply.
+- **Follow** moves only between Response, Working and the Prompt preview. Files, Changes, the REPL and Side questions keep their place.
+- Side questions show the model and Thinking beside Ask. The REPL's send mode moves to its **More** menu.
+- Plainer interface text throughout.
+- In dual editor mode, `/studio-replace`, `/studio-current`, editable `/studio-editor-only` and Office-to-Markdown opening aren't available; use Studio's Document controls, or single editor mode.
+- Development checks typecheck against Pi 1.2.0.
 
 ### Fixed
-- Bind hosted Refresh to its current canonical backing and independent resource permission; refuse legacy hosting entrypoints that bypass registered ownership. Preserve the copy unload warning during unresolved rechecks/disconnects and revoke stale live confirmations after failed queries.
-- Retain originating editor/buffer/source/connection ownership across delayed file, preview, metadata, save and replacement decisions. Protect unread comments/scratchpads and stale or cancelled append gestures.
-- Preserve response/Working reading state, history ownership and pending response-scroll reset through buffer round trips; bind delayed restoration to its originating view/content owner.
-- Retire pane-activation scroll snapshots after DOM/view-generation or editor-owner changes, preserving same-view and unaffected-pane restoration. The stale-callback mechanism also existed in `0.9.60`; this is not a blank-paint fix.
+- A pane's reading position could jump after you changed views, because an earlier scroll restore still ran.
 
-### Alpha boundary
-- Stable `0.9.60` and all three flag defaults remain unchanged. Eventual publication requires a separate decision and the explicit npm `next` tag.
-- No general role switching, simultaneous linked views, parked prompts, companion-to-Prompt role migration or automatic preservation of unfinished Prompts during response annotation. Additional independent Document hosts require the third flag; the two-flag workflow retains its fixed pair.
-- The blank-looking Working report remains unreproduced. Actual background-tab/visible-browser painting, current Safari/full mobile coverage and live-provider acceptance of this exact artifact remain unverified. See README for activation and backup/rollback requirements; historical test counts are not exact-artifact sign-off.
+## [0.9.63] — 2026-10-08
+
+### Fixed
+- The cursor fix in 0.9.62 didn't reach Studio's own editor, so in Safari and other WebKit browsers such as Muxy and cmux the cursor could still drift away from the text after an edit let a word move back up a line. The re-layout now works in Studio's layout.
+- After a macOS autocorrect, that re-layout could switch itself off until you moved to another line. Typing, an ordinary edit or leaving the editor now turns it back on, and the editor also re-lays out once whenever you pause typing.
+
+## [0.9.62] — 2026-10-08
+
+### Fixed
+- With syntax highlighting on, the cursor could end up several characters away from the text being typed, mostly in Safari and other WebKit browsers such as Muxy and cmux. It happened when an edit let a word move back up a line. The editor now re-lays out its text after each edit, so the cursor and text stay together. A line that is exactly full can still show a brief mismatch, which corrects itself on the next key.
+
+### Added
+- `Ctrl+Shift+H` toggles syntax highlighting without leaving the editor.
+
+## [0.9.61] — 2026-09-30
+
+### Fixed
+- Declare Pi-provided modules as wildcard peer dependencies rather than runtime dependencies, resolving Pi 0.99.1's extension-package warnings and avoiding separately installed runtime copies.
+- Keep these modules as development dependencies for typechecking, update the Pi development packages to 0.99.1, and add regression checks for the manifest and lockfile.
 
 ## [0.9.60] — 2026-09-07
 

@@ -2,6 +2,10 @@
 
 This is the current planning source of truth for Studio work. `NEXT-STAGE.md` is historical; `TODO.md` tracks smaller backlog items that are not yet assigned to a release.
 
+## Current status (14 Oct 2026)
+
+`0.10.0` ships the buffer-first workspace as **dual editor mode** (Prompt and Document), on by default, with **single editor mode** one switch away (footer button, `/studio --single`). It went through real course use as private alpha candidates 49–69. The `PI_STUDIO_*` flags described further down are now development overrides only: when any is set it decides, and the mode switch is hidden. Fixes follow in `0.10.x`. The sections below are the history up to this point.
+
 ## Release approach
 
 Studio development follows two tracks:

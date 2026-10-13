@@ -25,7 +25,7 @@ export function prepareStudioPromptDocumentWorkspace(value, { makeBufferId, role
 	if (!checked.ok) return checked;
 	const state = checked.state;
 	if (!isStudioPromptDocumentBufferState(state)) return { ok: false, reason: "unsupported-collection",
-		message: "This prototype displays one Prompt and one document. Other buffers were retained; export them or use a compatible build." };
+		message: "Studio shows one Prompt and one Document. Other buffers were retained; export them or use a compatible build." };
 	let buffers = state.buffers, activePromptId = state.activePromptId;
 	if (roleChoice === "visible-prompt" && state.selectedBufferId !== activePromptId) {
 		if (!needsStudioLegacyPromptChoice(state)) return { ok: false, reason: "role-decision-required", message: "The existing Prompt cannot be replaced by a role migration. Both texts were kept." };

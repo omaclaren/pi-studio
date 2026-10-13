@@ -18505,7 +18505,7 @@
               return result;
             },
             keepCurrent: (owner, isCurrent) => {
-              if (documentHostingEnabled) return { ok: false, message: "Creating a fresh workspace from recovery is unavailable in the hosting alpha. Export or recheck the retained copies instead." };
+              if (documentHostingEnabled) return { ok: false, message: "Creating a fresh workspace from recovery is unavailable in dual editor mode. Export or recheck the retained copies instead." };
               const editor = buildWorkspacePersistencePayload(), extra = bufferRecoveryExtra();
               if (bufferRecoveryClient) {
                 const captured = bufferRecoveryClient.capture(editor, fileBackedBaselineText, extra);
@@ -18531,7 +18531,7 @@
             },
           });
         }
-        if (documentHostingEnabled) setStatus("Hosted recovery supports inspection, export and recheck. Creating a fresh workspace from this panel is unavailable in this alpha.", "warning");
+        if (documentHostingEnabled) setStatus("Hosted recovery supports inspection, export and recheck. Creating a fresh workspace from this panel is unavailable in dual editor mode.", "warning");
         const opening = bufferRecoveryPanel.open();
         syncStudioBufferOpenOperation();
         await opening;
@@ -18539,7 +18539,7 @@
 
       async function clearStudioWorkspace() {
         if (documentHostingEnabled) {
-          setStatus("Resetting the whole workspace is unavailable in the Document-hosting alpha. Current work and recovery copies were kept; edit or detach individual buffers instead.", "warning");
+          setStatus("Resetting the whole workspace is unavailable in dual editor mode. Current work and recovery copies were kept; edit or detach individual buffers instead.", "warning");
           return;
         }
         if (uiBusy) {
@@ -20455,7 +20455,7 @@
 
       async function confirmPreviewOfficeConversion(href, destination, options) {
         if (getPreviewLocalLinkKind(href) !== "office") return true;
-        if (documentHostingEnabled) throw new Error("Office conversion is unavailable in the Document-hosting alpha. Convert separately and explicitly import a Markdown copy; the original document was not changed.");
+        if (documentHostingEnabled) throw new Error("Office conversion is unavailable in dual editor mode. Convert separately and explicitly import a Markdown copy; the original document was not changed.");
         const isCurrent = options && typeof options.isCurrent === "function" ? options.isCurrent : () => true;
         if (!isCurrent()) return false;
         const label = getPreviewOfficeConversionLabel(href);
@@ -29474,7 +29474,7 @@
           if (options?.hostingCopy && content === sourceTextEl.value && documentHostingController) {
             void documentHostingController.copy(); return true;
           }
-          setStatus("This standalone-tab action is not available in the hosting prototype. Use Copy Document for an independent copy, or Move Document to move the current Document.", "warning");
+          setStatus("This standalone-tab action is not available in dual editor mode. Use Copy Document for an independent copy, or Move Document to move the current Document.", "warning");
           return false;
         }
         const requestId = beginUiAction("open_editor_only");
