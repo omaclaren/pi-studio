@@ -29,7 +29,8 @@ function setup() {
     captureRecoveryConsent: () => ({ generation: c.generation }), recoveryConsentIsCurrent: owner => owner.generation === c.generation,
     generation: 1, getStudioSelectedBuffer: () => state.buffers.find(b => b.id === state.selectedBufferId),
     isStudioDocumentBufferView: () => state.selectedBufferId === "doc", syncStudioBufferSwitcher: () => calls.push("controls"),
-    setStatus: (...args) => calls.push(args), bufferSwitcherUi: { addDocument: button, documentInfo: info } });
+    setStatus: (...args) => calls.push(args), bufferSwitcherUi: { addDocument: button, documentInfo: info },
+    statusLineEl: null, statusEl: {}, statusMessage: "", studioPromptAddUndo: null, studioPromptAddUndoBtn: null });
   const a = source.indexOf("function studioDocumentAppendAvailability("), b = source.indexOf("function syncStudioBufferSwitcher()", a);
   assert(a >= 0 && b > a, "document append helpers exist"); vm.runInContext(source.slice(a, b), c);
   return { c, calls, timers, doc, prompt, state, button, info, handlers, documentHandlers, windowHandlers,

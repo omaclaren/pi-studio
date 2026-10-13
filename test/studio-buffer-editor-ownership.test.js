@@ -252,7 +252,7 @@ test("recovery is an opt-in source-menu action, with classic fallback and visibl
 	assert.deepEqual(h.calls, ["close menu", "focus trigger", "open panel"]);
 	const classic = recoveryActionHarness({ classic: true }); classic.c.setupBufferRecoveryAction();
 	assert.equal(classic.fallback.children[0].id, "bufferRecoveryBtn");
-	const bootstrap = section('let serverWorkspaceRecovery = { status: "skipped", state: null };', 'const initialRecoveryOwner');
+	const bootstrap = section('let serverWorkspaceRecovery = { status: "skipped", state: null };', 'let initialRecoveryOwner');
 	assert.match(bootstrap, /setupBufferRecoveryAction\(\)/); assert.doesNotMatch(bootstrap, /statusLine|appendChild/);
 });
 

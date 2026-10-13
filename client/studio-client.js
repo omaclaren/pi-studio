@@ -55,6 +55,7 @@
       let studioLinkedReaderUi = null, studioLinkedReaderFlight = null, studioLinkedReaderRenderNonce = 0;
       let studioReaderReturnEpoch = 0, pendingStudioReaderReturnScroll = null;
       let documentHostingGeneration = 0, documentHostingDomId = null, documentHostingController = null, documentOpenController = null, documentHostingLastRemote = null;
+      let documentHostingContinuation = null;
       let documentHostingReady = false, documentHostingPreparingFile = false, documentHostingRetired = false;
       let documentHostingSaveResolution = null;
       let documentHostingSaveResolutionBufferId = null, documentHostingFilePreparationBufferId = null;
@@ -77,6 +78,7 @@
       let bufferViewRestore = null;
       let pendingBufferDocumentOpen = null;
       let studioFilePick = null; // the Files "choose a file" mode, when active
+      let studioPromptAddUndo = null, studioPromptAddUndoBtn = null; // the last Add to Prompt, while it can be undone
       const bufferTransientStates = new Map(); // Page-only source epochs, terminal provenance and reading identities; never recovered.
       let bufferConnectionGeneration = 0;
       let editorContentGeneration = 0;
@@ -4721,6 +4723,7 @@
           : operationInNotice ? "" : operation?.message || statusMessage;
         statusEl.className = bufferRecoveryIssue ? "warning" : operationInNotice ? "" : operation?.severity || (statusLevel || "");
         statusEl.title = bufferRecoveryIssue || (!operationInNotice && operation?.message) || "";
+        if (typeof syncStudioPromptAddUndo === "function") syncStudioPromptAddUndo();
 
         const spinnerActive = shouldAnimateFooterSpinner();
         if (statusLineEl && statusLineEl.classList) {
@@ -16405,6 +16408,7 @@
       function syncActionButtons() {
         syncStudioBufferOpenOperation();
         if (typeof syncPromptRunIndicator === "function") syncPromptRunIndicator();
+        if (typeof syncStudioPromptAddUndo === "function") syncStudioPromptAddUndo();
         const canRefreshFromDisk = hasRefreshableFilePath();
 
         fileInput.disabled = uiBusy || isWatchedFilePreview;
@@ -17580,12 +17584,13 @@
           setStatus("Selection or workspace changed. Nothing was added; select text in the Document editor and try again.", "warning");
           return false;
         }
+        const before = studioActivePromptBuffer(intent.client);
         const result = intent.client.appendSelectionToPrompt(intent);
         if (!result.ok) { setStatus(result.message, "warning"); return false; }
         // Keep Document's live editor/preview DOM, metadata and page-only owners.
         // Ordinary recovery persistence is the only I/O; no Run, steering or Save.
         syncStudioBufferSwitcher();
-        setStatus("Selection added to Prompt. Nothing sent.", "success");
+        rememberStudioPromptAdd(intent.client, before);
         return true;
       }
       function syncStudioSelectionAppendAction() {
@@ -17737,10 +17742,95 @@
           setStatus("Document, Prompt or interaction changed. Nothing was added; try again explicitly.", "warning");
           return false;
         }
+        const before = studioActivePromptBuffer(intent.client);
         const result = intent.client.appendDocumentToPrompt(intent);
         if (!result.ok) { setStatus(result.message, "warning"); return false; }
         syncStudioBufferSwitcher();
-        setStatus("Document added to Prompt. Nothing sent.", "success");
+        rememberStudioPromptAdd(intent.client, before);
+        return true;
+      }
+      // Undo for Add to Prompt (Oliver, 11 Oct): the status says how much was added and offers
+      // Undo until another status replaces it, you leave the Document, or the Prompt changes.
+      function studioActivePromptBuffer(client) {
+        const state = client?.snapshot?.(), prompt = state?.buffers.find(entry => entry.id === state.activePromptId);
+        return prompt ? { id: prompt.id, revision: prompt.revision, text: prompt.text } : null;
+      }
+      function rememberStudioPromptAdd(client, before) {
+        const after = studioActivePromptBuffer(client);
+        if (!before || !after || after.id !== before.id) { studioPromptAddUndo = null; setStatus("Added to Prompt. Nothing sent.", "success"); return; }
+        const added = after.text.length - before.text.length;
+        const message = "Added " + added.toLocaleString("en-US") + " character" + (added === 1 ? "" : "s") + " to the Prompt. Nothing sent.";
+        studioPromptAddUndo = { client, promptId: after.id, revision: after.revision, addedText: after.text, previousText: before.text, message };
+        if (statusLineEl && !studioPromptAddUndoBtn) {
+          const undo = document.createElement("button");
+          undo.type = "button"; undo.id = "studioPromptAddUndoBtn"; undo.className = "studio-status-undo"; undo.textContent = "Undo"; undo.hidden = true;
+          undo.title = "Put the Prompt back as it was before this add.";
+          // Pin the add at press time with the Add buttons' pattern (Sol): separate pointer and keyboard
+          // leases; undefined means no press pending, null a retired press, which never undoes anything.
+          let pointerReceipt, keyboardReceipt, keyboardKey = null, keyboardGeneration = 0;
+          const retire = () => {
+            if (pointerReceipt !== undefined) pointerReceipt = null;
+            if (keyboardReceipt !== undefined) keyboardReceipt = null;
+          };
+          for (const type of ["pointerdown", "pointerup", "keydown", "focusin"]) document.addEventListener(type, event => {
+            if (event.target !== undo) retire();
+          }, true);
+          document.addEventListener("input", retire, true);
+          window.addEventListener("blur", retire);
+          document.addEventListener("keyup", event => {
+            if (event.key !== keyboardKey) return;
+            const generation = keyboardGeneration;
+            window.setTimeout(() => { if (keyboardGeneration === generation) { keyboardReceipt = undefined; keyboardKey = null; } }, 0);
+          }, true);
+          undo.addEventListener("pointerdown", event => {
+            if (event.button !== 0) return;
+            if (keyboardReceipt !== undefined) keyboardReceipt = null;
+            pointerReceipt = studioPromptAddUndo;
+          });
+          undo.addEventListener("pointercancel", () => { pointerReceipt = null; retire(); });
+          undo.addEventListener("keydown", event => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if (event.repeat) { event.preventDefault(); return; }
+            if (pointerReceipt !== undefined) pointerReceipt = null;
+            keyboardKey = event.key; keyboardGeneration++;
+            keyboardReceipt = studioPromptAddUndo;
+          });
+          undo.addEventListener("click", event => {
+            if (event.detail > 1) { pointerReceipt = undefined; return; }
+            const keyboard = event.detail === 0;
+            const pending = keyboard ? keyboardReceipt : pointerReceipt;
+            const receipt = pending === undefined ? studioPromptAddUndo : pending;
+            if (keyboard) {
+              keyboardReceipt = undefined;
+              if (pointerReceipt !== undefined) pointerReceipt = null;
+            } else {
+              pointerReceipt = undefined;
+              if (keyboardReceipt !== undefined) keyboardReceipt = null;
+            }
+            if (receipt) undoStudioPromptAdd(receipt);
+          });
+          statusLineEl.appendChild(undo); studioPromptAddUndoBtn = undo;
+        }
+        setStatus(message, "success");
+      }
+      function syncStudioPromptAddUndo() {
+        const undo = studioPromptAddUndo, button = studioPromptAddUndoBtn;
+        if (undo && statusMessage !== undo.message) studioPromptAddUndo = null; // a later status retires it
+        if (!button) return;
+        button.hidden = !(studioPromptAddUndo && statusEl.textContent === studioPromptAddUndo.message && getStudioSelectedBuffer()?.role === "document");
+        button.disabled = Boolean(uiBusy || pendingBufferDocumentOpen); // waits for the current action rather than refusing (Sol)
+      }
+      function undoStudioPromptAdd(receipt = studioPromptAddUndo) {
+        const undo = studioPromptAddUndo;
+        // A release whose press saw a different add (or none) does nothing; the newer add keeps its Undo.
+        if (!undo || receipt !== undo) return false;
+        if (undo.client !== bufferRecoveryClient) { studioPromptAddUndo = null; syncStudioPromptAddUndo(); return false; }
+        if (uiBusy || pendingBufferDocumentOpen) return false;
+        studioPromptAddUndo = null;
+        const result = undo.client.undoPromptAppend(undo);
+        if (!result.ok) { setStatus(result.message, "warning"); return false; }
+        syncStudioBufferSwitcher();
+        setStatus("Undone. The Prompt is as it was.", "success");
         return true;
       }
       function syncStudioDocumentAppendAction() {
@@ -28098,6 +28188,10 @@
         if (message.type === "hello_ack") {
           if (documentHostingEnabled && message.documentHosting?.workspaceId === studioTabStateId && Number.isSafeInteger(message.documentHosting.generation)) {
             documentHostingGeneration = message.documentHosting.generation;
+            // The server's clean-departure continuation belongs to this connection only.
+            const continuation = message.documentHosting.continuation;
+            documentHostingContinuation = continuation && typeof continuation.revision === "string" && /^[a-f0-9]{48}$/.test(continuation.revision)
+              ? { revision: continuation.revision, generation: documentHostingGeneration, connection: bufferConnectionGeneration } : null;
             for (const done of documentHostingWaiters) done(); documentHostingWaiters.clear();
             if (workspacePersistenceReady && bufferRecoveryClient) {
               if (bufferRecoveryClient.isHostingFrozen()) void documentHostingController?.recheck();
@@ -29149,7 +29243,7 @@
           if (disconnectHandled) return;
           disconnectHandled = true;
           bufferConnectionGeneration++;
-          documentHostingGeneration = 0; syncDocumentHostingReadiness();
+          documentHostingGeneration = 0; documentHostingContinuation = null; syncDocumentHostingReadiness();
           clearEditorAsyncOperations();
           pendingEditorRefresh = null;
           bufferRecoveryClient?.invalidateRemoteRecovery();
@@ -29582,6 +29676,15 @@
           || scratchpadUnsyncedRecords.size > 0 || reviewNotesUnsyncedRecords.size > 0;
       }
 
+      // Sol (candidate67): the only evidence that lets the next page skip the resume question.
+      // Every check must hold now; agreeing to leave despite a warning never counts.
+      function studioCleanDepartureRevision() {
+        if (!documentHostingEnabled || !documentHostingGeneration || !ws || ws.readyState !== WebSocket.OPEN || bufferPageClosed || bufferRecoveryKeptClosed || bufferRecoveryInitializing) return null;
+        if (!bufferRecoveryClient || !documentHostingController || documentHostingRetired || documentHostingSaveResolution || documentHostingPreparingFile || pendingSaveOperations.size > 0 || hasUnsyncedStudioMetadata()) return null;
+        if (documentHostingController.needsUnloadConfirmation() || documentHostingController.operationPending() || documentHostingController.moveState().adoptionPending || documentOpenController?.active()) return null;
+        return bufferRecoveryClient.cleanDepartureRevision();
+      }
+
       function flushStudioNavigationPersistence() {
         if (documentHostingEnabled && documentHostingCanCloseRetired()) return;
         stopFooterSpinner();
@@ -29625,6 +29728,9 @@
       window.addEventListener("pagehide", (event) => {
         flushStudioNavigationPersistence();
         if (!event.persisted) {
+          // Decide, send on the owning socket ahead of its close, and seal, all in this turn.
+          const cleanRevision = studioCleanDepartureRevision();
+          if (cleanRevision) try { ws.send(JSON.stringify({ type: "hosting_clean_leave", generation: documentHostingGeneration, revision: cleanRevision })); } catch {}
           bufferPageClosed = true;
           clearEditorAsyncOperations();
           documentOpenController?.dispose();
@@ -31722,22 +31828,30 @@
         // not let the later websocket handshake overwrite intervening local typing.
         initialDocumentApplied = true;
         try {
+          const resumeOrKeepClosed = async () => {
+            if (await openStudioDecision({ mode: "confirm", title: "Resume this retained workspace?",
+              message: "A disconnected tab may contain newer edits than the server checkpoint. Prefer reconnecting that original tab. Resume here only if you intend this tab to own the Document; this tab's browser recovery will also be checked.",
+              confirmLabel: "Resume here", cancelLabel: "Keep closed" })) return;
+            // A deliberate choice, not a failure to start (Sol).
+            documentHostingRetired = true; bufferPageClosed = true; bufferRecoveryKeptClosed = true; ws?.close();
+            throw new Error("Workspace kept closed. Retained recovery wasn't discarded. Reload and choose “Resume here” to reopen it.");
+          };
+          // Oliver, 11 Oct: no question when the previous owner left clean. The server's
+          // continuation only lets initialization adopt that exact snapshot (Sol, candidate67).
+          let admitted = null;
           if (documentHostingEnabled) {
             connect(); await waitForDocumentHostingLease();
-            if (document.body.dataset.hostingResume === "1" && !await openStudioDecision({ mode: "confirm", title: "Resume this retained workspace?",
-              message: "A disconnected tab may contain newer edits than the server checkpoint. Prefer reconnecting that original tab. Resume here only if you intend this tab to own the Document; this tab's browser recovery will also be checked.",
-              confirmLabel: "Resume here", cancelLabel: "Keep closed" })) {
-              // A deliberate choice, not a failure to start (Sol).
-              documentHostingRetired = true; bufferPageClosed = true; bufferRecoveryKeptClosed = true; ws?.close();
-              throw new Error("Workspace kept closed. Retained recovery wasn't discarded. Reload and choose “Resume here” to reopen it.");
+            if (document.body.dataset.hostingResume === "1") {
+              admitted = documentHostingContinuation; documentHostingContinuation = null;
+              if (!admitted) await resumeOrKeepClosed();
             }
           }
-          const initialRecoveryOwner = captureBufferRecoveryInitializationOwner();
+          let initialRecoveryOwner = captureBufferRecoveryInitializationOwner();
           const helpers = await import("/buffer-modules/studio-buffer-client.js?token=" + encodeURIComponent(getToken()));
           let recoveryStorage = null;
           try { recoveryStorage = window.sessionStorage; } catch {}
           const bufferRequest = requestBufferRecovery;
-          const client = helpers.createStudioBufferClient({
+          const createRecoveryClient = () => helpers.createStudioBufferClient({
             workspaceId: studioTabStateId, mode: isEditorOnlyMode ? "editor-only" : "full", storage: recoveryStorage,
             switching: bufferSwitchingEnabled, hosting: documentHostingEnabled,
             getHostingGeneration: () => documentHostingGeneration,
@@ -31762,9 +31876,21 @@
             },
             onIssue: (message) => { bufferRecoveryIssue = message; renderStatus(); },
           });
+          let client = createRecoveryClient();
           try { promptRunIndicatorFresh = !recoveryStorage?.getItem("piStudio.bufferWorkspace.v2:" + studioTabStateId) && document.body.dataset.hostingResume !== "1"; } catch { promptRunIndicatorFresh = false; }
-          const restored = await client.initialize(buildWorkspacePersistencePayload(), fileBackedBaselineText,
-            () => bufferRecoveryInitializationOwnerIsCurrent(initialRecoveryOwner));
+          let restored = await client.initialize(buildWorkspacePersistencePayload(), fileBackedBaselineText,
+            () => bufferRecoveryInitializationOwnerIsCurrent(initialRecoveryOwner),
+            admitted && { revision: admitted.revision, isCurrent: () => !bufferPageClosed && bufferConnectionGeneration === admitted.connection
+              && documentHostingGeneration === admitted.generation && !hasUnsyncedStudioMetadata() });
+          if (!restored.ok && restored.reason === "needs-decision") {
+            // Anything but the exact admitted snapshot takes the ordinary path: ask, then start afresh.
+            client.dispose(); bufferRecoveryIssue = "";
+            await resumeOrKeepClosed(); await waitForDocumentHostingLease();
+            initialRecoveryOwner = captureBufferRecoveryInitializationOwner();
+            client = createRecoveryClient();
+            restored = await client.initialize(buildWorkspacePersistencePayload(), fileBackedBaselineText,
+              () => bufferRecoveryInitializationOwnerIsCurrent(initialRecoveryOwner));
+          }
           if (!restored.ok) { bufferRecoveryIssue = restored.message; client.dispose(); }
           else {
             if (restored.restored) {

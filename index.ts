@@ -943,6 +943,12 @@ interface WorkspaceStateUpdateMessage {
 	state: ReturnType<typeof normalizeStudioWorkspaceRecoveryState>;
 }
 
+interface HostingCleanLeaveMessage {
+	type: "hosting_clean_leave";
+	generation: number;
+	revision: string;
+}
+
 type IncomingStudioMessage =
 	| HelloMessage
 	| PingMessage
@@ -989,7 +995,8 @@ type IncomingStudioMessage =
 	| GitChangesRequestMessage
 	| OpenEditorOnlyRequestMessage
 	| CancelRequestMessage
-	| WorkspaceStateUpdateMessage;
+	| WorkspaceStateUpdateMessage
+	| HostingCleanLeaveMessage;
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const PREVIEW_RENDER_MAX_CHARS = 400_000;
@@ -10041,6 +10048,9 @@ function parseIncomingMessage(data: RawData, captureEnvelope?: (message: Record<
 		const state = normalizeStudioWorkspaceRecoveryState(msg.state);
 		if (state) return { type: "workspace_state_update", tabStateId: msg.tabStateId, state };
 	}
+	if (msg.type === "hosting_clean_leave" && Number.isSafeInteger(msg.generation) && typeof msg.revision === "string" && /^[a-f0-9]{48}$/.test(msg.revision)) {
+		return { type: "hosting_clean_leave", generation: msg.generation as number, revision: msg.revision };
+	}
 	if (msg.type === "get_latest_response") return { type: "get_latest_response" };
 	if (msg.type === "get_trace_snapshot" && typeof msg.responseHistoryId === "string") {
 		return {
@@ -13125,7 +13135,7 @@ export default function (pi: ExtensionAPI) {
 		const result = writeStudioClassicHtmlExportFile(outputPath, html, cwd, canonical => studioBufferStateStore.checkUnownedHostedFile(canonical));
 		if (!result.filePath) throw new Error(result.error || "HTML project writing was refused; existing work was kept.");
 	};
-	const hostedConnections = new Map<WebSocket, { capability: string; generation: number; workspaceId: string }>();
+	const hostedConnections = new Map<WebSocket, { capability: string; generation: number; workspaceId: string; continuation?: { revision: string } }>();
 	const studioResourceGrantRegistry = createStudioResourceGrantRegistry();
 	const studioFileWatchers = new Map<WebSocket, ReturnType<typeof createStudioFileWatcher>>();
 	const studioWatchedClientPaths = new Map<WebSocket, string>();
@@ -15568,6 +15578,10 @@ export default function (pi: ExtensionAPI) {
 			sendToClient(client, { type: "pong", timestamp: Date.now() });
 			return;
 		}
+		if (msg.type === "hosting_clean_leave") {
+			if (hosted) studioBufferStateStore.hostingCleanLeave(hosted.capability, client, { generation: msg.generation, revision: msg.revision });
+			return;
+		}
 		if (msg.type === "workspace_state_update") {
 			if (STUDIO_DOCUMENT_HOSTING_ENABLED && (hosted || studioBufferStateStore.hostedWorkspace(msg.tabStateId))) return;
 			studioWorkspaceStateStore.set(msg.tabStateId, msg.state);
@@ -15624,7 +15638,7 @@ export default function (pi: ExtensionAPI) {
 				responseHistory: studioResponseHistory,
 				traceState: studioTraceState,
 				initialDocument: hosted ? null : initialStudioDocument,
-				...(hosted ? { documentHosting: { workspaceId: hosted.workspaceId, generation: hosted.generation } } : {}),
+				...(hosted ? { documentHosting: { workspaceId: hosted.workspaceId, generation: hosted.generation, ...(hosted.continuation ? { continuation: hosted.continuation } : {}) } } : {}),
 				resourceGrants: studioResourceGrantRegistry.snapshot(),
 				quartoPreview: getStudioQuartoPreviewSnapshot(),
 				sideQuestion: getStudioSideQuestionPublicState(),
@@ -18759,7 +18773,7 @@ export default function (pi: ExtensionAPI) {
 				const capability = requestUrl.searchParams.get("bufferCapability") || "";
 				const binding = studioBufferStateStore.bindHostingView(capability, clientMode, ws);
 				if (!("generation" in binding)) { ws.close(4005, "Document editing view unavailable or already open"); return; }
-				hostedConnections.set(ws, { capability, workspaceId: binding.workspaceId, generation: binding.generation });
+				hostedConnections.set(ws, { capability, workspaceId: binding.workspaceId, generation: binding.generation, ...("continuation" in binding && binding.continuation ? { continuation: binding.continuation } : {}) });
 			}
 			clients.add(ws);
 			clientModes.set(ws, clientMode);
@@ -19802,7 +19816,8 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Requested focus in the existing editor. Its unsaved work was kept; no independent copy was opened.", "info");
 				} else if (shouldAutoOpenStudioBrowser(flags)) {
 					await openStudioUrlInBrowser(url);
-					ctx.ui.notify(result.status === "reused" ? "Opening the retained owner. Confirm resuming if its previous browser may still contain newer work." : "Opened a registered Studio workspace.", "info");
+					ctx.ui.notify(result.status !== "reused" ? "Opened a registered Studio workspace." : studioBufferStateStore.hasCleanLeave(owner.workspaceId) ? "Opening the retained workspace."
+						: "Opening the retained owner. Confirm resuming if its previous browser may still contain newer work.", "info");
 				} else ctx.ui.notify("Studio workspace is registered. Browser auto-open was skipped; use the same URL to open or resume it.", "info");
 			} catch (error) {
 				ctx.ui.notify(`Browser opening failed; the same workspace is retained: ${error instanceof Error ? error.message : String(error)}`, "warning");

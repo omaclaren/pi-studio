@@ -2,7 +2,8 @@ import { STUDIO_BUFFER_LIMITS, createStudioBuffer, createStudioBufferStore, vali
 import { createStudioBufferRecoveryStorage, migrateStudioWorkspaceV1 } from "./studio-buffer-recovery.js";
 import { isStudioPromptDocumentBufferState, needsStudioLegacyPromptChoice, prepareStudioPromptDocumentWorkspace } from "./studio-buffer-switching.js";
 import { reconcileStudioHostingLineage } from "./studio-buffer-lineage.js";
-import { createStudioDocumentEscrow } from "./studio-document-escrow.js";
+import { createStudioDocumentCopyIntent, createStudioDocumentEscrow } from "./studio-document-escrow.js";
+import { createStudioDocumentLaunchIntent } from "./studio-document-launch-client.js";
 import { createStudioDocumentOpenStorage } from "./studio-document-open-storage.js";
 
 const fail = (reason, message) => ({ ok: false, reason, message });
@@ -178,7 +179,10 @@ export function createStudioBufferClient(options) {
 		return { ok: true, ...size, source, prompt, separator, header };
 	}
 	return Object.freeze({
-		async initialize(initialEditor, baselineText, isStillCurrent = () => true) {
+		// admission: the server's clean-departure continuation for this connection. It only
+		// lets initialization adopt that exact, unchanged server snapshot without asking;
+		// anything else returns "needs-decision" before any local save or publish (Sol).
+		async initialize(initialEditor, baselineText, isStillCurrent = () => true, admission = null) {
 			if (disposed || initialized) return fail("invalid-lifecycle", "Create a new recovery owner before initializing again.");
 			initialized = true;
 			const openBackup = opening?.peek(); if (openBackup?.error) return openBackup.error;
@@ -205,6 +209,17 @@ export function createStudioBufferClient(options) {
 			if (browser.ok && browser.status === "found") { const checked = validate(browser.state, false); if (!checked.ok) return checked; localState = checked.state; localRaw = browser.raw; }
 			if (remote.ok && remote.state) { const checked = validate(remote.state, false); if (!checked.ok) return checked; remoteState = checked.state; }
 			let chosen = localState || remoteState, fromInitial = false;
+			const needsDecision = () => fail("needs-decision", "Choose whether to resume this workspace here.");
+			// This tab's own browser records, read without writing: any older-format copy, or
+			// Copy/Launch tracking that is pending or unreadable, means ask (Sol, candidate67).
+			const admissionKeys = [local.key, local.legacyKey, local.key + ":copy", local.key + ":launch"];
+			const admissionBytes = () => { try { return admissionKeys.map(key => storage.getItem(key) ?? null); } catch { return null; } };
+			const trackingSettled = () => [createStudioDocumentCopyIntent(storage, local.key + ":copy"), createStudioDocumentLaunchIntent(storage, workspaceId)]
+				.every(intent => { try { const saved = intent.peek(); return !saved.error && !saved.record; } catch { return false; } });
+			const inspected = admission ? admissionBytes() : null;
+			if (admission && !(remoteEnabled && remoteState && remoteRevision === admission.revision && (!localState || same(localState, remoteState))
+				&& inspected && inspected[0] === (browser.ok ? browser.raw ?? null : null) && inspected[1] === null && trackingSettled()
+				&& !legacyRemote.state && !openBackup?.record && !escrow?.peek().record && !escrow?.peek().error && admission.isCurrent())) return needsDecision();
 			if (localState && remoteState && !same(localState, remoteState)) {
 				const checkpoint = ack();
 				if (checkpoint?.remoteRevision !== remoteRevision) {
@@ -258,6 +273,7 @@ export function createStudioBufferClient(options) {
 			if (switching) {
 				let roleChoice = !localState && !remoteState ? "visible-prompt" : undefined;
 				if ((localState || remoteState) && needsStudioLegacyPromptChoice(checked.state)) {
+					if (admission) return needsDecision();
 					if (typeof options.decideLegacyPromptRole !== "function") return fail("role-decision-required", "Choose whether the recovered file is the Prompt or a separate document. No roles or text were changed.");
 					roleChoice = await options.decideLegacyPromptRole(checked.state);
 					if (!["visible-prompt", "keep-roles"].includes(roleChoice)) return fail("role-decision-cancelled", "Recovery role choice cancelled. Existing text and copies were kept.");
@@ -265,6 +281,7 @@ export function createStudioBufferClient(options) {
 				checked = prepareStudioPromptDocumentWorkspace(checked.state, { makeBufferId, roleChoice, now });
 				if (!checked.ok) return checked;
 			}
+			if (admission && (!same(checked.state, remoteState) || !same(admissionBytes(), inspected) || !admission.isCurrent())) return needsDecision();
 			if (disposed || !isStillCurrent()) return fail("editor-changed", "The editor changed while recovery was loading. Current text and recovery were kept; save or copy before reloading.");
 			store = createStudioBufferStore(checked.state);
 			if (openBackup?.record) hostingFreeze = { kind: "open", bufferId: openBackup.record.request.bufferId, startedAt: remoteReadStartedAt };
@@ -370,6 +387,22 @@ export function createStudioBufferClient(options) {
 			if (!result.ok) return result;
 			saveLocal(store.snapshot()); publish(store.snapshot());
 			return { ok: true, characters: plan.characters, addedCharacters: plan.addedCharacters };
+		},
+		// Undo a just-made Add to Prompt: only while the Document is still selected and the Prompt is
+		// exactly as the add left it, so later work is never overwritten (Oliver, 11 Oct).
+		undoPromptAppend({ promptId, revision, addedText, previousText } = {}) {
+			if (hostingFreeze) return frozen();
+			if (!switching) return fail("switching-disabled", "Internal selection copying is not enabled in this view.");
+			if (disposed || !store || unrepresentedEditor) return fail("not-ready", "Keep the current editor visible until it can be represented safely in recovery.");
+			const state = store.snapshot(), prompt = store.get(promptId), selected = store.get(state.selectedBufferId);
+			if (selected?.role !== "document" || state.activePromptId !== promptId || prompt?.role !== "prompt"
+				|| prompt.revision !== revision || prompt.text !== addedText || typeof previousText !== "string") {
+				return fail("stale-buffer", "The Prompt changed after the add. Nothing was undone.");
+			}
+			const result = store.update(promptId, revision, { text: previousText });
+			if (!result.ok) return result;
+			saveLocal(store.snapshot()); publish(store.snapshot());
+			return { ok: true };
 		},
 		persist(editor, baselineText, extra) {
 			const result = capture(editor, baselineText, extra);
@@ -611,6 +644,8 @@ export function createStudioBufferClient(options) {
 			return escrow?.resolve(moveId) ?? fail("hosting-disabled", "Document hosting is not enabled.");
 		},
 		snapshot: () => store?.snapshot() ?? null,
+		// The acknowledged checkpoint a departing page may vouch for, or null.
+		cleanDepartureRevision() { return this.needsUnloadConfirmation() || remoteBlocked || !remoteEnabled ? null : remoteRevision; },
 		needsUnloadConfirmation() {
 			// beforeunload cannot distinguish reload from tab closure. Session storage can
 			// vanish on closure, so only a current, unexpired server acknowledgement allows

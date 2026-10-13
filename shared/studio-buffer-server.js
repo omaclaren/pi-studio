@@ -19,6 +19,9 @@ export function createStudioBufferServerStore(options = {}) {
 	const now = options.now ?? Date.now;
 	const legacyState = options.legacyState ?? (() => null);
 	const entries = new Map(), capabilities = new Map(), hostingViews = new Map(), metadataWrites = new Map(), seenHostingViews = new Set(), copyReceipts = new Map(), launchReceipts = new Map(), openReceipts = new Map();
+	// A departing owner's word that it held nothing beyond the stored checkpoint (Sol,
+	// candidate67). Single use, voided by any later activity, and consumed by the next lease.
+	const cleanLeaves = new Map(), releasedGenerations = new Map();
 	let nextViewGeneration = 0;
 	const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 	const hosting = options.hosting ? createStudioDocumentHostingStore({ ...options.hosting, now,
@@ -52,6 +55,7 @@ export function createStudioBufferServerStore(options = {}) {
 					lineage: [...(previous?.lineage || []), receipt].slice(-16), touchedAt: now() } });
 			}
 			const replacing = new Set(replacements.map(r => r.key));
+			for (const key of replacing) cleanLeaves.delete(key);
 			const total = [...entries].reduce((sum, [key, entry]) => sum + (replacing.has(key) ? 0 : entry.chars), 0)
 				+ replacements.reduce((sum, r) => sum + r.value.chars, 0);
 			if (total > maxTotalTextChars || entries.size + replacements.filter(r => !entries.has(r.key)).length > maxEntries) return fail("capacity", "Server recovery cannot hold the moved document. Nothing was evicted.");
@@ -73,6 +77,14 @@ export function createStudioBufferServerStore(options = {}) {
 		const conflict = legacyConflict(binding, entry.state); if (conflict) return conflict;
 		return { ok: true, workspaceId: binding.workspaceId, entry };
 	}
+	// One predicate for recording a clean departure and for admitting the next page
+	// without the resume question. Completed copy/launch receipts don't block it.
+	function cleanContinuationEligible(workspaceId, entry) {
+		return Boolean(hosting && entry && entries.get(workspaceId) === entry && !hosting.hasPending(workspaceId) && !hosting.pendingMoves(workspaceId).length
+			&& !fileClaims.hasPending(workspaceId) && ![...metadataWrites.keys()].some(key => key.startsWith(workspaceId + ":"))
+			&& ![...openReceipts.values()].some(r => r.workspaceId === workspaceId && r.result.status !== "acknowledged"));
+	}
+	const voidCleanLeave = (...ids) => { for (const id of ids) if (typeof id === "string") cleanLeaves.delete(id); };
 	function documentIdle(workspaceId, bufferId) {
 		if (metadataWrites.get(workspaceId + ":" + bufferId)?.size) return fail("metadata-pending", "Wait for this Document's comments and scratchpad to finish saving.");
 		return fileClaims.guardMove(workspaceId, bufferId);
@@ -88,7 +100,7 @@ export function createStudioBufferServerStore(options = {}) {
 	}
 	function reclaim(key, entry) {
 		if (hostingViews.has(key) || entry.state.buffers.some(b => metadataWrites.get(key + ":" + b.id)?.size) || fileClaims?.hasPending(key) || !isStudioPristineWorkspace(entry.state) || !hosting.reclaimPristine(key)) return false;
-		entries.delete(key); seenHostingViews.delete(key);
+		entries.delete(key); seenHostingViews.delete(key); cleanLeaves.delete(key);
 		for (const [capability, value] of capabilities) if (value.workspaceId === key) capabilities.delete(capability);
 		return true;
 	}
@@ -204,6 +216,7 @@ export function createStudioBufferServerStore(options = {}) {
 			const filePlan = fileClaims?.checkCheckpoint(binding.workspaceId, encoded.state);
 			if (filePlan && !filePlan.ok) return filePlan;
 			// An exact retry after an acknowledgement was lost is safe; divergent writers need a new decision.
+			// It changes nothing, so it leaves a clean departure standing (the departing page's flush).
 			if (previous?.raw === encoded.raw) {
 				fileClaims?.commitCheckpoint(filePlan);
 				previous.touchedAt = now();
@@ -229,6 +242,7 @@ export function createStudioBufferServerStore(options = {}) {
 				fromDigest: digest(previous.state), toDigest: digest(encoded.state) }].slice(-16) : [];
 			if (hosting && hostingViews.has(binding.workspaceId)) seenHostingViews.add(binding.workspaceId);
 			entries.set(binding.workspaceId, { state: encoded.state, raw: encoded.raw, revision, chars, lineage, touchedAt: now() });
+			cleanLeaves.delete(binding.workspaceId);
 			fileClaims?.commitCheckpoint(filePlan);
 			return { ok: true, revision, workspaceRevision: encoded.state.revision, expiresInMs: ttlMs,
 				...(hosting ? { documents: hosting.documentAuthorities(binding.workspaceId), pendingSaves: fileClaims.list(binding.workspaceId) } : {}) };
@@ -241,14 +255,33 @@ export function createStudioBufferServerStore(options = {}) {
 			const current = hostingViews.get(binding.workspaceId);
 			if (current && (current.capability !== capability || current.handle !== handle)) return fail("view-already-open", "This workspace already has a live editing tab. Use that tab; its draft was kept.");
 			const generation = current?.generation ?? ++nextViewGeneration;
+			// A new lease takes the clean departure, whatever happens next; a rebind never does.
+			let continuation = null;
+			if (!current) {
+				const clean = cleanLeaves.get(binding.workspaceId); cleanLeaves.delete(binding.workspaceId);
+				if (clean && clean.generation === releasedGenerations.get(binding.workspaceId) && cleanContinuationEligible(binding.workspaceId, clean.entry)) continuation = { revision: clean.entry.revision };
+			}
 			if (entries.has(binding.workspaceId)) seenHostingViews.add(binding.workspaceId);
 			hostingViews.set(binding.workspaceId, { capability, handle, mode, generation });
-			return { ok: true, workspaceId: binding.workspaceId, mode, generation };
+			return { ok: true, workspaceId: binding.workspaceId, mode, generation, ...(continuation ? { continuation } : {}) };
 		},
+		// The departing owner's own socket, at its own generation and exact checkpoint.
+		// Matched by the server-owned handle, so the page's capability release can't race it.
+		hostingCleanLeave(capability, handle, request) {
+			for (const [workspaceId, view] of hostingViews) if (view.capability === capability && view.handle === handle) {
+				const entry = entries.get(workspaceId);
+				cleanLeaves.delete(workspaceId);
+				if (view.generation !== request?.generation || !entry || entry.revision !== request?.revision || !cleanContinuationEligible(workspaceId, entry)) return fail("not-clean", "This departure can't skip the resume question.");
+				cleanLeaves.set(workspaceId, { generation: view.generation, entry });
+				return { ok: true };
+			}
+			return fail("forbidden", "Only the current owning connection can record its departure.");
+		},
+		hasCleanLeave(workspaceId) { const clean = cleanLeaves.get(workspaceId); return Boolean(clean && cleanContinuationEligible(workspaceId, clean.entry)); },
 		releaseHostingView(capability, handle) {
 			for (const [workspaceId, view] of hostingViews) if (view.capability === capability && view.handle === handle) {
 				const cancelled = hosting.cancelPending(workspaceId);
-				hostingViews.delete(workspaceId); return { ok: true, released: true, cancellation: cancelled };
+				hostingViews.delete(workspaceId); releasedGenerations.set(workspaceId, view.generation); return { ok: true, released: true, cancellation: cancelled };
 			}
 			return { ok: true, released: false };
 		},
@@ -258,6 +291,7 @@ export function createStudioBufferServerStore(options = {}) {
 		},
 		hostingCopy(capability, request) {
 			const binding = fileBinding(capability, request?.generation); if (!binding.ok) return binding;
+			voidCleanLeave(binding.workspaceId);
 			if (!/^[a-f0-9]{48}$/.test(request.operationId || "")) return fail("invalid-request", "A fresh copy intent identity is required.");
 			const key = binding.workspaceId + ":" + request.operationId;
 			const intent = JSON.stringify([request.bufferId, request.documentEpoch, request.expectedRevision]);
@@ -288,6 +322,7 @@ export function createStudioBufferServerStore(options = {}) {
 		// reuse + registration. A receipt never authorizes a filesystem read.
 		hostingLaunch(capability, request, loadFile, loadExport) {
 			const binding = fileBinding(capability, request?.generation); if (!binding.ok) return binding;
+			voidCleanLeave(binding.workspaceId);
 			if (!request || typeof request.operationId !== "string" || !/^[a-f0-9]{48}$/.test(request.operationId || "") || !["blank", "file"].includes(request.kind)
 				|| ["path", "sourcePath", "resourceDir"].some(k => typeof request[k] !== "string" || request[k].length > 16_384 || request[k].includes("\0"))
 				|| (request.kind === "blank" ? request.path || request.sourcePath || request.resourceDir : !request.path)
@@ -344,6 +379,7 @@ export function createStudioBufferServerStore(options = {}) {
 		},
 		hostingOpen(capability, request, loadFile) {
 			const binding = fileBinding(capability, request?.generation); if (!binding.ok) return binding;
+			voidCleanLeave(binding.workspaceId);
 			if (!request || !["open", "open-cancel", "open-ack"].includes(request.operation) || typeof request.operationId !== "string" || !/^[a-f0-9]{48}$/.test(request.operationId)
 				|| ["path", "sourcePath", "resourceDir"].some(k => typeof request[k] !== "string" || request[k].length > 16384 || request[k].includes("\0")) || !request.path) return fail("invalid-request", "A bounded file-open intent is required.");
 			const key = binding.workspaceId + ":" + request.operationId, intent = JSON.stringify([request.bufferId, request.documentEpoch, request.expectedRevision, request.path, request.sourcePath, request.resourceDir, request.discardTarget]);
@@ -427,6 +463,7 @@ export function createStudioBufferServerStore(options = {}) {
 			if (!hosting || !binding) return fail("forbidden", "Document hosting is unavailable for this page.");
 			const viewError = request?.operation === "status" ? null : hostingViewError(capability, binding, request?.generation);
 			if (viewError) return viewError;
+			if (request?.operation !== "status") voidCleanLeave(binding.workspaceId, request?.targetWorkspaceId);
 			const entry = entries.get(binding.workspaceId);
 			if (!entry || entry.state.mode !== binding.mode) return fail("not-ready", "A current recovery checkpoint is required before moving a document.");
 			const stale = () => fail("conflict", "The workspace checkpoint changed. Nothing was moved.");
@@ -500,7 +537,7 @@ export function createStudioBufferServerStore(options = {}) {
 						&& retained.bufferId === request.bufferId && hosting.owner(request.bufferId)?.workspaceId === binding.workspaceId) result = retained;
 				}
 				if (!result.ok) return result;
-				for (const value of entries.values()) for (const receipt of value.lineage || []) if (receipt.move?.moveId === request.moveId) receipt.move.adopted = true;
+				for (const [key, value] of entries) for (const receipt of value.lineage || []) if (receipt.move?.moveId === request.moveId) { receipt.move.adopted = true; cleanLeaves.delete(key); }
 				return withCheckpoint({ ...result, adopted: true });
 			}
 			return fail("invalid-request", "Unknown document hosting operation.");
@@ -533,11 +570,13 @@ export function createStudioBufferServerStore(options = {}) {
 		// The writer is a trusted server callback, never a client-provided function.
 		hostingSave(capability, request, writer) {
 			const binding = fileBinding(capability, request?.generation); if (!binding.ok) return binding;
+			voidCleanLeave(binding.workspaceId);
 			if (metadataWrites.get(binding.workspaceId + ":" + request.bufferId)?.size) return fail("metadata-pending", "Finish saving this Document's metadata before writing its file.");
 			return fileClaims.execute(capability, request, writer);
 		},
 		hostingSaveMetadata(capability, request, transaction) {
 			if (!hosting) return Promise.resolve(fail("forbidden", "Document hosting is unavailable."));
+			voidCleanLeave(capabilities.get(capability)?.workspaceId);
 			return fileClaims.metadata(capability, request, transaction);
 		},
 		ownsMetadataKey(kind, documentKey) {
@@ -556,6 +595,7 @@ export function createStudioBufferServerStore(options = {}) {
 				return binding;
 			};
 			const binding = check(); if (!binding.ok) return binding;
+			voidCleanLeave(binding.workspaceId);
 			const key = binding.workspaceId + ":" + request.bufferId;
 			let complete; const pending = new Promise(resolve => { complete = resolve; });
 			const writes = metadataWrites.get(key) || new Set(); writes.add(pending); metadataWrites.set(key, writes);
@@ -574,6 +614,7 @@ export function createStudioBufferServerStore(options = {}) {
 		},
 		discardHostingSave(capability, request) {
 			const binding = fileBinding(capability, request?.generation); if (!binding.ok) return binding;
+			voidCleanLeave(binding.workspaceId);
 			const authority = hosting.checkAuthority(binding.workspaceId, request.bufferId, request.documentEpoch); if (!authority.ok) return authority;
 			if (binding.entry.revision !== request.expectedRevision) return fail("conflict", "The Document changed while choosing how to resolve its save.");
 			return fileClaims.discard(binding.workspaceId, request.operationId, request.bufferId, request.confirmed === true);
@@ -616,7 +657,7 @@ export function createStudioBufferServerStore(options = {}) {
 		},
 		hostingViewAuthority(capability, generation) { const binding = fileBinding(capability, generation); return binding.ok ? { ok: true } : binding; },
 		release(capability) { return { ok: true, released: capabilities.delete(capability) }; },
-		clear() { entries.clear(); capabilities.clear(); hostingViews.clear(); seenHostingViews.clear(); copyReceipts.clear(); launchReceipts.clear(); openReceipts.clear(); hosting?.clear(); fileClaims?.clear(); },
+		clear() { entries.clear(); capabilities.clear(); hostingViews.clear(); seenHostingViews.clear(); cleanLeaves.clear(); releasedGenerations.clear(); copyReceipts.clear(); launchReceipts.clear(); openReceipts.clear(); hosting?.clear(); fileClaims?.clear(); },
 		get size() { cleanup(); return entries.size; },
 	});
 }

@@ -50,14 +50,10 @@ export async function openStudioRetainedDocument(options, bufferId, focus = true
  finally { if (current()) options.changed(); }
 }
 
-// A verified creation is independent from opening, seen/live state and focus.
-// Atomic retirement retains token-free destinations; uncertain replies retry v1/v2
-// pending requests unchanged, without borrowing a newer source checkpoint.
-export function createStudioDocumentLaunchController(options) {
- let flight = null, closed = false, live = false, forgetting = false;
- const observed = new Map(), ownerFlights = new Map();
- const nonce = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, "0")).join("");
- const intents = createStudioDocumentCreationIntent(options.storage, "piStudio.bufferWorkspace.v2:" + options.workspaceId + ":launch", r => {
+// The retained editor-request tracking. Also read, without writing, before a page may
+// skip the resume question (Sol, candidate67).
+export function createStudioDocumentLaunchIntent(storage, workspaceId) {
+ return createStudioDocumentCreationIntent(storage, "piStudio.bufferWorkspace.v2:" + workspaceId + ":launch", r => {
   if (!r || Object.keys(r).some(k => !["operationId", "bufferId", "documentEpoch", "expectedRevision", "kind", "path", "sourcePath", "resourceDir", "exportId"].includes(k))
    || !["blank", "file"].includes(r.kind) || !/^[a-f0-9]{48}$/.test(r.operationId || "") || !/^[a-f0-9]{48}$/.test(r.expectedRevision || "")
    || !/^[a-zA-Z0-9_-]{1,128}$/.test(r.bufferId || "") || !Number.isSafeInteger(r.documentEpoch) || r.documentEpoch < 1
@@ -66,6 +62,15 @@ export function createStudioDocumentLaunchController(options) {
    || (r.exportId !== undefined && (typeof r.exportId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(r.exportId)))) throw Error("The retained editor request is invalid. Keep it for inspection; it was not replaced.");
   return { ...r };
  }, ["blank", "file"]);
+}
+// A verified creation is independent from opening, seen/live state and focus.
+// Atomic retirement retains token-free destinations; uncertain replies retry v1/v2
+// pending requests unchanged, without borrowing a newer source checkpoint.
+export function createStudioDocumentLaunchController(options) {
+ let flight = null, closed = false, live = false, forgetting = false;
+ const observed = new Map(), ownerFlights = new Map();
+ const nonce = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, "0")).join("");
+ const intents = createStudioDocumentLaunchIntent(options.storage, options.workspaceId);
  const peek = () => { const saved = intents.peek(); return { ...saved, live: saved.record ? false : live, busy: !!flight || !!ownerFlights.size,
   destinations: saved.destinations.map(d => ({ ...d, live: observed.get(d.bufferId)?.generation === options.generation() && observed.get(d.bufferId)?.live === true })) }; };
  const notify = (message, kind = "warning") => { if (!closed) { options.status(message, kind); options.changed(); } };

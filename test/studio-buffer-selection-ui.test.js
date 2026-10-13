@@ -28,7 +28,8 @@ function setup() {
     captureRecoveryConsent: () => ({ generation: c.generation }), recoveryConsentIsCurrent: owner => owner.generation === c.generation,
     generation: 1, getStudioSelectedBuffer: () => state.buffers.find(b => b.id === state.selectedBufferId),
     isStudioDocumentBufferView: () => state.selectedBufferId === "doc", syncStudioBufferSwitcher: () => calls.push("controls"),
-    setStatus: (...args) => calls.push(args), bufferSwitcherUi: null, syncStudioReplSendLabel() {} });
+    setStatus: (...args) => calls.push(args), bufferSwitcherUi: null, syncStudioReplSendLabel() {},
+    statusLineEl: null, statusEl: {}, statusMessage: "", studioPromptAddUndo: null, studioPromptAddUndoBtn: null });
   load(c, "function studioBuffersCanAddSelection(", "function syncStudioBufferSwitcher()");
   const button = { addEventListener: (type, fn) => { handlers[type] = fn; } };
   c.document.activeElement = c.sourceTextEl;

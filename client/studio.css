@@ -7722,6 +7722,11 @@
     body.studio-workspace-layout .files-panel-workspace .files-row:has(.files-more[open]) .files-actions { visibility: visible; }
     body.studio-workspace-layout .files-panel-workspace .files-row:has(.files-more[open]) { z-index: 5; }
 
+    /* Undo for Add to Prompt, beside its status message (Oliver, 11 Oct). */
+    .studio-status-undo { margin-left: 8px; padding: 0 2px; min-height: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer;
+      text-decoration: underline; text-underline-offset: 2px; }
+    .studio-status-undo[hidden] { display: none; }
+
     /* Trial48 wording (finding 5): menus show labels only; status has no dot. */
     body.studio-workspace-layout .studio-buffer-menu-help { display: none; }
     body.studio-workspace-layout #syncBadge::before { display: none; }
