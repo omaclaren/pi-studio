@@ -4,17 +4,17 @@ A browser workspace for [Pi](https://pi.dev). Write and run prompts, read respon
 
 ## Screenshots
 
-**The Prompt: a question, plus a section added from the Document, and its preview:**
+The Prompt, with a section added from the Document:
 
-![The Prompt with a section added from the Document, and its preview (pi-studio-dark theme)](./assets/screenshots/dark-workspace.png)
+![The Prompt and its preview](./assets/screenshots/dark-workspace.png)
 
-**The Document: the file you're working on, with its preview:**
+The Document:
 
-![The Document with its rendered preview (pi-studio-light theme)](./assets/screenshots/light-workspace.png)
+![The Document and its preview](./assets/screenshots/light-workspace.png)
 
-**Zen mode, on the code (rose-pine-dawn theme):**
+Zen mode, in rose-pine-dawn:
 
-![Zen mode with a rendered code preview (rose-pine-dawn theme)](./assets/screenshots/theme-zen-code.png)
+![Zen mode on the code](./assets/screenshots/theme-zen-code.png)
 
 There's also a [2-minute demo](https://github.com/omaclaren/pi-studio/releases/latest/download/pi-studio-demo-2min.mp4) (MP4, 2x speed, no audio) of an earlier version; the workflow is the same.
 
@@ -22,18 +22,13 @@ There's also a [2-minute demo](https://github.com/omaclaren/pi-studio/releases/l
 
 - **Prompt and Document** — the default, dual editor mode. The Prompt holds what you send to Pi; the Document holds the file you're working on. Each keeps its own edits, preview and place. See [Single and dual editor mode](#single-and-dual-editor-mode).
 - **Run, critique, annotate** — run the Prompt, ask for a critique, or annotate a response with `[an: ...]` markers and send it back.
-- **Response history** — step back through earlier responses, and load a response, its critique or the prompt that produced it.
-- **Working** — follow Pi's thinking and tool use as it happens. **Follow activity** switches to it during a run and back to the response afterwards.
-- **Rendering** — Markdown and LaTeX with math, syntax highlighting, Mermaid diagrams (with Lucide and Logos icons), CSV tables, interactive HTML and embedded PDFs, themed to match Pi.
+- **Response history and Working** — step back through earlier responses and the prompts behind them, and follow Pi's thinking and tool use as it happens.
+- **Rendering** — Markdown and LaTeX with math, syntax highlighting, Mermaid diagrams, CSV tables, interactive HTML and embedded PDFs, themed to match Pi.
 - **Files and Changes** — browse folders you've allowed, open or preview files, and see the current git diff.
 - **Comments and scratchpad** — comments anchored to lines or selections, and a scratchpad per document.
-- **Side questions** — ask about the text, a folder or the repository in a separate thread that stays out of the main conversation, optionally with web search.
+- **Side questions and quizzes** — ask about the text, a folder or the repository in a separate thread that stays out of the main conversation, or quiz yourself on it.
 - **REPL** — send code to tmux-backed Shell, Python, IPython, Julia, R, GHCi or Clojure sessions, shared with [pi-repl](https://github.com/omaclaren/pi-repl).
-- **Quiz me, Show me, completions** — active-recall quizzes over the text or a folder, one-turn visual explanations, and short completions at the cursor.
 - **Export** — PDF (Pandoc and LaTeX) or standalone HTML, from the preview, a file or the last response.
-- **Careful saving** — a save checks the file hasn't changed on disk since you opened it, and asks if it has.
-- **Quarto** — preview a saved Quarto document through `quarto preview`, without running its code.
-- **Layout** — side by side or stacked panes, and a Zen mode that hides everything but the text.
 
 ## Requirements
 
@@ -97,7 +92,7 @@ Pi's agent can also use these tools:
 
 **Single editor mode** is the one-editor Studio of earlier versions, where Run sends the editor's text.
 
-To switch, use the footer button or `/studio --single` and `/studio --dual`. Studio restarts and reopens the tab, carrying over the Prompt's text, and the choice is kept for your Pi profile. The footer button waits, and says why, while there's unsaved text in the Document or a closed Document window, another Studio tab is open, or a run, save or side question is in progress. The commands work even if the page won't load; they disconnect open tabs, which keep their text, and ask before dropping anything only Studio's server holds.
+To switch, use the footer button or `/studio --single` and `--dual`. Studio restarts and reopens the tab with the Prompt's text, and remembers the choice. If switching would lose anything, it says so first.
 
 ## Details
 
@@ -117,7 +112,7 @@ watch: true
 ```
 ````
 
-To view a PDF, run `/studio report.pdf`; it opens read-only, and `#page=N` picks the page. `/studio --watch report.pdf` also reloads it when the file changes: Studio waits for two matching file-version observations, so it doesn't read a PDF that LaTeX is still writing. This is distinct from `/studio-pdf`, which exports to a new PDF.
+To view a PDF, run `/studio report.pdf`; it opens read-only, and `#page=N` picks the page. `/studio --watch report.pdf` also reloads it when the file changes; it waits until the file stops changing, so it doesn't reload half-written LaTeX output. (`/studio-pdf` is different: it exports to a new PDF.)
 
 ### Mermaid icons
 
@@ -136,7 +131,7 @@ Icons in exported PDFs need Mermaid CLI 11.12+ (`npm install -g @mermaid-js/merm
 
 ### Pi's input editor
 
-**Load from pi editor** (Cmd/Ctrl+Shift+L) copies the draft in Pi's terminal input into Studio, as tools like [pi-nvim-context](https://github.com/omaclaren/pi-nvim-context) build it up. When Studio runs that text, it clears the terminal draft only if the draft hasn't changed since.
+**Load from pi editor** (Cmd/Ctrl+Shift+L) copies the draft in Pi's terminal input into Studio, which suits tools like [pi-nvim-context](https://github.com/omaclaren/pi-nvim-context) that build that draft up. When Studio runs that text, it clears the terminal draft only if the draft hasn't changed since.
 
 ### REPL
 

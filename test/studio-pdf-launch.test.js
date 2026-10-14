@@ -82,7 +82,7 @@ test("--watch dispatches PDF auto-refresh and read-only followed text previews",
   assert.match(indexSource, /watchFile: true,[\s\S]*?kind: "watched-preview"/);
   assert.match(indexSource, /\/studio --watch <file>\s+Open a read-only text preview that follows disk changes, or a PDF with auto-refresh/);
   assert.match(readmeSource, /`\/studio --watch <file>`/);
-  assert.match(readmeSource, /waits for two matching file-version observations/);
+  assert.match(readmeSource, /waits until the file stops changing, so it doesn't reload half-written LaTeX output/);
 });
 
 
@@ -90,5 +90,5 @@ test("command help distinguishes PDF viewing from PDF export", () => {
   assert.match(indexSource, /Open a text file in Studio, or a PDF in a read-only companion preview/);
   assert.match(indexSource, /only one full \/studio view is allowed per Pi session; PDF previews open as companions/);
   assert.match(readmeSource, /run `\/studio report\.pdf`/);
-  assert.match(readmeSource, /distinct from `\/studio-pdf`, which exports/);
+  assert.match(readmeSource, /`\/studio-pdf` is different: it exports to a new PDF/);
 });
