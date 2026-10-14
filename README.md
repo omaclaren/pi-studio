@@ -4,15 +4,17 @@ A browser workspace for [Pi](https://pi.dev). Write and run prompts, read respon
 
 ## Screenshots
 
-**Dual editor mode, with the demo document open in the Document (dark and light themes):**
+**The Prompt: a question, plus a section added from the Document, and its preview:**
 
-![Pi Studio workspace (dark)](./assets/screenshots/dark-workspace.png)
+![The Prompt with a section added from the Document, and its preview (pi-studio-dark theme)](./assets/screenshots/dark-workspace.png)
 
-![Pi Studio workspace (light)](./assets/screenshots/light-workspace.png)
+**The Document: the file you're working on, with its preview:**
 
-**Zen mode, on the code:**
+![The Document with its rendered preview (pi-studio-light theme)](./assets/screenshots/light-workspace.png)
 
-![Pi Studio Zen mode with a rendered code preview](./assets/screenshots/theme-zen-code.png)
+**Zen mode, on the code (rose-pine-dawn theme):**
+
+![Zen mode with a rendered code preview (rose-pine-dawn theme)](./assets/screenshots/theme-zen-code.png)
 
 There's also a [2-minute demo](https://github.com/omaclaren/pi-studio/releases/latest/download/pi-studio-demo-2min.mp4) (MP4, 2x speed, no audio) of an earlier version; the workflow is the same.
 
