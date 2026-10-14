@@ -1,242 +1,125 @@
 # pi-studio
 
-Extension for [pi](https://pi.dev) that opens a local two-pane browser workspace for working with prompts, responses, live working details, Markdown and LaTeX documents, interactive HTML previews, code files, REPL sessions, and other common text-based files side by side. Annotate responses and files, add local comments, write, edit, run prompts, send code to a REPL, browse prompt and response history, request critiques, and use live preview for code, Markdown, LaTeX, and interactive HTML.
-
-See [`ROADMAP.md`](./ROADMAP.md) for the current release plan.
-
-## Single and dual editor mode
-
-Studio 0.10 has two editor modes.
-
-**Dual editor mode** is the default. The left pane holds a **Prompt**, which is what Run sends to Pi, and a **Document**, the file you're working on. Switch between them with the Prompt and Document tabs, or Cmd/Ctrl+Shift+1 and 2. Each keeps its own edits, preview and reading position, and selecting the Document never changes what Run sends.
-
-- **Open a file** in the Document from **File**, the **Files** pane or a link's menu. **Add to Prompt** adds the Document's selection, or all of it, to the Prompt as a labelled copy; Undo takes it back.
-- **Document windows:** **File** can open a file in a new Document window, or move or copy the Document to one. Each file has one editor; opening a file that's already open finds that editor.
-- **Recovery:** unsaved Prompt and Document text survives reloads and dropped connections. If you close the tab, `/studio` reopens the same workspace. After a clean exit it just reopens; otherwise Studio asks before resuming. `/studio --blank` and `--last` start afresh, and `/studio <file>` opens that file, finding its editor if it's already open. Recovery isn't a backup, so save work you want to keep.
-- **Studio open somewhere you can't find**, such as another browser: `/studio-replace` moves it here, or open its URL and choose **Move it here**. The old tab hands over its text and disconnects; if it doesn't answer, Studio asks before resuming.
-- `/studio-current`, editable `/studio-editor-only` and Office-to-Markdown opening aren't available in dual editor mode. Use Studio's Document controls, or single editor mode.
-
-**Single editor mode** is the one-editor Studio of earlier versions, where Run sends the editor's text.
-
-**Switching:** use the footer button (**Switch to single editor** / **Switch to dual editor**), or `/studio --single` and `/studio --dual`. Studio restarts and reopens the tab, and the Prompt's text comes with you. The choice is kept for your Pi profile. Studio won't switch from the footer while the Document or a closed Document window has unsaved text, other Studio tabs are open, or a run, save or side question is in progress; it says why. The commands work even if the page won't load. Like `/studio --stop`, they disconnect open tabs, which keep their text on screen, and they ask in Pi before dropping text that only Studio's server holds.
-
-See [BUFFER-DESIGN.md](./BUFFER-DESIGN.md) for the design.
-
-## Quick demo
-
-[Watch the 2-minute demo (MP4, 2x speed, no audio)](https://github.com/omaclaren/pi-studio/releases/latest/download/pi-studio-demo-2min.mp4)
-
-_The video shows an earlier version of the Studio interface. The basic workflow is the same, but there have been minor UI changes since it was recorded; the screenshots show the more recent version._
+A browser workspace for [Pi](https://pi.dev). Write and run prompts, read responses with rendered math and diagrams, edit and annotate documents, and follow what Pi is doing, side by side.
 
 ## Screenshots
 
-**Dark workspace**
+The screenshots and the [2-minute demo](https://github.com/omaclaren/pi-studio/releases/latest/download/pi-studio-demo-2min.mp4) (MP4, 2x speed, no audio) show Studio before 0.10, which added a two-row header and the Prompt and Document tabs. The workflow is the same.
+
+**Workspace, dark and light:**
 
 ![Pi Studio workspace (dark)](./assets/screenshots/dark-workspace.png)
 
-**Light workspace**
-
 ![Pi Studio workspace (light)](./assets/screenshots/light-workspace.png)
 
-**Zen mode**
-
-![Pi Studio Zen mode (dark)](./assets/screenshots/dark-zen.png)
-
-**Zen mode with a custom theme and rendered code preview**
+**Zen mode, with a custom theme and a rendered code preview:**
 
 ![Pi Studio Zen mode with custom theme and rendered code preview](./assets/screenshots/theme-zen-code.png)
 
-## What it does
+## Features
 
-- Opens a two-pane browser workspace: **Editor** + **Response/Working/Editor Preview/Quarto Preview/Side questions**, side by side by default
-- Lets you choose a persisted pane layout from **View → Workspace**: side by side, Editor above, or Response above; the same divider resizes width or height and either pane can still be focused independently
-- Supports one canonical full Studio view per Pi session, plus additional editor-only companion views when you want extra editing/preview surfaces; editor-only views can also browse files and use the Studio REPL send controls without taking over the full Studio session view
-- Includes a global **Zen** mode that hides the Studio header and secondary chrome without changing the current pane layout; the header can also be hidden independently and restored from the top-right edge
-- Runs editor text directly, asks for structured critique (auto/writing/code focus), offers explicit **Show me** actions for a one-turn compact visual or structural explanation of the editor selection/document, displayed response, or current conversation topic, provides a manual **Suggest completion** action for short cursor-aware continuations (`Option/Alt+Tab` where available or `Cmd/Ctrl+Shift+Space` from the editor, `Tab` to insert a visible suggestion) with an optional editor-plus-latest-response context mode, or opens **Quiz me** for a Studio-native active-recall loop over the current editor text, selection, current file, folder, or repo, with optional focus guidance for shaping question selection
-- Treats text copied from or staged in Pi's terminal input editor as a linked draft: ordinary Studio edits retain the link, and an accepted **Run editor text** clears the terminal draft only when it has not changed in the meantime; a confirmed **Clear Pi editor text…** action remains available explicitly
-- Adds a right-pane **Side questions** thread for contextual questions that stay outside the main Pi conversation unless explicitly promoted. It can start with the editor selection, the Markdown/LaTeX heading block at the cursor, nearby unstructured text, the whole editor, the displayed response, or no starting text; independently, it can use read-only tools to map, search, and read the document folder, repository, or another chosen folder—including extracted PDF, DOCX, ODT, and EPUB text—and can optionally search the web through Brave Search.
-- Working displays codemode JavaScript as **Code**, with light highlighting and preserved indentation. Code/Input and Output fold independently: short sections start visible and long ones compact. That initial default stays stable as content streams; empty pending placeholders do not choose for the first real output. Explicit choices survive streaming, including nested Raw/Write/Edit disclosures. **Collapse all / Expand all** affect displayed sections only; full output remains a separate bounded/full choice. **Control+Shift+[ / ]** works only while focused in Working, outside editable controls. Tool/status/timing and collapsed errors stay visible. This is display formatting, not a tool tree or REPL change; the blank-until-interaction report remains unreproduced.
-- Includes a live **Working** view for following current model/tool activity, with `All` / `Thinking` / `Tools` filters, image previews for image-producing tool outputs, plus **Load visible into editor** and **Copy visible** actions; optional browser-stored **Follow activity** (`Cmd/Ctrl+Option/Alt+A`; off by default under **View → Workspace**) switches to Working when the main Pi agent starts generating and to Response Preview when it completes, unless you manually choose another view during that request. When cycling response history, Working follows saved working details for the selected response when available, and `Cmd/Ctrl+Option/Alt+1–8` switches directly between right-pane views while `Cmd/Ctrl+Option/Alt+P` / `Cmd/Ctrl+Option/Alt+E` / `Cmd/Ctrl+Option/Alt+W` / `Cmd/Ctrl+Option/Alt+F` / `Cmd/Ctrl+Option/Alt+R` / `Cmd/Ctrl+Option/Alt+Q` keep quick mnemonic shortcuts for Response Preview, Editor Preview, Working, Files, REPL, and Side questions
-- Includes a right-pane **Changes** view for browsing the current git diff by file, previewing per-file diffs, opening changed files, loading the full diff into the editor, and copying the diff
-- Includes a right-pane **Files** view rooted in folders allowed for the current Studio session, with an **Allow folder…** action and location selector; exact-file grants can still be opened independently without exposing their parent folders. Files supports sorting by name/modified time/size, opening folders or the current root in Finder/the system file manager, loading text/code/CSV/TSV documents into the editor, opening a read-only **Preview (follow)** tab whose disk content is authoritative, previewing PDFs/images, opening previews in new Studio tabs, converting DOCX/ODT documents to editable Markdown when Pandoc is available after confirmation, copying paths, setting the current folder as the Studio working directory, and revealing files in the file manager
-- Imports detached text-file copies either through the browser's file picker or from a path on the computer running Pi, keeping the path option available in embedded and remote browser views; imported copies remain detached until saved or opened as file-backed documents
-- Includes an optional tmux-backed **REPL** view for Shell, Python, IPython, Julia, R, GHCi, and Clojure sessions, with a scoped **Quick send** composer (`Cmd/Ctrl+Enter`), Raw/Literate editor send modes, `Cmd/Ctrl+Shift+Enter` **Send to REPL**, session start/stop/interrupt controls, a privacy-conscious Off/Summary/Full pane-echo selector, a compact refresh-persistent **Shared REPL Record** of compatible-client submissions, a secondary raw tmux mirror, agent-facing `studio_repl_status` / `studio_repl_send` tools, and Markdown/PDF/HTML export
-- Includes a local persistent scratchpad for quick notes you want to keep out of the main editor until you're ready to copy or insert them, with a **Recent…** picker for recovering scratchpads saved under earlier file/draft identities
-- Includes a docked **Outline** rail for navigating document structure in the current editor text, with clickable entries that jump in the raw editor and reveal matching preview locations when available
-- Restores each browser tab’s editor workspace after refresh or cmux hidden-surface reconstruction, and provides an explicit **Reset editor** action when you want to discard the restored draft and return the tab to a fresh blank draft without changing responses or saved files
-- Tracks an SHA-256 disk revision for file-backed editors: `Cmd/Ctrl+S` checks that revision before staging and again immediately before atomic replacement, external changes produce an explicit **Reload / Save As… / Overwrite / Cancel** decision, and even **Overwrite** / Save As **Replace** must still match the revision Studio reported when confirmation opened. `Cmd/Ctrl+Shift+S` performs no-clobber Save As unless you explicitly confirm the current target. Studio preserves ordinary mode and ownership metadata where the platform permits and refuses to split hard-linked files; file-system-specific ACLs and extended attributes may not survive atomic replacement. As with other file system editors, unrelated writers do not participate in a shared atomic compare-and-swap, so version control remains appropriate for highly concurrent files.
-- Opens text/code documents as read-only followed previews through **Preview file (follow changes)**, Files' **Preview (follow)** action, or `/studio --watch <file>`; updates are debounced and content-hashed, atomic-save replacements are followed, reading position is restored by a stable content anchor with ratio fallback, and temporary read/render failures retain the last good preview
-- Turns local preview links, including links inside sandboxed HTML previews, into Studio actions: PDFs open in the embedded viewer, images open in a zoomable focus viewer, PDF/image links can open in a new Studio preview tab, text/code/CSV/TSV document links can open in a new editor tab, DOCX/ODT links can be converted to editable Markdown, and right-click menus provide **Open here**, **Reveal in file manager**, and **Copy path** for local resources
-- Includes local comments anchored to selections/lines, shown in a docked **Comments** rail, with transient **Comment** / **Jump** actions from raw-editor selections plus editor-preview selections for Markdown, LaTeX, code/text/diff previews, and an opt-in comment mode for editor HTML previews; source-anchored comments can be toggled into inline `[an: ...]` annotations when you want comments reflected in the document text
-- Browses response history (`Prev/Next/Last`) and loads either:
-  - response text, with **Annotate response** (`Cmd/Ctrl+Option/Alt+Enter` from either main pane) also opening **Editor (Preview)**; add Shift (`Cmd/Ctrl+Option/Alt+Shift+Enter`) for **Load response into editor** without switching views (choose another view first if file-backed Quarto Preview is active)
-  - critique notes/full critique
-  - the prompt that generated a selected response
-- Keeps the prompt → accepted Run → **Annotate response** loop confirmation-free when the submitted editor text is unchanged. **Annotate response**, **Load response into editor**, and the critique notes/full loaders ask before replacing unsubmitted edits or unsaved file changes; Cancel preserves the editor and its view so you can save or copy first. A failed submission or late acknowledgement cannot mark later typing as submitted, and sending file text does not save it. This bounded accepted-prompt baseline stays in page memory, is not restored after a page reload, and is separate from Pi-terminal draft cleanup.
-- Supports an annotation workflow for `[an: ...]` markers:
-  - inserts/removes the annotated-reply header
-  - shows/hides annotation markers in preview
-  - strips markers before send (optional)
-  - saves `.annotated.md`
-- Renders Markdown/LaTeX/code previews (math + Mermaid) plus lightweight CSV/TSV table previews, theme-synced with pi, with an explicit H1–H6 hierarchy, zoomable images across Studio-owned Markdown surfaces, and copy buttons for code blocks and blockquotes; already allowed local media loads silently, while blocked images and embedded PDFs remain unloaded behind an explicit per-file or containing-folder allow action; Mermaid previews include Lucide/Logos icon nodes and accessible label contrast over custom fills
-- Adds a contextual **Editor (Quarto Preview)** right-pane view for file-backed `.qmd`, `.md`, and `.markdown` documents. Studio checks Quarto and the document/project configuration before showing an explicit start action, launches a single loopback `quarto preview` process with `--no-execute`, embeds Quarto's authoritative saved-file output without restyling it, and provides open-in-browser, restart, stop, logs, and unsaved-editor warnings. If Quarto is missing, the view remains available with an actionable dependency message.
-- Renders straight, unfenced interactive HTML in preview via a sandboxed browser iframe with zoom controls, while fenced `html` blocks remain source code
-- Embeds local PDFs in Studio Markdown previews via explicit `studio-pdf` fenced blocks and opens existing PDFs directly with `/studio <path.pdf>`, with visible enlarge, browser-tab, system-viewer, show-in-folder, copy-path, manual refresh, and opt-in stable-file auto-refresh actions; true browser fullscreen is offered only when the browser supports it
-- Ships optional `pi-studio-dark` and `pi-studio-light` themes tuned for Studio's browser workspace
-- Exports right-pane preview as PDF (pandoc + LaTeX) or standalone HTML into the source file directory, Studio working directory, or Pi session directory; PDF export can open in a Studio preview tab or the default PDF viewer, and HTML export can open in the default browser or in a new Studio editor tab for inspection/commenting, while preserving authored HTML previews as HTML and rendering CSV/TSV editor previews as tables
-- Exports local files headlessly via `/studio-pdf <path>` to `<name>.studio.pdf` or `/studio-html <path>` to `<name>.studio.html`; without a path, those commands export the last model response to a timestamped file. Agent tools `studio_export_pdf` and `studio_export_html` expose the same export pipeline for remote/Telegram-style sessions.
-- Shows model/session/context usage in the footer, plus compact-context and active-theme controls
+- **Prompt and Document** — the default, dual editor mode. The Prompt holds what you send to Pi; the Document holds the file you're working on. Each keeps its own edits, preview and place. See [Single and dual editor mode](#single-and-dual-editor-mode).
+- **Run, critique, annotate** — run the Prompt, ask for a critique, or annotate a response with `[an: ...]` markers and send it back.
+- **Response history** — step back through earlier responses, and load a response, its critique or the prompt that produced it.
+- **Working** — follow Pi's thinking and tool use as it happens. **Follow activity** switches to it during a run and back to the response afterwards.
+- **Rendering** — Markdown and LaTeX with math, syntax highlighting, Mermaid diagrams (with Lucide and Logos icons), CSV tables, interactive HTML and embedded PDFs, themed to match Pi.
+- **Files and Changes** — browse folders you've allowed, open or preview files, and see the current git diff.
+- **Comments and scratchpad** — comments anchored to lines or selections, and a scratchpad per document.
+- **Side questions** — ask about the text, a folder or the repository in a separate thread that stays out of the main conversation, optionally with web search.
+- **REPL** — send code to tmux-backed Shell, Python, IPython, Julia, R, GHCi or Clojure sessions, shared with [pi-repl](https://github.com/omaclaren/pi-repl).
+- **Quiz me, Show me, completions** — active-recall quizzes over the text or a folder, one-turn visual explanations, and short completions at the cursor.
+- **Export** — PDF (Pandoc and LaTeX) or standalone HTML, from the preview, a file or the last response.
+- **Careful saving** — a save checks the file hasn't changed on disk since you opened it, and asks if it has.
+- **Quarto** — preview a saved Quarto document through `quarto preview`, without running its code.
+- **Layout** — side by side or stacked panes, and a Zen mode that hides everything but the text.
 
-## Pi input-draft handoff
+## Requirements
 
-Tools such as [`pi-nvim-context`](https://github.com/omaclaren/pi-nvim-context) deliberately accumulate visible context in Pi's terminal input draft without submitting it. **Load from pi editor** (`Cmd/Ctrl+Shift+L`) copies that draft into Studio without clearing it and records only a transient SHA-256 fingerprint and byte length for the handoff—no additional snapshot copy beyond the text already in Studio. You can then edit the text freely in Studio.
+- [Pi](https://pi.dev)
+- [Pandoc](https://pandoc.org/installing.html) for full previews and exports (`brew install pandoc` on macOS), and LaTeX (TeX Live or MacTeX) for PDF export
+- Optional:
+  - `tmux` for the REPL;
+  - `quarto` for Quarto previews;
+  - Mermaid CLI 11.12+ for diagrams in exported PDFs;
+  - `pdftotext` so side questions can read PDFs;
+  - `BRAVE_API_KEY` for side-question web search.
 
-When Pi accepts **Run editor text**, Studio clears the linked terminal draft only if its current fingerprint and byte length still match those captured at load time. Terminal typing, additional Neovim context, or another client changing the draft causes Studio to preserve it silently. A failed or rejected run also leaves it intact. **Send current text to Pi editor** establishes the same safe link, while **Clear Pi editor text…** provides a separate confirmed, unconditional cleanup action. Studio never clears terminal history or its own editor through this handoff.
-
-### Prompt header behaviour
-
-In dual editor mode, the Prompt's **Annotation header** button adds or removes only the recognised leading explanation. It does not add an `--- end annotations ---` marker or remove any existing end markers. All text following the header—including copied headers, source labels and whitespace—stays unchanged. The header's source metadata, syntax hint and precedence wording are unchanged.
-
-Use an ordinary heading such as `## Notes` if you want to separate additional material, or move an excerpt into `[an: …]` manually. Studio does not insert/manage Notes sections or remember reply ranges; imported or recovered text needs no section re-selection. Selection/document copying and the Prompt's existing inline-annotation policy are unchanged. Default/foundation-only views, Document and companion editors retain their existing header/footer behaviour.
-
-## Commands
-
-| Command | Description |
-|---|---|
-| `/studio` | Open in Muxy or cmux when available, otherwise the system browser, with the last assistant response (fallback: blank). In dual editor mode, if your last workspace's tab is gone, reopen that workspace instead |
-| `/studio <path>` | Open a text file in the editor, or a PDF in a read-only companion preview tab |
-| `/studio --watch <file>` | Open a local text/code file in a read-only preview that follows disk changes, or a PDF with stable-file auto-refresh enabled |
-| `/studio --last` | Force last response |
-| `/studio --blank` | Force blank editor |
-| `/studio --no-browser` | Start/print the Studio URL without opening a browser, useful for forwarded or phone/browser sessions |
-| `/studio --port <port>` | Bind Studio to a fixed port instead of a random free port; the default host remains localhost |
-| `/studio --listen-all` | Explicitly bind Studio to all IPv4 interfaces (`0.0.0.0`) for a container or trusted private-network workflow |
-| `/studio --status` | Show studio server status, including its listening address |
-| `/studio --stop` | Stop studio server |
-| `/studio --single` | Use single editor mode, and remember it; restarts Studio if it's running in dual editor mode |
-| `/studio --dual` | Use dual editor mode (the default), and remember it |
-| `/studio --help` | Show help |
-| `/studio-replace [path\|--blank\|--last]` | Replace the current full Studio view with a new full Studio view; in dual editor mode, move the open Studio here |
-| `/studio-editor-only [path\|--blank\|--last]` | Open an editor-only view, or a read-only PDF preview; add `--watch <file>` for a followed text/PDF companion view |
-| `/studio-current <path>` | Load a file into currently open Studio tab(s) without opening a new browser window |
-| `/studio-pdf [path] [options]` | Export a local file, or the last model response when no path is given, via the Studio PDF pipeline |
-| `/studio-html [path]` | Export a local file, or the last model response when no path is given, to standalone HTML via the Studio preview pipeline |
-
-## Agent tools
-
-| Tool | Description |
-|---|---|
-| `studio_export_pdf` | Export direct Markdown/LaTeX, a local file, or the last model response to PDF. Defaults to writing a file without opening a viewer. |
-| `studio_export_html` | Export direct Markdown/LaTeX, a local file, or the last model response to standalone HTML. Defaults to writing a file without opening a viewer. |
-| `studio_repl_status` | Inspect tmux-backed REPL sessions, including shared clean-record identity, compatible-client entries, and raw-mirror details. |
-| `studio_repl_send` | Send code to a visible REPL under the cross-client send lease, optionally choose its raw-pane `echoMode`, and add its captured output to the shared clean record. |
+Studio is developed on macOS. It should work on Linux, which has had less testing.
 
 ## Install
 
 ```bash
-# npm
 pi install npm:pi-studio
-
-# GitHub
-pi install https://github.com/omaclaren/pi-studio
 ```
 
-Run once without installing:
+Or from GitHub, `pi install https://github.com/omaclaren/pi-studio`, or once without installing, `pi -e https://github.com/omaclaren/pi-studio`.
 
-```bash
-pi -e https://github.com/omaclaren/pi-studio
-```
+## Usage
 
-## Container and network access
+| Command | Description |
+|---|---|
+| `/studio` | Open Studio with the last response. In dual editor mode, reopen your last workspace if its tab is gone |
+| `/studio <file>` | Open a text file, or a PDF in a read-only preview |
+| `/studio --watch <file>` | Open a read-only preview that follows changes on disk |
+| `/studio --blank`, `--last` | Start with a blank editor, or the last response |
+| `/studio --single`, `--dual` | Switch editor mode, and remember it |
+| `/studio --no-browser` | Print the URL without opening a browser |
+| `/studio --port <port>` | Use a fixed port |
+| `/studio --listen-all` | Listen on all interfaces, for containers ([see below](#network-and-ssh)) |
+| `/studio --status`, `--stop` | Show the server's status, or stop it |
+| `/studio-replace` | Replace the open Studio view. In dual editor mode, move it to a new tab here |
+| `/studio-editor-only [file]` | Open an extra editor tab (single editor mode) |
+| `/studio-current <file>` | Load a file into the open Studio tab (single editor mode) |
+| `/studio-pdf [file]` | Export a file, or the last response, to PDF |
+| `/studio-html [file]` | Export a file, or the last response, to HTML |
 
-Studio binds to `127.0.0.1` by default. For a container or sandbox whose port must be published to the host, opt in explicitly and choose a stable port:
+Studio opens in Muxy's or cmux's built-in browser when Pi runs there, and otherwise in the system browser. Press `?` in Studio for keyboard shortcuts.
 
-```text
-/studio --no-browser --listen-all --port 4321
-```
+Pi's agent can also use these tools:
 
-This listens on `0.0.0.0:4321` while still printing a tokenized `http://127.0.0.1:4321/...` browser URL. With a same-port mapping such as `sbx run --publish 4321:4321`, open that URL unchanged on the host. `--listen-all` is a server-lifetime setting: if Studio is already running on localhost, use `/studio --stop` before restarting it with the flag.
+| Tool | Description |
+|---|---|
+| `studio_export_pdf`, `studio_export_html` | Export Markdown/LaTeX, a file or the last response |
+| `studio_repl_status` | List REPL sessions |
+| `studio_repl_send` | Send code to a REPL and record its output |
 
-Treat wildcard binding as a security-sensitive mode. The URL token remains required, but anyone who obtains the full URL can control Studio for that Pi process: they can submit prompts, read or write files through Studio, and expand local-resource access. Studio does not add TLS. Treat the URL like a password, never expose the port directly to the public internet, and bind the host side of a container mapping to loopback when possible—for example, `-p 127.0.0.1:4321:4321`. For access across an untrusted network, keep Studio on its localhost default and use SSH local port forwarding instead.
+## Single and dual editor mode
 
-## Shared REPL record
+**Dual editor mode** is the default. The left pane has a **Prompt**, which is what Run sends to Pi, and a **Document**, the file you're working on. Switch with the tabs or Cmd/Ctrl+Shift+1 and 2. Selecting the Document never changes what Run sends.
 
-Studio remains a standalone REPL client: it can create and use its own tmux sessions without `pi-repl`. When a compatible `pi-repl` installation uses the same tmux session, both clients automatically discover one session-owned clean record and see each other's code and captured output. No package imports or depends on the other.
+- **Add to Prompt** copies the Document's selection, or all of it, into the Prompt as a labelled snapshot, with Undo.
+- **File** opens a file in the Document, or in a new Document window. Each file has one editor; opening a file that's already open finds that editor.
+- Unsaved Prompt and Document text survives reloads and dropped connections. If you close the tab, `/studio` reopens the same workspace, asking first if the tab didn't close cleanly. This isn't a backup: save work you want to keep.
+- If Studio opened somewhere you can't find, such as another browser, `/studio-replace` moves it here, or open its URL and choose **Move it here**.
+- `/studio-current`, editable `/studio-editor-only` and Office-to-Markdown conversion aren't available in dual editor mode.
 
-Compatible clients publish a versioned opaque record ID in tmux and keep the bounded JSON record in a private per-user temporary directory. The record is tied to the exact tmux session ID and creation time, uses atomic locked updates, and serializes compatible sends from pre-capture through output capture so concurrent Studio and `pi-repl` submissions do not claim each other's output. Existing sessions attach lazily; Studio's legacy browser-local entries are imported once with stable IDs.
+**Single editor mode** is the one-editor Studio of earlier versions, where Run sends the editor's text.
 
-The clean record covers only submissions and notes whose boundaries a compatible client knows. Text typed directly into an attached tmux pane remains in the secondary raw pane/history mirror and is not presented as reliably parsed code/output. **Export record** produces a canonical Markdown representation with origin, mode, status, runtime, timestamp, and this limitation; PDF and HTML exports are derived from that Markdown.
+To switch, use the footer button or `/studio --single` and `/studio --dual`. Studio restarts and reopens the tab, carrying over the Prompt's text, and the choice is kept for your Pi profile. The footer button waits, and says why, while there's unsaved text in the Document or a closed Document window, another Studio tab is open, or a run, save or side question is in progress. The commands work even if the page won't load; they disconnect open tabs, which keep their text, and ask before dropping anything only Studio's server holds.
 
-**Quick send** is a small command composer beneath the Shared REPL Record and above the secondary raw mirror, not a second persistent editor or terminal emulator. Its compact target shows the selected session name and doubles as a link back to the session controls; the hover and accessibility label retain the runtime and exact tmux pane details. Plain Enter adds a line, and `Cmd/Ctrl+Enter` submits the exact text through the same cross-client lease, control-file, and Shared REPL Record path as editor sends. Unsaved drafts stay in browser memory per exact tmux lifetime/runtime, survive session switching, and clear only after Studio acknowledges the submission; rejected text remains available to edit or retry.
+## Details
 
-### Submission display and alignment anchors
+### Local files
 
-Optional pane echo places submitted code after a compact begin anchor, followed by a plain `── output ──` divider and a completion anchor. The anchors contain a stable 12-character hash derived from the Shared REPL Record entry ID, so compatible clients can align known sends in future derived transcripts without exposing the entry ID itself. Studio strips the exact header, source preview, divider, and footer from captured tool output and the clean record; they remain visible only in the raw pane/history.
+Studio reads files in the opened document's folder and in folders you allow from **Files**. A link or image elsewhere asks first, offering that file or its folder, for the rest of the session.
 
-The REPL footer selector offers:
-
-- **Off** (default): no optional submission display or anchors; the runtime's unavoidable temporary-file control command can still be echoed by the REPL.
-- **Summary**: short submissions in full, truncating after 6 lines or 600 source characters, with compact begin/end anchors and a plain output divider.
-- **Full**: up to 40 lines or 4,000 source characters with the same anchors and divider. Full mode writes source code into persistent raw terminal history, so use it only when that is acceptable.
-
-The browser choice is stored locally for that Studio origin. `studio_repl_send` accepts the same per-call `echoMode`; `PI_STUDIO_REPL_ECHO_MODE=off|summary|full` changes the tool-send startup default from Off. Display text escapes terminal, line-separator, and bidirectional control characters. The anchors improve raw-history alignment but do not make direct pane activity without instrumentation authoritative or alter protocol-v1 entries.
-
-Runtime wrappers use compact request-unique paths such as `/tmp/pi-rc-<user-key>/<token>.py` rather than a long Studio/session directory tree. The per-user root is current-user-owned mode `0700`, source files are mode `0600`, and files are removed after capture or by the timeout/abort watcher once execution settles. This keeps the unavoidable echoed loader command short without reverting to a collision-prone shared filename.
-
-See [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md) for protocol, safety, retention, and compatibility details.
-
-**Copy response prompt** copies the selected history item's recorded prompt without loading, saving or running it. Its title distinguishes the original run prompt from an effective prompt that may include steering. Missing records show **Copy response prompt (unavailable)**; Studio does not reconstruct them from current editor text.
-
-## Side questions and research context
-
-Open **Review → Side question**, select **Side questions** in the right pane, or press **Cmd/Ctrl+Option/Alt+Q**. A new side thread captures its starting text while keeping related-file access separate:
-
-- **Starting text** controls what unsaved text begins the thread. The compact **Automatic: selection → heading block at cursor → nearby text** disclosure explains the fallback order; when expanded, it defines the heading boundary. The summary below reports the resolved starting text, editor line range when applicable, and character count separately from the related-file scope.
-- Explicit **Editor selection only** no longer falls back to the whole document when no text is selected; the summary instead reports that no editor text is selected.
-- In the initial-question and follow-up boxes, **Cmd/Ctrl+Enter** submits while plain **Enter** adds a new line. The button remains available for pointer and ordinary keyboard activation.
-- **Also use files from** controls the read-only boundary available to the side agent: no other files, the document folder, the current repository, or another chosen folder. Related-file access requires an allowed folder for the current Studio session; if the selected root is not already allowed, Studio names the canonical folder and asks before starting the thread. An exact-file grant never exposes its parent folder.
-- With **Repository** selected, **Include Git context** can capture status, staged and unstaged tracked-file changes, and up to 20 recent commit summaries. The bounded snapshot is frozen when the thread starts and exposed through fixed read-only tools; untracked contents remain available only through the existing root-confined file reader.
-- **Include the current main conversation snapshot** is opt-in. Side questions and answers otherwise never enter the main Pi history; **Bring to main conversation** is the explicit handoff.
-- During an active thread, **Next thread settings** holds the next scope, thinking and tool choices separately. Follow-ups keep the captured context shown above it. The choices apply only after confirmed **New thread**; starting text is captured and folder access checked when you ask its first question. Cancel keeps the thread, follow-up draft and staged choices in this page. Remembered thinking, scope and tool preferences change only after New is accepted; a reload discards unapplied next-thread choices. Setup preferences before any thread retain their existing immediate persistence.
-- **Thinking** defaults to **Low** for quick asides. **X-high** and **Max** appear when the active model advertises support, for complex side questions where the extra latency is worthwhile.
-- Local context tools can map filenames, search readable text, and read selected ranges. Studio revalidates the allowed context root before prompts and built-in local tool calls; symlinks, root replacement, and traversal outside that root are rejected. PDF extraction uses `pdftotext`; DOCX, ODT, and EPUB extraction uses Pandoc.
-- **Allow web search** is opt-in and appears when `BRAVE_API_KEY` is available to the Pi process. Model-chosen search queries are sent to Brave Search; the side agent is instructed not to copy private local passages into queries. Web answers cite result URLs and identify when they rely on search-result snippets rather than full page content.
-- **Additional Pi tools** lists eligible tools already registered by the user's installed Pi extensions. Selection is explicit, remembered locally, and frozen when the thread starts. Studio reloads only the extensions owning the selected tools into the isolated side runtime and activates only those tool names; it does not import or depend on any particular third-party extension. Gateway tools are labelled and require an additional confirmation because selecting one may expose further services configured behind it.
-
-The current side thread is ephemeral but survives Studio browser refreshes while the same Pi Studio server remains running. **Export thread** can save the visible discussion and context summary as Markdown, copy that Markdown, open it as an unsaved editor copy, or render it to PDF or HTML. Markdown is the canonical durable format; exports omit hidden starting-text contents, inherited main-conversation contents, and raw tool output. Studio never supplies the side agent with shell or file-writing tools, and known execution/mutation surfaces are excluded from the picker. Selected third-party tools retain their own behavior, permissions, and downstream scope, so choose tools you trust for read-only research.
-
-## Studio Markdown extras
-
-Studio previews standard Markdown, code fences, display math, Mermaid, and local images. The opened document directory and other explicitly allowed folders are available for local preview resources during the current Studio session. Media already inside those locations loads without interruption. An image or embedded PDF outside them stays unloaded and shows **Allow local image/PDF…**; activating that control offers an exact-file grant, a containing-folder grant for the session, or cancellation. Passive rendering itself never opens the permission decision.
-
-When adding companion files such as generated plots or PDFs, prefer the project's existing folder convention. If there is no convention, `attachments/` is a reasonable default for newly generated assets. Use relative paths from the opened Markdown file or a folder allowed for the current Studio session, and wrap paths in angle brackets when spaces are possible:
-
-```md
-![Short descriptive caption](<attachments/plot.png>)
-```
-
-Local PDFs can be embedded with an explicit Studio-only fenced block:
+Embed a PDF in a Markdown preview with a `studio-pdf` block. `path` is relative to the document; the other fields are optional:
 
 ````md
 ```studio-pdf
 path: attachments/paper.pdf
-title: Optional title
+title: A title
 page: 3
 height: 760
 watch: true
-caption: Optional caption
 ```
 ````
 
-`path` must point to a local `.pdf`. Relative paths resolve from the opened document's directory, or from Studio's working directory for non-file-backed content; the resolved file must be inside a location allowed for the current Studio session before it loads. `page` is an initial page hint for the browser PDF viewer, `height` controls the embedded frame height in pixels, and `watch: true` enables auto-refresh after Studio observes the changed file in a stable state. Use normal Markdown links for PDFs when embedding is not useful.
-
-To view an existing PDF directly, run `/studio report.pdf` (or `/studio "path with spaces/report.pdf"`). The PDF opens read-only in a focused companion preview, even when the full Studio workspace is already open. A `#page=N` suffix selects the initial page. Auto-refresh is off by default; use `/studio --watch report.pdf` to start with it on, or toggle **Auto-refresh** in the PDF card or focused viewer. Studio checks only while the tab is visible and waits for two matching file-version observations before reloading, which avoids reading a PDF while LaTeX is still writing it. **Cmd/Ctrl+Option/Alt+Shift+R** manually refreshes the focused or visible PDF. This is distinct from `/studio-pdf`, which exports Markdown, LaTeX, code, or the last response to a new PDF.
-
-For a disk-authoritative text or code preview, run `/studio --watch notes.md` or choose **Preview file (follow changes)** from a local-link menu / **Preview (follow)** in Files. This opens a transient read-only companion tab with the preview pane focused; leaving pane focus reveals the same disk-following text as **Source** with a visible **Read-only · follows disk** badge rather than as an editable buffer. Studio polls the canonical file, debounces change bursts, compares SHA-256 content revisions, accepts ordinary and atomic-replacement saves, and never writes back. Each watcher socket is bound to the exact path in a bounded, expiring server-created tab capability; if that identity expires before a reload or reconnect, the tab stays read-only and asks you to open a fresh watched preview. A missing, unreadable, oversized, binary, or path-replaced source leaves the last good preview visible and automatically recovers when the same canonical file becomes readable again. Render failures likewise retain the last successfully staged document rather than replacing it with partial output. On successful updates, Studio restores a nearby stable content anchor where possible and falls back to the previous scroll ratio.
+To view a PDF, run `/studio report.pdf`; it opens read-only, and `#page=N` picks the page. `/studio --watch report.pdf` also reloads it when the file changes: Studio waits for two matching file-version observations, so it doesn't read a PDF that LaTeX is still writing. This is distinct from `/studio-pdf`, which exports to a new PDF.
 
 ### Mermaid icons
 
-Studio's live previews and standalone HTML exports support Mermaid's `lucide:*` and `logos:*` icon nodes. The corresponding Iconify packs load lazily, so Studio does not fetch either pack unless a diagram uses it. Mermaid and the browser icon-pack URLs are pinned to tested versions.
+Diagrams can use `lucide:*` and `logos:*` icons; the icon packs load only when a diagram uses them.
 
 ````md
 ```mermaid
@@ -247,40 +130,42 @@ flowchart LR
 ```
 ````
 
-Studio also corrects low-contrast Mermaid icon paints and node labels after browser rendering while preserving authored colours that already meet a 4.5:1 contrast ratio. For PDF output, Studio adds or corrects label colours on `classDef` and `style` declarations with solid hex/RGB fills and supplies targeted icon CSS to Mermaid CLI; this also covers Logos icons whose SVG paths use literal fills.
+Icons in exported PDFs need Mermaid CLI 11.12+ (`npm install -g @mermaid-js/mermaid-cli`, or set `MERMAID_CLI_PATH`).
 
-PDF icon nodes require Mermaid CLI 11.12+ so Studio can use pinned icon-pack URLs. Install a current CLI, or set `MERMAID_CLI_PATH` to one:
+### Pi's input editor
 
-```bash
-npm install -g @mermaid-js/mermaid-cli@11.16.0
-mmdc --version
-```
+**Load from pi editor** (Cmd/Ctrl+Shift+L) copies the draft in Pi's terminal input into Studio, as tools like [pi-nvim-context](https://github.com/omaclaren/pi-nvim-context) build it up. When Studio runs that text, it clears the terminal draft only if the draft hasn't changed since.
 
-Studio only passes icon-pack arguments when a diagram actually references `lucide:` or `logos:`, so ordinary Mermaid PDF diagrams remain compatible with older CLI versions.
+### REPL
+
+The REPL pane runs code in tmux sessions. It can start its own, and it shares a record of submissions and output with [pi-repl](https://github.com/omaclaren/pi-repl) when both use the same session. Pane echo (Off, Summary, Full) controls how much submitted code appears in the raw tmux history; Full writes your code into that history. The record format is in [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md).
+
+### Side questions
+
+**Review → Side question**, or Cmd/Ctrl+Option/Alt+Q, opens a separate thread. It starts from the selection, the section at the cursor or the whole text, and can read the document's folder, the repository or another folder you allow, including PDF, DOCX, ODT and EPUB text. Its tools are read-only. With `BRAVE_API_KEY` set, it can also search the web; queries go to Brave Search. Nothing enters the main conversation unless you choose **Bring to main conversation**.
+
+### Network and SSH
+
+Studio listens on `127.0.0.1` only, and every URL carries a token. Over SSH, forward the port and open the printed URL with its token; `/studio --no-browser --port <port>` gives a stable port to forward.
+
+For a container, `/studio --no-browser --listen-all --port 4321` listens on all interfaces. Anyone with the full URL can control Studio, including running prompts and reading or writing files, and there's no TLS. Treat the URL like a password, never expose the port to the internet, and bind the host side to loopback (`-p 127.0.0.1:4321:4321`). Quarto previews use a second port, which must be forwarded too.
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `PANDOC_PATH`, `PANDOC_PDF_ENGINE` | Pandoc binary, and the LaTeX engine for PDFs (default `xelatex`) |
+| `MERMAID_CLI_PATH` | Mermaid CLI for diagrams in PDFs |
+| `BRAVE_API_KEY` | Enables web search in side questions |
+| `PI_STUDIO_FONT_MONO`, `PI_STUDIO_FONT_UI`, `PI_STUDIO_FONT_PROSE` | CSS font stacks for code, interface and previews |
+| `PI_STUDIO_REPL_ECHO_MODE` | Default pane echo for `studio_repl_send`: `off`, `summary` or `full` |
+| `PI_STUDIO_PANDOC_TIMEOUT_MS`, `PI_STUDIO_LATEX_TIMEOUT_MS`, `PI_STUDIO_MERMAID_TIMEOUT_MS` | Export time limits |
+
+Installing pi-studio also adds `pi-studio-dark` and `pi-studio-light` to Pi's themes, without changing your current theme.
 
 ## Acknowledgements
 
-Thanks to [Hal Gumbert / CampSoftware](https://github.com/campsoftware) for publishing [Pi Studio Activity](https://campsoftware.com/blog/post.php?post=20260507-ai-ollama-pi-studio-activity). Its Working-to-Preview following and vertical-layout experiments inspired Studio's built-in **Follow activity** option and stacked pane layouts; the built-in implementation uses Studio's own lifecycle events and layout system.
-
-## Notes
-
-- The Studio server is localhost-only (`127.0.0.1`) by default and every Studio URL carries a server-lifetime token. The explicit `--listen-all` option changes the listening address to `0.0.0.0` without changing the advertised loopback URL or removing token authentication; `/studio --status` reports the active binding.
-- When Pi runs inside Muxy or cmux, Studio opens in that terminal app’s built-in browser. Muxy is detected from its pane/socket environment without installing global hooks; cmux targets and focuses the caller’s workspace. If the detected terminal browser is unavailable, disabled, or declines the request, Studio falls back once to the system browser.
-- For remote SSH sessions, keep Studio bound to localhost and use SSH local port forwarding; `/studio` and `/studio --status` print the full tokenized localhost URL. The SSH hint repeats the full URL so it is visible even if your terminal only shows the latest notification. Open that URL through the tunnel, preserving the `?token=...` parameter. If SSH is not auto-detected, use `/studio --no-browser`; for stable forwarding, use `/studio --port <port>` or combine them, e.g. `/studio --no-browser --port 3417`.
-- Full Studio is a singleton per Pi session: use `/studio` to open it, `/studio-replace` to explicitly replace it, and `/studio-editor-only` for extra editing/preview tabs that do not take over the full Studio session view.
-- Studio is designed as a complement to terminal pi, not a replacement.
-- Installing pi-studio makes the optional `pi-studio-dark` and `pi-studio-light` themes available in pi's theme selector; it does not change your active theme.
-- Editor/code font uses a best-effort terminal-monospace match when the current terminal config exposes it; set `PI_STUDIO_FONT_MONO` to force a specific CSS `font-family` stack. Use `PI_STUDIO_FONT_UI` or `PI_STUDIO_FONT_PROSE` to override the Studio UI or rendered-preview font stacks.
-- The optional REPL view requires `tmux`. Studio can start and stop Studio-owned `pi-studio-repl-*` sessions and can mirror detected `pi-repl-*` sessions, but it will not stop external `pi-repl-*` sessions. Compatible clients synchronize their clean record automatically; direct pane interaction remains available only in the raw mirror. A send timeout or tool abort does not stop submitted runtime code, so Studio keeps that session's cross-client lease until the runtime completion signal appears or the exact tmux session ends. The visible request-specific completion anchor is separate presentation metadata and stays in raw history when pane echo is enabled.
-- Side-question web search requires `BRAVE_API_KEY`; without it, local and conversation context still work, and the web option is shown as unavailable. Side sub-sessions are deliberately read-only and can run independently while the main Pi agent is busy.
-- Full preview/PDF quality depends on `pandoc` (and `xelatex` for PDF):
-  - `brew install pandoc`
-  - install TeX Live/MacTeX for PDF export
-- LaTeX browser previews and **Export right preview** are semantic Pandoc conversions rather than authoritative compilation of the original source layout. If a local legacy `.sty` package overrides LaTeX document startup in a way that prevents Pandoc from reading the document, Studio omits that package from the conversion only, preserves local includes, and shows a warning; compile the original source directly with LaTeX for exact package-specific layout.
-- **Editor (Quarto Preview)** is optional and requires the `quarto` CLI on Studio's `PATH`. It supports saved `.qmd`, `.md`, and `.markdown` files, whether standalone or part of a Quarto project. Selecting the view only inspects the saved document; starting the preview is explicit. Studio passes `--no-execute`, which prevents computational cells from running, but trusted Quarto project extensions, filters, configuration, and render hooks are still processed, and Quarto may create or update its normal rendered output files. The preview reflects disk, not unsaved editor text.
-- Quarto serves its embedded page on a second random loopback port. When Studio itself is reached through SSH port forwarding, that Quarto port (shown in **Show log**) must also be forwarded, or the preview should be opened from a Studio process running on the browser's machine.
-- Export subprocess timeouts default to bounded values and can be tuned with `PI_STUDIO_PANDOC_TIMEOUT_MS`, `PI_STUDIO_LATEX_TIMEOUT_MS`, `PI_STUDIO_MERMAID_TIMEOUT_MS`, and `PI_STUDIO_HTML_RENDER_OUTPUT_MAX_BYTES` for unusually large embedded-asset HTML exports.
-- Mermaid diagrams in exported PDFs require Mermaid CLI (`mmdc` / `@mermaid-js/mermaid-cli`) when you want diagram blocks rendered as diagrams rather than left as code; PDF icon nodes require Mermaid CLI 11.12+.
+Thanks to [Hal Gumbert / CampSoftware](https://github.com/campsoftware) for [Pi Studio Activity](https://campsoftware.com/blog/post.php?post=20260507-ai-ollama-pi-studio-activity), which inspired **Follow activity** and the stacked layouts.
 
 ## License
 
