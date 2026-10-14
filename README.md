@@ -12,8 +12,9 @@ Studio 0.10 has two editor modes.
 
 - **Open a file** in the Document from **File**, the **Files** pane or a link's menu. **Add to Prompt** adds the Document's selection, or all of it, to the Prompt as a labelled copy; Undo takes it back.
 - **Document windows:** **File** can open a file in a new Document window, or move or copy the Document to one. Each file has one editor; opening a file that's already open finds that editor.
-- **Recovery:** unsaved Prompt and Document text survives reloads and dropped connections. After a clean exit a reload just reopens; otherwise Studio asks before resuming. Recovery isn't a backup, so save work you want to keep.
-- `/studio-replace`, `/studio-current`, editable `/studio-editor-only` and Office-to-Markdown opening aren't available in dual editor mode. Use Studio's Document controls, or single editor mode.
+- **Recovery:** unsaved Prompt and Document text survives reloads and dropped connections. If you close the tab, `/studio` reopens the same workspace. After a clean exit it just reopens; otherwise Studio asks before resuming. `/studio --blank` and `--last` start afresh, and `/studio <file>` opens that file, finding its editor if it's already open. Recovery isn't a backup, so save work you want to keep.
+- **Studio open somewhere you can't find**, such as another browser: `/studio-replace` moves it here, or open its URL and choose **Move it here**. The old tab hands over its text and disconnects; if it doesn't answer, Studio asks before resuming.
+- `/studio-current`, editable `/studio-editor-only` and Office-to-Markdown opening aren't available in dual editor mode. Use Studio's Document controls, or single editor mode.
 
 **Single editor mode** is the one-editor Studio of earlier versions, where Run sends the editor's text.
 
@@ -102,7 +103,7 @@ Use an ordinary heading such as `## Notes` if you want to separate additional ma
 
 | Command | Description |
 |---|---|
-| `/studio` | Open in Muxy or cmux when available, otherwise the system browser, with the last assistant response (fallback: blank) |
+| `/studio` | Open in Muxy or cmux when available, otherwise the system browser, with the last assistant response (fallback: blank). In dual editor mode, if your last workspace's tab is gone, reopen that workspace instead |
 | `/studio <path>` | Open a text file in the editor, or a PDF in a read-only companion preview tab |
 | `/studio --watch <file>` | Open a local text/code file in a read-only preview that follows disk changes, or a PDF with stable-file auto-refresh enabled |
 | `/studio --last` | Force last response |
@@ -115,7 +116,7 @@ Use an ordinary heading such as `## Notes` if you want to separate additional ma
 | `/studio --single` | Use single editor mode, and remember it; restarts Studio if it's running in dual editor mode |
 | `/studio --dual` | Use dual editor mode (the default), and remember it |
 | `/studio --help` | Show help |
-| `/studio-replace [path\|--blank\|--last]` | Replace the current full Studio view with a new full Studio view |
+| `/studio-replace [path\|--blank\|--last]` | Replace the current full Studio view with a new full Studio view; in dual editor mode, move the open Studio here |
 | `/studio-editor-only [path\|--blank\|--last]` | Open an editor-only view, or a read-only PDF preview; add `--watch <file>` for a followed text/PDF companion view |
 | `/studio-current <path>` | Load a file into currently open Studio tab(s) without opening a new browser window |
 | `/studio-pdf [path] [options]` | Export a local file, or the last model response when no path is given, via the Studio PDF pipeline |

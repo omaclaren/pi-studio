@@ -297,6 +297,8 @@ export function createStudioBufferServerStore(options = {}) {
 			return { ok: true, released: false };
 		},
 		seenHostingView(workspaceId) { return seenHostingViews.has(workspaceId); },
+		forgetCleanLeave(workspaceId) { cleanLeaves.delete(workspaceId); },
+		capabilityWorkspace(capability) { cleanup(); const issued = capabilities.get(capability); return issued ? { workspaceId: issued.workspaceId, mode: issued.mode } : null; },
 		// Oliver, 13 Oct: switching editor mode restarts Studio and drops every retained copy.
 		// Reports work in flight, and each workspace holding a buffer not saved anywhere else.
 		// Only the carried Prompt (the asking page's active Prompt) is exempt (Sol, candidate69).

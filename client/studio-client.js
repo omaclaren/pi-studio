@@ -245,6 +245,9 @@
       const studioEditorModeSwitchable = document.body.dataset.editorModeLocked !== "1" && studioMode === "full" && !isEditorOnlyMode && !isWatchedFilePreview
         && (studioEditorMode === "single" ? !bufferRecoveryEnabled : bufferSwitchingEnabled && documentHostingEnabled);
       let studioEditorModeSwitchRequestId = null, studioEditorModeLanding = null, studioEditorModeLanded = false, studioEditorModeAttempt = null;
+      // Oliver, 14 Oct: moving Studio to another tab (/studio-replace, or Move it here there).
+      let studioMovedAway = false, studioMoveHereOffered = false, studioMoveHereReloading = false, studioEverHeldWorkspace = false;
+      const STUDIO_MOVED_AWAY_MESSAGE = "Studio moved to another tab. This tab's text is kept here.";
       const EDITOR_ONLY_RIGHT_VIEW_ALLOWED = new Set(["editor-preview", "editor-quarto-preview", "files", "changes", "repl", "side-questions"]);
       // In the Document the right pane may also show responses and Working, by explicit choice only:
       // Follow and new responses never switch it there (Oliver and Sol, 8 Oct).
@@ -27996,6 +27999,10 @@
           handleStudioEditorModeSwitchResult(message);
           return;
         }
+        if (message.type === "workspace_handover_request") {
+          void handOverStudioWorkspace();
+          return;
+        }
         if (message.type === "watched_file_update") {
           handleWatchedFileUpdate(message);
           return;
@@ -28222,6 +28229,7 @@
         if (message.type === "hello_ack") {
           if (documentHostingEnabled && message.documentHosting?.workspaceId === studioTabStateId && Number.isSafeInteger(message.documentHosting.generation)) {
             documentHostingGeneration = message.documentHosting.generation;
+            if (documentHostingGeneration) studioEverHeldWorkspace = true;
             // The server's clean-departure continuation belongs to this connection only.
             const continuation = message.documentHosting.continuation;
             documentHostingContinuation = continuation && typeof continuation.revision === "string" && /^[a-f0-9]{48}$/.test(continuation.revision)
@@ -29307,13 +29315,25 @@
             return;
           }
 
+          if (kind === "moved" || studioMovedAway) {
+            // Moved to another tab: stay off the workspace; the text stays here.
+            if (!studioMovedAway) { studioMovedAway = true; documentHostingRetired = true; bufferPageClosed = true; bufferRecoveryKeptClosed = true; }
+            bufferRecoveryIssue = "";
+            clearScheduledReconnect();
+            reconnectAttempt = 0;
+            setWsState("Disconnected");
+            setStatus(STUDIO_MOVED_AWAY_MESSAGE, "warning");
+            return;
+          }
+
           if (kind === "full_conflict") {
             clearScheduledReconnect();
             reconnectAttempt = 0;
             setWsState("Disconnected");
             setStatus(documentHostingEnabled
-              ? "Another full Studio view is already active. Use that view's Document controls; this duplicate view cannot replace it. Keep or export any local work."
+              ? (studioEverHeldWorkspace ? "Studio is open in another tab. This tab's text is kept here; /studio-replace in Pi moves Studio here." : "Studio is open in another tab. Move it here, or use that tab.")
               : "Another full Studio view is already active for this session. Use /studio-replace for a fresh full Studio view, or /studio-editor-only for a concurrent editor-only Studio view.", "warning");
+            void offerStudioMoveHere();
             return;
           }
 
@@ -29379,6 +29399,10 @@
           }
           if (event && event.code === 4004) {
             handleDisconnect("full_conflict", 4004);
+            return;
+          }
+          if (event && event.code === 4006) {
+            handleDisconnect("moved", 4006);
             return;
           }
           if (event && event.code === 4003) {
@@ -29852,6 +29876,56 @@
         void openStudioDecision({ mode: "confirm", title: "Studio didn't restart", message: "Run /studio in Pi to open it. This tab's text is still here.", confirmLabel: "OK", hideCancel: true });
       }
 
+      // Another tab asked for Studio. Send what's here; leave cleanly if nothing is pending, so
+      // that tab opens without asking; then stay off the workspace, as Keep closed does.
+      async function handOverStudioWorkspace() {
+        if (studioMovedAway) return;
+        studioMovedAway = true;
+        sealStudioForEditorModeSwitch(true);
+        try {
+          if (bufferRecoveryClient) { flushWorkspacePersistence({}); await bufferRecoveryClient.settled(); }
+        } catch {}
+        const socket = ws, cleanRevision = studioCleanDepartureRevision();
+        if (cleanRevision && socket) try { socket.send(JSON.stringify({ type: "hosting_clean_leave", generation: documentHostingGeneration, revision: cleanRevision })); } catch {}
+        documentHostingRetired = true; bufferPageClosed = true; bufferRecoveryKeptClosed = true;
+        sealStudioForEditorModeSwitch(false);
+        try { socket?.close(1000, "Studio moved to another tab"); } catch {}
+        setStatus(STUDIO_MOVED_AWAY_MESSAGE, "warning");
+      }
+      // Studio is already open in another tab, perhaps another browser: offer to move it here.
+      // Only in dual editor mode, and only from a tab that never held the workspace, so its
+      // reload can't lose recovered work. Page-only drafts (a side question, REPL quick send)
+      // are named in the question, the page is sealed while the move runs, and the reload
+      // skips the leave warning only if those drafts are still what was named (Sol, candidate70).
+      const studioMoveHereAllowed = () => documentHostingEnabled && !studioEverHeldWorkspace && !studioMovedAway && !isWatchedFilePreview && !isEditorOnlyMode;
+      // Raw text, and each REPL draft with its session: any change at all counts.
+      const studioPageOnlyDrafts = () => JSON.stringify([String(sideQuestionUi?.draft ?? ""),
+        [...replQuickDrafts].map(([key, text]) => [String(key), String(text ?? "")]).filter(([, text]) => text.length > 0).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)]);
+      async function offerStudioMoveHere() {
+        if (studioMoveHereOffered || !studioMoveHereAllowed()) return;
+        studioMoveHereOffered = true;
+        const named = studioPageOnlyDrafts(), hasDrafts = named !== JSON.stringify(["", []]);
+        const move = await openStudioDecision({ mode: "confirm", title: "Studio is open in another tab",
+          message: "Move it here? That tab sends its text here and disconnects." + (hasDrafts ? " This tab's side-question and REPL drafts are cleared." : ""),
+          confirmLabel: "Move it here", cancelLabel: "Keep it there" });
+        if (!move || !studioMoveHereAllowed()) return;
+        sealStudioForEditorModeSwitch(true);
+        try {
+          await fetchStudioJson("/studio-handover", { method: "POST", body: JSON.stringify({ capability: document.body.dataset.bufferCapability || "" }) });
+        } catch (error) {
+          sealStudioForEditorModeSwitch(false);
+          await openStudioDecision({ mode: "confirm", title: "Studio didn't move", message: error && error.message ? error.message : "Run /studio-replace in Pi instead.", confirmLabel: "OK", hideCancel: true });
+          return;
+        }
+        if (!studioMoveHereAllowed() || studioPageOnlyDrafts() !== named) {
+          sealStudioForEditorModeSwitch(false);
+          await openStudioDecision({ mode: "confirm", title: "Studio is ready here", message: "Reload this tab to open it. Something on this page changed, so it wasn't reloaded for you.", confirmLabel: "OK", hideCancel: true });
+          return;
+        }
+        studioMoveHereReloading = true;
+        window.location.reload();
+      }
+
       function studioCleanDepartureRevision() {
         if (!documentHostingEnabled || !documentHostingGeneration || !ws || ws.readyState !== WebSocket.OPEN || bufferPageClosed || bufferRecoveryKeptClosed || bufferRecoveryInitializing) return null;
         if (!bufferRecoveryClient || !documentHostingController || documentHostingRetired || documentHostingSaveResolution || documentHostingPreparingFile || pendingSaveOperations.size > 0 || hasUnsyncedStudioMetadata()) return null;
@@ -29924,6 +29998,7 @@
       });
       window.addEventListener("beforeunload", (event) => {
         if (typeof studioEditorModeLanded !== "undefined" && studioEditorModeLanded) return; // The text went with the switch.
+        if (typeof studioMoveHereReloading !== "undefined" && studioMoveHereReloading) return; // This tab never held a workspace.
         if (documentHostingEnabled && documentHostingCanCloseRetired()) return;
         const unsafeRetirement = documentHostingEnabled && documentHostingRetired;
         const unresolvedCopy = documentHostingEnabled && documentHostingController?.needsUnloadConfirmation();
@@ -32054,7 +32129,8 @@
               const legacy = await readServerWorkspaceRecoveryState();
               return legacy.status === "unavailable" ? { ok: false, reason: "unavailable", message: "Legacy server recovery could not be checked." } : { ok: true, state: legacy.state };
             },
-            onIssue: (message) => { bufferRecoveryIssue = message; renderStatus(); },
+            // A tab Studio moved away from no longer owns the workspace; its issues don't apply.
+            onIssue: (message) => { if (studioMovedAway) return; bufferRecoveryIssue = message; renderStatus(); },
           });
           let client = createRecoveryClient();
           try { promptRunIndicatorFresh = !recoveryStorage?.getItem("piStudio.bufferWorkspace.v2:" + studioTabStateId) && document.body.dataset.hostingResume !== "1"; } catch { promptRunIndicatorFresh = false; }

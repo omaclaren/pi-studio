@@ -11,7 +11,7 @@ All notable changes to `pi-studio` are documented here.
 - **Single editor mode** keeps the one-editor Studio. Switch from the footer (**Switch to single editor** / **Switch to dual editor**), or with `/studio --single` and `/studio --dual`. Studio restarts and reopens the tab, and the Prompt's text comes with you. The choice is kept per Pi profile. Studio won't switch while the Document or a closed Document window has unsaved text, other Studio tabs are open, or a run, save or side question is in progress; it says why.
 - **Add to Prompt** adds the Document's selection, or the whole Document, to the Prompt as a labelled copy, with Undo.
 - **Document windows:** open a file in a new Document window, or move or copy the Document to one, and find it again from **File**. Each file has one editor, and saving replaces the file atomically.
-- **Recovery:** unsaved Prompt and Document text survives reloads and dropped connections. A reload after a clean exit reopens without asking; otherwise Studio asks before resuming.
+- **Recovery:** unsaved Prompt and Document text survives reloads and dropped connections. After you close the tab, `/studio` reopens the same workspace; `--blank` and `--last` start afresh. A clean exit reopens without asking; otherwise Studio asks before resuming.
 - The **Files** pane lists files to open in the Document or Prompt, read, or show in their folder.
 - Links in rendered pages share one menu: Read, Open in Document, Open in Prompt, Show in folder, Copy path. Web links open in a new tab.
 
@@ -21,7 +21,7 @@ All notable changes to `pi-studio` are documented here.
 - **Follow** moves only between Response, Working and the Prompt preview. Files, Changes, the REPL and Side questions keep their place.
 - Side questions show the model and Thinking beside Ask. The REPL's send mode moves to its **More** menu.
 - Plainer interface text throughout.
-- In dual editor mode, `/studio-replace`, `/studio-current`, editable `/studio-editor-only` and Office-to-Markdown opening aren't available; use Studio's Document controls, or single editor mode.
+- In dual editor mode, `/studio-replace` moves the open Studio to a new tab here, for when it opened in another browser or a tab you can't find; opening its URL offers **Move it here** too. The old tab hands over its text first. `/studio-current`, editable `/studio-editor-only` and Office-to-Markdown opening aren't available in dual editor mode; use Studio's Document controls, or single editor mode.
 - Development checks typecheck against Pi 1.2.0.
 
 ### Fixed

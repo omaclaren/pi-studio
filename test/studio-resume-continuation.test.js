@@ -240,7 +240,7 @@ test("the continuation belongs to one connection; init skips the question only t
 
 test("the server routes the note from the hosted socket and hands the continuation to that connection", () => {
   assert.match(index, /if \(msg\.type === "hosting_clean_leave" && Number\.isSafeInteger\(msg\.generation\) && typeof msg\.revision === "string" && \/\^\[a-f0-9\]\{48\}\$\/\.test\(msg\.revision\)\)/);
-  assert.match(index, /if \(hosted\) studioBufferStateStore\.hostingCleanLeave\(hosted\.capability, client, \{ generation: msg\.generation, revision: msg\.revision \}\);/);
+  assert.match(index, /if \(hosted && !studioMovedAwayCapabilities\.has\(hosted\.capability\)\) studioBufferStateStore\.hostingCleanLeave\(hosted\.capability, client, \{ generation: msg\.generation, revision: msg\.revision \}\);/);
   assert.match(index, /documentHosting: \{ workspaceId: hosted\.workspaceId, generation: hosted\.generation, \.\.\.\(hosted\.continuation \? \{ continuation: hosted\.continuation \} : \{\}\) \}/);
   assert.match(index, /studioBufferStateStore\.hasCleanLeave\(owner\.workspaceId\) \? "Opening the retained workspace\."/);
 });

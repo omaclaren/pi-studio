@@ -15611,7 +15611,8 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (msg.type === "hosting_clean_leave") {
-			if (hosted) studioBufferStateStore.hostingCleanLeave(hosted.capability, client, { generation: msg.generation, revision: msg.revision });
+			// A tab forced off by a handover doesn't get to skip the resume question (Sol, candidate70).
+			if (hosted && !studioMovedAwayCapabilities.has(hosted.capability)) studioBufferStateStore.hostingCleanLeave(hosted.capability, client, { generation: msg.generation, revision: msg.revision });
 			return;
 		}
 		if (msg.type === "editor_mode_switch_request") {
@@ -18526,6 +18527,29 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		if (requestUrl.pathname === "/studio-handover") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) { respondJson(res, 403, { ok: false, error: "Invalid or expired studio token. Re-run /studio." }); return; }
+			if ((req.method ?? "GET").toUpperCase() !== "POST") { res.setHeader("Allow", "POST"); respondJson(res, 405, { ok: false, error: "Method not allowed. Use POST." }); return; }
+			if (!STUDIO_DOCUMENT_HOSTING_ENABLED) { respondJson(res, 409, { ok: false, error: "Use /studio-replace in Pi." }); return; }
+			const admitted = serverState;
+			void (async () => {
+				let body: Record<string, unknown>;
+				try { const raw = await readRequestBody(req, 4096); body = raw ? JSON.parse(raw) as Record<string, unknown> : {}; }
+				catch { respondJson(res, 400, { ok: false, error: "Invalid request." }); return; }
+				// Never wait behind a restart: it waits for this response to finish (Sol, candidate70).
+				if (studioRestarting || serverState !== admitted || studioLifecycle.pending() > 0 || !STUDIO_DOCUMENT_HOSTING_ENABLED) {
+					respondJson(res, 503, { ok: false, error: "Studio is busy. Try again in a moment." }); return;
+				}
+				const capability = typeof body.capability === "string" ? body.capability : "";
+				const issued = studioBufferStateStore.capabilityWorkspace(capability);
+				if (!issued || issued.mode !== "full" || studioMovedAwayCapabilities.has(capability)) { respondJson(res, 409, { ok: false, error: "This tab can't take over Studio. Run /studio-replace in Pi instead." }); return; }
+				const moved = await handOverFullStudioView({ state: admitted, capability, workspaceId: issued.workspaceId });
+				respondJson(res, moved.ok ? 200 : 409, moved.ok ? { ok: true, clean: moved.clean } : { ok: false, error: moved.message });
+			})().catch(error => respondJson(res, 500, { ok: false, error: `Studio couldn't move: ${error instanceof Error ? error.message : String(error)}` }));
+			return;
+		}
+
 		if (requestUrl.pathname === "/side-question-context-root") {
 			const token = requestUrl.searchParams.get("token") ?? "";
 			if (token !== serverState.token) {
@@ -18819,6 +18843,10 @@ export default function (pi: ExtensionAPI) {
 				}
 				return;
 			}
+			if (studioMovedAwayCapabilities.has(requestUrl.searchParams.get("bufferCapability") || "")) {
+				try { ws.close(4006, "Studio moved to another tab"); } catch {}
+				return;
+			}
 			if (clientMode === "full") {
 				for (const client of clients) {
 					if (client.readyState !== WebSocket.OPEN) continue;
@@ -19023,6 +19051,70 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	// Oliver, 14 Oct: Studio opened in another browser, or in a tab you can't find, holds the
+	// workspace. Ask that tab to hand over: it sends its text and leaves cleanly, so the new tab
+	// opens without asking. A tab that doesn't answer is disconnected, and the new tab asks the
+	// usual resume question. Single editor mode replaces the tab, as /studio-replace always did.
+	const STUDIO_HANDOVER_WAIT_MS = 5000;
+	// Tabs disconnected without answering: if one wakes and reconnects, it's told it moved,
+	// rather than being offered to move Studio back.
+	const studioMovedAwayCapabilities = new Set<string>();
+	const openFullStudioClients = () => {
+		const state = serverState;
+		return state ? [...state.clients].filter(client => client.readyState === WebSocket.OPEN && (state.clientModes.get(client) ?? "full") === "full" && !studioWatchedClientPaths.has(client)) : [];
+	};
+	// asking: the Move it here page, revalidated here, inside the turn (Sol, candidate70).
+	const handOverFullStudioView = (asking: { state: StudioServerState; capability: string; workspaceId: string } | null = null): Promise<{ ok: true; workspaceId: string | null; clean: boolean } | { ok: false; message: string }> => withStudioLifecycle(async () => {
+		if (asking && (serverState !== asking.state || studioMovedAwayCapabilities.has(asking.capability)
+			|| studioBufferStateStore.capabilityWorkspace(asking.capability)?.workspaceId !== asking.workspaceId)) return { ok: false, message: "This tab can't take over Studio. Run /studio-replace in Pi instead." };
+		if (!serverState) return { ok: true, workspaceId: null, clean: false };
+		const owners = openFullStudioClients();
+		const workspaceId = owners.map(client => hostedConnections.get(client)?.workspaceId).find(Boolean) ?? lastHostedFullWorkspaceId;
+		if (asking && owners.length && workspaceId !== asking.workspaceId) return { ok: false, message: "This tab is for a different workspace. Run /studio-replace in Pi instead." };
+		if (owners.length && (isStudioBusy() || isStudioSideQuestionBusy())) return { ok: false, message: "Wait for Pi to finish, then try again." };
+		await Promise.all(owners.map(client => new Promise<void>(resolve => {
+			let forced: NodeJS.Timeout | null = null;
+			const timer = setTimeout(() => {
+				const hosted = hostedConnections.get(client);
+				if (hosted) { studioMovedAwayCapabilities.add(hosted.capability); studioBufferStateStore.forgetCleanLeave(hosted.workspaceId); }
+				try { client.close(4006, "Studio moved to another tab"); } catch {}
+				forced = setTimeout(() => { try { client.terminate(); } catch {} }, 1500);
+			}, STUDIO_HANDOVER_WAIT_MS);
+			client.once("close", () => { clearTimeout(timer); if (forced) clearTimeout(forced); resolve(); });
+			if (STUDIO_DOCUMENT_HOSTING_ENABLED && hostedConnections.has(client)) sendToClient(client, { type: "workspace_handover_request" });
+			else { clearTimeout(timer); try { client.close(4001, "Full Studio replaced"); } catch { resolve(); } }
+		})));
+		return { ok: true, workspaceId: workspaceId ?? null, clean: Boolean(workspaceId && studioBufferStateStore.hasCleanLeave(workspaceId)) };
+	});
+	// /studio-replace in dual editor mode: move the open Studio (or the last one) here.
+	const moveHostedStudioHere = async (trimmed: string, ctx: ExtensionCommandContext) => {
+		const flags = parseStudioLaunchOpenFlags(trimmed);
+		if (flags.error) { ctx.ui.notify(`${flags.error} Use /studio-replace --help`, "error"); return; }
+		if (flags.args || flags.editorMode) { ctx.ui.notify("In dual editor mode, /studio-replace moves the open Studio here. Open files from Studio's Document controls.", "warning"); return; }
+		lastCommandCtx = ctx;
+		const moved = await handOverFullStudioView();
+		if (!moved.ok) { ctx.ui.notify(moved.message, "warning"); return; }
+		const state = serverState;
+		if (!state || !moved.workspaceId || !studioBufferStateStore.hostedWorkspace(moved.workspaceId)) {
+			await openStudioView(trimmed, ctx, "full", { defaultSource: "last-response", commandLabel: "/studio-replace" });
+			return;
+		}
+		lastHostedFullWorkspaceId = moved.workspaceId;
+		const url = buildStudioUrl(state.port, state.token, "full", undefined, undefined, { hostedWorkspaceId: moved.workspaceId });
+		try {
+			if (shouldAutoOpenStudioBrowser(flags)) await openStudioUrlInBrowser(url);
+			ctx.ui.notify(moved.clean ? "Studio moved here." : "Opening Studio here. The other tab didn't hand over cleanly, so Studio asks before resuming.", "info");
+		} catch (error) {
+			ctx.ui.notify(`Browser opening failed; the workspace is kept: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		} finally {
+			ctx.ui.notify(`Studio URL: ${url}`, "info");
+			const hint = state.listenAll ? null : buildStudioSshTunnelHint(state.port, url)
+				?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
+			if (hint) ctx.ui.notify(hint, "info");
+			if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
+		}
+	};
+
 	const stopServer = () => withStudioLifecycle(stopServerNow);
 	const stopServerNow = async () => {
 		studioSideQuestionStartRequestId = null;
@@ -19064,6 +19156,7 @@ export default function (pi: ExtensionAPI) {
 		studioBufferStateStore.clear();
 		lastHostedFullWorkspaceId = null;
 		studioResourceGrantRegistry.clear();
+		studioMovedAwayCapabilities.clear();
 	};
 
 	const hydrateLatestAssistant = (entries: SessionEntry[]) => {
@@ -19917,8 +20010,29 @@ export default function (pi: ExtensionAPI) {
 		options?: { defaultSource?: "blank" | "last-response"; commandLabel?: string },
 	) => {
 		if (hasConnectedFullStudioView() && serverState) {
-			ctx.ui.notify("The existing full Studio was kept. Use its opening controls.", "warning");
+			ctx.ui.notify("The existing full Studio was kept. Use its opening controls, or /studio-replace to move it here if you can't find it.", "warning");
 			ctx.ui.notify(`Studio URL: ${currentFullStudioUrl(serverState)}`, "info");
+			return;
+		}
+		// Oliver, 14 Oct: plain /studio reopens the last workspace when its tab is gone, asking to
+		// resume only if that tab didn't leave cleanly. --blank and --last start afresh; a file finds its owner.
+		const lastWorkspace = lastHostedFullWorkspaceId;
+		if (!launchArgs && serverState && lastWorkspace && studioBufferStateStore.hostedWorkspace(lastWorkspace)) {
+			const state = serverState;
+			const url = buildStudioUrl(state.port, state.token, "full", undefined, undefined, { hostedWorkspaceId: lastWorkspace });
+			const clean = studioBufferStateStore.hasCleanLeave(lastWorkspace);
+			try {
+				if (shouldAutoOpenStudioBrowser(flags)) await openStudioUrlInBrowser(url);
+				ctx.ui.notify(clean ? "Opening your last Studio workspace." : "Opening your last Studio workspace. Studio asks before resuming, in case its tab had newer edits.", "info");
+			} catch (error) {
+				ctx.ui.notify(`Browser opening failed; the workspace is kept: ${error instanceof Error ? error.message : String(error)}`, "warning");
+			} finally {
+				ctx.ui.notify(`Studio URL: ${url}`, "info");
+				const hint = state.listenAll ? null : buildStudioSshTunnelHint(state.port, url)
+					?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
+				if (hint) ctx.ui.notify(hint, "info");
+				if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
+			}
 			return;
 		}
 		let path: string | undefined;
@@ -20229,7 +20343,7 @@ export default function (pi: ExtensionAPI) {
 			if (trimmed === "help" || trimmed === "--help" || trimmed === "-h") {
 				ctx.ui.notify(
 					"Usage: /studio [path|--blank|--last]\n"
-						+ "  /studio           Open studio with last model response (fallback: blank)\n"
+						+ "  /studio           Open studio with last model response (fallback: blank); in dual editor mode, reopen your last workspace if its tab is gone\n"
 						+ "  /studio <path>    Open a text file in Studio, or a PDF in a read-only companion preview\n"
 						+ "  /studio --watch <file>  Open a read-only text preview that follows disk changes, or a PDF with auto-refresh\n"
 						+ "  /studio --blank   Open with blank editor\n"
@@ -20271,12 +20385,14 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio-replace --no-browser  Print URL without opening a browser\n"
 						+ "  /studio-replace --port <port> Bind Studio to a fixed port when starting\n"
 						+ "  /studio-replace --listen-all  Explicitly bind to 0.0.0.0 instead of localhost\n"
-						+ "Editor-only Studio views stay open.",
+						+ "Editor-only Studio views stay open.\n"
+						+ "In dual editor mode, /studio-replace moves the open Studio (or the last one) to a new tab here: the old tab hands over its text.",
 					"info",
 				);
 				return;
 			}
 
+			if (STUDIO_DOCUMENT_HOSTING_ENABLED) { await moveHostedStudioHere(trimmed, ctx); return; }
 			await openStudioView(trimmed, ctx, "full", {
 				defaultSource: "last-response",
 				commandLabel: "/studio-replace",
