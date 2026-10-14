@@ -294,6 +294,17 @@
       filter: brightness(0.95);
     }
 
+    /* Oliver, 14 Oct: from the click until Stop, Run keeps its shape and colour, dimmed, and
+       can't be clicked, so it doesn't flash empty while Pi starts. */
+    #sendRunBtn.request-pending:disabled:not(.repl-secondary-action) {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-contrast);
+      font-weight: 600;
+      opacity: 0.7;
+      cursor: progress;
+    }
+
     #sendRunBtn.request-stop-active,
     #critiqueBtn.request-stop-active,
     #showMeBtn.request-stop-active {
@@ -7528,7 +7539,8 @@
     /* Honor existing handler eligibility after controls are regrouped. */
     body.studio-ui-refresh [hidden] { display: none !important; }
     /* Dogfood workspace: two logical rows, with normal wrapping in small panes. */
-    .studio-run-status { color: var(--muted); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+    /* Room for "Running 00:00" from the start, so nothing moves when "Starting…" becomes the clock (Oliver, 14 Oct). */
+    .studio-run-status { color: var(--muted); font-size: 12px; min-width: 13ch; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
     body.studio-ui-refresh #rightSectionHeader .studio-follow-button {
       color: var(--muted); border: 0; border-radius: 0; background: transparent;
     }

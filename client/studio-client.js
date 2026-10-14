@@ -920,6 +920,9 @@
           const seconds = Math.max(0, Math.floor((Date.now() - run.startedAt) / 1000));
           return "Running " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
         }
+        // Oliver, 14 Oct: a Run waiting for Pi to start says so briefly here, so Queue steering fits
+        // beside it and the toolbar doesn't wrap and jump back. The footer keeps the detail.
+        if (uiBusy && pendingKind === "direct") return "Starting…";
         return uiBusy ? getStudioBusyStatus(pendingKind) : "";
       }
 
@@ -936,6 +939,7 @@
         ui.headerStop.hidden = isEditorOnlyMode || !rightFocused || (!activeKind && !stopping && !ownedRun);
         ui.headerStop.textContent = stopping ? "Stopping…" : "Stop";
         ui.headerStop.disabled = Boolean(stopping) || !activeKind;
+        if (run && sendRunBtn) sendRunBtn.classList.toggle("request-pending", false);
         if (run && !isEditorOnlyMode && sendRunBtn) {
           const owned = run.origin === "studio" && Boolean(run.requestId && run.kind);
           if (owned) {
@@ -27685,6 +27689,9 @@
           // The new-layout Document has the Prompt tab just above, so no Return to Prompt here (Oliver, 10 Oct).
           sendRunBtn.hidden = workspaceLayout && documentView && !directIsStop;
           sendRunBtn.classList.toggle("request-stop-active", directIsStop);
+          // Between the click and Stop the button keeps its look, dimmed, instead of flashing empty.
+          sendRunBtn.classList.toggle("request-pending", !directIsStop && !documentView && uiBusy && pendingKind === "direct" && !studioRuntimeActivity?.run
+            && wsState !== "Disconnected" && wsState !== "Connecting");
           sendRunBtn.classList.toggle("repl-secondary-action", rightView === "repl" && !directIsStop && !workspaceLayout);
           sendRunBtn.disabled = documentView && !directIsStop ? !studioBuffersCanSwitch(true)
             : wsState === "Disconnected" || (!directIsStop && (uiBusy || critiqueIsStop || !promptReady));

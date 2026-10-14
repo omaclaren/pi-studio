@@ -4,6 +4,14 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-10-14
+
+### Fixed
+- Between clicking **Run Prompt** and Pi starting, the button no longer flashes hollow, and the toolbar no longer drops a row and jumps back. The status beside Run now says "Starting…", with the detail kept in the footer; the button keeps its colour, dimmed, until it becomes Stop.
+
+### Changed
+- A shorter, plainer README with new screenshots. The npm package drops from about 8.4 MB to 1.8 MB.
+
 ## [0.10.0] — 2026-10-14
 
 ### Added
