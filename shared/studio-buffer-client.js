@@ -306,7 +306,9 @@ export function createStudioBufferClient(options) {
 				if (owned && same(owned, store.get(owned.id))) escrow.resolve(backup.moveId);
 			}
 			const selected = store.get(state.selectedBufferId);
-			return { ok: true, restored: !fromInitial, editor: projectStudioBufferEditor(state), baselineText: selected.baselineText };
+			// restored also covers a launch the server registered before this tab opened;
+			// fromBrowser says this tab had its own copy, as after a reload.
+			return { ok: true, restored: !fromInitial, fromBrowser: Boolean(localState), editor: projectStudioBufferEditor(state), baselineText: selected.baselineText };
 		},
 		capture,
 		select(id) {

@@ -17226,6 +17226,13 @@
           },
           replace: bufferId => retireStudioBufferSourceView(bufferId),
           bind: () => bindSelectedStudioBuffer({ focusEditor: false }),
+          opened: bufferId => {
+            const buffer = bufferRecoveryClient?.snapshot()?.buffers.find(b => b.id === bufferId);
+            const path = String(buffer?.sourceState.path || "");
+            const name = path.split(/^(?:[A-Za-z]:\\|\\\\)/.test(path) ? /[\\/]/ : "/").pop();
+            const where = !bufferSwitchingEnabled ? "" : buffer?.role === "document" ? " in the Document" : " in the Prompt";
+            return name ? "Opened " + name + where + "." : "";
+          },
           reuse: async request => {
             const result = await reuseHostedDocumentOwner(request.path, { sourcePath: request.sourcePath, resourceDir: request.resourceDir });
             if (!result.handled) setStatus("The file owner is no longer available. Current work was kept; retry opening explicitly.", "warning");
@@ -32159,10 +32166,13 @@
             if (restored.restored) {
               const snapshot = client.snapshot();
               const selected = snapshot.buffers.find((entry) => entry.id === snapshot.selectedBufferId);
-              applyPersistedWorkspaceState(restored.editor, {
+              const applied = applyPersistedWorkspaceState(restored.editor, {
                 verifiedBuffer: documentHostingEnabled,
                 metadataAssociations: selected && selected.metadata,
               });
+              // A fresh dual-mode launch is registered on the server first; only an
+              // applied copy kept by this tab (a reload) is reported as restored.
+              workspaceRestoredFromBrowser = applied && restored.fromBrowser === true;
               if (sourceState.path) fileBackedBaselineText = restored.baselineText;
               if (selected) {
                 sourceTextEl.setSelectionRange(selected.view.selectionStart, selected.view.selectionEnd, selected.view.selectionDirection);
@@ -32216,7 +32226,7 @@
       if (documentHostingEnabled) syncActionButtons();
       persistWorkspaceStateNow({ skipServer: serverWorkspaceRecovery.status === "unavailable" });
       if (workspaceRestoredFromBrowser) {
-        setStatus(bufferSwitchingEnabled ? "Restored Prompt and Document in this browser tab. Both texts were kept." : "Restored editor workspace from this browser tab. Use Reset editor to discard it.", "success");
+        setStatus(bufferSwitchingEnabled ? "Restored the Prompt and Document." : "Restored editor workspace from this browser tab. Use Reset editor to discard it.", "success");
       }
       connect();
       if (documentHostingEnabled && bufferRecoveryClient) { await bufferRecoveryClient.settled(); await setupDocumentHosting(); }

@@ -9,6 +9,8 @@ export function createStudioDocumentOpenController(options) {
 	const notify = (message, severity = "warning") => { if (!closed) options.status?.(message, severity); };
 	const changed = () => { if (!closed) options.changed?.(); };
 	const fail = message => ({ ok: false, message });
+	// Optional narration; it never changes a committed open's outcome (Sol).
+	const opened = bufferId => { try { return options.opened?.(bufferId); } catch { return ""; } };
 	// Refusals the server makes before recording anything: the open certainly didn't happen, so it
 	// is closed through the ordinary Cancel route and its reason shown, not kept as unknown (Oliver, 9 Oct).
 	const finalOpenRefusals = new Set(["too-large", "invalid-document"]);
@@ -34,7 +36,7 @@ export function createStudioDocumentOpenController(options) {
 			changed();
 			if (!settings.quiet) notify(result.status === "cancelled" ? "File opening cancelled. Current work was kept."
 				: result.status === "reused" ? "The file already has an editor. Current work was kept."
-				: "Opened the file in its existing buffer. Other work was kept; nothing was sent.", "success");
+				: opened(record.request.bufferId) || "Opened the file.", "success");
 			await owner.settled();
 			// Failure to release a server receipt cannot undo verified local adoption.
 			// Send no acknowledgements from an obsolete connection or disposed page.
