@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Windows browser opening passes the complete Studio URL directly to the default URL handler, keeping authentication, workspace IDs and encoded file hints intact. This avoids the truncated URLs and resulting unregistered dual-editor error caused by `cmd /c start` interpreting query separators as commands (#5).
+
 ## [0.10.1] — 2026-10-14
 
 ### Fixed
