@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-10-19
+
 ### Fixed
 - IPython shows a value once, as `Out[5]: array([11])`. Studio used to print it again on the next line.
 - After a Quick send, the cursor goes back to the box when the send finishes, so you can type the next line. It stays where you put it if you clicked elsewhere meanwhile.
