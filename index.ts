@@ -46,7 +46,7 @@ import { resolveStudioPdfResourceFile } from "./shared/studio-pdf-resource.js";
 import { createStudioPandocHtmlResourceFlagResolver } from "./shared/studio-pandoc-resource-flag.js";
 import { createStudioResourceGrantRegistry } from "./shared/studio-resource-grants.js";
 import { prepareStudioLatexForPandoc } from "./shared/studio-latex-pandoc-compat.js";
-import { isStudioCmuxSession, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
+import { isStudioCmuxSession, openStudioPathInDefaultViewer, openStudioUrlInBrowser } from "./shared/studio-browser-launcher.js";
 import {
 	buildStudioListenAllWarning,
 	isStudioWebSocketOriginAllowed,
@@ -8722,24 +8722,7 @@ async function handleOpenLocalPreviewResourceRequest(
 }
 
 function openPathInDefaultViewer(path: string): Promise<void> {
-	const openCommand =
-		process.platform === "darwin"
-			? { command: "open", args: [path] }
-			: process.platform === "win32"
-				? { command: "cmd", args: ["/c", "start", "", path] }
-				: { command: "xdg-open", args: [path] };
-
-	return new Promise<void>((resolve, reject) => {
-		const child = spawn(openCommand.command, openCommand.args, {
-			stdio: "ignore",
-			detached: true,
-		});
-		child.once("error", reject);
-		child.once("spawn", () => {
-			child.unref();
-			resolve();
-		});
-	});
+	return openStudioPathInDefaultViewer(path);
 }
 
 async function handleOpenStudioFileBrowserDirectoryRequest(

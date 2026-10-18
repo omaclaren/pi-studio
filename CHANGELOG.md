@@ -12,6 +12,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Fixed
 - On Windows, `/studio` opens the whole Studio URL. `cmd /c start` cut it at the first `&`, which lost the workspace and gave "editing URL is not registered in dual editor mode" (#5).
+- On Windows, opening a PDF, an export or a folder works when its path has `&`, `%`, `^`, `!` or a comma. Studio hands the path to Explorer instead of `cmd /c start`.
 - Starting a REPL waits for the runtime's own prompt before saying it started. If the runtime exits while starting, Studio says so and shows the command; if the prompt hasn't appeared after 20 seconds, it asks you to check the pane before running code.
 - Stopping a runtime's session ends its processes, including any that ignore the hangup, and reports it stopped only once they've exited. If Studio can't confirm that, it says so. Shell sessions still close like a terminal, so nohup and disowned jobs keep running.
 - Code goes only to the session Studio names, never to one whose name merely starts the same way, and into that session's first pane, even when windows are numbered from 1 or a pane is opened above it.

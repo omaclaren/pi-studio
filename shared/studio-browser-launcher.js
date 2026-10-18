@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { win32 } from "node:path";
 
 export const STUDIO_TERMINAL_BROWSER_OPEN_TIMEOUT_MS = 5_000;
 export const STUDIO_MUXY_CLI_TIMEOUT_SECONDS = 4;
@@ -85,11 +86,33 @@ export function getStudioDefaultBrowserOpenCommand(target, platform = process.pl
 }
 
 /**
- * @param {{ command: string, args: string[] }} openCommand
+ * Build the platform-native invocation that opens a local file in its default app,
+ * or a folder in the file manager.
+ *
+ * @param {string} path
+ * @param {NodeJS.Platform} [platform]
+ * @returns {{ command: string, args: string[], verbatim?: boolean }}
+ */
+export function getStudioDefaultViewerOpenCommand(path, platform = process.platform) {
+	if (platform === "darwin") return { command: "open", args: [path] };
+	// Not cmd /c start, which cuts the path at & and expands %NAME%, even inside quotes;
+	// nor url.dll, which loses non-ASCII names. Explorer reads an unquoted comma as a
+	// switch separator and opens Documents for / separators, so the path is resolved and
+	// passed quoted as is. Windows paths can't contain ", and one that does is refused,
+	// so the quotes can't be closed early (Sol).
+	if (platform === "win32") {
+		if (path.includes("\"")) throw new Error("A Windows path can't contain \".");
+		return { command: "explorer.exe", args: [`"${win32.resolve(path)}"`], verbatim: true };
+	}
+	return { command: "xdg-open", args: [path] };
+}
+
+/**
+ * @param {{ command: string, args: string[], verbatim?: boolean }} openCommand
  * @param {typeof spawn} spawnProcess
  * @returns {Promise<void>}
  */
-function spawnDetachedBrowser(openCommand, spawnProcess) {
+function spawnDetached(openCommand, spawnProcess) {
 	return new Promise((resolve, reject) => {
 		let child;
 		try {
@@ -97,6 +120,7 @@ function spawnDetachedBrowser(openCommand, spawnProcess) {
 				stdio: "ignore",
 				detached: true,
 				shell: false,
+				...(openCommand.verbatim ? { windowsVerbatimArguments: true } : {}),
 			});
 		} catch (error) {
 			reject(error);
@@ -219,6 +243,18 @@ export async function openStudioUrlInBrowser(target, options = {}) {
 	}
 
 	const openCommand = getStudioDefaultBrowserOpenCommand(target, options.platform ?? process.platform);
-	await spawnDetachedBrowser(openCommand, options.spawnProcess ?? spawn);
+	await spawnDetached(openCommand, options.spawnProcess ?? spawn);
 	return "system";
+}
+
+/**
+ * Open a local file in its default app, or a folder in the file manager.
+ *
+ * @param {string} path
+ * @param {{ platform?: NodeJS.Platform, spawnProcess?: typeof spawn }} [options]
+ * @returns {Promise<void>}
+ */
+export async function openStudioPathInDefaultViewer(path, options = {}) {
+	const openCommand = getStudioDefaultViewerOpenCommand(path, options.platform ?? process.platform);
+	await spawnDetached(openCommand, options.spawnProcess ?? spawn);
 }

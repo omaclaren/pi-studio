@@ -2,12 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 
+import { readFileSync } from "node:fs";
+
 import {
 	getStudioCmuxBrowserOpenCommand,
 	getStudioDefaultBrowserOpenCommand,
+	getStudioDefaultViewerOpenCommand,
 	getStudioMuxyBrowserOpenCommand,
 	isStudioCmuxSession,
 	isStudioMuxySession,
+	openStudioPathInDefaultViewer,
 	openStudioUrlInBrowser,
 } from "../shared/studio-browser-launcher.js";
 
@@ -201,6 +205,56 @@ test("Windows launcher errors reach the caller instead of retrying through cmd",
 		}), /launcher failed|ENOENT/);
 		assert.equal(fake.calls.length, 1);
 	}
+});
+
+// Checked on Windows 11 (19 Oct): cmd /c start failed for &, %NAME% (also quoted) and ^!;
+// url.dll lost non-ASCII names; unquoted Explorer opened Documents for a comma or /.
+test("default-viewer commands: Windows hands Explorer the resolved path, quoted", () => {
+	const path = "/Users/o/notes & drafts/report.pdf";
+	assert.deepEqual(getStudioDefaultViewerOpenCommand(path, "darwin"), { command: "open", args: [path] });
+	assert.deepEqual(getStudioDefaultViewerOpenCommand(path, "linux"), { command: "xdg-open", args: [path] });
+	for (const [given, passed] of [
+		["C:\\notes & drafts\\a,b\\%PATH%\\Māori ^!.pdf", "C:\\notes & drafts\\a,b\\%PATH%\\Māori ^!.pdf"],
+		["C:/Users/o/a,b/report.pdf", "C:\\Users\\o\\a,b\\report.pdf"],
+		["C:\\Users\\o\\exports\\", "C:\\Users\\o\\exports"],
+		["C:\\", "C:\\"],
+		["\\\\server\\share\\a&b", "\\\\server\\share\\a&b"],
+	]) {
+		assert.deepEqual(getStudioDefaultViewerOpenCommand(given, "win32"), { command: "explorer.exe", args: [`"${passed}"`], verbatim: true }, given);
+	}
+});
+
+test("Windows opens files and folders through Explorer, with no shell and the quoted path kept as is", async () => {
+	const fake = createSpawnSequence([{ event: "spawn" }]);
+	await openStudioPathInDefaultViewer("C:\\a,b\\%USERNAME% x\\doc.pdf", { platform: "win32", spawnProcess: fake.spawnProcess });
+	assert.deepEqual(fake.calls, [{
+		command: "explorer.exe",
+		args: ["\"C:\\a,b\\%USERNAME% x\\doc.pdf\""],
+		options: { stdio: "ignore", detached: true, shell: false, windowsVerbatimArguments: true },
+	}]);
+	assert.equal(fake.children[0].unrefCalled, true);
+
+	const mac = createSpawnSequence([{ event: "spawn" }]);
+	await openStudioPathInDefaultViewer("/Users/o/doc.pdf", { platform: "darwin", spawnProcess: mac.spawnProcess });
+	assert.deepEqual(mac.calls[0].options, { stdio: "ignore", detached: true, shell: false });
+
+	const failing = createSpawnSequence([{ event: "error", value: new Error("spawn explorer.exe ENOENT") }]);
+	await assert.rejects(openStudioPathInDefaultViewer("C:\\doc.pdf", { platform: "win32", spawnProcess: failing.spawnProcess }), /ENOENT/);
+	assert.equal(failing.calls.length, 1);
+
+	// A " would close the quotes early; Windows names can't contain one, so it is refused before any spawn.
+	const quoted = createSpawnSequence([]);
+	await assert.rejects(openStudioPathInDefaultViewer("C:\\a\" /select,\"C:\\b.pdf", { platform: "win32", spawnProcess: quoted.spawnProcess }), /can't contain "/);
+	assert.equal(quoted.calls.length, 0);
+	const macQuoted = createSpawnSequence([{ event: "spawn" }]);
+	await openStudioPathInDefaultViewer("/Users/o/\"quoted\".pdf", { platform: "darwin", spawnProcess: macQuoted.spawnProcess });
+	assert.deepEqual(macQuoted.calls[0].args, ["/Users/o/\"quoted\".pdf"]);
+});
+
+test("Studio's PDF, export and folder opening uses the shared opener, not cmd", () => {
+	const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+	assert.match(source, /function openPathInDefaultViewer\(path: string\): Promise<void> \{\n\treturn openStudioPathInDefaultViewer\(path\);\n\}/);
+	assert.doesNotMatch(source, /"\/c", "start"/);
 });
 
 test("Studio falls directly from Muxy to the system browser even with inherited cmux markers", async () => {
