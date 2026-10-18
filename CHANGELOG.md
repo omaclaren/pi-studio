@@ -4,11 +4,15 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-10-19
+
 ### Changed
 - The selected REPL session follows what you choose. A Start, send or agent send that finishes later no longer takes the selection back if you've chosen another session since.
 - **Runtime** follows the selected session. If the agent sends code to a Python session while you're on Julia, Studio switches to Python. After a reload, Studio shows the session it has selected, not just some session of the last Runtime.
 - When the selected session ends outside Studio, Studio selects another session of the same runtime, or none.
 - An agent send that names no session fails when Studio shows none, with "No REPL session is selected in Studio. Choose one under Session, or pass sessionName."
+- A new dual workspace, or one reopened after switching mode, no longer says it was restored. Only a reload that brings back this tab's own copy says "Restored the Prompt and Document."
+- Opening a file names it and where it went, such as "Opened notes.md in the Document.", or "Opened notes.md." with one editor.
 
 ### Fixed
 - On Windows, `/studio` opens the whole Studio URL. `cmd /c start` cut it at the first `&`, which lost the workspace and gave "editing URL is not registered in dual editor mode" (#5).
