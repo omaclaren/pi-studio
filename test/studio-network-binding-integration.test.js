@@ -8,6 +8,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { STUDIO_EDITOR_MODE_ENV } from "../shared/studio-editor-mode.js";
 
 const repositoryRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const piCliPath = fileURLToPath(new URL(
@@ -119,6 +120,10 @@ function extractLastStudioUrl(events) {
 }
 
 function createRpcPi(homeDirectory) {
+  // Pi reads PI_CODING_AGENT_DIR before HOME, and the development flags override the saved
+  // editor mode, so neither may come from the caller's profile (Sol, PR #6).
+  const env = { ...process.env, HOME: homeDirectory, USERPROFILE: homeDirectory, PI_CODING_AGENT_DIR: join(homeDirectory, ".pi", "agent") };
+  for (const key of STUDIO_EDITOR_MODE_ENV) delete env[key];
   const child = spawn(process.execPath, [
     piCliPath,
     "--no-session",
@@ -129,7 +134,7 @@ function createRpcPi(homeDirectory) {
     "rpc",
   ], {
     cwd: repositoryRoot,
-    env: { ...process.env, HOME: homeDirectory, USERPROFILE: homeDirectory },
+    env,
     stdio: ["pipe", "pipe", "pipe"],
   });
 
@@ -222,6 +227,36 @@ function createRpcPi(homeDirectory) {
     },
   };
 }
+
+test("a /studio URL cut at its first & is refused, and the whole URL still opens its workspace (#5)", { timeout: 30_000 }, async (t) => {
+  const isolatedHome = mkdtempSync(join(tmpdir(), "pi-studio-launch-test-"));
+  const rpc = createRpcPi(isolatedHome);
+  t.after(async () => {
+    try { await rpc.command("/studio --stop", 5_000); } catch { /* Best-effort cleanup. */ }
+    await rpc.close();
+    rmSync(isolatedHome, { recursive: true, force: true });
+  });
+
+  const port = await reserveFreePort();
+  const url = extractLastStudioUrl(await rpc.command(`/studio --no-browser --port ${port}`));
+  const workspaceId = url.searchParams.get("hostedWorkspace");
+  assert.ok(workspaceId, "/studio must register its dual-editor workspace before issuing the URL");
+  assert.equal(url.searchParams.get("studioTabState"), workspaceId);
+  assert.equal(await requestStatus(url), 200);
+
+  // What cmd /c start did: the token survives, both workspace IDs are lost.
+  const truncatedUrl = new URL(url.href.split("&", 1)[0]);
+  assert.equal(truncatedUrl.searchParams.get("token"), url.searchParams.get("token"));
+  const truncatedPage = await fetch(truncatedUrl);
+  assert.equal(truncatedPage.status, 409);
+  assert.match(await truncatedPage.text(), /editing URL is not registered in dual editor mode/);
+  assert.equal(await requestStatus(url), 200, "the full URL still opens the retained workspace after a damaged request");
+
+  const unauthenticated = new URL(url);
+  unauthenticated.searchParams.delete("token");
+  assert.equal(await requestStatus(unauthenticated), 403);
+  assert.equal(rpc.stderr(), "");
+});
 
 test("/studio --listen-all runs the production server lifecycle safely", { timeout: 45_000 }, async (t) => {
   const isolatedHome = mkdtempSync(join(tmpdir(), "pi-studio-network-test-"));

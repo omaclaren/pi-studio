@@ -94,7 +94,7 @@ test("cmux browser command targets and focuses the caller workspace", () => {
 
 test("system-browser commands preserve the tokenized Studio URL", () => {
 	assert.deepEqual(getStudioDefaultBrowserOpenCommand(STUDIO_URL, "darwin"), { command: "open", args: [STUDIO_URL] });
-	assert.deepEqual(getStudioDefaultBrowserOpenCommand(STUDIO_URL, "win32"), { command: "cmd", args: ["/c", "start", "", STUDIO_URL] });
+	assert.deepEqual(getStudioDefaultBrowserOpenCommand(STUDIO_URL, "win32"), { command: "rundll32.exe", args: ["url.dll,FileProtocolHandler", STUDIO_URL] });
 	assert.deepEqual(getStudioDefaultBrowserOpenCommand(STUDIO_URL, "linux"), { command: "xdg-open", args: [STUDIO_URL] });
 });
 
@@ -169,9 +169,38 @@ test("Studio uses the system browser directly outside supported terminal browser
 	assert.deepEqual(fake.calls[0], {
 		command: "open",
 		args: [STUDIO_URL],
-		options: { stdio: "ignore", detached: true },
+		options: { stdio: "ignore", detached: true, shell: false },
 	});
 	assert.equal(fake.children[0].unrefCalled, true);
+});
+
+test("Windows opens the URL directly without a command shell, including after terminal-browser failure", async () => {
+	for (const env of [{}, { CMUX_WORKSPACE_ID: "workspace-1" }, { MUXY_PANE_ID: "pane-1", MUXY_SOCKET_PATH: "/tmp/muxy.sock" }]) {
+		const fallback = isStudioCmuxSession(env) || isStudioMuxySession(env);
+		const fake = createSpawnSequence([...(fallback ? [{ event: "close", value: 1 }] : []), { event: "spawn" }]);
+		assert.equal(await openStudioUrlInBrowser(STUDIO_URL, {
+			env, platform: "win32", spawnProcess: fake.spawnProcess,
+		}), "system");
+		assert.deepEqual(fake.calls.at(-1), {
+			command: "rundll32.exe",
+			args: ["url.dll,FileProtocolHandler", STUDIO_URL],
+			options: { stdio: "ignore", detached: true, shell: false },
+		});
+		assert.equal(fake.children.at(-1).unrefCalled, true);
+	}
+});
+
+test("Windows launcher errors reach the caller instead of retrying through cmd", async () => {
+	for (const step of [
+		{ throwError: new Error("launcher failed") },
+		{ event: "error", value: new Error("spawn rundll32.exe ENOENT") },
+	]) {
+		const fake = createSpawnSequence([step]);
+		await assert.rejects(openStudioUrlInBrowser(STUDIO_URL, {
+			env: {}, platform: "win32", spawnProcess: fake.spawnProcess,
+		}), /launcher failed|ENOENT/);
+		assert.equal(fake.calls.length, 1);
+	}
 });
 
 test("Studio falls directly from Muxy to the system browser even with inherited cmux markers", async () => {

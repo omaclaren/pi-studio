@@ -78,7 +78,9 @@ export function getStudioCmuxBrowserOpenCommand(target, env = process.env) {
  */
 export function getStudioDefaultBrowserOpenCommand(target, platform = process.platform) {
 	if (platform === "darwin") return { command: "open", args: [target] };
-	if (platform === "win32") return { command: "cmd", args: ["/c", "start", "", target] };
+	// Not cmd /c start, which cuts the URL at each & and expands %NAME% (#5).
+	// url.dll's handler takes the URL as one argument, with no shell.
+	if (platform === "win32") return { command: "rundll32.exe", args: ["url.dll,FileProtocolHandler", target] };
 	return { command: "xdg-open", args: [target] };
 }
 
@@ -94,6 +96,7 @@ function spawnDetachedBrowser(openCommand, spawnProcess) {
 			child = spawnProcess(openCommand.command, openCommand.args, {
 				stdio: "ignore",
 				detached: true,
+				shell: false,
 			});
 		} catch (error) {
 			reject(error);

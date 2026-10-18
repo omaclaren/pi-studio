@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- On Windows, `/studio` opens the whole Studio URL. `cmd /c start` cut it at the first `&`, which lost the workspace and gave "editing URL is not registered in dual editor mode" (#5).
+
 ## [0.10.1] — 2026-10-14
 
 ### Fixed
