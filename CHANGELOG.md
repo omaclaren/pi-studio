@@ -4,8 +4,22 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- The selected REPL session follows what you choose. A Start, send or agent send that finishes later no longer takes the selection back if you've chosen another session since.
+- **Runtime** follows the selected session. If the agent sends code to a Python session while you're on Julia, Studio switches to Python. After a reload, Studio shows the session it has selected, not just some session of the last Runtime.
+- When the selected session ends outside Studio, Studio selects another session of the same runtime, or none.
+- An agent send that names no session fails when Studio shows none, with "No REPL session is selected in Studio. Choose one under Session, or pass sessionName."
+
 ### Fixed
 - On Windows, `/studio` opens the whole Studio URL. `cmd /c start` cut it at the first `&`, which lost the workspace and gave "editing URL is not registered in dual editor mode" (#5).
+- Starting a REPL waits for the runtime's own prompt before saying it started. If the runtime exits while starting, Studio says so and shows the command; if the prompt hasn't appeared after 20 seconds, it asks you to check the pane before running code.
+- Stopping a runtime's session ends its processes, including any that ignore the hangup, and reports it stopped only once they've exited. If Studio can't confirm that, it says so. Shell sessions still close like a terminal, so nohup and disowned jobs keep running.
+- Code goes only to the session Studio names, never to one whose name merely starts the same way, and into that session's first pane, even when windows are numbered from 1 or a pane is opened above it.
+- REPL sessions are listed and read correctly when no UTF-8 locale is set.
+- Output from sent code no longer shows Studio's own loader line, even when IPython wraps it, or the prompt after it. Output that only looks like a prompt is kept.
+- Julia code with `$` interpolation, such as `println("i=$i")`, runs as written. Studio's wrapper used to read the `$` first.
+- GHCi reports completion even when the code reads input or leaves a `:{` block open.
+- Studio no longer pastes code into a runtime it doesn't support. It says "Studio can't send code to … yet: it doesn't support that runtime."
 
 ## [0.10.1] — 2026-10-14
 
