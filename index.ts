@@ -11640,9 +11640,8 @@ function buildStudioPythonControlSource(runtime: "python" | "ipython", code: str
 			"    __pi_studio_ip = get_ipython()",
 			"    if __pi_studio_ip is None:",
 			"        raise RuntimeError('Expected IPython session, but get_ipython() returned None.')",
-			`    __pi_studio_result = __pi_studio_ip.run_cell(${JSON.stringify(code)}, store_history=False)`,
-			"    if getattr(__pi_studio_result, 'error_in_exec', None) is None and getattr(__pi_studio_result, 'result', None) is not None:",
-			"        print(repr(__pi_studio_result.result))",
+			// run_cell shows the value itself (Out[N]: ...), so nothing more is printed here.
+			`    __pi_studio_ip.run_cell(${JSON.stringify(code)}, store_history=False)`,
 			"except Exception:",
 			"    __pi_studio_traceback.print_exc()",
 			"finally:",

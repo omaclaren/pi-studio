@@ -774,6 +774,12 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.equal((await repl.start("ipython")).message, "Started IPython REPL.");
 		assert.equal(pane("pi-studio-repl-ipython", "#{pane_width}"), "80");
 		assert.equal((await repl.send("pi-studio-repl-ipython", 'print("hello")')).output, "hello");
+		// IPython shows a value once, as Out[N]: (Oliver, 19 Oct: it used to be repeated as a bare repr).
+		assert.match((await repl.send("pi-studio-repl-ipython", "1 + 1")).output, /^Out\[\d+\]: 2$/);
+		assert.equal((await repl.send("pi-studio-repl-ipython", "x = 3")).output, "");
+		// A trailing ; doesn't hide the value: IPython looks for it in the history, which
+		// store_history=False leaves out. Shown once, as before apart from the repeat.
+		assert.match((await repl.send("pi-studio-repl-ipython", "x * 2;")).output, /^Out\[\d+\]: 6$/);
 		assert.equal((await repl.stop("pi-studio-repl-ipython")).message, "Stopped pi-studio-repl-ipython.");
 	});
 

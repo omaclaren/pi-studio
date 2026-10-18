@@ -713,6 +713,9 @@
       const replQuickDrafts = new Map();
       let replQuickPending = null;
       let replQuickFocusRequested = false;
+      // After a Quick send from the box, the cursor goes back to it (Oliver, 19 Oct):
+      // { requestId, settled }, cleared when restored or when anything else is chosen.
+      let replQuickRefocus = null;
       let replSendMode = (() => {
         try {
           const stored = window.localStorage && window.localStorage.getItem("piStudio.replSendMode");
@@ -1690,7 +1693,46 @@
         if (submitted && replQuickDrafts.get(pending.key) === pending.text) {
           replQuickDrafts.delete(pending.key);
         }
+        // The cursor goes back after the redraw, to the box then on screen (Sol, Astra).
+        if (replQuickRefocus && replQuickRefocus.requestId === requestId) {
+          replQuickRefocus.settled = true;
+          renderReplViewIfActive({ force: true });
+        }
         return true;
+      }
+
+      // Runs straight after a redraw. Nothing chosen elsewhere since the send (that clears
+      // replQuickRefocus), and focus still on the page or in the box: the box gets it.
+      function applyReplQuickRefocus() {
+        const pending = replQuickRefocus;
+        if (!pending || !pending.settled) return;
+        if (rightView !== "repl" || !critiqueViewEl) {
+          replQuickRefocus = null;
+          return;
+        }
+        const activeEl = document.activeElement;
+        if (activeEl instanceof Element && activeEl !== document.body && !activeEl.closest(".repl-quick-composer")) {
+          replQuickRefocus = null;
+          return;
+        }
+        const composer = critiqueViewEl.querySelector("[data-repl-quick-draft]");
+        // Another send can keep the box disabled; the next redraw tries again.
+        if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) return;
+        replQuickRefocus = null;
+        try {
+          composer.focus({ preventScroll: true });
+        } catch {
+          try { composer.focus(); } catch {}
+        }
+      }
+
+      // A click or focus outside the box, while the send runs or before the cursor is back,
+      // means something else was chosen, so the box doesn't take focus back.
+      function cancelReplQuickRefocusOutside(event) {
+        if (!replQuickRefocus) return;
+        const target = event && event.target;
+        if (target instanceof Element && target.closest(".repl-quick-composer")) return;
+        replQuickRefocus = null;
       }
 
       function reconcileReplQuickPending() {
@@ -2017,6 +2059,7 @@
         traceRenderRaf = window.requestAnimationFrame(() => {
           traceRenderRaf = null;
           refreshResponseUi();
+          applyReplQuickRefocus();
           if (replQuickFocusRequested) focusReplQuickComposer();
         });
       }
@@ -2776,6 +2819,8 @@
         });
         if (!requestId) return false;
         replQuickPending = { requestId, key, text };
+        const activeEl = document.activeElement;
+        replQuickRefocus = activeEl instanceof Element && activeEl.closest(".repl-quick-composer") ? { requestId, settled: false } : null;
         renderReplViewIfActive({ force: true });
         return true;
       }
@@ -11869,6 +11914,8 @@
         critiqueViewEl.addEventListener("click", handleStudioQuartoPreviewClick);
         critiqueViewEl.addEventListener("click", (event) => { void handleSideQuestionClick(event); });
         critiqueViewEl.addEventListener("focusin", handleReplPaneFocusIn);
+        document.addEventListener("focusin", cancelReplQuickRefocusOutside, true);
+        document.addEventListener("pointerdown", cancelReplQuickRefocusOutside, true);
         critiqueViewEl.addEventListener("input", handleSideQuestionInput);
         critiqueViewEl.addEventListener("input", handleReplPaneInput);
         critiqueViewEl.addEventListener("keydown", handleTracePaneKeydown);

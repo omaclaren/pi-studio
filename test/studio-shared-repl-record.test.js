@@ -150,6 +150,7 @@ test("Studio REPL Quick send keeps exact-lifetime drafts until acknowledgement",
 		const REPL_QUICK_DRAFT_MAX_SESSIONS = 12;
 		const replQuickDrafts = new Map();
 		let replQuickPending = null;
+		let replQuickRefocus = null;
 		let replPendingRequestId = "";
 		let replBusy = false;
 		let replJournalEntries = [];
