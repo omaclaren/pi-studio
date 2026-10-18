@@ -6,12 +6,13 @@ import { renderReplSessionRecordMarkdown } from "../shared/repl-session-record.j
 
 const serverSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
 const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
+const tmuxSource = readFileSync(new URL("../shared/studio-repl-tmux.js", import.meta.url), "utf8");
 
 test("Studio discovers and publishes the session-owned shared REPL record", () => {
 	assert.match(serverSource, /REPL_SESSION_RECORD_ID_OPTION/);
 	assert.match(serverSource, /REPL_SESSION_RECORD_VERSION_OPTION/);
 	assert.match(serverSource, /set-option", "-qo"/);
-	assert.match(serverSource, /#\{@pi_repl_record_id\}/);
+	assert.match(tmuxSource, /#\{@pi_repl_record_id\}/);
 	assert.match(serverSource, /tmuxSessionCreatedAt/);
 	assert.match(serverSource, /readReplSessionRecord\(/);
 	assert.match(serverSource, /upsertReplSessionRecordEntry\(/);
@@ -24,7 +25,9 @@ test("Studio serializes browser and tool sends with the cross-client lease", () 
 	assert.match(serverSource, /owner: `pi-studio:browser:/);
 	assert.match(serverSource, /Could not capture .* before sending/);
 	assert.match(serverSource, /changed while Studio was waiting to send/);
-	assert.match(serverSource, /getStudioReplPaneTarget\(tmuxSessionId \|\| sessionName\)/);
+	assert.match(serverSource, /target: pane\.paneId,/);
+	assert.match(serverSource, /captureStudioReplSession\(msg\.sessionName, currentSession\)/);
+	assert.match(serverSource, /captureStudioReplSession\(currentSession\.sessionName, currentSession\)/);
 	assert.match(serverSource, /sendTextToStudioReplSession\(currentSession\.sessionName, params\.code, currentSession\.target, currentSession\.runtime, \{/);
 	assert.match(serverSource, /retainStudioReplSubmissionUntilSettled/);
 	assert.match(serverSource, /releaseOrRetainStudioReplSubmission/);
@@ -37,15 +40,17 @@ test("Studio serializes browser and tool sends with the cross-client lease", () 
 test("Studio shell and GHCi sends retain completion after runtime errors", () => {
 	assert.match(serverSource, /runtime === "shell"\) return `\. \$\{shellQuote\(sourceFile\)\}; touch/);
 	assert.match(serverSource, /runtime === "shell"\) return "sh"/);
-	assert.match(serverSource, /runtime === "ghci" \? buildStudioGhciCompletionLine/);
-	assert.match(serverSource, /submissionText: \[submissionLine, completionLine\]\.filter\(Boolean\)\.join/);
-	assert.match(serverSource, /stripStudioReplCompletionEcho/);
+	// Candidate 74: GHCi completes from a driver script, never from typed input.
+	assert.match(serverSource, /buildStudioGhciCompletionLine\(controlFiles\.doneFile, display\)/);
+	assert.match(serverSource, /loader = driver\.sourceFile;/);
+	assert.doesNotMatch(serverSource, /completionLine/);
 });
 
 test("Studio uses compact private request-unique control files and cleans them after settlement", () => {
 	assert.match(serverSource, /createPrivateReplControlFiles\(\{/);
 	assert.match(serverSource, /getStudioReplControlExtension\(runtime\)/);
 	assert.match(serverSource, /cleanupPrivateReplControlFiles\(controlFiles\)/);
+	assert.match(serverSource, /for \(const helper of controlFiles\.helpers \?\? \[\]\) cleanupPrivateReplControlFiles\(helper\)/);
 	assert.match(serverSource, /retainStudioReplSubmissionUntilSettled\(session, controlFiles, lease\)/);
 	assert.doesNotMatch(serverSource, /const STUDIO_REPL_CONTROL_ROOT/);
 });
@@ -71,9 +76,11 @@ test("Studio browser clean preview strips compact and legacy loader echoes", () 
 	assert.equal(context.stripLoader(shell), "42");
 	const robustPythonLoaderPattern = String.raw`/^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\)\)\s*$/gm`;
 	assert.ok(clientSource.includes(robustPythonLoaderPattern));
-	assert.ok(serverSource.includes(robustPythonLoaderPattern));
-	assert.match(clientSource, /output: typeof entry\.output === "string" \? stripStudioReplSubmissionEcho\(entry\.output\) : ""/);
-	assert.match(clientSource, /!entry\.legacyLocal && \(entry\.status === "captured"/);
+	// Candidate 74: the server removes only its own submission's echo (shared/studio-repl-tmux.js),
+	// and the browser keeps this cleanup for its older local entries and the live preview.
+	assert.ok(!serverSource.includes(robustPythonLoaderPattern));
+	assert.match(clientSource, /output: typeof entry\.output === "string" \? \(outputClean \? entry\.output : stripStudioReplSubmissionEcho\(entry\.output\)\) : ""/);
+	assert.match(clientSource, /\(entry\.outputClean \|\| !entry\.legacyLocal\) && \(entry\.status === "captured"/);
 });
 
 test("Studio has numeric and mnemonic direct-switch shortcuts for REPL", () => {
@@ -177,7 +184,7 @@ test("Studio sends bounded pane echoes with clean-record-derived anchors", () =>
 	assert.match(serverSource, /entryId: details\.submissionId/);
 	assert.match(serverSource, /origin: "pi-studio"/);
 	assert.match(serverSource, /PI_STUDIO_REPL_ECHO_MODE/);
-	assert.match(serverSource, /cleanStudioReplCapturedOutput\(rawOutput, sent\.display, sent\.completionLine\)/);
+	assert.equal((serverSource.match(/cleanStudioReplOutput\(rawOutput, \{\n\t+submissionLine: sent\.submissionText,\n\t+runtime: sent\.runtime,\n\t+display: sent\.display,/g) || []).length, 2);
 	assert.match(clientSource, /piStudio\.replEchoMode\.v2/);
 	assert.match(clientSource, /return stored === "summary" \|\| stored === "full" \? stored : "off"/);
 	assert.match(clientSource, /echoMode: replEchoMode/);

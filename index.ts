@@ -3,7 +3,7 @@ import { buildSessionContext, createAgentSession, createAgentSessionFromServices
 import { type ModelThinkingLevel, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { Type } from "@sinclair/typebox";
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -54,7 +54,18 @@ import {
 	resolveStudioNetworkBinding,
 	STUDIO_ADVERTISED_HOST,
 } from "./shared/studio-network-binding.js";
-import { buildStudioReplTmuxStartArgs } from "./shared/studio-repl-tmux.js";
+import {
+	buildStudioReplTmuxStartArgs,
+	cleanStudioReplOutput,
+	firstStudioReplPanes,
+	buildStudioReplDeadPaneCloseArgs,
+	isStudioReplReadyLine,
+	STUDIO_REPL_PANE_FORMAT,
+	STUDIO_REPL_SESSION_NAME,
+	studioReplSessionTarget,
+} from "./shared/studio-repl-tmux.js";
+import { stopVerifiedReplSession } from "./shared/repl-session-stop.js";
+import { createReplSelection, sameReplSessionLifetime } from "./shared/studio-repl-selection.js";
 import {
 	REPL_SESSION_RECORD_ID_OPTION,
 	REPL_SESSION_RECORD_VERSION,
@@ -71,7 +82,6 @@ import {
 import {
 	createReplSubmissionDisplay,
 	normalizeReplSubmissionEchoMode,
-	stripReplSubmissionDisplay,
 } from "./shared/repl-submission-display.js";
 import {
 	cleanupPrivateReplControlFiles,
@@ -800,6 +810,20 @@ interface ReplListRequestMessage {
 interface ReplCaptureRequestMessage {
 	type: "repl_capture_request";
 	sessionName?: string;
+	// A choice on the page's Session or Runtime selector; without it, a poll.
+	choice?: boolean;
+	choiceRevision?: number;
+	runtime?: StudioReplRuntime;
+}
+
+// A selection the page made itself, against the selection it last adopted.
+interface ReplReconcileRequestMessage {
+	type: "repl_reconcile_request";
+	basis: number;
+	sessionName?: string;
+	tmuxSessionId?: string;
+	tmuxSessionCreatedAt?: number;
+	runtime?: StudioReplRuntime;
 }
 
 interface ReplStartRequestMessage {
@@ -992,6 +1016,7 @@ type IncomingStudioMessage =
 	| QuizDiscussRequestMessage
 	| ReplListRequestMessage
 	| ReplCaptureRequestMessage
+	| ReplReconcileRequestMessage
 	| ReplStartRequestMessage
 	| ReplStopRequestMessage
 	| ReplSendRequestMessage
@@ -1066,6 +1091,8 @@ const STUDIO_REPL_CAPTURE_LINES = 800;
 const STUDIO_REPL_SEND_MAX_CHARS = 200_000;
 const STUDIO_REPL_SEND_DEFAULT_TIMEOUT_MS = 20_000;
 const STUDIO_REPL_SEND_MAX_TIMEOUT_MS = 120_000;
+const STUDIO_REPL_START_WAIT_MS = 20_000;
+const STUDIO_REPL_START_POLL_MS = 250;
 const STUDIO_REPL_JOURNAL_MAX_ENTRIES = 300;
 const STUDIO_REPL_RUNTIME_OPTION = "@pi_repl_runtime";
 const STUDIO_SUBPROCESS_OUTPUT_MAX_BYTES = 2_000_000;
@@ -10336,6 +10363,20 @@ function parseIncomingMessage(data: RawData, captureEnvelope?: (message: Record<
 		return {
 			type: "repl_capture_request",
 			sessionName: typeof msg.sessionName === "string" ? msg.sessionName : undefined,
+			choice: msg.choice === true,
+			choiceRevision: typeof msg.choiceRevision === "number" && Number.isSafeInteger(msg.choiceRevision) ? msg.choiceRevision : undefined,
+			runtime: normalizeStudioReplRuntime(msg.runtime) || undefined,
+		};
+	}
+
+	if (msg.type === "repl_reconcile_request" && typeof msg.basis === "number" && Number.isSafeInteger(msg.basis)) {
+		return {
+			type: "repl_reconcile_request",
+			basis: msg.basis,
+			sessionName: typeof msg.sessionName === "string" ? msg.sessionName : undefined,
+			tmuxSessionId: typeof msg.tmuxSessionId === "string" ? msg.tmuxSessionId : undefined,
+			tmuxSessionCreatedAt: typeof msg.tmuxSessionCreatedAt === "number" && Number.isSafeInteger(msg.tmuxSessionCreatedAt) ? msg.tmuxSessionCreatedAt : undefined,
+			runtime: normalizeStudioReplRuntime(msg.runtime) || undefined,
 		};
 	}
 
@@ -11233,10 +11274,6 @@ function getNewStudioReplSessionName(runtime: StudioReplRuntime, command?: strin
 	return `pi-studio-repl-${runtime}${getStudioReplCommandSessionSuffix(runtime, command)}-${suffix}`;
 }
 
-function getStudioReplPaneTarget(sessionName: string): string {
-	return `${sessionName}:0.0`;
-}
-
 function inferStudioReplSessionRuntime(sessionName: string): { runtime: StudioReplRuntime | "unknown"; source: StudioReplSessionInfo["source"] } {
 	const studioMatch = sessionName.match(/^pi-studio-repl-([a-z0-9-]+)$/i);
 	if (studioMatch) {
@@ -11270,8 +11307,9 @@ function isTmuxAvailable(): boolean {
 	return result.status === 0;
 }
 
+// -u: without a UTF-8 locale, tmux prints the tabs that separate format fields as "_".
 function runStudioTmux(args: string[], options?: { cwd?: string; input?: string; timeout?: number }): { ok: true; stdout: string; stderr: string } | { ok: false; message: string; stdout: string; stderr: string } {
-	const result = spawnSync("tmux", args, {
+	const result = spawnSync("tmux", ["-u", ...args], {
 		cwd: options?.cwd,
 		input: options?.input,
 		encoding: "utf8",
@@ -11290,15 +11328,15 @@ function runStudioTmux(args: string[], options?: { cwd?: string; input?: string;
 	return { ok: true, stdout, stderr };
 }
 
-function readStudioReplTmuxOption(sessionName: string, optionName: string): string | undefined {
-	const result = runStudioTmux(["show-options", "-v", "-t", sessionName, optionName], { timeout: 3_000 });
+function readStudioReplTmuxOption(session: string, optionName: string): string | undefined {
+	const result = runStudioTmux(["show-options", "-v", "-t", studioReplSessionTarget(session), optionName], { timeout: 3_000 });
 	if (!result.ok) return undefined;
 	const value = result.stdout.trim();
 	return value || undefined;
 }
 
-function setStudioReplTmuxOptionIfAbsent(sessionName: string, optionName: string, value: string): boolean {
-	return runStudioTmux(["set-option", "-qo", "-t", sessionName, optionName, value], { timeout: 3_000 }).ok;
+function setStudioReplTmuxOptionIfAbsent(session: string, optionName: string, value: string): boolean {
+	return runStudioTmux(["set-option", "-qo", "-t", studioReplSessionTarget(session), optionName, value], { timeout: 3_000 }).ok;
 }
 
 function attachStudioReplSessionRecord(
@@ -11306,24 +11344,25 @@ function attachStudioReplSessionRecord(
 	recordIdHint?: string,
 	versionHint?: string,
 ): StudioReplSessionInfo {
-	let recordId = recordIdHint || readStudioReplTmuxOption(session.sessionName, REPL_SESSION_RECORD_ID_OPTION);
-	let version = versionHint || readStudioReplTmuxOption(session.sessionName, REPL_SESSION_RECORD_VERSION_OPTION);
+	const tmuxSession = session.tmuxSessionId || session.sessionName;
+	let recordId = recordIdHint || readStudioReplTmuxOption(tmuxSession, REPL_SESSION_RECORD_ID_OPTION);
+	let version = versionHint || readStudioReplTmuxOption(tmuxSession, REPL_SESSION_RECORD_VERSION_OPTION);
 	if (recordId && !isValidReplSessionRecordId(recordId)) {
 		return { ...session, recordWarning: "Invalid shared REPL record metadata; Studio left it untouched." };
 	}
 	if (!recordId) {
 		const candidate = createReplSessionRecordId();
-		if (!setStudioReplTmuxOptionIfAbsent(session.sessionName, REPL_SESSION_RECORD_ID_OPTION, candidate)) {
+		if (!setStudioReplTmuxOptionIfAbsent(tmuxSession, REPL_SESSION_RECORD_ID_OPTION, candidate)) {
 			return { ...session, recordWarning: "Studio could not attach shared record metadata to this tmux session." };
 		}
-		recordId = readStudioReplTmuxOption(session.sessionName, REPL_SESSION_RECORD_ID_OPTION);
+		recordId = readStudioReplTmuxOption(tmuxSession, REPL_SESSION_RECORD_ID_OPTION);
 	}
 	if (!recordId || !isValidReplSessionRecordId(recordId)) {
 		return { ...session, recordWarning: "Studio could not read valid shared record metadata from this tmux session." };
 	}
 	if (!version) {
-		setStudioReplTmuxOptionIfAbsent(session.sessionName, REPL_SESSION_RECORD_VERSION_OPTION, String(REPL_SESSION_RECORD_VERSION));
-		version = readStudioReplTmuxOption(session.sessionName, REPL_SESSION_RECORD_VERSION_OPTION);
+		setStudioReplTmuxOptionIfAbsent(tmuxSession, REPL_SESSION_RECORD_VERSION_OPTION, String(REPL_SESSION_RECORD_VERSION));
+		version = readStudioReplTmuxOption(tmuxSession, REPL_SESSION_RECORD_VERSION_OPTION);
 	}
 	const recordPath = getReplSessionRecordPath(recordId);
 	if (version !== String(REPL_SESSION_RECORD_VERSION)) {
@@ -11352,126 +11391,186 @@ function attachStudioReplSessionRecord(
 	}
 }
 
-function makeStudioReplSessionInfo(
-	sessionName: string,
-	tmuxSessionId = "",
-	tmuxSessionCreatedRaw = "0",
-	runtimeMetadata = "",
-	recordIdHint = "",
-	versionHint = "",
-): StudioReplSessionInfo {
-	const inferred = inferStudioReplSessionRuntime(sessionName);
-	const metadataRuntime = normalizeStudioReplRuntime(runtimeMetadata);
+type StudioReplPane = ReturnType<typeof firstStudioReplPanes>[number];
+
+function makeStudioReplSessionInfo(pane: StudioReplPane): StudioReplSessionInfo {
+	const inferred = inferStudioReplSessionRuntime(pane.sessionName);
+	const metadataRuntime = normalizeStudioReplRuntime(pane.runtime);
 	const runtime = metadataRuntime || inferred.runtime;
 	return attachStudioReplSessionRecord({
-		sessionName,
-		target: getStudioReplPaneTarget(tmuxSessionId || sessionName),
-		tmuxSessionId,
-		tmuxSessionCreatedAt: Math.max(0, Math.floor(Number(tmuxSessionCreatedRaw) || 0)),
+		sessionName: pane.sessionName,
+		// The first pane's ID, pinned for a whole send (Sol: not an assumed 0.0).
+		target: pane.paneId,
+		tmuxSessionId: pane.sessionId,
+		tmuxSessionCreatedAt: Math.max(0, Math.floor(Number(pane.createdAt) || 0)),
 		runtime,
-		label: formatStudioReplSessionLabel(sessionName, runtime, inferred.source),
+		label: formatStudioReplSessionLabel(pane.sessionName, runtime, inferred.source),
 		source: inferred.source,
-	}, recordIdHint, versionHint);
+	}, pane.recordId, pane.version);
+}
+
+// A session by exact name or tmux ID ($N).
+function inspectStudioReplTmuxSession(session: string): StudioReplSessionInfo | null {
+	const result = runStudioTmux(["list-panes", "-s", "-t", studioReplSessionTarget(session), "-F", STUDIO_REPL_PANE_FORMAT], { timeout: 3_000 });
+	if (!result.ok) return null;
+	const [pane] = firstStudioReplPanes(result.stdout);
+	return pane ? makeStudioReplSessionInfo(pane) : null;
 }
 
 function inspectStudioReplSession(sessionName: string): StudioReplSessionInfo | null {
 	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return null;
-	const result = runStudioTmux([
-		"display-message",
-		"-p",
-		"-t",
-		getStudioReplPaneTarget(sessionName),
-		"#{session_name}\t#{session_id}\t#{session_created}\t#{@pi_repl_runtime}\t#{@pi_repl_record_id}\t#{@pi_repl_record_version}",
-	], { timeout: 3_000 });
-	if (!result.ok) return null;
-	const [resolvedName, tmuxSessionId, createdAt, runtime, recordId, version] = result.stdout.trim().split("\t");
-	return makeStudioReplSessionInfo(resolvedName || sessionName, tmuxSessionId, createdAt, runtime, recordId, version);
+	const session = inspectStudioReplTmuxSession(sessionName);
+	return session?.sessionName === sessionName ? session : null;
 }
 
 function listStudioReplSessions(): { tmuxAvailable: boolean; sessions: StudioReplSessionInfo[]; error?: string } {
 	if (!isTmuxAvailable()) return { tmuxAvailable: false, sessions: [], error: "tmux is not available." };
-	const result = runStudioTmux([
-		"list-sessions",
-		"-F",
-		"#{session_name}\t#{session_id}\t#{session_created}\t#{@pi_repl_runtime}\t#{@pi_repl_record_id}\t#{@pi_repl_record_version}",
-	], { timeout: 3_000 });
+	const result = runStudioTmux(["list-panes", "-a", "-F", STUDIO_REPL_PANE_FORMAT], { timeout: 3_000 });
 	if (!result.ok) {
 		const message = result.message.toLowerCase().includes("no server running") ? "No tmux sessions are running." : result.message;
 		return { tmuxAvailable: true, sessions: [], error: message };
 	}
-	const sessions = result.stdout
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter(Boolean)
-		.map((line) => line.split("\t"))
-		.filter(([sessionName]) => Boolean(sessionName && shouldShowStudioReplTmuxSession(sessionName)))
-		.map(([sessionName = "", tmuxSessionId = "", createdAt = "0", runtime = "", recordId = "", version = ""]) => (
-			makeStudioReplSessionInfo(sessionName, tmuxSessionId, createdAt, runtime, recordId, version)
-		));
+	const sessions = firstStudioReplPanes(result.stdout)
+		.filter((pane) => shouldShowStudioReplTmuxSession(pane.sessionName))
+		.map((pane) => makeStudioReplSessionInfo(pane));
 	return { tmuxAvailable: true, sessions };
 }
 
-function captureStudioReplSession(sessionName: string): { ok: true; transcript: string; session: StudioReplSessionInfo } | { ok: false; message: string } {
+function captureStudioReplSession(sessionName: string, pinned?: StudioReplSessionInfo): { ok: true; transcript: string; session: StudioReplSessionInfo } | { ok: false; message: string } {
 	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
 	const session = inspectStudioReplSession(sessionName);
 	if (!session) return { ok: false, message: `No tmux REPL session named ${sessionName}.` };
-	const result = runStudioTmux(["capture-pane", "-J", "-p", "-t", session.target, "-S", `-${STUDIO_REPL_CAPTURE_LINES}`], { timeout: 3_000 });
+	// A send reads the pane it pasted into, even if a lower-numbered window has appeared since.
+	const target = pinned?.target || session.target;
+	if (pinned) {
+		// Ask the session for its panes: a pane in a linked window belongs to more than one session (Sol).
+		const panes = runStudioTmux(["list-panes", "-s", "-t", session.tmuxSessionId || studioReplSessionTarget(sessionName), "-F", "#{pane_id}"], { timeout: 3_000 });
+		if (!panes.ok || !panes.stdout.split("\n").includes(target)) return { ok: false, message: `The ${sessionName} pane Studio sent to has closed.` };
+	}
+	const result = runStudioTmux(["capture-pane", "-J", "-p", "-t", target, "-S", `-${STUDIO_REPL_CAPTURE_LINES}`], { timeout: 3_000 });
 	if (!result.ok) return { ok: false, message: result.message };
 	return { ok: true, transcript: String(result.stdout || "").replace(/[\t ]+$/gm, "").trimEnd(), session };
 }
 
-function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, options?: { newSession?: boolean; command?: string }): { ok: true; session: StudioReplSessionInfo; message: string } | { ok: false; message: string } {
+// The pane's cursor row, where a runtime shows its prompt; dead once its command has
+// exited, gone once the pane has closed or left the session.
+function readStudioReplCursorRow(sessionId: string, paneId: string): { gone?: boolean; dead?: boolean; pid?: string; line?: string } {
+	const panes = runStudioTmux(["list-panes", "-s", "-t", sessionId, "-F", "#{pane_id}\t#{pane_dead}\t#{cursor_y}\t#{pane_pid}"], { timeout: 3_000 });
+	if (!panes.ok) return { gone: true };
+	const fields = panes.stdout.split("\n").map((line) => line.split("\t")).find(([id]) => id === paneId);
+	if (!fields) return { gone: true };
+	const [, dead = "", row = "", pid = ""] = fields;
+	if (dead === "1") return { dead: true, pid };
+	if (!/^\d+$/.test(row)) return {};
+	const line = runStudioTmux(["capture-pane", "-p", "-t", paneId, "-S", row, "-E", row], { timeout: 3_000 });
+	return { line: line.ok ? line.stdout.replace(/\r?\n$/, "").trimEnd() : undefined };
+}
+
+async function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, options?: { newSession?: boolean; command?: string }): Promise<{ ok: true; session: StudioReplSessionInfo; message: string } | { ok: false; message: string }> {
 	if (!isTmuxAvailable()) return { ok: false, message: "tmux is not available. Install tmux to use Studio REPL sessions." };
 	const commandOverride = normalizeStudioReplCommandOverride(runtime, options?.command);
 	const sessionName = options?.newSession ? getNewStudioReplSessionName(runtime, commandOverride) : getStudioReplSessionName(runtime, commandOverride);
-	const existing = runStudioTmux(["has-session", "-t", sessionName], { timeout: 3_000 });
-	if (existing.ok) {
+	const label = STUDIO_REPL_RUNTIME_LABELS[runtime];
+	const running = () => runStudioTmux(["has-session", "-t", studioReplSessionTarget(sessionName)], { timeout: 3_000 }).ok;
+	const reuse = (): { ok: true; session: StudioReplSessionInfo; message: string } | { ok: false; message: string } => {
 		const session = inspectStudioReplSession(sessionName);
 		if (!session) return { ok: false, message: `Could not inspect existing REPL session ${sessionName}.` };
-		return {
-			ok: true,
-			session,
-			message: `${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL is already running.`,
-		};
-	}
-	const command = getStudioReplRuntimeCommand(runtime, commandOverride);
-	const result = runStudioTmux(buildStudioReplTmuxStartArgs(sessionName, cwd || process.cwd(), command), { timeout: 5_000 });
-	if (!result.ok) return { ok: false, message: result.message || `Failed to start ${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL.` };
-	runStudioTmux(["set-option", "-q", "-t", sessionName, STUDIO_REPL_RUNTIME_OPTION, runtime], { timeout: 3_000 });
-	const session = inspectStudioReplSession(sessionName);
-	if (!session) {
-		runStudioTmux(["kill-session", "-t", sessionName], { timeout: 3_000 });
-		return { ok: false, message: `Started ${sessionName}, but could not initialize its shared session metadata.` };
-	}
-	return {
-		ok: true,
-		session,
-		message: `Started ${options?.newSession ? "new " : ""}${STUDIO_REPL_RUNTIME_LABELS[runtime]} REPL${commandOverride ? ` with custom command: ${commandOverride}` : ""}.`,
+		return { ok: true, session, message: `${label} REPL is already running.` };
 	};
+	if (running()) return reuse();
+	const command = getStudioReplRuntimeCommand(runtime, commandOverride);
+	const created = runStudioTmux(buildStudioReplTmuxStartArgs(sessionName, cwd || process.cwd(), command), { timeout: 5_000 });
+	if (!created.ok) {
+		// Another tab may have started the same session first; share it.
+		if (running()) return reuse();
+		return { ok: false, message: created.message || `Failed to start ${label} REPL.` };
+	}
+	// From here on, address the session Studio created, and the pane its runtime
+	// started in, by their IDs, not by name or position.
+	const [sessionId = "", paneId = ""] = created.stdout.trim().split("\t");
+	if (!/^\$\d+$/.test(sessionId) || !/^%\d+$/.test(paneId)) return { ok: false, message: `Started ${sessionName}, but tmux didn't report its ID. Check it before running code.` };
+	runStudioTmux(["set-option", "-q", "-t", sessionId, STUDIO_REPL_RUNTIME_OPTION, runtime], { timeout: 3_000 });
+	const started = `Started ${options?.newSession ? "new " : ""}${label} REPL${commandOverride ? ` with custom command: ${commandOverride}` : ""}`;
+	const exited = `${label} exited while starting. Check the command: ${command}.`;
+	// Wait for the runtime's normal prompt, only reading the pane: no probe, Enter or Ctrl-C (Sol).
+	const deadline = Date.now() + STUDIO_REPL_START_WAIT_MS;
+	let ready = false;
+	while (true) {
+		const row = readStudioReplCursorRow(sessionId, paneId);
+		if (row.gone) return { ok: false, message: exited };
+		if (row.dead) {
+			// Close only that pane, and only if it is still the one that exited; tmux
+			// ends the session with its last pane, and anything opened since keeps running (Sol).
+			const close = buildStudioReplDeadPaneCloseArgs(sessionId, paneId, row.pid ?? "");
+			if (close) runStudioTmux(close, { timeout: 3_000 });
+			return { ok: false, message: exited };
+		}
+		ready = runtime === "shell" || (row.line !== undefined && isStudioReplReadyLine(runtime, row.line));
+		if (ready || Date.now() >= deadline) break;
+		await sleep(Math.min(STUDIO_REPL_START_POLL_MS, Math.max(0, deadline - Date.now())));
+	}
+	// Inspect once, which also attaches the shared record.
+	const session = inspectStudioReplTmuxSession(sessionId);
+	if (!session) return { ok: false, message: exited };
+	// Studio sends to a session's first pane. If that isn't the pane it watched,
+	// the prompt it saw says nothing about where code would go (Sol).
+	if (session.target !== paneId) return { ok: true, session, message: `${started}, but another pane now comes first in its session. Check it before running code.` };
+	return { ok: true, session, message: ready ? `${started}.` : `${started}, but its prompt hasn't appeared yet. Check the pane before running code.` };
 }
 
-function stopStudioReplSession(sessionName: string): { ok: true; message: string } | { ok: false; message: string } {
+function runStudioTmuxAsync(args: string[], timeout = 3_000): Promise<{ code: number; stdout: string; stderr: string }> {
+	return new Promise((resolveTmux) => {
+		execFile("tmux", ["-u", ...args], { encoding: "utf8", timeout, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+			const exitCode = (error as { code?: unknown } | null)?.code;
+			const code = !error ? 0 : typeof exitCode === "number" ? exitCode : 1;
+			resolveTmux({ code, stdout: String(stdout || ""), stderr: String(stderr || (error && code === 1 ? error.message : "")) });
+		});
+	});
+}
+
+async function stopStudioReplSession(sessionName: string): Promise<{ ok: true; message: string; session: StudioReplSessionInfo } | { ok: false; message: string }> {
 	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
 	const inferred = inferStudioReplSessionRuntime(sessionName);
-	if (inferred.source !== "studio") {
+	if (inferred.source !== "studio" || !STUDIO_REPL_SESSION_NAME.test(sessionName)) {
 		return { ok: false, message: "Studio can only stop Studio-owned REPL sessions. Use tmux or pi-repl to stop external sessions." };
 	}
-	const result = runStudioTmux(["kill-session", "-t", sessionName], { timeout: 5_000 });
-	if (!result.ok) return { ok: false, message: result.message || "Failed to stop REPL session." };
-	return { ok: true, message: `Stopped ${sessionName}.` };
+	const session = inspectStudioReplSession(sessionName);
+	if (!session) return { ok: false, message: `No tmux REPL session named ${sessionName}.` };
+	if (session.runtime === "shell" || inferred.runtime === "shell") {
+		// Like closing a terminal: the shell's ordinary jobs end, and nohup or
+		// disowned jobs keep running. Close only the session Studio inspected.
+		const closed = runStudioTmux([
+			"if-shell", "-F", "-t", session.tmuxSessionId,
+			`#{==:#{session_created},${session.tmuxSessionCreatedAt}}`,
+			`kill-session -t '${session.tmuxSessionId}'`,
+			"display-message -p PI_STUDIO_STOP_CHANGED",
+		], { timeout: 5_000 });
+		if (!closed.ok || closed.stdout.includes("PI_STUDIO_STOP_CHANGED")) return { ok: false, message: `Couldn't close ${sessionName}: ${closed.ok ? "it changed before Studio could close it." : closed.message}` };
+		return { ok: true, message: `Closed ${sessionName}.`, session };
+	}
+	try {
+		await stopVerifiedReplSession({ tmux: (args: string[]) => runStudioTmuxAsync(args), sessionName, sessionNamePattern: STUDIO_REPL_SESSION_NAME });
+		return { ok: true, message: `Stopped ${sessionName}.`, session };
+	} catch (error) {
+		// After tmux has closed the session, the shared stop wraps its reason as the cause.
+		const cause = error instanceof Error && error.cause instanceof Error ? error.cause : null;
+		if (cause) return { ok: false, message: `Stopped ${sessionName}'s tmux session, but couldn't confirm its processes exited: ${cause.message}` };
+		return { ok: false, message: `Couldn't stop ${sessionName}: ${error instanceof Error ? error.message : String(error)}` };
+	}
 }
 
 type StudioReplControlFiles = {
 	dir: string;
 	sourceFile: string;
 	doneFile: string;
+	// GHCi's guard and driver scripts, removed along with the source.
+	helpers?: Array<{ dir: string; sourceFile: string; doneFile: string }>;
 };
 
 type StudioReplPreparedSubmission = {
 	runtime: StudioReplRuntime | "unknown";
 	usedControlFile: boolean;
 	submissionText: string;
-	completionLine?: string;
 	controlFiles?: StudioReplControlFiles;
 	display?: ReplSubmissionDisplay;
 };
@@ -11482,7 +11581,6 @@ type StudioReplSendSuccess = {
 	runtime: StudioReplRuntime | "unknown";
 	usedControlFile: boolean;
 	submissionText: string;
-	completionLine?: string;
 	controlFiles?: StudioReplControlFiles;
 	display?: ReplSubmissionDisplay;
 };
@@ -11494,7 +11592,6 @@ type StudioReplSendFailure = {
 	runtime?: StudioReplRuntime | "unknown";
 	usedControlFile?: boolean;
 	submissionText?: string;
-	completionLine?: string;
 	controlFiles?: StudioReplControlFiles;
 	display?: ReplSubmissionDisplay;
 };
@@ -11526,9 +11623,15 @@ function buildStudioPythonDisplayStatements(display: ReplSubmissionDisplay, inde
 	return display.prefixLines.map((line) => `${indent}__pi_studio_builtins.print(${JSON.stringify(line)})`);
 }
 
+function juliaStringLiteral(value: string): string {
+	// JSON escaping alone leaves Julia's $ interpolation active: "i=$i" would be
+	// read while building the wrapper, before the code runs.
+	return JSON.stringify(value).replace(/\$/g, "\\$");
+}
+
 function buildStudioJuliaDisplayStatements(display: ReplSubmissionDisplay, indent = ""): string[] {
 	if (!display.enabled) return [];
-	return display.prefixLines.map((line) => `${indent}Base.println(${JSON.stringify(line)})`);
+	return display.prefixLines.map((line) => `${indent}Base.println(${juliaStringLiteral(line)})`);
 }
 
 function buildStudioRDisplayStatements(display: ReplSubmissionDisplay, indent = ""): string[] {
@@ -11589,11 +11692,11 @@ function buildStudioPythonControlSource(runtime: "python" | "ipython", code: str
 }
 
 function buildStudioJuliaControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
-	const completion = display.enabled ? [`    Base.println(${JSON.stringify(display.endMarker)})`] : [];
+	const completion = display.enabled ? [`    Base.println(${juliaStringLiteral(display.endMarker)})`] : [];
 	return [
 		...buildStudioJuliaDisplayStatements(display),
 		"try",
-		`    local __pi_studio_result = Base.include_string(Main, ${JSON.stringify(code)}, "pi-studio-repl")`,
+		`    local __pi_studio_result = Base.include_string(Main, ${juliaStringLiteral(code)}, "pi-studio-repl")`,
 		"    if !isnothing(__pi_studio_result)",
 		"        println(repr(__pi_studio_result))",
 		"    end",
@@ -11601,7 +11704,7 @@ function buildStudioJuliaControlSource(code: string, doneFile: string, display: 
 		"    Base.display_error(stderr, e, catch_backtrace())",
 		"finally",
 		...completion,
-		`    write(${JSON.stringify(doneFile)}, "done\\n")`,
+		`    write(${juliaStringLiteral(doneFile)}, "done\\n")`,
 		"end",
 	].join("\n");
 }
@@ -11639,7 +11742,8 @@ function buildStudioRControlSource(code: string, doneFile: string, display: Repl
 	].join("\n");
 }
 
-function buildStudioGhciControlSource(code: string, display: ReplSubmissionDisplay): string {
+function buildStudioGhciControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	if (/[\r\n]/.test(doneFile)) throw new Error("GHCi control paths cannot contain line breaks.");
 	const prefix = display.enabled
 		? display.prefixLines.map((line) => `:! command printf '%s\\n' ${shellQuote(line)}`)
 		: [];
@@ -11689,7 +11793,7 @@ function buildStudioReplControlSource(runtime: StudioReplRuntime, code: string, 
 	if (runtime === "python" || runtime === "ipython") return buildStudioPythonControlSource(runtime, code, doneFile, display);
 	if (runtime === "julia") return buildStudioJuliaControlSource(code, doneFile, display);
 	if (runtime === "r") return buildStudioRControlSource(code, doneFile, display);
-	if (runtime === "ghci") return buildStudioGhciControlSource(code, display);
+	if (runtime === "ghci") return buildStudioGhciControlSource(code, doneFile, display);
 	if (runtime === "clojure") return buildStudioClojureControlSource(code, doneFile, display);
 	if (runtime === "shell") return buildStudioShellControlSource(code, display);
 	return null;
@@ -11697,7 +11801,7 @@ function buildStudioReplControlSource(runtime: StudioReplRuntime, code: string, 
 
 function buildStudioReplSubmissionLine(runtime: StudioReplRuntime, sourceFile: string, doneFile: string): string {
 	const quotedPath = JSON.stringify(sourceFile);
-	if (runtime === "julia") return `include(${quotedPath})`;
+	if (runtime === "julia") return `include(${juliaStringLiteral(sourceFile)})`;
 	if (runtime === "r") return `source(${quotedPath}, local=.GlobalEnv)`;
 	if (runtime === "ghci") return `:script ${quotedPath}`;
 	if (runtime === "clojure") return `(do (load-file ${quotedPath}) :pi-studio/silent)`;
@@ -11705,51 +11809,74 @@ function buildStudioReplSubmissionLine(runtime: StudioReplRuntime, sourceFile: s
 	return `exec(open(${quotedPath}, encoding="utf-8").read(), globals())`;
 }
 
+function unsupportedStudioReplRuntimeMessage(sessionName: string): string {
+	return `Studio can't send code to ${sessionName} yet: it doesn't support that runtime.`;
+}
+
+function cleanupStudioReplControlFiles(controlFiles: StudioReplControlFiles | undefined): void {
+	if (!controlFiles) return;
+	cleanupPrivateReplControlFiles(controlFiles);
+	for (const helper of controlFiles.helpers ?? []) cleanupPrivateReplControlFiles(helper);
+}
+
 function prepareStudioReplSubmission(
-	sessionName: string,
 	source: string,
 	details: { submissionId: string; echoMode: ReplSubmissionEchoMode },
-	runtimeHint?: StudioReplRuntime | "unknown",
+	runtime: StudioReplRuntime,
 ): StudioReplPreparedSubmission {
 	const normalizedSource = String(source || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-	const runtime = runtimeHint && runtimeHint !== "unknown" ? runtimeHint : inferStudioReplSessionRuntime(sessionName).runtime;
-	if (runtime !== "unknown") {
-		const display = createReplSubmissionDisplay({
-			entryId: details.submissionId,
-			origin: "pi-studio",
-			code: normalizedSource,
-			mode: details.echoMode,
-		});
-		const controlFiles: StudioReplControlFiles = createPrivateReplControlFiles({
-			extension: getStudioReplControlExtension(runtime),
-			buildSource: ({ doneFile }: StudioReplControlFiles) => {
-				const source = buildStudioReplControlSource(runtime, normalizedSource, doneFile, display);
-				if (source === null) throw new Error(`No control-file wrapper is available for ${runtime}.`);
-				return source;
-			},
-		});
-		const submissionLine = buildStudioReplSubmissionLine(runtime, controlFiles.sourceFile, controlFiles.doneFile);
-		const completionLine = runtime === "ghci" ? buildStudioGhciCompletionLine(controlFiles.doneFile, display) : undefined;
-		return {
-			runtime,
-			usedControlFile: true,
-			controlFiles,
-			display,
-			completionLine,
-			submissionText: [submissionLine, completionLine].filter(Boolean).join("\n"),
-		};
+	const display = createReplSubmissionDisplay({
+		entryId: details.submissionId,
+		origin: "pi-studio",
+		code: normalizedSource,
+		mode: details.echoMode,
+	});
+	const controlFiles: StudioReplControlFiles = createPrivateReplControlFiles({
+		extension: getStudioReplControlExtension(runtime),
+		buildSource: ({ doneFile }: StudioReplControlFiles) => {
+			const source = buildStudioReplControlSource(runtime, normalizedSource, doneFile, display);
+			if (source === null) throw new Error(`No control-file wrapper is available for ${runtime}.`);
+			return source;
+		},
+	});
+	let loader = controlFiles.sourceFile;
+	if (runtime === "ghci") {
+		// As in pi-repl: the completion step runs from a driver script, never as
+		// typed input that code reading stdin could take. An unclosed :{ ends the
+		// guard's script, and the driver still completes.
+		try {
+			const guard = createPrivateReplControlFiles({
+				extension: "ghci",
+				buildSource: () => buildStudioReplSubmissionLine("ghci", controlFiles.sourceFile, controlFiles.doneFile) + "\n",
+			});
+			controlFiles.helpers = [guard];
+			const driver = createPrivateReplControlFiles({
+				extension: "ghci",
+				buildSource: () => [
+					buildStudioReplSubmissionLine("ghci", guard.sourceFile, controlFiles.doneFile),
+					buildStudioGhciCompletionLine(controlFiles.doneFile, display),
+					"",
+				].join("\n"),
+			});
+			controlFiles.helpers.push(driver);
+			loader = driver.sourceFile;
+		} catch (error) {
+			cleanupStudioReplControlFiles(controlFiles);
+			throw error;
+		}
 	}
-
 	return {
 		runtime,
-		usedControlFile: false,
-		submissionText: normalizedSource.replace(/\n+$/, ""),
+		usedControlFile: true,
+		controlFiles,
+		display,
+		submissionText: buildStudioReplSubmissionLine(runtime, loader, controlFiles.doneFile),
 	};
 }
 
-function pasteTextToStudioReplPane(sessionName: string, text: string, paneTarget?: string): { ok: true } | { ok: false; message: string; submissionStarted: boolean } {
+function pasteTextToStudioReplPane(text: string, paneTarget: string): { ok: true } | { ok: false; message: string; submissionStarted: boolean } {
 	const bufferName = `pi-studio-repl-${randomUUID().replace(/-/g, "")}`;
-	const target = paneTarget || getStudioReplPaneTarget(sessionName);
+	const target = paneTarget;
 	const loadResult = runStudioTmux(["load-buffer", "-b", bufferName, "-"], { input: text, timeout: 5_000 });
 	if (!loadResult.ok) return { ok: false, message: loadResult.message || "Failed to load text into tmux buffer.", submissionStarted: false };
 	try {
@@ -11766,21 +11893,23 @@ function pasteTextToStudioReplPane(sessionName: string, text: string, paneTarget
 function sendTextToStudioReplSession(
 	sessionName: string,
 	text: string,
-	paneTarget?: string,
-	runtimeHint?: StudioReplRuntime | "unknown",
+	paneTarget: string,
+	runtime: StudioReplRuntime | "unknown",
 	options: { submissionId?: string; echoMode?: string } = {},
 ): StudioReplSendSuccess | StudioReplSendFailure {
 	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
+	// No raw pasting: without its runtime's wrapper, Studio can't tell when code has finished.
+	if (runtime === "unknown") return { ok: false, message: unsupportedStudioReplRuntimeMessage(sessionName) };
 	const source = String(text || "");
 	if (!source.trim()) return { ok: false, message: "Editor text is empty." };
 	if (source.length > STUDIO_REPL_SEND_MAX_CHARS) {
 		return { ok: false, message: `REPL input is too large (${source.length} chars; max ${STUDIO_REPL_SEND_MAX_CHARS}).` };
 	}
-	const prepared = prepareStudioReplSubmission(sessionName, source, {
+	const prepared = prepareStudioReplSubmission(source, {
 		submissionId: options.submissionId || `pi-studio:local:${randomUUID()}`,
 		echoMode: normalizeReplSubmissionEchoMode(options.echoMode, STUDIO_REPL_TOOL_ECHO_MODE) as ReplSubmissionEchoMode,
-	}, runtimeHint);
-	const pasted = pasteTextToStudioReplPane(sessionName, prepared.submissionText, paneTarget);
+	}, runtime);
+	const pasted = pasteTextToStudioReplPane(prepared.submissionText, paneTarget);
 	if (!pasted.ok) return {
 		ok: false,
 		message: pasted.message,
@@ -11788,7 +11917,6 @@ function sendTextToStudioReplSession(
 		runtime: prepared.runtime,
 		usedControlFile: prepared.usedControlFile,
 		submissionText: prepared.submissionText,
-		completionLine: prepared.completionLine,
 		controlFiles: prepared.controlFiles,
 		display: prepared.display,
 	};
@@ -11798,7 +11926,6 @@ function sendTextToStudioReplSession(
 		runtime: prepared.runtime,
 		usedControlFile: prepared.usedControlFile,
 		submissionText: prepared.submissionText,
-		completionLine: prepared.completionLine,
 		controlFiles: prepared.controlFiles,
 		display: prepared.display,
 	};
@@ -11819,50 +11946,6 @@ function extractStudioReplTranscriptDelta(before: string, after: string): string
 		if (suffixIndex >= 0) return current.slice(suffixIndex + suffix.length).trim();
 	}
 	return current.trim();
-}
-
-function stripStudioReplSubmissionEcho(output: string): string {
-	let value = String(output || "").replace(/^\s+/, "");
-	// The raw tmux mirror should stay raw, but Studio/tool result output should not
-	// expose the temp-file wrapper used to submit multiline snippets safely. The
-	// root fragment catches both legacy long Studio paths and compact private
-	// control paths. Match the Python wrapper by its final double close rather
-	// than the word `globals`, which IPython may split across continuation lines.
-	const submissionEchoPatterns = [
-		/^.*exec\(open\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\)\)\s*$/gm,
-		/^.*include\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.jl"\)\s*$/gm,
-		/^.*source\([\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?local\s*=\s*\.GlobalEnv\)\s*$/gm,
-		/^.*:script\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.ghci"?\s*$/gm,
-		/^.*\(do\s+\(load-file\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?:pi-studio\/silent\)\s*$/gm,
-		/^.*\.\s+[\s\S]*?(?:pi-studio-re|pi-rc-)[\s\S]*?\.sh[\s\S]*?(?:done\.flag|[a-f0-9]{16}\.done).*$/gm,
-	];
-	for (const pattern of submissionEchoPatterns) value = value.replace(pattern, "");
-	return value.replace(/^(?:\s*\n)+/, "").replace(/[\t ]+$/gm, "").trimEnd();
-}
-
-function stripTrailingStudioReplPrompts(output: string): string {
-	const lines = String(output || "").replace(/\r\n/g, "\n").split("\n");
-	while (lines.length > 0 && /^\s*(?:>>>|\.\.\.|In \[\d+\]:|julia>|>|\+|ghci>|Prelude>|\*?[A-Za-z0-9_.:]+>|[^\s>]+=>)\s*$/.test(lines[lines.length - 1] || "")) {
-		lines.pop();
-	}
-	return lines.join("\n").trimEnd();
-}
-
-function stripStudioReplCompletionEcho(output: string, completionLine?: string): string {
-	const value = String(output || "");
-	if (!completionLine) return value;
-	const completionIndex = value.lastIndexOf(completionLine);
-	if (completionIndex < 0) return value;
-	const lineStart = value.lastIndexOf("\n", completionIndex - 1) + 1;
-	const newlineIndex = value.indexOf("\n", completionIndex + completionLine.length);
-	const lineEnd = newlineIndex < 0 ? value.length : newlineIndex + 1;
-	return value.slice(0, lineStart) + value.slice(lineEnd);
-}
-
-function cleanStudioReplCapturedOutput(output: string, display?: ReplSubmissionDisplay, completionLine?: string): string {
-	const completionCleaned = stripStudioReplCompletionEcho(output, completionLine);
-	const displayCleaned = display ? stripReplSubmissionDisplay(completionCleaned, display) : completionCleaned;
-	return stripTrailingStudioReplPrompts(stripStudioReplSubmissionEcho(displayCleaned));
 }
 
 function normalizeStudioReplJournalMode(mode: unknown): StudioReplJournalEntry["mode"] {
@@ -12105,7 +12188,7 @@ function retainStudioReplSubmissionUntilSettled(
 				await sleepWithoutKeepingStudioProcessAlive(100);
 			}
 		} finally {
-			cleanupPrivateReplControlFiles(controlFiles);
+			cleanupStudioReplControlFiles(controlFiles);
 			await lease?.release().catch(() => undefined);
 		}
 	})();
@@ -12120,13 +12203,15 @@ async function releaseOrRetainStudioReplSubmission(
 		retainStudioReplSubmissionUntilSettled(session, controlFiles, lease);
 		return;
 	}
-	cleanupPrivateReplControlFiles(controlFiles);
+	cleanupStudioReplControlFiles(controlFiles);
 	await lease?.release().catch(() => undefined);
 }
 
 function interruptStudioReplSession(sessionName: string): { ok: true; message: string } | { ok: false; message: string } {
 	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
-	const result = runStudioTmux(["send-keys", "-t", getStudioReplPaneTarget(sessionName), "C-c"], { timeout: 5_000 });
+	const session = inspectStudioReplSession(sessionName);
+	if (!session) return { ok: false, message: `No tmux REPL session named ${sessionName}.` };
+	const result = runStudioTmux(["send-keys", "-t", session.target, "C-c"], { timeout: 5_000 });
 	if (!result.ok) return { ok: false, message: result.message || "Failed to interrupt REPL session." };
 	return { ok: true, message: `Interrupted ${sessionName}.` };
 }
@@ -13222,7 +13307,8 @@ export default function (pi: ExtensionAPI) {
 		contextWindow: null,
 		percent: null,
 	};
-	let studioReplActiveSessionName: string | null = null;
+	// The selected REPL session, the count of explicit actions and `shown`.
+	const studioReplSelection = createReplSelection<StudioReplSessionInfo>();
 	let compactInProgress = false;
 	let compactRequestId: string | null = null;
 	const activeCompletionSuggestions = new Map<string, AbortController>();
@@ -13283,6 +13369,7 @@ export default function (pi: ExtensionAPI) {
 		const state = listStudioReplSessions();
 		const sessions = state.sessions;
 		if (!state.tmuxAvailable) return { session: null, error: "tmux is not available.", sessions };
+		studioReplSelection.resolve(sessions);
 		if (typeof params.sessionName === "string" && params.sessionName.trim()) {
 			const requested = params.sessionName.trim();
 			const session = sessions.find((candidate) => candidate.sessionName === requested) ?? null;
@@ -13290,19 +13377,20 @@ export default function (pi: ExtensionAPI) {
 				? { session, sessions }
 				: { session: null, error: `No Studio-visible REPL session named ${requested}.`, sessions };
 		}
+		const selected = studioReplSelection.session;
+		const active = selected ? sessions.find((candidate) => sameReplSessionLifetime(candidate, selected)) ?? null : null;
 		const target = normalizeStudioReplRuntime(params.target);
 		if (target) {
-			const active = studioReplActiveSessionName
-				? sessions.find((candidate) => candidate.sessionName === studioReplActiveSessionName && candidate.runtime === target)
-				: null;
-			const session = active ?? sessions.find((candidate) => candidate.runtime === target) ?? null;
+			const session = (active?.runtime === target ? active : null) ?? sessions.find((candidate) => candidate.runtime === target) ?? null;
 			return session
 				? { session, sessions }
 				: { session: null, error: `No running Studio-visible ${STUDIO_REPL_RUNTIME_LABELS[target]} REPL session.`, sessions };
 		}
-		if (studioReplActiveSessionName) {
-			const active = sessions.find((candidate) => candidate.sessionName === studioReplActiveSessionName);
-			if (active) return { session: active, sessions };
+		if (active) return { session: active, sessions };
+		// With no session shown for the selected runtime, an unaddressed send doesn't
+		// guess another interpreter (Sol, Astra).
+		if (studioReplSelection.hasPreference) {
+			return { session: null, error: "No REPL session is selected in Studio. Choose one under Session, or pass sessionName.", sessions };
 		}
 		return sessions[0]
 			? { session: sessions[0], sessions }
@@ -13336,7 +13424,7 @@ export default function (pi: ExtensionAPI) {
 			const selected = selectStudioReplSessionForTool({ sessionName: params.sessionName, target: params.target });
 			const recordEntries = selected.session ? getStudioReplJournalEntries(selected.session.sessionName) : [];
 			const lines = [
-				`Active Studio REPL: ${studioReplActiveSessionName || "none"}`,
+				`Active Studio REPL: ${studioReplSelection.session?.sessionName || "none"}`,
 				`tmux sessions visible to Studio: ${selected.sessions.length}`,
 			];
 			if (selected.error) lines.push(`Selection: ${selected.error}`);
@@ -13353,7 +13441,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
 				details: {
-					activeSessionName: studioReplActiveSessionName,
+					activeSessionName: studioReplSelection.session?.sessionName ?? null,
 					selectedSession: selected.session,
 					selectedRecordEntries: recordEntries,
 					sessions: selected.sessions,
@@ -13383,7 +13471,30 @@ export default function (pi: ExtensionAPI) {
 					details: { ok: false, error: selected.error || "No Studio REPL session selected.", sessions: selected.sessions } as Record<string, unknown>,
 				};
 			}
+			if (selected.session.runtime === "unknown") {
+				const message = unsupportedStudioReplRuntimeMessage(selected.session.sessionName);
+				return {
+					content: [{ type: "text", text: message }],
+					details: { ok: false, error: message, session: selected.session, sessions: selected.sessions } as Record<string, unknown>,
+				};
+			}
 
+			// Input that can't be sent is refused before it counts as a choice (Sol).
+			const inputError = !params.code.trim()
+				? "Editor text is empty."
+				: (params.code.length > STUDIO_REPL_SEND_MAX_CHARS ? `REPL input is too large (${params.code.length} chars; max ${STUDIO_REPL_SEND_MAX_CHARS}).` : "");
+			if (inputError) {
+				return {
+					content: [{ type: "text", text: inputError }],
+					details: { ok: false, error: inputError, session: selected.session, sessions: selected.sessions } as Record<string, unknown>,
+				};
+			}
+			// The agent's send is an explicit choice when admitted, before it waits for the
+			// session's lease; only a ticket still current lets its result select (Sol, Astra).
+			const ticket = studioReplSelection.choose({ session: selected.session });
+			// Every exit after admission tells the pages Studio's selection: the result when
+			// it selects, otherwise a repl_state, so a failure can't leave them behind (Sol).
+			let published = false;
 			const timeoutMs = clampStudioReplSendTimeout(params.timeoutMs);
 			let lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null = null;
 			let submittedSession: StudioReplSessionInfo | null = null;
@@ -13404,7 +13515,7 @@ export default function (pi: ExtensionAPI) {
 				if (lease && currentSession.recordId !== selected.session.recordId) {
 					throw new Error(`The shared record for ${selected.session.sessionName} changed while Studio was waiting to send.`);
 				}
-				const before = captureStudioReplSession(currentSession.sessionName);
+				const before = captureStudioReplSession(currentSession.sessionName, currentSession);
 				if (!before.ok) throw new Error(`Could not capture ${currentSession.sessionName} before sending: ${before.message}`);
 				if (!isSameStudioReplSessionLifetime(currentSession, before.session)) {
 					throw new Error(`REPL session ${currentSession.sessionName} changed before Studio could capture it.`);
@@ -13440,7 +13551,6 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 				submittedSession = currentSession;
-				studioReplActiveSessionName = selected.session.sessionName;
 
 				let completed = false;
 				if (sent.controlFiles?.doneFile) {
@@ -13451,14 +13561,20 @@ export default function (pi: ExtensionAPI) {
 				} else {
 					await sleep(Math.min(750, timeoutMs));
 				}
-				const after = captureStudioReplSession(currentSession.sessionName);
+				const after = captureStudioReplSession(currentSession.sessionName, currentSession);
 				if (!after.ok) throw new Error(`Could not capture ${currentSession.sessionName} after sending: ${after.message}`);
 				if (!isSameStudioReplSessionLifetime(currentSession, after.session)) {
 					throw new Error(`REPL session ${currentSession.sessionName} changed before Studio captured the result.`);
 				}
 				const afterTranscript = after.transcript;
 				const rawOutput = extractStudioReplTranscriptDelta(beforeTranscript, afterTranscript);
-				const output = cleanStudioReplCapturedOutput(rawOutput, sent.display, sent.completionLine);
+				const output = cleanStudioReplOutput(rawOutput, {
+					submissionLine: sent.submissionText,
+					runtime: sent.runtime,
+					display: sent.display,
+					promptLine: beforeTranscript.split("\n").at(-1),
+					completed,
+				});
 				const status: StudioReplJournalEntry["status"] = sent.controlFiles?.doneFile
 					? (completed ? "captured" : "timeout")
 					: (output.trim() ? "captured" : "sent");
@@ -13477,6 +13593,10 @@ export default function (pi: ExtensionAPI) {
 					output ? "" : undefined,
 					output || undefined,
 				].filter(Boolean).join("\n");
+				// Its result selects only if nothing was chosen since it was admitted.
+				const select = studioReplSelection.isCurrent(ticket);
+				if (select) studioReplSelection.show({ session: currentSession });
+				published = true;
 				broadcastStudioReplToolSend({
 					toolCallId,
 					sessionName: selected.session.sessionName,
@@ -13487,9 +13607,16 @@ export default function (pi: ExtensionAPI) {
 					sharedSynced: journalEntry.sharedSynced === true,
 					completed,
 					timedOut: Boolean(sent.controlFiles?.doneFile && !completed),
-					transcript: afterTranscript,
-					capturedAt: Date.now(),
 					journalEntries: getStudioReplJournalEntries(selected.session.sessionName),
+					select,
+					...(select ? {
+						session: currentSession,
+						activeSessionName: currentSession.sessionName,
+						activeRuntime: currentSession.runtime,
+						shown: studioReplSelection.shown,
+						transcript: afterTranscript,
+						capturedAt: Date.now(),
+					} : {}),
 				});
 				return {
 					content: [{ type: "text", text }],
@@ -13526,6 +13653,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				throw error;
 			} finally {
+				if (!published) broadcastStudioReplSelection();
 				await releaseOrRetainStudioReplSubmission(lease, submittedSession, submittedControlFiles);
 				lease = null;
 				submittedControlFiles = undefined;
@@ -14328,59 +14456,96 @@ export default function (pi: ExtensionAPI) {
 		return next;
 	};
 
+	// A REPL reply for a page that has closed, which includes every page from before
+	// a Studio restart, leaves Studio's active REPL session alone (Sol).
+	const isOpenReplClient = (client: WebSocket): boolean => (
+		!studioRestarting && Boolean(serverState?.clients.has(client)) && client.readyState === WebSocket.OPEN
+	);
+
+	// Every repl_state states Studio's selection as it is when sent. The page adopts it,
+	// and its `shown` is the basis for the page's own reconciles (Sol, Astra).
 	const sendReplStateToClient = (client: WebSocket, extra?: Record<string, unknown>) => {
+		if (!isOpenReplClient(client)) return;
 		const state = listStudioReplSessions();
-		if (studioReplActiveSessionName && !state.sessions.some((session) => session.sessionName === studioReplActiveSessionName)) {
-			studioReplActiveSessionName = state.sessions[0]?.sessionName ?? null;
-		} else if (!studioReplActiveSessionName && state.sessions.length > 0) {
-			studioReplActiveSessionName = state.sessions[0].sessionName;
-		}
+		studioReplSelection.resolve(state.sessions);
+		const active = studioReplSelection.session;
 		sendToClient(client, {
 			type: "repl_state",
 			tmuxAvailable: state.tmuxAvailable,
 			sessions: state.sessions,
-			activeSessionName: studioReplActiveSessionName,
-			journalEntries: getStudioReplJournalEntries(studioReplActiveSessionName),
+			activeSessionName: active?.sessionName ?? null,
+			activeRuntime: studioReplSelection.runtime,
+			shown: studioReplSelection.shown,
+			journalEntries: getStudioReplJournalEntries(active?.sessionName ?? null),
 			error: state.error ?? null,
 			...extra,
 		});
 	};
 
-	const sendReplCaptureToClient = (client: WebSocket, sessionName?: string | null, extra?: Record<string, unknown>) => {
-		const targetSession = (typeof sessionName === "string" && sessionName.trim())
-			? sessionName.trim()
-			: studioReplActiveSessionName;
-		if (!targetSession) {
+	// The selected session's capture, as the selection is when sent.
+	const sendReplSelectionToClient = (client: WebSocket, extra?: Record<string, unknown>) => {
+		if (!isOpenReplClient(client)) return;
+		const selected = studioReplSelection.session;
+		if (!selected) {
+			sendReplStateToClient(client, extra);
+			return;
+		}
+		const captured = captureStudioReplSession(selected.sessionName);
+		if (!captured.ok || !sameReplSessionLifetime(captured.session, selected)) {
 			sendReplStateToClient(client, {
 				transcript: "",
+				captureError: captured.ok ? `REPL session ${selected.sessionName} changed before Studio could capture it.` : captured.message,
 				capturedAt: Date.now(),
-				journalEntries: [],
 				...extra,
 			});
 			return;
 		}
-		const captured = captureStudioReplSession(targetSession);
-		if (!captured.ok) {
-			sendReplStateToClient(client, {
-				activeSessionName: targetSession,
-				transcript: "",
-				captureError: captured.message,
-				capturedAt: Date.now(),
-				journalEntries: getStudioReplJournalEntries(targetSession),
-				...extra,
-			});
-			return;
-		}
-		studioReplActiveSessionName = captured.session.sessionName;
 		sendToClient(client, {
 			type: "repl_capture",
 			session: captured.session,
 			activeSessionName: captured.session.sessionName,
+			activeRuntime: captured.session.runtime,
+			shown: studioReplSelection.shown,
 			transcript: captured.transcript,
 			capturedAt: Date.now(),
 			journalEntries: getStudioReplJournalEntries(captured.session.sessionName),
 			...extra,
 		});
+	};
+
+	// A poll's reply: what one session shows now. It carries no selection (Sol, Astra).
+	const sendReplObservationToClient = (client: WebSocket, sessionName: string) => {
+		if (!isOpenReplClient(client)) return;
+		const captured = captureStudioReplSession(sessionName);
+		sendToClient(client, captured.ok ? {
+			type: "repl_capture",
+			observation: true,
+			session: captured.session,
+			transcript: captured.transcript,
+			capturedAt: Date.now(),
+			journalEntries: getStudioReplJournalEntries(captured.session.sessionName),
+		} : {
+			type: "repl_capture",
+			observation: true,
+			sessionName,
+			captureError: captured.message,
+			journalEntries: getStudioReplJournalEntries(sessionName),
+		});
+	};
+
+	// Studio's selection, to every open page.
+	const broadcastStudioReplSelection = () => {
+		for (const client of serverState?.clients ?? []) sendReplStateToClient(client);
+	};
+
+	// A send's result selects only if nothing was chosen since the send was admitted.
+	// Otherwise the page gets the send's record entries and keeps its choice.
+	const sendReplSendResultToClient = (client: WebSocket, ticket: number | null, sessionName: string, extra: Record<string, unknown>) => {
+		if (ticket !== null && studioReplSelection.isCurrent(ticket)) {
+			sendReplSelectionToClient(client, extra);
+			return;
+		}
+		sendReplStateToClient(client, { journalEntries: getStudioReplJournalEntries(sessionName), ...extra });
 	};
 
 	const emitDebugEvent = (event: string, details?: Record<string, unknown>) => {
@@ -16421,7 +16586,41 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		if (msg.type === "repl_capture_request") {
-			sendReplCaptureToClient(client, msg.sessionName ?? null);
+			if (!msg.choice) {
+				// A poll observes one session; with none, it asks for the list.
+				if (msg.sessionName) sendReplObservationToClient(client, msg.sessionName);
+				else sendReplStateToClient(client);
+				return;
+			}
+			if (!isOpenReplClient(client)) return;
+			// A choice on the page's Session or Runtime selector counts, even of a session
+			// that has gone. Its reply carries its revision, so the page stops waiting.
+			const answer = { choiceRevision: msg.choiceRevision };
+			const session = msg.sessionName ? inspectStudioReplSession(msg.sessionName) : null;
+			if (session) {
+				studioReplSelection.choose({ session });
+				sendReplSelectionToClient(client, answer);
+				return;
+			}
+			// A session that has gone, or a runtime with none: no session, for that runtime.
+			const replError = msg.sessionName ? `No tmux REPL session named ${msg.sessionName}.` : (msg.runtime ? "" : "Choose a runtime or a session.");
+			if (msg.runtime) studioReplSelection.choose({ runtime: msg.runtime });
+			sendReplStateToClient(client, { ...answer, ...(replError ? { replError } : {}) });
+			return;
+		}
+
+		if (msg.type === "repl_reconcile_request") {
+			// The page's own selection applies only if the page saw the selection as it is
+			// now. It doesn't count, so an action in progress keeps its ticket (Sol, Astra).
+			if (msg.sessionName) {
+				const session = inspectStudioReplSession(msg.sessionName);
+				if (session && session.tmuxSessionId === msg.tmuxSessionId && session.tmuxSessionCreatedAt === msg.tmuxSessionCreatedAt) {
+					studioReplSelection.reconcile(msg.basis, { session });
+				}
+			} else if (msg.runtime) {
+				studioReplSelection.reconcile(msg.basis, { runtime: msg.runtime });
+			}
+			sendReplStateToClient(client);
 			return;
 		}
 
@@ -16430,15 +16629,30 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
 			}
-			const started = startStudioReplSession(msg.runtime, studioCwd, { newSession: msg.newSession, command: msg.command });
-			if (!started.ok) {
-				sendReplStateToClient(client, { requestId: msg.requestId, replError: started.message });
-				sendToClient(client, { type: "error", requestId: msg.requestId, message: started.message });
-				return;
-			}
-			studioReplActiveSessionName = started.session.sessionName;
-			sendReplStateToClient(client, { requestId: msg.requestId, replMessage: started.message });
-			sendReplCaptureToClient(client, started.session.sessionName, { requestId: msg.requestId, replMessage: started.message });
+			// Waits for the runtime's prompt; the page shows "Starting…" meanwhile. The request
+			// counts on arrival, so of two overlapping Starts the newer one selects (Sol).
+			const ticket = studioReplSelection.startRequested();
+			void (async () => {
+				const started = await startStudioReplSession(msg.runtime, studioCwd, { newSession: msg.newSession, command: msg.command });
+				// Studio may have restarted, or the page closed, while the runtime started.
+				if (!isOpenReplClient(client)) return;
+				if (!started.ok) {
+					sendReplStateToClient(client, { requestId: msg.requestId, replError: started.message });
+					sendToClient(client, { type: "error", requestId: msg.requestId, message: started.message });
+					return;
+				}
+				// A session chosen while this one started stays selected, unless the latest
+				// choice was this session itself (Astra), or it is already selected, as when
+				// two Starts reach the same session.
+				const unchanged = sameReplSessionLifetime(studioReplSelection.session, started.session);
+				if (!studioReplSelection.isCurrent(ticket) && !studioReplSelection.latestChose(started.session) && !unchanged) {
+					sendReplStateToClient(client, { requestId: msg.requestId, replMessage: `${started.message} Select ${started.session.sessionName} under Session to use it.` });
+					return;
+				}
+				studioReplSelection.show({ session: started.session });
+				sendReplStateToClient(client, { requestId: msg.requestId, replMessage: started.message });
+				sendReplSelectionToClient(client, { requestId: msg.requestId, replMessage: started.message });
+			})();
 			return;
 		}
 
@@ -16447,14 +16661,19 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
 			}
-			const stopped = stopStudioReplSession(msg.sessionName);
-			if (!stopped.ok) {
-				sendReplStateToClient(client, { requestId: msg.requestId, replError: stopped.message });
-				sendToClient(client, { type: "error", requestId: msg.requestId, message: stopped.message });
-				return;
-			}
-			if (studioReplActiveSessionName === msg.sessionName) studioReplActiveSessionName = null;
-			sendReplStateToClient(client, { requestId: msg.requestId, replMessage: stopped.message, transcript: "", capturedAt: Date.now() });
+			void (async () => {
+				const stopped = await stopStudioReplSession(msg.sessionName);
+				if (!isOpenReplClient(client)) return;
+				if (!stopped.ok) {
+					sendReplStateToClient(client, { requestId: msg.requestId, replError: stopped.message });
+					sendToClient(client, { type: "error", requestId: msg.requestId, message: stopped.message });
+					return;
+				}
+				// Stop clears the view only if the session it stopped is still selected (Astra).
+				// Listing then selects another of its runtime, or none.
+				const cleared = sameReplSessionLifetime(studioReplSelection.session, stopped.session);
+				sendReplStateToClient(client, { requestId: msg.requestId, replMessage: stopped.message, ...(cleared ? { transcript: "", capturedAt: Date.now() } : {}) });
+			})();
 			return;
 		}
 
@@ -16469,8 +16688,13 @@ export default function (pi: ExtensionAPI) {
 				let lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null = null;
 				let submittedSession: StudioReplSessionInfo | null = null;
 				let submittedControlFiles: StudioReplControlFiles | undefined;
+				let ticket: number | null = null;
 				try {
 					if (!session) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
+					if (session.runtime === "unknown") throw new Error(unsupportedStudioReplRuntimeMessage(msg.sessionName));
+					// The send is an explicit choice when admitted, before it waits for the
+					// session's lease, even of the session already selected (Sol, Astra).
+					if (isOpenReplClient(client)) ticket = studioReplSelection.choose({ session });
 					if (session.recordId && !session.recordWarning) {
 						lease = await acquireReplSessionSendLease(session.recordId, {
 							owner: `pi-studio:browser:${msg.requestId}`,
@@ -16484,7 +16708,7 @@ export default function (pi: ExtensionAPI) {
 					if (lease && currentSession.recordId !== session.recordId) {
 						throw new Error(`The shared record for ${msg.sessionName} changed while Studio was waiting to send.`);
 					}
-					const before = captureStudioReplSession(msg.sessionName);
+					const before = captureStudioReplSession(msg.sessionName, currentSession);
 					if (!before.ok) throw new Error(`Could not capture ${msg.sessionName} before sending: ${before.message}`);
 					if (!isSameStudioReplSessionLifetime(currentSession, before.session)) {
 						throw new Error(`REPL session ${msg.sessionName} changed before Studio could capture it.`);
@@ -16514,7 +16738,6 @@ export default function (pi: ExtensionAPI) {
 						throw new Error(sent.message);
 					}
 					submittedSession = currentSession;
-					studioReplActiveSessionName = msg.sessionName;
 					sendToClient(client, {
 						type: "repl_send_ack",
 						requestId: msg.requestId,
@@ -16529,14 +16752,20 @@ export default function (pi: ExtensionAPI) {
 					} else {
 						await sleep(Math.min(750, timeoutMs));
 					}
-					const after = captureStudioReplSession(msg.sessionName);
+					const after = captureStudioReplSession(msg.sessionName, currentSession);
 					if (!after.ok) throw new Error(`Could not capture ${msg.sessionName} after sending: ${after.message}`);
 					if (!isSameStudioReplSessionLifetime(currentSession, after.session)) {
 						throw new Error(`REPL session ${msg.sessionName} changed before Studio captured the result.`);
 					}
 					const afterTranscript = after.transcript;
 					const rawOutput = extractStudioReplTranscriptDelta(beforeTranscript, afterTranscript);
-					const output = cleanStudioReplCapturedOutput(rawOutput, sent.display, sent.completionLine);
+					const output = cleanStudioReplOutput(rawOutput, {
+						submissionLine: sent.submissionText,
+						runtime: sent.runtime,
+						display: sent.display,
+						promptLine: beforeTranscript.split("\n").at(-1),
+						completed,
+					});
 					updateStudioReplJournalEntryOutput(
 						msg.requestId,
 						msg.sessionName,
@@ -16544,7 +16773,7 @@ export default function (pi: ExtensionAPI) {
 						sent.controlFiles?.doneFile ? (completed ? "captured" : "timeout") : (output.trim() ? "captured" : "sent"),
 						currentSession,
 					);
-					sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId });
+					sendReplSendResultToClient(client, ticket, msg.sessionName, { requestId: msg.requestId });
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					if (journalEntry) updateStudioReplJournalEntryOutput(
@@ -16555,7 +16784,7 @@ export default function (pi: ExtensionAPI) {
 						submittedSession || session,
 					);
 					sendToClient(client, { type: "error", requestId: msg.requestId, message });
-					sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId, replError: message });
+					sendReplSendResultToClient(client, ticket, msg.sessionName, { requestId: msg.requestId, replError: message });
 				} finally {
 					await releaseOrRetainStudioReplSubmission(lease, submittedSession, submittedControlFiles);
 					lease = null;
@@ -16640,11 +16869,13 @@ export default function (pi: ExtensionAPI) {
 			const interrupted = interruptStudioReplSession(msg.sessionName);
 			if (!interrupted.ok) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: interrupted.message });
-				sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId, replError: interrupted.message });
+				sendReplStateToClient(client, { requestId: msg.requestId, replError: interrupted.message });
 				return;
 			}
-			studioReplActiveSessionName = msg.sessionName;
-			sendReplCaptureToClient(client, msg.sessionName, { requestId: msg.requestId, replMessage: interrupted.message });
+			// An interrupt is an explicit choice of its session.
+			const interruptedSession = inspectStudioReplSession(msg.sessionName);
+			if (interruptedSession) studioReplSelection.choose({ session: interruptedSession });
+			sendReplSelectionToClient(client, { requestId: msg.requestId, replMessage: interrupted.message });
 			return;
 		}
 

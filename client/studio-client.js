@@ -674,6 +674,18 @@
       let replTmuxAvailable = null;
       let replSessions = [];
       let replActiveSessionName = "";
+      // Studio's selection as this page last adopted it, with its `shown`, and this page's
+      // own choices: while one is unanswered, other replies don't change what the page
+      // shows (Sol, Astra).
+      let replServerSelection = { sessionName: "", runtime: "" };
+      let replShownBasis = null;
+      let replChoiceRevision = 0;
+      let replChoiceAnswered = 0;
+      // The session as chosen, kept with the unanswered choice rather than read from the list.
+      let replChoicePin = null;
+      let replReconcileSent = "";
+      // The session lifetime the transcript belongs to.
+      let replTranscriptOwner = "";
       let replRuntime = (() => {
         try {
           return (window.localStorage && window.localStorage.getItem("piStudio.replRuntime")) || "python";
@@ -721,6 +733,9 @@
         if (!entry || typeof entry !== "object") return null;
         const hasCompatibleOrigin = entry.origin === "pi-repl" || entry.origin === "pi-studio";
         const sharedSynced = entry.sharedSynced === true || (entry.sharedSynced !== false && hasCompatibleOrigin);
+        // Whether the output was cleaned where it was captured is separate from whether
+        // it reached the shared record: a failed record write leaves clean output.
+        const outputClean = sharedSynced || entry.outputClean === true;
         const normalized = {
           id: typeof entry.id === "string" && entry.id ? entry.id : ("repl-journal-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8)),
           requestId: typeof entry.requestId === "string" ? entry.requestId : "",
@@ -731,11 +746,14 @@
           runtime: typeof entry.runtime === "string" ? entry.runtime : "python",
           origin: hasCompatibleOrigin ? entry.origin : "",
           legacyLocal: !sharedSynced,
+          outputClean,
           label: typeof entry.label === "string" ? entry.label : "REPL send",
           mode: typeof entry.mode === "string" ? entry.mode : "raw",
           prose: typeof entry.prose === "string" ? entry.prose : "",
           code: typeof entry.code === "string" ? entry.code : "",
-          output: typeof entry.output === "string" ? stripStudioReplSubmissionEcho(entry.output) : "",
+          // Studio's server and pi-repl record clean output; only this browser's
+          // older local entries can still hold a loader echo.
+          output: typeof entry.output === "string" ? (outputClean ? entry.output : stripStudioReplSubmissionEcho(entry.output)) : "",
           beforeTranscript: "",
           status: typeof entry.status === "string" ? entry.status : "sent",
           skippedChunks: Math.max(0, Math.floor(Number(entry.skippedChunks) || 0)),
@@ -767,6 +785,7 @@
             runtime: entry.runtime,
             origin: entry.origin,
             sharedSynced: !entry.legacyLocal,
+            outputClean: entry.outputClean === true,
             label: entry.label,
             mode: entry.mode,
             prose: entry.prose,
@@ -786,7 +805,8 @@
         let changed = false;
         const next = [...replJournalEntries];
         for (const rawEntry of entries) {
-          const entry = normalizeReplJournalEntry(rawEntry);
+          // These come from Studio's server, which has already cleaned their output.
+          const entry = normalizeReplJournalEntry(rawEntry && typeof rawEntry === "object" ? { ...rawEntry, outputClean: true } : rawEntry);
           if (!entry) continue;
           const existingIndex = next.findIndex((candidate) => (
             (entry.requestId && candidate.requestId === entry.requestId)
@@ -1488,7 +1508,7 @@
         if (!sessionName) return null;
         return {
           sessionName,
-          target: typeof session.target === "string" ? session.target : (sessionName + ":0.0"),
+          target: typeof session.target === "string" ? session.target : "",
           tmuxSessionId: typeof session.tmuxSessionId === "string" ? session.tmuxSessionId : "",
           tmuxSessionCreatedAt: typeof session.tmuxSessionCreatedAt === "number" && Number.isFinite(session.tmuxSessionCreatedAt)
             ? session.tmuxSessionCreatedAt
@@ -1729,14 +1749,20 @@
       function setReplSessions(sessions) {
         const previous = serializeReplSessionsForCompare(replSessions);
         const previousActive = replActiveSessionName;
-        replSessions = Array.isArray(sessions)
-          ? sessions.map(normalizeReplSession).filter(Boolean)
-          : [];
-        if (replActiveSessionName && !replSessions.some((session) => session.sessionName === replActiveSessionName)) {
-          setActiveReplSession("");
-        }
-        if (!getActiveReplSessionForCurrentRuntime()) {
-          selectReplSessionForRuntime(replRuntime, replActiveSessionName);
+        // While a choice is unanswered, the chosen session keeps the lifetime it was chosen
+        // with: no list, even one after a list that left it out, can swap in a replacement
+        // with the same name (Astra, Sol).
+        const chosen = isReplChoicePending() ? replChoicePin : null;
+        replSessions = (Array.isArray(sessions) ? sessions.map(normalizeReplSession).filter(Boolean) : [])
+          .map((session) => (chosen && session.sessionName === chosen.sessionName ? chosen : session));
+        // The list may change while a choice is unanswered, but the selection waits for its reply.
+        if (!isReplChoicePending()) {
+          if (replActiveSessionName && !replSessions.some((session) => session.sessionName === replActiveSessionName)) {
+            setActiveReplSession("");
+          }
+          if (!getActiveReplSessionForCurrentRuntime()) {
+            selectReplSessionForRuntime(replRuntime, replActiveSessionName);
+          }
         }
         return previous !== serializeReplSessionsForCompare(replSessions) || previousActive !== replActiveSessionName;
       }
@@ -1789,7 +1815,7 @@
           "The right pane is mirroring an active tmux-backed REPL session.",
           "If the user refers to the active REPL, send code to this session rather than inventing a separate one.",
           "Session name: " + session.sessionName,
-          "tmux target: " + (session.target || (session.sessionName + ":0.0")),
+          "tmux target: " + (session.target || session.sessionName),
           "runtime: " + runtime,
           "Use the studio_repl_send tool for code execution in this REPL. Pass sessionName when targeting this exact session.",
           "Do not improvise raw tmux paste commands for multiline code; Studio handles runtime-specific safe submission.",
@@ -1804,21 +1830,94 @@
       }
 
       function setActiveReplSession(sessionName) {
-        const name = String(sessionName || "").trim();
-        if (!name) {
-          if (replActiveSessionName) {
-            replTranscript = "";
-            replCapturedAt = 0;
-          }
-          replActiveSessionName = "";
-          return;
+        replActiveSessionName = String(sessionName || "").trim();
+        retireReplViewIfTargetChanged();
+      }
+
+      // The view belongs to one session lifetime, or to none. When the displayed target
+      // changes, including to or from none or to a replacement with the same name, its
+      // transcript, timestamp and live entry go with it (Sol).
+      function retireReplViewIfTargetChanged() {
+        const owner = getReplSessionLifetimeKey(getActiveReplSession());
+        if (owner === replTranscriptOwner) return false;
+        replTranscript = "";
+        replCapturedAt = 0;
+        activeReplJournalEntryId = "";
+        replTranscriptOwner = owner;
+        return true;
+      }
+
+      function getReplSessionLifetimeKey(session) {
+        return session ? [session.sessionName, session.tmuxSessionId || "", Number(session.tmuxSessionCreatedAt) || 0].join("\u001f") : "";
+      }
+
+      function upsertReplSession(value) {
+        const session = normalizeReplSession(value);
+        if (!session) return false;
+        const index = replSessions.findIndex((candidate) => candidate.sessionName === session.sessionName);
+        if (index < 0) {
+          replSessions = [...replSessions, session];
+          return true;
         }
-        if (replActiveSessionName && replActiveSessionName !== name) {
-          replTranscript = "";
-          replCapturedAt = 0;
-          activeReplJournalEntryId = "";
+        if (serializeReplSessionsForCompare([replSessions[index]]) === serializeReplSessionsForCompare([session])) return false;
+        replSessions = replSessions.map((candidate, candidateIndex) => candidateIndex === index ? session : candidate);
+        return true;
+      }
+
+      function isReplChoicePending() {
+        return replChoiceAnswered < replChoiceRevision;
+      }
+
+      // Only the reply to this page's latest choice ends the wait.
+      function noteReplChoiceAnswer(message) {
+        if (typeof message.choiceRevision === "number" && message.choiceRevision > replChoiceAnswered) {
+          replChoiceAnswered = Math.min(message.choiceRevision, replChoiceRevision);
         }
-        replActiveSessionName = name;
+        if (!isReplChoicePending()) replChoicePin = null;
+      }
+
+      // Adopts Studio's selection from a message that states it. A session brings its
+      // runtime; none comes for a runtime; with no preference yet, the page keeps its
+      // runtime and picks within it (Sol, Astra).
+      function adoptReplSelection(message) {
+        const sessionName = typeof message.activeSessionName === "string" ? message.activeSessionName.trim() : "";
+        const runtime = getKnownReplRuntime(message.activeRuntime);
+        replServerSelection = { sessionName, runtime };
+        if (typeof message.shown === "number") replShownBasis = message.shown;
+        if (runtime && runtime !== replRuntime) setReplRuntime(runtime);
+        if (sessionName) {
+          setActiveReplSessionForCurrentRuntime(sessionName);
+        } else {
+          selectReplSessionForRuntime(replRuntime, runtime ? "" : replActiveSessionName);
+        }
+      }
+
+      // Reports a selection the page made itself, against the selection it last adopted.
+      // Studio applies it only if nothing has changed since; it isn't a choice (Sol, Astra).
+      function reconcileReplSelection() {
+        if (replShownBasis === null || isReplChoicePending() || wsState === "Disconnected") return false;
+        const session = getActiveReplSessionForCurrentRuntime();
+        const matches = session
+          ? session.sessionName === replServerSelection.sessionName
+          : !replServerSelection.sessionName && replServerSelection.runtime === replRuntime;
+        if (matches) return false;
+        const target = session
+          ? { sessionName: session.sessionName, tmuxSessionId: session.tmuxSessionId, tmuxSessionCreatedAt: session.tmuxSessionCreatedAt }
+          : { runtime: replRuntime };
+        const key = replShownBasis + "\u001f" + JSON.stringify(target);
+        if (key === replReconcileSent) return false;
+        replReconcileSent = key;
+        return sendMessage({ type: "repl_reconcile_request", basis: replShownBasis, ...target });
+      }
+
+      // A new connection has no choice outstanding and no basis until it adopts one.
+      function resetReplSelectionBasis() {
+        replChoiceAnswered = replChoiceRevision;
+        replChoicePin = null;
+        replShownBasis = null;
+        replReconcileSent = "";
+        replServerSelection = { sessionName: "", runtime: "" };
+        if (rightView === "repl") requestReplList();
       }
 
       function trimReplTranscript(text) {
@@ -1832,12 +1931,32 @@
         return sendMessage({ type: "repl_list_request" });
       }
 
+      // A poll: the displayed session as it is now, or the list when there is none.
       function requestReplCapture() {
         if (wsState === "Disconnected") return false;
         if (replActiveSessionName) {
           return sendMessage({ type: "repl_capture_request", sessionName: replActiveSessionName });
         }
         return sendMessage({ type: "repl_list_request" });
+      }
+
+      // A choice on the Session or Runtime selector, which Studio counts. Until its reply
+      // arrives, other replies don't change what the page shows.
+      function requestReplChoice() {
+        if (wsState === "Disconnected") return false;
+        const choiceRevision = replChoiceRevision + 1;
+        const sent = sendMessage({
+          type: "repl_capture_request",
+          choice: true,
+          choiceRevision,
+          runtime: replRuntime,
+          ...(replActiveSessionName ? { sessionName: replActiveSessionName } : {}),
+        });
+        if (sent) {
+          replChoiceRevision = choiceRevision;
+          replChoicePin = getActiveReplSession();
+        }
+        return sent;
       }
 
       function isReplControlFocused() {
@@ -1905,6 +2024,8 @@
       function startReplPolling() {
         if (rightView !== "repl") return;
         if (replPollTimer !== null) return;
+        // Polls only observe, so the view starts from Studio's current selection.
+        if (replActiveSessionName) requestReplList();
         requestReplCapture();
         replPollTimer = window.setInterval(() => {
           if (rightView !== "repl") {
@@ -2182,6 +2303,7 @@
           runtime: details.runtime || getActiveReplRuntime(),
           origin: details.origin === "pi-repl" ? "pi-repl" : "pi-studio",
           legacyLocal: !sharedSynced,
+          outputClean: sharedSynced || details.outputClean === true,
           label: details.label || "REPL send",
           mode: details.mode || replSendMode,
           prose: String(details.prose || ""),
@@ -2259,7 +2381,7 @@
         return sent;
       }
 
-      function recordReplToolSend(message) {
+      function recordReplToolSend(message, selects) {
         const requestId = typeof message.toolCallId === "string" && message.toolCallId.trim()
           ? "tool:" + message.toolCallId.trim()
           : (typeof message.requestId === "string" && message.requestId.trim() ? message.requestId.trim() : "");
@@ -2267,20 +2389,23 @@
         if (!code.trim()) return false;
         const runtime = normalizeReplRuntime(message.runtime || getActiveReplRuntime());
         const sessionName = typeof message.sessionName === "string" ? message.sessionName : replActiveSessionName;
-        const output = cleanReplCapturedOutput(String(message.output || ""), { code, runtime });
+        // The server has already cleaned this send's output; cleaning it again could drop real lines.
+        const output = trimReplJournalOutput(String(message.output || "").trimEnd());
         const details = {
           requestId,
           sessionName,
           runtime,
           origin: message.origin === "pi-repl" ? "pi-repl" : "pi-studio",
           sharedSynced: message.sharedSynced === true,
+          outputClean: true,
           label: typeof message.label === "string" && message.label.trim() ? message.label.trim() : "Pi",
           mode: "agent",
           code,
           output,
           status: output.trim() ? "captured" : (message.timedOut ? "timeout" : "sent"),
         };
-        activeReplJournalEntryId = "";
+        // A result that doesn't select leaves this page's own entry tracking alone (Astra).
+        if (selects !== false) activeReplJournalEntryId = "";
         if (requestId) {
           const existingIndex = replJournalEntries.findIndex((entry) => entry.requestId === requestId);
           if (existingIndex >= 0) {
@@ -2375,7 +2500,8 @@
         if (entryIndex < 0) return false;
         const entry = replJournalEntries[entryIndex];
         if (entry.sessionName && sessionName && entry.sessionName !== sessionName) return false;
-        if (!entry.legacyLocal && (entry.status === "captured" || entry.status === "timeout" || entry.status === "error")) {
+        // Finished output from Studio's server stands, whether or not the shared record took it.
+        if ((entry.outputClean || !entry.legacyLocal) && (entry.status === "captured" || entry.status === "timeout" || entry.status === "error")) {
           activeReplJournalEntryId = "";
           return false;
         }
@@ -11699,13 +11825,13 @@
           selectReplSessionForRuntime(replRuntime, previousActive);
           replError = "";
           replMessage = "";
-          if (replActiveSessionName) {
-            requestReplCapture();
-          } else {
+          if (!replActiveSessionName) {
             replTranscript = "";
             replCapturedAt = 0;
             syncActionButtons();
           }
+          // Counted even with no session, so nothing that finishes later takes it back.
+          requestReplChoice();
           renderReplViewIfActive({ force: true });
           return;
         }
@@ -11727,7 +11853,7 @@
           replError = "";
           replMessage = "";
           replFollow = true;
-          requestReplCapture();
+          requestReplChoice();
           renderReplViewIfActive({ force: true });
         }
       }
@@ -28468,25 +28594,30 @@
           const responseRequestId = typeof message.requestId === "string" ? message.requestId : "";
           const settlesPendingRequest = Boolean(responseRequestId && responseRequestId === replPendingRequestId);
           const previousActiveLifetimeKey = getReplQuickDraftKey(getActiveReplSession());
+          const previousRuntime = replRuntime;
+          // Every repl_state states Studio's selection; while this page's own choice is
+          // unanswered, only that choice's reply changes what the page shows.
+          noteReplChoiceAnswer(message);
+          const present = !isReplChoicePending();
           replTmuxAvailable = typeof message.tmuxAvailable === "boolean" ? message.tmuxAvailable : replTmuxAvailable;
           const sessionsChanged = setReplSessions(message.sessions);
-          if (typeof message.activeSessionName === "string" && message.activeSessionName.trim()) {
-            setActiveReplSessionForCurrentRuntime(message.activeSessionName);
-          }
+          if (present) adoptReplSelection(message);
           const journalChanged = mergeReplJournalEntries(message.journalEntries);
           reconcileReplQuickPending();
           maybeImportLegacyReplJournalEntries(replActiveSessionName);
-          if (typeof message.transcript === "string") replTranscript = trimReplTranscript(message.transcript);
-          if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
+          if (present && typeof message.transcript === "string") replTranscript = trimReplTranscript(message.transcript);
+          if (present && typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
           replError = typeof message.replError === "string" ? message.replError : (typeof message.captureError === "string" ? message.captureError : "");
           replMessage = typeof message.replMessage === "string" ? message.replMessage : "";
           if (settlesPendingRequest && replPendingRequestId === responseRequestId) replPendingRequestId = "";
           replBusy = Boolean(replPendingRequestId);
+          if (present) reconcileReplSelection();
           const activeSessionIdentityChanged = Boolean(previousActiveLifetimeKey)
             && previousActiveLifetimeKey !== getReplQuickDraftKey(getActiveReplSession());
           const controlsChanged = wasBusy
             || sessionsChanged
             || previousTmuxAvailable !== replTmuxAvailable
+            || previousRuntime !== replRuntime
             || previousActiveSessionName !== replActiveSessionName;
           if (controlsChanged) syncActionButtons();
           const viewChanged = controlsChanged
@@ -28501,14 +28632,28 @@
         }
 
         if (message.type === "repl_tool_send") {
-          if (typeof message.sessionName === "string" && message.sessionName.trim()) {
-            setActiveReplSession(message.sessionName);
+          // The agent's send selects only if nothing was chosen since Studio admitted it,
+          // and not while this page's own choice is unanswered (Sol, Astra).
+          const selects = message.select !== false && !isReplChoicePending();
+          const previousRuntime = replRuntime;
+          const previousActiveSessionName = replActiveSessionName;
+          if (selects) {
+            if (message.session) upsertReplSession(message.session);
+            adoptReplSelection({
+              activeSessionName: typeof message.activeSessionName === "string" ? message.activeSessionName : message.sessionName,
+              activeRuntime: typeof message.activeRuntime === "string" ? message.activeRuntime : message.runtime,
+              shown: message.shown,
+            });
           }
-          const changed = recordReplToolSend(message);
+          const changed = recordReplToolSend(message, selects);
           const journalChanged = mergeReplJournalEntries(message.journalEntries);
-          if (typeof message.transcript === "string") replTranscript = trimReplTranscript(message.transcript);
-          if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
-          if (changed || journalChanged) renderReplViewIfActive({ force: true });
+          if (selects && message.sessionName === replActiveSessionName) {
+            if (typeof message.transcript === "string") replTranscript = trimReplTranscript(message.transcript);
+            if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
+          }
+          if (selects) reconcileReplSelection();
+          if (previousRuntime !== replRuntime || previousActiveSessionName !== replActiveSessionName) syncActionButtons();
+          if (changed || journalChanged || selects) renderReplViewIfActive({ force: true });
           updateReferenceBadge();
           return;
         }
@@ -28523,41 +28668,55 @@
           const responseRequestId = typeof message.requestId === "string" ? message.requestId : "";
           const settlesPendingRequest = Boolean(responseRequestId && responseRequestId === replPendingRequestId);
           const previousActiveLifetimeKey = getReplQuickDraftKey(getActiveReplSession());
+          const previousRuntime = replRuntime;
           let sessionsChanged = false;
-          if (message.session) {
-            const session = normalizeReplSession(message.session);
-            if (session) {
-              const existingIndex = replSessions.findIndex((candidate) => candidate.sessionName === session.sessionName);
-              if (existingIndex < 0) {
-                replSessions = [...replSessions, session];
-                sessionsChanged = true;
-              } else if (serializeReplSessionsForCompare([replSessions[existingIndex]]) !== serializeReplSessionsForCompare([session])) {
-                replSessions = replSessions.map((candidate, index) => index === existingIndex ? session : candidate);
-                sessionsChanged = true;
+          let applies = false;
+          if (message.observation === true) {
+            // A poll's reply shows one session as it is now. It applies only to the exact
+            // session this page displays, checked before anything changes (Sol, Astra).
+            const observed = normalizeReplSession(message.session);
+            const displayed = getActiveReplSession();
+            const observedName = observed ? observed.sessionName : (typeof message.sessionName === "string" ? message.sessionName : "");
+            if (!isReplChoicePending() && displayed && observedName === displayed.sessionName) {
+              if (!observed) {
+                // Its capture failed; the list says what Studio selects now.
+                applies = true;
+                requestReplList();
+              } else if (getReplSessionLifetimeKey(observed) === getReplSessionLifetimeKey(displayed)) {
+                applies = true;
+                sessionsChanged = upsertReplSession(observed);
+              } else {
+                requestReplList();
               }
             }
-          }
-          if (typeof message.activeSessionName === "string" && message.activeSessionName.trim()) {
-            setActiveReplSessionForCurrentRuntime(message.activeSessionName);
+          } else {
+            // A choice's reply, or a result that selected: it states Studio's selection.
+            noteReplChoiceAnswer(message);
+            applies = !isReplChoicePending();
+            if (applies && message.session) sessionsChanged = upsertReplSession(message.session);
+            if (applies) adoptReplSelection(message);
+            applies = applies && Boolean(message.session) && message.session.sessionName === replActiveSessionName;
           }
           let journalChanged = mergeReplJournalEntries(message.journalEntries);
           reconcileReplQuickPending();
           maybeImportLegacyReplJournalEntries(replActiveSessionName);
-          if (typeof message.transcript === "string") {
+          if (applies && typeof message.transcript === "string") {
             replTranscript = trimReplTranscript(message.transcript);
-            journalChanged = updateActiveReplJournalEntryFromTranscript(
-              typeof message.activeSessionName === "string" && message.activeSessionName.trim() ? message.activeSessionName : replActiveSessionName,
-              replTranscript
-            ) || journalChanged;
+            journalChanged = updateActiveReplJournalEntryFromTranscript(replActiveSessionName, replTranscript) || journalChanged;
+          } else if (applies && typeof message.captureError === "string") {
+            replTranscript = "";
           }
-          if (typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
-          replError = typeof message.replError === "string" ? message.replError : "";
+          if (applies && typeof message.capturedAt === "number") replCapturedAt = message.capturedAt;
+          if (applies || message.observation !== true) {
+            replError = typeof message.replError === "string" ? message.replError : (typeof message.captureError === "string" ? message.captureError : "");
+          }
           if (typeof message.replMessage === "string") replMessage = message.replMessage;
           if (settlesPendingRequest && replPendingRequestId === responseRequestId) replPendingRequestId = "";
           replBusy = Boolean(replPendingRequestId);
+          if (message.observation !== true && !isReplChoicePending()) reconcileReplSelection();
           const activeSessionIdentityChanged = Boolean(previousActiveLifetimeKey)
             && previousActiveLifetimeKey !== getReplQuickDraftKey(getActiveReplSession());
-          const controlsChanged = wasBusy || sessionsChanged || previousActiveSessionName !== replActiveSessionName;
+          const controlsChanged = wasBusy || sessionsChanged || previousRuntime !== replRuntime || previousActiveSessionName !== replActiveSessionName;
           if (controlsChanged) syncActionButtons();
           const viewChanged = controlsChanged
             || previousTranscript !== replTranscript
@@ -29382,6 +29541,7 @@
           setWsState("Ready");
           setStatus(wasReconnect ? "Reconnected. Syncing…" : "Connected. Syncing…");
           sendMessage({ type: "hello" });
+          resetReplSelectionBasis();
           if (isWatchedFilePreview && watchedFilePreviewState.path) {
             watchedFilePreviewState.generation = 0;
             sendMessage({
