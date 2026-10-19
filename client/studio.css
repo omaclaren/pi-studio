@@ -6819,6 +6819,12 @@
       background: var(--studio-header-action-hover-bg, var(--panel-2));
     }
 
+    /* Plain text needs no button width. The old 10rem left a gap before it and, on a
+       13-inch screen, pushed the tools onto a second row while running (Oliver, 19 Oct). */
+    body.studio-ui-refresh #queueSteerBtn {
+      min-width: 0;
+    }
+
     body.studio-ui-refresh .studio-refresh-review-btn.request-stop-active {
       background: color-mix(in srgb, var(--error) 82%, var(--panel));
       border-color: color-mix(in srgb, var(--error) 88%, var(--panel));

@@ -68,3 +68,12 @@ test("toolbar tools sit in a right-aligned group after the main action", () => {
   // Add to Prompt still goes in after the main action, before the tools.
   assert.match(source, /studioUiRefreshUi\.actionLine\.insertBefore\(addMenu\.anchor, queueSteerBtn\?\.nextSibling \|\| sendRunBtn\?\.nextSibling \|\| null\)/);
 });
+
+// Oliver, 19 Oct (13-inch Mac): Queue steering is plain text in the new layout, so the old
+// 10rem button width only left a gap before it and pushed the tools onto a second row.
+test("Queue steering takes only its label's width in the new layout", () => {
+  assert.match(css, /#sendRunBtn,\n\s+#queueSteerBtn,\n\s+#sendReplBtn \{\n\s+min-width: 10rem;/);
+  assert.match(css, /body\.studio-ui-refresh #queueSteerBtn \{\n\s+min-width: 0;\n\s+\}/);
+  // The override comes after the shared rule and is more specific, so it wins.
+  assert.ok(css.indexOf("body.studio-ui-refresh #queueSteerBtn {\n      min-width: 0;") > css.indexOf("min-width: 10rem;"));
+});

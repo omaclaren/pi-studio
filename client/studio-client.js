@@ -716,6 +716,18 @@
       // After a Quick send from the box, the cursor goes back to it (Oliver, 19 Oct):
       // { requestId, settled }, cleared when restored or when anything else is chosen.
       let replQuickRefocus = null;
+      // A REPL pane redraw that waited (for focus to leave a control, or for a pause in the
+      // Quick send box), and what the box is in the middle of (Oliver, 19 Oct).
+      let replRedrawDeferred = false;
+      let replRedrawDeferredForce = false;
+      let replRedrawForced = false;
+      let replRedrawRetryTimer = null;
+      // A height the box was dragged to, kept across redraws.
+      let replQuickBoxHeight = "";
+      let replQuickComposing = false;
+      let replQuickPointerDown = false;
+      let replQuickLastInputAt = 0;
+      const REPL_QUICK_TYPING_PAUSE_MS = 800;
       let replSendMode = (() => {
         try {
           const stored = window.localStorage && window.localStorage.getItem("piStudio.replSendMode");
@@ -1669,7 +1681,10 @@
       }
 
       function setReplQuickDraft(session, value) {
-        const key = getReplQuickDraftKey(session);
+        return setReplQuickDraftForKey(getReplQuickDraftKey(session), value);
+      }
+
+      function setReplQuickDraftForKey(key, value) {
         if (!key) return "";
         const draft = String(value || "").slice(0, REPL_QUICK_DRAFT_MAX_CHARS);
         if (!draft) {
@@ -2006,6 +2021,113 @@
         return activeEl instanceof Element && Boolean(activeEl.closest(".repl-controls, .repl-quick-composer"));
       }
 
+      // The pane can be redrawn under the Quick send box: its text is kept as a draft on
+      // every keystroke, and its cursor, selection and scroll are put back. Otherwise a
+      // result that arrived while the cursor stayed there wasn't shown (since 0.10.3).
+      // Not mid-typing, mid-composition or mid-drag, though: the redraw waits for a pause.
+      // Other REPL controls wait until focus leaves them.
+      function canRedrawReplUnderFocus() {
+        const activeEl = document.activeElement;
+        return activeEl instanceof HTMLTextAreaElement && activeEl.hasAttribute("data-repl-quick-draft")
+          && !replQuickComposing && !replQuickPointerDown && Date.now() - replQuickLastInputAt >= REPL_QUICK_TYPING_PAUSE_MS;
+      }
+
+      function retryReplRedrawAfterPause() {
+        if (replRedrawRetryTimer !== null) return;
+        const wait = Math.max(0, replQuickLastInputAt + REPL_QUICK_TYPING_PAUSE_MS - Date.now()) + 20;
+        replRedrawRetryTimer = window.setTimeout(() => {
+          replRedrawRetryTimer = null;
+          replayDeferredReplRedraw();
+        }, wait);
+      }
+
+      // Whether a REPL redraw has to wait. Asked when the redraw is requested and again when
+      // its frame runs: composing, typing, a drag or focus elsewhere can start in between
+      // (Sol, Astra). Composing holds even a forced redraw.
+      function replRedrawMustWait(force) {
+        return replQuickComposing || (!force && isReplControlFocused() && !canRedrawReplUnderFocus());
+      }
+
+      function deferReplRedraw(force) {
+        replRedrawDeferred = true;
+        replRedrawDeferredForce = replRedrawDeferredForce || force;
+        // Only typing needs a timer: composing and a drag end with their own events (Sol).
+        const activeEl = document.activeElement;
+        if (!replQuickComposing && !replQuickPointerDown && activeEl instanceof HTMLTextAreaElement && activeEl.hasAttribute("data-repl-quick-draft")) retryReplRedrawAfterPause();
+      }
+
+      // The session lifetime a drawn Quick send box belongs to. While a redraw waits (for
+      // composing, say), the selection can move on and leave the box showing another one.
+      function getReplQuickBoxKey(box) {
+        try {
+          return box instanceof Element ? decodeURIComponent(box.getAttribute("data-repl-quick-lifetime") || "") : "";
+        } catch {
+          return "";
+        }
+      }
+
+      // What the REPL pane is drawn for: the runtime, and the selected session's name and lifetime.
+      function getReplPaneTargetKey() {
+        const session = getActiveReplSessionForCurrentRuntime();
+        return [normalizeReplRuntime(replRuntime), session ? session.sessionName : "", session ? getReplQuickDraftKey(session) : ""].join("\u001e");
+      }
+
+      // A pane left on screen for another session, or a replacement with the same name. Its
+      // controls do nothing then, and the redraw shows the current one (Sol, Astra).
+      function isReplPaneStale(el) {
+        const pane = el instanceof Element ? el.closest("[data-repl-drawn-target]") : null;
+        if (!pane) return false;
+        try {
+          return decodeURIComponent(pane.getAttribute("data-repl-drawn-target") || "") !== getReplPaneTargetKey();
+        } catch {
+          return true;
+        }
+      }
+
+      function refuseStaleReplPaneAction(message) {
+        setStatus(message, "warning");
+        renderReplViewIfActive({ force: true });
+      }
+
+      function replayDeferredReplRedraw() {
+        if (!replRedrawDeferred) return;
+        renderReplViewIfActive({ force: replRedrawDeferredForce });
+      }
+
+      // The cursor goes back only into the box for the same session lifetime: a redraw that
+      // shows another session, or a replacement with the same name, leaves focus to the page.
+      function captureReplQuickComposerCursor() {
+        const activeEl = document.activeElement;
+        if (!(activeEl instanceof HTMLTextAreaElement) || !activeEl.hasAttribute("data-repl-quick-draft")) return null;
+        return {
+          lifetime: activeEl.getAttribute("data-repl-quick-lifetime") || "",
+          start: activeEl.selectionStart,
+          end: activeEl.selectionEnd,
+          direction: activeEl.selectionDirection,
+          scrollTop: activeEl.scrollTop,
+        };
+      }
+
+      function restoreReplQuickComposerCursor(cursor) {
+        if (!cursor || rightView !== "repl" || !critiqueViewEl) return;
+        const composer = critiqueViewEl.querySelector("[data-repl-quick-draft]");
+        if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) return;
+        if (!cursor.lifetime || composer.getAttribute("data-repl-quick-lifetime") !== cursor.lifetime) return;
+        if (document.activeElement !== composer) {
+          try {
+            composer.focus({ preventScroll: true });
+          } catch {
+            try { composer.focus(); } catch {}
+          }
+        }
+        if (document.activeElement !== composer) return;
+        const length = composer.value.length;
+        try {
+          composer.setSelectionRange(Math.min(cursor.start, length), Math.min(cursor.end, length), cursor.direction || "none");
+        } catch {}
+        composer.scrollTop = cursor.scrollTop;
+      }
+
       function focusReplQuickComposer() {
         replQuickFocusRequested = true;
         window.setTimeout(() => {
@@ -2054,11 +2176,26 @@
 
       function renderReplViewIfActive(options) {
         if (rightView !== "repl") return;
-        if ((!options || options.force !== true) && isReplControlFocused()) return;
+        const force = Boolean(options && options.force === true);
+        if (replRedrawMustWait(force)) {
+          deferReplRedraw(force);
+          return;
+        }
+        replRedrawDeferred = false;
+        replRedrawDeferredForce = false;
+        replRedrawForced = replRedrawForced || force;
         if (traceRenderRaf !== null) return;
         traceRenderRaf = window.requestAnimationFrame(() => {
           traceRenderRaf = null;
+          const forced = replRedrawForced;
+          replRedrawForced = false;
+          if (rightView === "repl" && replRedrawMustWait(forced)) {
+            deferReplRedraw(forced);
+            return;
+          }
+          const cursor = captureReplQuickComposerCursor();
           refreshResponseUi();
+          restoreReplQuickComposerCursor(cursor);
           applyReplQuickRefocus();
           if (replQuickFocusRequested) focusReplQuickComposer();
         });
@@ -2800,6 +2937,11 @@
           return false;
         }
         const key = getReplQuickDraftKey(session);
+        const box = critiqueViewEl ? critiqueViewEl.querySelector("[data-repl-quick-draft]") : null;
+        if (isReplPaneStale(box)) {
+          refuseStaleReplPaneAction("The REPL session changed, so nothing was sent.");
+          return false;
+        }
         const text = getReplQuickDraft(session);
         if (!text.trim()) {
           setStatus("Quick send is empty.", "warning");
@@ -11693,6 +11835,10 @@
         if (!actionBtn) return;
         event.preventDefault();
         const action = actionBtn.getAttribute("data-repl-action") || "";
+        if (isReplPaneStale(actionBtn)) {
+          refuseStaleReplPaneAction(action === "quick-send" ? "The REPL session changed, so nothing was sent." : "The REPL session changed, so nothing was done.");
+          return;
+        }
         if (action === "quick-send") {
           submitReplQuickDraft();
           return;
@@ -11834,13 +11980,44 @@
         }
       }
 
+      // A redraw that waited for a control runs once focus has left it.
+      function handleReplPaneFocusOut() {
+        if (!replRedrawDeferred) return;
+        window.setTimeout(replayDeferredReplRedraw, 0);
+      }
+
+      function handleReplPaneComposition(event) {
+        const target = event && event.target;
+        if (!(target instanceof HTMLTextAreaElement) || !target.hasAttribute("data-repl-quick-draft")) return;
+        replQuickComposing = event.type === "compositionstart";
+        if (!replQuickComposing) replayDeferredReplRedraw();
+      }
+
+      // A drag that starts in the box ends wherever the button comes up.
+      function handleReplQuickPointer(event) {
+        if (event.type === "pointerdown") {
+          const target = event.target;
+          replQuickPointerDown = target instanceof Element && Boolean(target.closest("[data-repl-quick-draft]"));
+          return;
+        }
+        if (!replQuickPointerDown) return;
+        replQuickPointerDown = false;
+        // Dragging the box's corner sets its height; keep it for the boxes drawn after it.
+        const composer = critiqueViewEl ? critiqueViewEl.querySelector("[data-repl-quick-draft]") : null;
+        if (composer instanceof HTMLTextAreaElement && /^\d+(?:\.\d+)?px$/.test(composer.style.height)) replQuickBoxHeight = composer.style.height;
+        replayDeferredReplRedraw();
+      }
+
       function handleReplPaneInput(event) {
         if (rightView !== "repl") return;
         const target = event && event.target;
         if (!(target instanceof HTMLTextAreaElement) || !target.hasAttribute("data-repl-quick-draft")) return;
-        const session = getActiveReplSessionForCurrentRuntime();
-        if (!session) return;
-        const draft = setReplQuickDraft(session, target.value);
+        replQuickLastInputAt = Date.now();
+        // The text belongs to the session the box was drawn for, even if another is selected
+        // now and the box hasn't been redrawn yet (Astra).
+        const key = getReplQuickBoxKey(target);
+        if (!key) return;
+        const draft = setReplQuickDraftForKey(key, target.value);
         if (target.value !== draft) target.value = draft;
         updateReplQuickComposerActions();
       }
@@ -11889,7 +12066,8 @@
         }
         const commandInput = target.closest("[data-repl-command]");
         if (commandInput && "value" in commandInput) {
-          setReplCommandOverride(replRuntime, commandInput.value);
+          // For the runtime it was drawn for, even if another was selected meanwhile.
+          setReplCommandOverride(commandInput.getAttribute("data-repl-command") || replRuntime, commandInput.value);
           return;
         }
         const sessionSelect = target.closest("[data-repl-session]");
@@ -11914,6 +12092,12 @@
         critiqueViewEl.addEventListener("click", handleStudioQuartoPreviewClick);
         critiqueViewEl.addEventListener("click", (event) => { void handleSideQuestionClick(event); });
         critiqueViewEl.addEventListener("focusin", handleReplPaneFocusIn);
+        critiqueViewEl.addEventListener("focusout", handleReplPaneFocusOut);
+        critiqueViewEl.addEventListener("compositionstart", handleReplPaneComposition);
+        critiqueViewEl.addEventListener("compositionend", handleReplPaneComposition);
+        document.addEventListener("pointerdown", handleReplQuickPointer, true);
+        document.addEventListener("pointerup", handleReplQuickPointer, true);
+        document.addEventListener("pointercancel", handleReplQuickPointer, true);
         document.addEventListener("focusin", cancelReplQuickRefocusOutside, true);
         document.addEventListener("pointerdown", cancelReplQuickRefocusOutside, true);
         critiqueViewEl.addEventListener("input", handleSideQuestionInput);
@@ -13952,7 +14136,7 @@
         return "<section class='repl-quick-composer' aria-labelledby='replQuickComposerTitle'>"
           + "<div class='repl-quick-header'><div><strong id='replQuickComposerTitle'>Quick send</strong><button type='button' class='repl-quick-target' data-repl-action='jump-controls' title='Target: " + escapeHtml(targetDetails) + ". Jump to REPL session controls.' aria-label='Target: " + escapeHtml(targetDetails) + ". Jump to REPL session controls.'><span class='repl-quick-target-label'>" + escapeHtml(visibleTargetLabel) + "</span><span class='repl-quick-target-arrow' aria-hidden='true'>↑</span></button></div>"
           + "<span class='repl-quick-hint'>Enter adds a line · Cmd/Ctrl+Enter sends</span></div>"
-          + "<textarea data-repl-quick-draft rows='3' maxlength='" + REPL_QUICK_DRAFT_MAX_CHARS + "' aria-label='Quick code for " + escapeHtml(targetDetails) + "' aria-keyshortcuts='Meta+Enter Control+Enter' placeholder='" + (activeSession ? (key ? "Type a short command or snippet…" : "Exact tmux identity unavailable; refresh the session list") : "Start or select a REPL session first") + "'" + (inputDisabled ? " disabled" : "") + ">" + escapeHtml(draft) + "</textarea>"
+          + "<textarea data-repl-quick-draft data-repl-quick-lifetime='" + escapeHtml(encodeURIComponent(key)) + "'" + (replQuickBoxHeight ? " style='height: " + replQuickBoxHeight + "'" : "") + " rows='3' maxlength='" + REPL_QUICK_DRAFT_MAX_CHARS + "' aria-label='Quick code for " + escapeHtml(targetDetails) + "' aria-keyshortcuts='Meta+Enter Control+Enter' placeholder='" + (activeSession ? (key ? "Type a short command or snippet…" : "Exact tmux identity unavailable; refresh the session list") : "Start or select a REPL session first") + "'" + (inputDisabled ? " disabled" : "") + ">" + escapeHtml(draft) + "</textarea>"
           + "<div class='repl-quick-actions'><span></span><div>"
           + "<button type='button' data-repl-action='quick-clear'" + (pending || !draft ? " disabled" : "") + ">Clear</button>"
           + "<button class='repl-quick-send-btn' type='button' data-repl-action='quick-send'" + (sendDisabled ? " disabled" : "") + ">" + (pending ? "Sending…" : "Send") + "</button>"
@@ -13985,11 +14169,11 @@
           : "<div class='repl-empty'>" + escapeHtml(emptyMessage) + "</div>";
         const canSendToActiveSession = Boolean(activeSession) && !replBusy && replTmuxAvailable !== false;
         const canStopActiveSession = Boolean(activeSession && activeSession.source === "studio" && !replBusy && replTmuxAvailable !== false);
-        return "<div class='repl-panel'>"
+        return "<div class='repl-panel' data-repl-drawn-target='" + escapeHtml(encodeURIComponent(getReplPaneTargetKey())) + "'>"
           + "<div class='repl-toolbar'>"
           + "<div class='repl-controls'>"
           + "<label class='repl-control-label'>Runtime <select class='studio-flat-select' data-repl-runtime aria-label='REPL runtime'>" + runtimeOptions + "</select></label>"
-          + "<label class='repl-control-label repl-command-label'>Start cmd <input data-repl-command type='text' value='" + escapeHtml(replCommand) + "' placeholder='default' aria-label='REPL start command' title='Command used by Start for this runtime. Leave blank for the default; use this for envs, e.g. .venv/bin/python, uv run python, or conda run --no-capture-output -n env python.'></label>"
+          + "<label class='repl-control-label repl-command-label'>Start cmd <input data-repl-command='" + escapeHtml(normalizeReplRuntime(replRuntime)) + "' type='text' value='" + escapeHtml(replCommand) + "' placeholder='default' aria-label='REPL start command' title='Command used by Start for this runtime. Leave blank for the default; use this for envs, e.g. .venv/bin/python, uv run python, or conda run --no-capture-output -n env python.'></label>"
           + "<button class='repl-start-btn' type='button' data-repl-action='start'" + (replBusy || replTmuxAvailable === false ? " disabled" : "") + " title='Start or switch to a " + escapeHtml(runtimeLabel) + " session using the selected runtime and start command.'>Start</button>"
           + "<label class='repl-control-label repl-session-label'>Session <select class='studio-flat-select' data-repl-session aria-label='REPL session'" + (visibleSessions.length ? "" : " disabled") + ">" + sessionOptions + "</select></label>"
           + "<details class='repl-more-controls'>"

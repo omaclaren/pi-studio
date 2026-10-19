@@ -4,6 +4,10 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- After a Quick send, the record shows the result while the cursor stays in the box. Since 0.10.3 it waited for the next change, such as your next send. If the pane is redrawn while you type, the text, the selection and where typing goes are kept.
+- While a prompt runs, the Prompt toolbar's tools stay on one row on a 13-inch screen. **Queue steering** took more room than its label needed, which left a gap before it and pushed them onto a second row.
+
 ## [0.10.4] — 2026-10-19
 
 ### Fixed
