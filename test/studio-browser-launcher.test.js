@@ -377,3 +377,124 @@ test("Studio kills a stalled cmux launch before falling back", async () => {
 		clearTimeout(keepAlive);
 	}
 });
+
+// Muxy 2.2 (CLI 2.2.0, checked 20 Oct) no longer sets MUXY_PANE_ID or MUXY_SOCKET_PATH, so
+// Studio opened in the system browser. These are the markers a Muxy 2.2 terminal has, with
+// made-up values of the same shape.
+const MUXY_22_ENV = Object.freeze({
+	TERM_PROGRAM: "muxy",
+	TERM: "xterm-256color",
+	MUXY_SERVER_ID: "0f3c9a5e7b2d4c18a6e9f0b1c2d3e4f5",
+	MUXY_SESSION_ID: "1234567890123456789",
+	MUXY_SHELL_INTEGRATION: "1",
+	MUXY_SHELL_INTEGRATION_DIR: "/Applications/Muxy.app/Contents/Resources/shell-integration",
+	__CFBundleIdentifier: "com.muxy.app",
+});
+
+test("Muxy 2.2: a terminal with its server and session IDs and TERM_PROGRAM=muxy is Muxy", () => {
+	assert.equal(isStudioMuxySession(MUXY_22_ENV), true);
+	assert.equal(isStudioMuxySession({ TERM_PROGRAM: "muxy", MUXY_SERVER_ID: "s", MUXY_SESSION_ID: "1" }), true);
+	assert.equal(isStudioMuxySession({ ...MUXY_22_ENV, TERM_PROGRAM: "Muxy" }), true);
+	assert.deepEqual(getStudioMuxyBrowserOpenCommand(STUDIO_URL, MUXY_22_ENV), { command: "muxy", args: ["browser", "open", STUDIO_URL] });
+});
+
+test("Muxy 2.2: missing IDs, TERM_PROGRAM alone, another terminal app and a nested Zed aren't Muxy", () => {
+	for (const [what, env] of [
+		["no server ID", { ...MUXY_22_ENV, MUXY_SERVER_ID: undefined }],
+		["no session ID", { ...MUXY_22_ENV, MUXY_SESSION_ID: undefined }],
+		["blank IDs", { ...MUXY_22_ENV, MUXY_SERVER_ID: " ", MUXY_SESSION_ID: "" }],
+		["TERM_PROGRAM alone", { TERM_PROGRAM: "muxy", TERM: "xterm-256color", __CFBundleIdentifier: "com.muxy.app" }],
+		["shell integration alone", { MUXY_SHELL_INTEGRATION: "1", MUXY_SHELL_INTEGRATION_DIR: "/tmp/x" }],
+		["no TERM_PROGRAM", { ...MUXY_22_ENV, TERM_PROGRAM: undefined }],
+		["tmux inside", { ...MUXY_22_ENV, TERM_PROGRAM: "tmux" }],
+		["VS Code opened from Muxy", { ...MUXY_22_ENV, TERM_PROGRAM: "vscode" }],
+		["Ghostty opened from Muxy", { ...MUXY_22_ENV, TERM_PROGRAM: "ghostty" }],
+		["Terminal opened from Muxy", { ...MUXY_22_ENV, TERM_PROGRAM: "Apple_Terminal" }],
+		["Zed opened from Muxy", { ...MUXY_22_ENV, TERM_PROGRAM: "zed", ZED_TERM: "true" }],
+		["ZED_TERM=1", { ...MUXY_22_ENV, ZED_TERM: "1" }],
+	]) {
+		assert.equal(isStudioMuxySession(env), false, what);
+		assert.equal(getStudioMuxyBrowserOpenCommand(STUDIO_URL, env), undefined, what);
+	}
+});
+
+test("Muxy 2.2: Studio opens once in Muxy, with the whole tokenised URL as one argument and the CLI's wait bounded", async () => {
+	const fake = createSpawnSequence([{ event: "close", value: 0 }]);
+	const destination = await openStudioUrlInBrowser(STUDIO_URL, {
+		env: MUXY_22_ENV,
+		platform: "darwin",
+		spawnProcess: fake.spawnProcess,
+		timeoutMs: 100,
+	});
+
+	assert.equal(destination, "muxy");
+	assert.deepEqual(fake.calls, [{
+		command: "muxy",
+		args: ["browser", "open", STUDIO_URL],
+		options: { stdio: "ignore", env: { ...MUXY_22_ENV, MUXY_CLI_TIMEOUT: "4" } },
+	}]);
+	// The token goes only in that argument: not in the environment, and no shell sees it.
+	assert.equal(JSON.stringify(fake.calls[0].options.env).includes("abc123"), false);
+	assert.equal(fake.calls[0].options.shell, undefined);
+});
+
+test("Muxy 2.2 takes precedence over inherited cmux markers; cmux opened from Muxy is cmux", async () => {
+	const inMuxy = createSpawnSequence([{ event: "close", value: 0 }]);
+	assert.equal(await openStudioUrlInBrowser(STUDIO_URL, {
+		env: { ...MUXY_22_ENV, CMUX_WORKSPACE_ID: "inherited-workspace" },
+		spawnProcess: inMuxy.spawnProcess,
+		timeoutMs: 100,
+	}), "muxy");
+	assert.deepEqual(inMuxy.calls.map(({ command }) => command), ["muxy"]);
+
+	// cmux's terminal sets its own TERM_PROGRAM, so Muxy's inherited IDs don't count.
+	const inCmux = createSpawnSequence([{ event: "close", value: 0 }]);
+	assert.equal(await openStudioUrlInBrowser(STUDIO_URL, {
+		env: { ...MUXY_22_ENV, TERM_PROGRAM: "ghostty", CMUX_WORKSPACE_ID: "workspace-1" },
+		spawnProcess: inCmux.spawnProcess,
+		timeoutMs: 100,
+	}), "cmux");
+	assert.deepEqual(inCmux.calls.map(({ command, args }) => ({ command, args })), [
+		{ command: "cmux", args: ["browser", "open", STUDIO_URL, "--workspace", "workspace-1", "--focus", "true"] },
+	]);
+});
+
+test("Muxy 2.2: when the Muxy CLI fails, is missing, can't start or stalls, the system browser opens once", async () => {
+	for (const [what, step] of [
+		["declines (exit 1)", { event: "close", value: 1 }],
+		["not on PATH", { event: "error", value: new Error("spawn muxy ENOENT") }],
+		["spawn throws", { throwError: new Error("spawn failed") }],
+		["stalls", {}],
+	]) {
+		const fake = createSpawnSequence([step, { event: "spawn" }]);
+		const keepAlive = setTimeout(() => {}, 100);
+		try {
+			const destination = await openStudioUrlInBrowser(STUDIO_URL, {
+				// Inherited cmux markers too: Studio doesn't try cmux after Muxy.
+				env: { ...MUXY_22_ENV, CMUX_WORKSPACE_ID: "inherited-workspace" },
+				platform: "darwin",
+				spawnProcess: fake.spawnProcess,
+				timeoutMs: 5,
+			});
+			assert.equal(destination, "system", what);
+			assert.deepEqual(fake.calls.map(({ command, args }) => ({ command, args })), [
+				{ command: "muxy", args: ["browser", "open", STUDIO_URL] },
+				{ command: "open", args: [STUDIO_URL] },
+			], what);
+			assert.equal(fake.calls[0].options.env.MUXY_CLI_TIMEOUT, "4", what);
+			if (what === "stalls") assert.equal(fake.children[0].killedByTest, true);
+		} finally {
+			clearTimeout(keepAlive);
+		}
+	}
+});
+
+test("a terminal that inherited Muxy 2.2's IDs, outside Muxy and cmux, opens the system browser directly", async () => {
+	const fake = createSpawnSequence([{ event: "spawn" }]);
+	assert.equal(await openStudioUrlInBrowser(STUDIO_URL, {
+		env: { ...MUXY_22_ENV, TERM_PROGRAM: "vscode" },
+		platform: "darwin",
+		spawnProcess: fake.spawnProcess,
+	}), "system");
+	assert.deepEqual(fake.calls.map(({ command, args }) => ({ command, args })), [{ command: "open", args: [STUDIO_URL] }]);
+});

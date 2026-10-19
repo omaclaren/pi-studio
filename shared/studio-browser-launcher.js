@@ -13,6 +13,32 @@ function isStudioNestedZedTerminal(env) {
 }
 
 /**
+ * Muxy before 2.2 marked each pane with its ID and the app's socket.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+function isStudioLegacyMuxyPane(env) {
+	const paneId = String(env.MUXY_PANE_ID ?? "").trim();
+	const socketPath = String(env.MUXY_SOCKET_PATH ?? "").trim();
+	return Boolean(paneId && socketPath);
+}
+
+/**
+ * Muxy 2.2 marks each terminal with its server's and session's IDs, and sets
+ * TERM_PROGRAM=muxy. Another terminal app opened from a Muxy pane inherits the IDs
+ * but sets its own TERM_PROGRAM (tmux sets "tmux"), so the IDs alone aren't enough,
+ * and TERM_PROGRAM alone isn't either.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+function isStudioMuxyTerminal(env) {
+	const serverId = String(env.MUXY_SERVER_ID ?? "").trim();
+	const sessionId = String(env.MUXY_SESSION_ID ?? "").trim();
+	const termProgram = String(env.TERM_PROGRAM ?? "").trim().toLowerCase();
+	return Boolean(serverId && sessionId && termProgram === "muxy");
+}
+
+/**
  * Detect whether the current process is running inside Muxy itself rather than
  * a nested application terminal that inherited Muxy's environment.
  *
@@ -20,9 +46,8 @@ function isStudioNestedZedTerminal(env) {
  * @returns {boolean}
  */
 export function isStudioMuxySession(env = process.env) {
-	const paneId = String(env.MUXY_PANE_ID ?? "").trim();
-	const socketPath = String(env.MUXY_SOCKET_PATH ?? "").trim();
-	return Boolean(paneId && socketPath && !isStudioNestedZedTerminal(env));
+	if (isStudioNestedZedTerminal(env)) return false;
+	return isStudioLegacyMuxyPane(env) || isStudioMuxyTerminal(env);
 }
 
 /**
