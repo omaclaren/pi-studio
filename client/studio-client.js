@@ -738,10 +738,13 @@
       })();
       let replEchoMode = (() => {
         try {
-          const stored = String((window.localStorage && window.localStorage.getItem("piStudio.replEchoMode.v2")) || "").trim().toLowerCase();
-          return stored === "summary" || stored === "full" ? stored : "off";
+          const stored = String((window.localStorage && window.localStorage.getItem("piStudio.replEchoMode.v3")) || "").trim().toLowerCase();
+          if (stored === "off" || stored === "summary" || stored === "full") return stored;
+          // v2 saved Off whether or not it was chosen; keep only a Full chosen there.
+          const earlier = String((window.localStorage && window.localStorage.getItem("piStudio.replEchoMode.v2")) || "").trim().toLowerCase();
+          return earlier === "full" ? "full" : "summary";
         } catch {
-          return "off";
+          return "summary";
         }
       })();
       function normalizeReplJournalEntry(entry) {
@@ -1590,7 +1593,7 @@
 
       function normalizeReplEchoMode(value) {
         const normalized = String(value || "").trim().toLowerCase();
-        return normalized === "summary" || normalized === "full" ? normalized : "off";
+        return normalized === "off" || normalized === "full" ? normalized : "summary";
       }
 
       function isMacShortcutPlatform() {
@@ -1651,10 +1654,21 @@
         replEchoMode = normalizeReplEchoMode(mode);
         if (replEchoModeSelect) replEchoModeSelect.value = replEchoMode;
         try {
-          if (window.localStorage) window.localStorage.setItem("piStudio.replEchoMode.v2", replEchoMode);
+          if (window.localStorage) window.localStorage.setItem("piStudio.replEchoMode.v3", replEchoMode);
         } catch {
           // Ignore storage failures.
         }
+      }
+
+      function chooseReplEchoMode(mode) {
+        setReplEchoMode(mode);
+        syncActionButtons();
+        setStatus(replEchoMode === "full"
+          ? "Full pane echo enabled. Bounded submitted source code will remain in raw terminal history."
+          : (replEchoMode === "off"
+            ? "Pane echo disabled; new sends will not add alignment anchors to raw terminal history."
+            : "Summary pane echo enabled; short submissions will be shown with compact anchors and a plain output divider."),
+        replEchoMode === "full" ? "warning" : "success");
       }
 
       function syncReplEchoModeSelect(visible) {
@@ -1666,7 +1680,7 @@
           ? "Do not add a submitted-code display or alignment anchors to the raw REPL pane."
           : (replEchoMode === "full"
             ? "Display up to 40 lines or 4,000 characters of submitted code; source remains in raw terminal history."
-            : "Display short submissions in full, truncating after 6 lines or 600 characters, with compact anchors and a plain output divider.");
+            : "Display short submissions in full, truncating after 20 lines or 2,000 characters, with compact anchors and a plain output divider.");
       }
 
       function getReplQuickDraftKey(session) {
@@ -12064,6 +12078,12 @@
           renderReplViewIfActive({ force: true });
           return;
         }
+        const echoModeSelect = target.closest("[data-repl-echo-mode]");
+        if (echoModeSelect && "value" in echoModeSelect) {
+          chooseReplEchoMode(echoModeSelect.value);
+          renderReplViewIfActive({ force: true });
+          return;
+        }
         const commandInput = target.closest("[data-repl-command]");
         if (commandInput && "value" in commandInput) {
           // For the runtime it was drawn for, even if another was selected meanwhile.
@@ -14182,6 +14202,9 @@
           // New layout: how Send to REPL reads the editor lives here, not in the Prompt toolbar (Oliver, 10 Oct).
           + (bufferSwitchingEnabled && studioUiRefreshUi ? "<label class='repl-more-send-mode' title='Raw sends the selection or all the text. Literate sends the selection, the code chunk at the cursor, or all matching chunks.'>Send mode <select class='studio-flat-select' data-repl-send-mode aria-label='Send mode'" + (wsState === "Disconnected" || uiBusy || replBusy ? " disabled" : "") + ">"
             + [["raw", "Raw"], ["literate", "Literate"]].map(([value, label]) => "<option value='" + value + "'" + (replSendMode === value ? " selected" : "") + ">" + label + "</option>").join("") + "</select></label>" : "")
+          // Pane echo sits with Send mode; the toolbar menu isn't shown in this layout (Oliver, 19 Oct).
+          + (bufferSwitchingEnabled && studioUiRefreshUi ? "<label class='repl-more-echo-mode' title='How much of the sent code the tmux pane shows: Summary up to 20 lines, Full up to 40, Off none.'>Pane echo <select class='studio-flat-select' data-repl-echo-mode aria-label='Pane echo'" + (wsState === "Disconnected" || uiBusy || replBusy ? " disabled" : "") + ">"
+            + [["off", "Off"], ["summary", "Summary"], ["full", "Full"]].map(([value, label]) => "<option value='" + value + "'" + (replEchoMode === value ? " selected" : "") + ">" + label + "</option>").join("") + "</select></label>" : "")
           + "<button type='button' data-repl-action='stop-session'" + (canStopActiveSession ? "" : " disabled") + " title='Stop the selected Studio-owned REPL session.'>Stop session</button>"
           + "<button type='button' data-repl-action='interrupt'" + (activeSession && !replBusy ? "" : " disabled") + " title='Send Ctrl+C to the active REPL session.'>Interrupt</button>"
           + "<button type='button' data-repl-action='copy-attach-command'" + (activeSession ? "" : " disabled") + " title='Copy command for attaching to this tmux session in a terminal.'>Copy attach command</button>"
@@ -31744,16 +31767,7 @@
       }
 
       if (replEchoModeSelect) {
-        replEchoModeSelect.addEventListener("change", () => {
-          setReplEchoMode(replEchoModeSelect.value);
-          syncActionButtons();
-          setStatus(replEchoMode === "full"
-            ? "Full pane echo enabled. Bounded submitted source code will remain in raw terminal history."
-            : (replEchoMode === "off"
-              ? "Pane echo disabled; new sends will not add alignment anchors to raw terminal history."
-              : "Summary pane echo enabled; short submissions will be shown with compact anchors and a plain output divider."),
-          replEchoMode === "full" ? "warning" : "success");
-        });
+        replEchoModeSelect.addEventListener("change", () => chooseReplEchoMode(replEchoModeSelect.value));
       }
 
       copyDraftBtn.addEventListener("click", async () => {

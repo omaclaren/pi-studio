@@ -1116,7 +1116,7 @@ const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 	timeoutMs: Type.Optional(Type.Number({ description: "Maximum time to wait for completion when Studio can detect it (default 20000, max 120000).", minimum: 1000, maximum: STUDIO_REPL_SEND_MAX_TIMEOUT_MS })),
 	echoMode: Type.Optional(Type.Union(
 		[Type.Literal("off"), Type.Literal("summary"), Type.Literal("full")],
-		{ description: "How much submitted code to echo visibly in the raw REPL pane. Defaults to PI_STUDIO_REPL_ECHO_MODE or off. Summary shows short submissions in full and truncates longer ones; Full has larger bounds and writes source code into persistent raw terminal history." },
+		{ description: "How much submitted code to echo visibly in the raw REPL pane. Defaults to PI_STUDIO_REPL_ECHO_MODE or summary. Summary shows short submissions in full and truncates longer ones; Full has larger bounds and writes source code into persistent raw terminal history." },
 	)),
 });
 const STUDIO_REPL_TOOL_ECHO_MODE = normalizeReplSubmissionEchoMode(process.env.PI_STUDIO_REPL_ECHO_MODE) as ReplSubmissionEchoMode;
@@ -11627,9 +11627,36 @@ function buildStudioClojureDisplayStatements(display: ReplSubmissionDisplay, ind
 	return display.prefixLines.map((line) => `${indent}(clojure.core/println ${JSON.stringify(line)})`);
 }
 
+// As in pi-repl 0.8.4: prints the pane's cursor column, or exits non-zero; tmux gets
+// 500 ms. A wrapper runs it with Node and ends a line before its footer unless it prints
+// 0. Only the wrapper reads its output, so it never reaches the pane: a query that
+// outlives its wait can't print after the done file (Sol, Astra, candidate80).
+const STUDIO_CURSOR_COLUMN_QUERY = 'try { process.stdout.write(require("node:child_process").execFileSync("tmux", ["-N", "display-message", "-p", "-t", process.env.TMUX_PANE, "#{cursor_x}"], { encoding: "utf8", timeout: 500, killSignal: "SIGKILL", maxBuffer: 128, stdio: ["ignore", "pipe", "ignore"] }).trim()); } catch { process.exitCode = 1; }';
+
+function buildStudioPythonFooter(display: ReplSubmissionDisplay): string[] {
+	if (!display.enabled) return [];
+	return [
+		"    import subprocess as __pi_studio_subprocess",
+		"    import sys as __pi_studio_sys",
+		"    __pi_studio_column = ''",
+		"    try:",
+		"        __pi_studio_sys.stdout.flush()",
+		"        __pi_studio_sys.stderr.flush()",
+		`        __pi_studio_query = __pi_studio_subprocess.run([${JSON.stringify(process.execPath)}, '-e', ${JSON.stringify(STUDIO_CURSOR_COLUMN_QUERY)}], stdin=__pi_studio_subprocess.DEVNULL, stdout=__pi_studio_subprocess.PIPE, stderr=__pi_studio_subprocess.DEVNULL, timeout=5)`,
+		"        if __pi_studio_query.returncode == 0:",
+		"            __pi_studio_column = __pi_studio_query.stdout.decode('utf-8', 'replace').strip()",
+		// run() kills the query on any exception. Ctrl-C here must not skip the done file.
+		"    except BaseException:",
+		"        pass",
+		"    if __pi_studio_column != '0':",
+		"        __pi_studio_builtins.print()",
+		...display.suffixLines.map((line) => `    __pi_studio_builtins.print(${JSON.stringify(line)})`),
+	];
+}
+
 function buildStudioPythonControlSource(runtime: "python" | "ipython", code: string, doneFile: string, display: ReplSubmissionDisplay): string {
 	const prefix = buildStudioPythonDisplayStatements(display);
-	const completion = display.enabled ? [`    __pi_studio_builtins.print(${JSON.stringify(display.endMarker)})`] : [];
+	const completion = buildStudioPythonFooter(display);
 	if (runtime === "ipython") {
 		return [
 			"from pathlib import Path as __pi_studio_path",
@@ -11673,8 +11700,25 @@ function buildStudioPythonControlSource(runtime: "python" | "ipython", code: str
 	].join("\n");
 }
 
+function buildStudioJuliaFooter(display: ReplSubmissionDisplay): string[] {
+	if (!display.enabled) return [];
+	const query = `Cmd([${juliaStringLiteral(process.execPath)}, "-e", ${juliaStringLiteral(STUDIO_CURSOR_COLUMN_QUERY)}])`;
+	return [
+		'    local __pi_studio_column = ""',
+		// read throws if the query fails; catch also takes an interrupt here.
+		"    try",
+		"        flush(stdout)",
+		"        flush(stderr)",
+		`        __pi_studio_column = strip(read(pipeline(${query}, stdin=devnull, stderr=devnull), String))`,
+		"    catch",
+		"    end",
+		'    __pi_studio_column == "0" || Base.println()',
+		...display.suffixLines.map((line) => `    Base.println(${juliaStringLiteral(line)})`),
+	];
+}
+
 function buildStudioJuliaControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
-	const completion = display.enabled ? [`    Base.println(${juliaStringLiteral(display.endMarker)})`] : [];
+	const completion = buildStudioJuliaFooter(display);
 	return [
 		...buildStudioJuliaDisplayStatements(display),
 		"try",
@@ -11691,8 +11735,20 @@ function buildStudioJuliaControlSource(code: string, doneFile: string, display: 
 	].join("\n");
 }
 
+function buildStudioRFooter(display: ReplSubmissionDisplay): string[] {
+	if (!display.enabled) return [];
+	return [
+		"    try({ flush(stdout()); flush(stderr()) }, silent = TRUE)",
+		// system2 quotes the command but not its arguments. A failed query
+		// sets a status; an error or Ctrl-C here gives NULL, not a lost done file.
+		`    .__pi_studio_column <- tryCatch(suppressWarnings(system2(${JSON.stringify(process.execPath)}, c("-e", ${JSON.stringify(shellQuote(STUDIO_CURSOR_COLUMN_QUERY))}), stdout = TRUE, stderr = FALSE)), error = function(e) NULL, interrupt = function(e) NULL)`,
+		'    if (!is.null(attr(.__pi_studio_column, "status")) || !identical(trimws(paste(.__pi_studio_column, collapse = "")), "0")) base::cat("\\n")',
+		...display.suffixLines.map((line) => `    base::cat(${JSON.stringify(`${line}\n`)})`),
+	];
+}
+
 function buildStudioRControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
-	const completion = display.enabled ? [`    base::cat(${JSON.stringify(`${display.endMarker}\n`)})`] : [];
+	const completion = buildStudioRFooter(display);
 	return [
 		"local({",
 		...buildStudioRDisplayStatements(display, "  "),
@@ -11736,12 +11792,45 @@ function buildStudioGhciControlSource(code: string, doneFile: string, display: R
 }
 
 function buildStudioGhciCompletionLine(doneFile: string, display: ReplSubmissionDisplay): string {
-	const completion = display.enabled ? `command printf '%s\\n' ${shellQuote(display.endMarker)}; ` : "";
+	// As in pi-repl: start the footer on a new line only when output left the
+	// cursor mid-line. Node's bounded cursor query falls back to a plain footer.
+	const footerScript = [
+		'let column = "";',
+		'try { column = require("node:child_process").execFileSync("tmux", ["-N", "display-message", "-p", "-t", process.env.TMUX_PANE, "#{cursor_x}"], { encoding: "utf8", timeout: 500, killSignal: "SIGKILL", maxBuffer: 128, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch {}',
+		`process.stdout.write((column === "0" ? "" : "\\n") + ${JSON.stringify(`${display.suffixLines.join("\n")}\n`)});`,
+	].join(" ");
+	const fallback = `command printf '\\n%s\\n\\n' ${shellQuote(display.endMarker)}`;
+	const completion = display.enabled ? `${shellQuote(process.execPath)} -e ${shellQuote(footerScript)} 2>/dev/null || ${fallback}; ` : "";
 	return `:! ${completion}touch ${shellQuote(doneFile)}`;
 }
 
+function buildStudioClojureFooter(display: ReplSubmissionDisplay): string[] {
+	if (!display.enabled) return [];
+	const builder = `(java.lang.ProcessBuilder. ^java.util.List [${JSON.stringify(process.execPath)} "-e" ${JSON.stringify(STUDIO_CURSOR_COLUMN_QUERY)}])`;
+	return [
+		"      (try (.flush *out*) (.flush *err*) (catch Throwable _))",
+		// An interrupt left pending by the code would end the wait at once, so
+		// it is cleared for the query and restored afterwards, as is one that
+		// arrives during the wait. The query is killed on every path.
+		"      (let [pi-studio-interrupted (volatile! (Thread/interrupted))",
+		`            pi-studio-query (try (.start (.redirectError ${builder} java.lang.ProcessBuilder$Redirect/DISCARD)) (catch Throwable _ nil))`,
+		"            pi-studio-column (when pi-studio-query",
+		"                               (try",
+		"                                 (.close (.getOutputStream pi-studio-query))",
+		"                                 (when (and (.waitFor pi-studio-query 5 java.util.concurrent.TimeUnit/SECONDS) (zero? (.exitValue pi-studio-query)))",
+		"                                   (.trim ^String (slurp (.getInputStream pi-studio-query))))",
+		"                                 (catch InterruptedException _ (vreset! pi-studio-interrupted true) nil)",
+		"                                 (catch Throwable _ nil)",
+		"                                 (finally (.destroyForcibly pi-studio-query))))]",
+		"        (when @pi-studio-interrupted (.interrupt (Thread/currentThread)))",
+		'        (when-not (= pi-studio-column "0") (clojure.core/println))',
+		...display.suffixLines.map((line) => `        (clojure.core/println ${JSON.stringify(line)})`),
+		"        nil)",
+	];
+}
+
 function buildStudioClojureControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
-	const completion = display.enabled ? [`      (clojure.core/println ${JSON.stringify(display.endMarker)})`] : [];
+	const completion = buildStudioClojureFooter(display);
 	return [
 		"(let [code " + JSON.stringify(code) + "]",
 		...buildStudioClojureDisplayStatements(display, "  "),
@@ -11766,7 +11855,9 @@ function buildStudioShellControlSource(code: string, display: ReplSubmissionDisp
 		...display.prefixLines.map((line) => `command printf '%s\\n' ${shellQuote(line)}`),
 		code.replace(/\r/g, "").trimEnd(),
 		"__pi_studio_repl_status=$?",
-		`command printf '%s\\n' ${shellQuote(display.endMarker)}`,
+		// The column query, as for the other runtimes; only the shell reads its output.
+		`[ "$(${shellQuote(process.execPath)} -e ${shellQuote(STUDIO_CURSOR_COLUMN_QUERY)} </dev/null 2>/dev/null)" = 0 ] || command printf '\\n'`,
+		...display.suffixLines.map((line) => `command printf '%s\\n' ${shellQuote(line)}`),
 		"return \"$__pi_studio_repl_status\"",
 	].filter(Boolean).join("\n") + "\n";
 }
@@ -11813,7 +11904,10 @@ function prepareStudioReplSubmission(
 		code: normalizedSource,
 		mode: details.echoMode,
 	});
+	// As in pi-repl, control filenames start with the display's id.
+	const controlOptions = { anchorId: display.anchorId };
 	const controlFiles: StudioReplControlFiles = createPrivateReplControlFiles({
+		...controlOptions,
 		extension: getStudioReplControlExtension(runtime),
 		buildSource: ({ doneFile }: StudioReplControlFiles) => {
 			const source = buildStudioReplControlSource(runtime, normalizedSource, doneFile, display);
@@ -11828,11 +11922,13 @@ function prepareStudioReplSubmission(
 		// guard's script, and the driver still completes.
 		try {
 			const guard = createPrivateReplControlFiles({
+				...controlOptions,
 				extension: "ghci",
 				buildSource: () => buildStudioReplSubmissionLine("ghci", controlFiles.sourceFile, controlFiles.doneFile) + "\n",
 			});
 			controlFiles.helpers = [guard];
 			const driver = createPrivateReplControlFiles({
+				...controlOptions,
 				extension: "ghci",
 				buildSource: () => [
 					buildStudioReplSubmissionLine("ghci", guard.sourceFile, controlFiles.doneFile),
@@ -12808,8 +12904,8 @@ ${cssVarsBlock}
                 <option value="literate">Send mode: Literate</option>
               </select>
               <select id="replEchoModeSelect" class="studio-flat-select" hidden aria-label="REPL submission echo" title="Choose how much submitted code Studio displays in the raw REPL pane.">
-                <option value="off" selected>Pane echo: Off</option>
-                <option value="summary">Pane echo: Summary</option>
+                <option value="off">Pane echo: Off</option>
+                <option value="summary" selected>Pane echo: Summary</option>
                 <option value="full">Pane echo: Full (raw code)</option>
               </select>
             </div>
@@ -13440,7 +13536,7 @@ export default function (pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use studio_repl_send when the user asks to run code in the active Studio REPL.",
 			"Do not improvise tmux paste-buffer commands for Studio REPL code; studio_repl_send handles multiline quoting and runtime-specific submission.",
-			"Submitted-code display is off by default; use echoMode='summary' or echoMode='full' only when the user asks to show code and alignment anchors in the raw pane.",
+			"studio_repl_send shows bounded submitted code and alignment anchors in the raw pane by default (Summary). Use echoMode='off' when the user asks for quiet output, and echoMode='full' only when explicitly requested.",
 			"If several REPL sessions of the same runtime are running, use studio_repl_status first or pass the exact sessionName when known.",
 		],
 		parameters: STUDIO_REPL_SEND_TOOL_PARAMS,

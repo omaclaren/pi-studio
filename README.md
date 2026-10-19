@@ -135,7 +135,7 @@ Icons in exported PDFs need Mermaid CLI 11.12+ (`npm install -g @mermaid-js/merm
 
 ### REPL
 
-The REPL pane runs code in tmux sessions. It can start its own, and it shares a record of submissions and output with [pi-repl](https://github.com/omaclaren/pi-repl) when both use the same session. Pane echo (Off, Summary, Full) controls how much submitted code appears in the raw tmux history; Full writes your code into that history. The record format is in [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md).
+The REPL pane runs code in tmux sessions. It can start its own, and it shares a record of submissions and output with [pi-repl](https://github.com/omaclaren/pi-repl) when both use the same session. Pane echo sets how much submitted code goes into the raw tmux history, as in pi-repl: up to 20 lines with Summary, the default, up to 40 with Full, and none with Off. The record format is in [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md).
 
 ### Side questions
 
@@ -155,7 +155,7 @@ For a container, `/studio --no-browser --listen-all --port 4321` listens on all 
 | `MERMAID_CLI_PATH` | Mermaid CLI for diagrams in PDFs |
 | `BRAVE_API_KEY` | Enables web search in side questions |
 | `PI_STUDIO_FONT_MONO`, `PI_STUDIO_FONT_UI`, `PI_STUDIO_FONT_PROSE` | CSS font stacks for code, interface and previews |
-| `PI_STUDIO_REPL_ECHO_MODE` | Default pane echo for `studio_repl_send`: `off`, `summary` or `full` |
+| `PI_STUDIO_REPL_ECHO_MODE` | Default pane echo for `studio_repl_send`: `summary` (the default), `off` or `full` |
 | `PI_STUDIO_PANDOC_TIMEOUT_MS`, `PI_STUDIO_LATEX_TIMEOUT_MS`, `PI_STUDIO_MERMAID_TIMEOUT_MS` | Export time limits |
 
 Installing pi-studio also adds `pi-studio-dark` and `pi-studio-light` to Pi's themes, without changing your current theme.

@@ -189,6 +189,9 @@ test("the browser keeps server-cleaned output as it is when the shared record co
 
 test("output cleanup removes the pane display after the native scaffolding", () => {
 	const display = createReplSubmissionDisplay({ entryId: "pi-studio:test:1", origin: "pi-studio", code: "print(1)", mode: "summary" });
-	const shown = [py, ...display.prefixLines, "1", display.endMarker, ">>>"].join("\n");
+	const shown = [py, ...display.prefixLines, "1", ...display.suffixLines, ">>>"].join("\n");
 	assert.equal(cleanStudioReplOutput(shown, { submissionLine: py, display }), "1");
+	// Only the display's own blank lines go; the output's stay.
+	const spaced = [py, ...display.prefixLines, "1", "", "", "2", ...display.suffixLines, ">>>"].join("\n");
+	assert.equal(cleanStudioReplOutput(spaced, { submissionLine: py, display }), "1\n\n\n2");
 });

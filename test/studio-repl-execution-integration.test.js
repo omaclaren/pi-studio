@@ -199,18 +199,18 @@ function replClient(ws) {
 			const reply = await request("repl_interrupt_request", { sessionName }, (m) => m.type === "repl_capture" || m.type === "repl_state");
 			return { message: reply.replMessage, error: reply.replError };
 		},
-		async send(sessionName, text) {
-			const { reply, ...result } = await this.sending(sessionName, text).done;
+		async send(sessionName, text, fields) {
+			const { reply, ...result } = await this.sending(sessionName, text, fields).done;
 			return result;
 		},
 		// A send's acknowledgement (after the paste) and its result, separately.
-		sending(sessionName, text) {
+		sending(sessionName, text, fields = {}) {
 			const journalEntryId = `pi-studio:c74:${++next}`;
 			const requestId = `c74-repl_send_request-${next}`;
 			const ack = expect((m) => m.type === "repl_send_ack" && m.requestId === requestId);
 			const done = expect((m) => m.requestId === requestId && (m.type === "repl_capture" || m.type === "repl_state") && Array.isArray(m.journalEntries)
 				&& (m.replError || m.journalEntries.some((e) => e.id === journalEntryId && e.status !== "sending")));
-			ws.send(JSON.stringify({ type: "repl_send_request", requestId, sessionName, text, journalEntryId, label: "Test" }));
+			ws.send(JSON.stringify({ type: "repl_send_request", requestId, sessionName, text, journalEntryId, label: "Test", ...fields }));
 			return {
 				ack,
 				done: done.then((reply) => {
@@ -271,6 +271,20 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	const lifetime = (session) => ({ sessionName: session.sessionName, tmuxSessionId: session.tmuxSessionId, tmuxSessionCreatedAt: session.tmuxSessionCreatedAt });
 	const hasSession = (name) => tmux("has-session", "-t", `=${name}`).status === 0;
 	const starts = (name) => waitFor(() => hasSession(name), 3_000);
+	const scrollback = (name) => tmux("capture-pane", "-p", "-J", "-t", `=${name}:`, "-S", "-300").stdout.replace(/[\t ]+$/gm, "");
+	// Summary is the default, as in pi-repl: the pane shows the code between labelled
+	// markers, then a blank line, and the record keeps only the output.
+	async function showsSummary(name, code, output) {
+		assert.equal((await repl.send(name, code)).output, output);
+		const shown = scrollback(name);
+		const lines = code.split("\n");
+		const count = `${lines.length} ${lines.length === 1 ? "line" : "lines"}`;
+		const id = [...shown.matchAll(new RegExp(`^── pi-studio · input · ${count} · id: ([a-f0-9]{12}) ──$`, "gm"))].at(-1)?.[1];
+		assert.ok(id, shown);
+		const block = ["", "", `── pi-studio · input · ${count} · id: ${id} ──`, ...lines, "── output ──", ...output.split("\n"), `── done · id: ${id} ──`, "", ""].join("\n");
+		assert.ok(shown.includes(block), `expected\n${block}\nin\n${shown}`);
+		assert.match(shown, new RegExp(`/${id}-[a-f0-9]{16}\\.`), "the loader's file name starts with the id");
+	}
 
 	await t.test("with no preference yet, the page's own pick applies without counting", { skip: !has("python3") }, async () => {
 		const slowName = studioName("python", slow(2));
@@ -301,6 +315,16 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.equal(cursorRow("pi-studio-repl-python"), ">>>", "Start answered once the prompt was showing");
 
 		assert.deepEqual(await repl.send("pi-studio-repl-python", 'print("a")\nprint(">>>")'), { output: "a\n>>>", status: "captured", error: undefined });
+		await showsSummary("pi-studio-repl-python", 'print("a")\nprint("b")', "a\nb");
+		// Output that ends mid-line still puts the done marker on a line of its own (Sol, Astra).
+		await showsSummary("pi-studio-repl-python", 'print("c", end="")', "c");
+		// Off adds nothing to the pane. As in pi-repl, its file name still starts with an id.
+		const markers = (text) => text.match(/^── /gm)?.length ?? 0;
+		const before = markers(scrollback("pi-studio-repl-python"));
+		assert.equal((await repl.send("pi-studio-repl-python", 'print("quiet")', { echoMode: "off" })).output, "quiet");
+		const quiet = scrollback("pi-studio-repl-python");
+		assert.equal(markers(quiet), before);
+		assert.match(quiet.split("\n").filter((line) => line.includes("exec(open(")).at(-1), /\/[a-f0-9]{12}-[a-f0-9]{16}\.py"/);
 		const loaderLike = 'exec(open("/tmp/pi-rc-x/0123456789abcdef.py", encoding="utf-8").read(), globals())';
 		assert.equal((await repl.send("pi-studio-repl-python", `print(${JSON.stringify(loaderLike)})`)).output, loaderLike);
 
@@ -774,6 +798,8 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.equal((await repl.start("ipython")).message, "Started IPython REPL.");
 		assert.equal(pane("pi-studio-repl-ipython", "#{pane_width}"), "80");
 		assert.equal((await repl.send("pi-studio-repl-ipython", 'print("hello")')).output, "hello");
+		await showsSummary("pi-studio-repl-ipython", 'print("a")\nprint("b")', "a\nb");
+		await showsSummary("pi-studio-repl-ipython", 'print("c", end="")', "c");
 		// IPython shows a value once, as Out[N]: (Oliver, 19 Oct: it used to be repeated as a bare repr).
 		assert.match((await repl.send("pi-studio-repl-ipython", "1 + 1")).output, /^Out\[\d+\]: 2$/);
 		assert.equal((await repl.send("pi-studio-repl-ipython", "x = 3")).output, "");
@@ -786,6 +812,8 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	await t.test("Julia: $ interpolation runs as written", { skip: !has("julia") }, async () => {
 		assert.equal((await repl.start("julia")).message, "Started Julia REPL.");
 		assert.equal((await repl.send("pi-studio-repl-julia", 'for i in 1:2\n    println("i=$i")\nend')).output, "i=1\ni=2");
+		await showsSummary("pi-studio-repl-julia", 'println("a")\nprintln("b")', "a\nb");
+		await showsSummary("pi-studio-repl-julia", 'print("c")', "c");
 		assert.equal((await repl.stop("pi-studio-repl-julia")).message, "Stopped pi-studio-repl-julia.");
 	});
 
@@ -800,6 +828,9 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		const unclosed = await repl.send("pi-studio-repl-ghci", ":{\nlet f x = x + 1");
 		assert.equal(unclosed.status, "captured");
 		assert.equal((await repl.send("pi-studio-repl-ghci", "1 + 1")).output, "2");
+		await showsSummary("pi-studio-repl-ghci", 'putStrLn "a"\nputStrLn "b"', "a\nb");
+		// Output that ends mid-line still puts the done marker on a line of its own.
+		await showsSummary("pi-studio-repl-ghci", 'putStr "c"', "c");
 		assert.doesNotMatch(tmux("capture-pane", "-p", "-t", "=pi-studio-repl-ghci:", "-S", "-200").stdout, /touch '/, "no completion command in the pane");
 		assert.equal((await repl.stop("pi-studio-repl-ghci")).message, "Stopped pi-studio-repl-ghci.");
 	});
@@ -809,17 +840,26 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			const [first, second] = await Promise.all([repl.start("r"), repl.start("r")]);
 			assert.deepEqual([first.message, second.message].sort(), ["R REPL is already running.", "Started R REPL."], "two Starts share one session");
 			assert.equal((await repl.send("pi-studio-repl-r", 'cat(">\\n")')).output, ">");
+			await showsSummary("pi-studio-repl-r", 'cat("a\\n")\ncat("b\\n")', "a\nb");
+			await showsSummary("pi-studio-repl-r", 'cat("c")', "c");
 			assert.equal((await repl.stop("pi-studio-repl-r")).message, "Stopped pi-studio-repl-r.");
 		} else st.diagnostic("R not installed");
 		if (has("clojure")) {
 			assert.equal((await repl.start("clojure")).message, "Started Clojure REPL.");
 			assert.equal((await repl.send("pi-studio-repl-clojure", '(println "user=>")')).output, "user=>");
+			await showsSummary("pi-studio-repl-clojure", '(println "a")\n(println "b")', "a\nb");
+			await showsSummary("pi-studio-repl-clojure", '(print "c")', "c");
 			assert.equal((await repl.stop("pi-studio-repl-clojure")).message, "Stopped pi-studio-repl-clojure.");
 		} else st.diagnostic("clojure not installed");
 	});
 
 	await t.test("Shell: Stop closes it like a terminal, and nohup jobs keep running", async () => {
 		assert.equal((await repl.start("shell")).message, "Started Shell REPL.");
+		// Shell's Start can't recognise the user's prompt, so it doesn't wait for one, and a
+		// send made at once also records the shell's startup output. This one takes it.
+		await repl.send("pi-studio-repl-shell", "true");
+		await showsSummary("pi-studio-repl-shell", "echo a\necho b", "a\nb");
+		await showsSummary("pi-studio-repl-shell", "printf c", "c");
 		const sent = await repl.send("pi-studio-repl-shell", "nohup sleep 300 >/dev/null 2>&1 &\necho \"pid=$!\"");
 		const job = Number(sent.output.match(/pid=(\d+)/)?.[1]);
 		leftovers.push({ pid: job, identity: identify(job) });

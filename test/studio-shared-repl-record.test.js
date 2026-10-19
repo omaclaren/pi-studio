@@ -186,13 +186,45 @@ test("Studio sends bounded pane echoes with clean-record-derived anchors", () =>
 	assert.match(serverSource, /origin: "pi-studio"/);
 	assert.match(serverSource, /PI_STUDIO_REPL_ECHO_MODE/);
 	assert.equal((serverSource.match(/cleanStudioReplOutput\(rawOutput, \{\n\t+submissionLine: sent\.submissionText,\n\t+runtime: sent\.runtime,\n\t+display: sent\.display,/g) || []).length, 2);
-	assert.match(clientSource, /piStudio\.replEchoMode\.v2/);
-	assert.match(clientSource, /return stored === "summary" \|\| stored === "full" \? stored : "off"/);
 	assert.match(clientSource, /echoMode: replEchoMode/);
-	assert.match(serverSource, /<option value="off" selected>Pane echo: Off<\/option>/);
+	assert.match(serverSource, /<option value="summary" selected>Pane echo: Summary<\/option>/);
+	assert.match(serverSource, /<option value="off">Pane echo: Off<\/option>/);
 	assert.match(serverSource, /Pane echo: Summary/);
 	assert.match(serverSource, /Pane echo: Full \(raw code\)/);
 	assert.match(clientSource, /source code will remain in raw terminal history/);
+});
+
+test("Studio's pane echo defaults to Summary and keeps a choice", () => {
+	const start = clientSource.indexOf("      let replEchoMode = (() => {");
+	const end = clientSource.indexOf("})();", start);
+	assert.ok(start >= 0 && end > start, "expected the stored echo-mode reader");
+	const normalizeStart = clientSource.indexOf("      function normalizeReplEchoMode(value) {");
+	const normalizeEnd = clientSource.indexOf("\n      }\n", normalizeStart);
+	assert.ok(normalizeStart >= 0 && normalizeEnd > normalizeStart, "expected normalizeReplEchoMode");
+	const read = (stored, throws = false) => {
+		const localStorage = {
+			getItem(key) {
+				if (throws) throw new Error("blocked");
+				return Object.hasOwn(stored, key) ? stored[key] : null;
+			},
+		};
+		const context = { window: { localStorage } };
+		vm.runInNewContext(`${clientSource.slice(start, end + "})();".length)}\nglobalThis.mode = replEchoMode;`, context);
+		return context.mode;
+	};
+	assert.equal(read({}), "summary");
+	assert.equal(read({}, true), "summary");
+	// v2 stored Off for everyone, chosen or not; only a Full chosen there carries over.
+	assert.equal(read({ "piStudio.replEchoMode.v2": "off" }), "summary");
+	assert.equal(read({ "piStudio.replEchoMode.v2": "summary" }), "summary");
+	assert.equal(read({ "piStudio.replEchoMode.v2": "full" }), "full");
+	assert.equal(read({ "piStudio.replEchoMode.v3": "off", "piStudio.replEchoMode.v2": "full" }), "off");
+	assert.equal(read({ "piStudio.replEchoMode.v3": "full" }), "full");
+	assert.equal(read({ "piStudio.replEchoMode.v3": "bogus" }), "summary");
+	const context = {};
+	vm.runInNewContext(`${clientSource.slice(normalizeStart, normalizeEnd + "\n      }".length)}\nglobalThis.normalize = normalizeReplEchoMode;`, context);
+	assert.deepEqual(["off", "OFF", "full", "summary", "", "bogus", undefined].map((value) => context.normalize(value)), ["off", "off", "full", "summary", "summary", "summary", "summary"]);
+	assert.match(clientSource, /window\.localStorage\.setItem\("piStudio\.replEchoMode\.v3", replEchoMode\)/);
 });
 
 test("Studio browser reads, writes, migrates, and clears the shared record", () => {

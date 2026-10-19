@@ -7809,7 +7809,9 @@
     body.studio-workspace-layout .repl-more-menu button:not(:disabled):hover { border-color: transparent; background: var(--studio-header-action-hover-bg, var(--panel-2)); }
     body.studio-workspace-layout .repl-more-menu button:disabled { color: var(--muted); }
     body.studio-workspace-layout .repl-more-menu button:focus-visible { outline: none; text-decoration: underline; text-underline-offset: 3px; }
-    body.studio-workspace-layout .repl-more-send-mode { display: flex; align-items: center; gap: 6px; padding: 3px 8px 6px; margin-bottom: 2px; border-bottom: 1px solid var(--panel-border); color: var(--muted); font-size: 12px; }
+    body.studio-workspace-layout .repl-more-send-mode,
+    body.studio-workspace-layout .repl-more-echo-mode { display: flex; align-items: center; gap: 6px; padding: 3px 8px 6px; margin-bottom: 2px; border-bottom: 1px solid var(--panel-border); color: var(--muted); font-size: 12px; }
+    body.studio-workspace-layout .repl-more-send-mode:has(+ .repl-more-echo-mode) { padding-bottom: 3px; margin-bottom: 0; border-bottom: 0; }
     body.studio-workspace-layout .files-pick-path { flex: 1 1 180px; min-width: 0; padding: 4px 8px; border: 1px solid var(--control-border); border-radius: 6px;
       background: var(--panel); color: var(--text); font: 12px var(--font-mono); outline: none; }
     body.studio-workspace-layout .files-pick-strip button { border-color: transparent; background: transparent; }

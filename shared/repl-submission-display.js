@@ -1,15 +1,17 @@
 import { createHash } from "node:crypto";
 
 export const REPL_SUBMISSION_DISPLAY_VERSION = 1;
-export const DEFAULT_REPL_SUBMISSION_ECHO_MODE = "off";
+export const DEFAULT_REPL_SUBMISSION_ECHO_MODE = "summary";
 export const REPL_SUBMISSION_ECHO_MODES = Object.freeze(["off", "summary", "full"]);
-export const REPL_SUBMISSION_SUMMARY_MAX_CHARS = 600;
-export const REPL_SUBMISSION_SUMMARY_MAX_LINES = 6;
+export const REPL_SUBMISSION_SUMMARY_MAX_CHARS = 2_000;
+export const REPL_SUBMISSION_SUMMARY_MAX_LINES = 20;
 export const REPL_SUBMISSION_FULL_MAX_CHARS = 4_000;
 export const REPL_SUBMISSION_FULL_MAX_LINES = 40;
 
 const UNSAFE_UNICODE_PATTERN = /[\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 const OTHER_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+const LABELLED_BEGIN_MARKER_PATTERN = /^── ([a-z0-9][a-z0-9-]{0,31}) · input · ([1-9]\d*) (line|lines) · id: ([a-f0-9]{12}) ──$/;
+const LABELLED_END_MARKER_PATTERN = /^── done · id: ([a-f0-9]{12}) ──$/;
 const COMPACT_BEGIN_MARKER_PATTERN = /^── ([a-z0-9][a-z0-9-]{0,31}) · ([a-f0-9]{12}) · ([1-9]\d*) (line|lines) ──$/;
 const COMPACT_OUTPUT_MARKER = "── output ──";
 const COMPACT_END_MARKER_PATTERN = /^── done · ([a-f0-9]{12}) ──$/;
@@ -53,10 +55,6 @@ function normalizeDisplayCode(code) {
 	return sanitized || "(empty submission)";
 }
 
-function formatPreviewLine(line) {
-	return line ? `│ ${line}` : "│";
-}
-
 function buildBoundedPreviewLines(codeLines, maxLines, maxChars) {
 	const shown = [];
 	let usedChars = 0;
@@ -73,7 +71,7 @@ function buildBoundedPreviewLines(codeLines, maxLines, maxChars) {
 			break;
 		}
 		const clipped = truncateCodePoints(line, remaining);
-		shown.push(formatPreviewLine(clipped.text));
+		shown.push(clipped.text);
 		usedChars += Array.from(clipped.text).length + 1;
 		if (clipped.truncated) {
 			truncated = true;
@@ -81,7 +79,7 @@ function buildBoundedPreviewLines(codeLines, maxLines, maxChars) {
 		}
 	}
 	if (shown.length < codeLines.length) truncated = true;
-	if (truncated) shown.push(`│ … preview truncated; ${codeLines.length} ${codeLines.length === 1 ? "line" : "lines"} total`);
+	if (truncated) shown.push(`… preview truncated; ${codeLines.length} ${codeLines.length === 1 ? "line" : "lines"} total`);
 	return shown;
 }
 
@@ -101,9 +99,9 @@ export function createReplSubmissionDisplay(details = {}) {
 	const displayCode = normalizeDisplayCode(details.code);
 	const codeLines = displayCode.split("\n");
 	const lineLabel = `${codeLines.length} ${codeLines.length === 1 ? "line" : "lines"}`;
-	const beginMarker = `── ${origin} · ${anchorId} · ${lineLabel} ──`;
+	const beginMarker = `── ${origin} · input · ${lineLabel} · id: ${anchorId} ──`;
 	const outputMarker = COMPACT_OUTPUT_MARKER;
-	const endMarker = `── done · ${anchorId} ──`;
+	const endMarker = `── done · id: ${anchorId} ──`;
 	const enabled = mode !== "off";
 	const previewLines = !enabled
 		? []
@@ -121,7 +119,8 @@ export function createReplSubmissionDisplay(details = {}) {
 		outputMarker,
 		endMarker,
 		previewLines,
-		prefixLines: enabled ? [beginMarker, ...previewLines, outputMarker] : [],
+		prefixLines: enabled ? ["", beginMarker, ...previewLines, outputMarker] : [],
+		suffixLines: enabled ? [endMarker, ""] : [],
 	};
 }
 
@@ -134,6 +133,15 @@ function parseLineCount(countText, countLabel) {
 
 export function parseReplSubmissionDisplayMarker(line) {
 	const normalized = String(line || "").replace(/\r$/, "");
+	const labelledBegin = normalized.match(LABELLED_BEGIN_MARKER_PATTERN);
+	if (labelledBegin) {
+		const [, origin, countText, countLabel, anchorId] = labelledBegin;
+		const lineCount = parseLineCount(countText, countLabel);
+		return lineCount === null
+			? null
+			: { version: REPL_SUBMISSION_DISPLAY_VERSION, origin, phase: "submitted", anchorId, lineCount };
+	}
+	// Keep the earlier compact form readable without changing its parse result.
 	const compactBegin = normalized.match(COMPACT_BEGIN_MARKER_PATTERN);
 	if (compactBegin) {
 		const [, origin, anchorId, countText, countLabel] = compactBegin;
@@ -145,7 +153,7 @@ export function parseReplSubmissionDisplayMarker(line) {
 	if (normalized === COMPACT_OUTPUT_MARKER) {
 		return { version: REPL_SUBMISSION_DISPLAY_VERSION, phase: "output" };
 	}
-	const compactEnd = normalized.match(COMPACT_END_MARKER_PATTERN);
+	const compactEnd = normalized.match(LABELLED_END_MARKER_PATTERN) ?? normalized.match(COMPACT_END_MARKER_PATTERN);
 	if (compactEnd) {
 		return { version: REPL_SUBMISSION_DISPLAY_VERSION, phase: "complete", anchorId: compactEnd[1] };
 	}
@@ -174,6 +182,20 @@ function consumeExactDisplayLine(value, offset, line) {
 	return value[end] === "\n" ? end + 1 : end;
 }
 
+function consumeWrappedDisplayLine(value, offset, line) {
+	const exact = consumeExactDisplayLine(value, offset, line);
+	if (exact !== null) return exact;
+	// Some captures retain hard wraps inside a printed preview line. Match
+	// its known text, allowing only inserted line breaks, not arbitrary output.
+	let end = offset;
+	for (const character of line) {
+		while (end > offset && value[end] === "\n") end += 1;
+		if (!value.startsWith(character, end)) return null;
+		end += character.length;
+	}
+	return consumeExactDisplayLine(value, end, "");
+}
+
 function findExactDisplayLine(value, line, useLast = false) {
 	let index = useLast ? value.lastIndexOf(line) : value.indexOf(line);
 	while (index >= 0) {
@@ -190,9 +212,14 @@ function findExactDisplayLine(value, line, useLast = false) {
 	return null;
 }
 
-function removeMarkerLine(value, marker, useLast = false) {
+function removeMarkerLine(value, marker, useLast = false, trailingGap = false) {
 	const found = findExactDisplayLine(value, marker, useLast);
-	return found ? value.slice(0, found.index) + value.slice(found.end) : value;
+	if (!found) return value;
+	// Consume at most our one following blank line. Preserve user whitespace
+	// before the anchor and any additional blank lines after it; older captures
+	// without a separator (or without the new display field) still work.
+	const end = found.end + (trailingGap && value[found.end] === "\n" ? 1 : 0);
+	return value.slice(0, found.index) + value.slice(end);
 }
 
 export function stripReplSubmissionDisplay(output, display) {
@@ -200,28 +227,23 @@ export function stripReplSubmissionDisplay(output, display) {
 	if (!display || display.enabled !== true) return value;
 	const begin = findExactDisplayLine(value, display.beginMarker);
 	if (begin) {
-		const beginIndex = begin.index;
-		const afterBegin = value.slice(begin.end);
-		const outputDivider = display.outputMarker
-			? findExactDisplayLine(afterBegin, display.outputMarker)
-			: null;
-		if (outputDivider) {
-			// The plain divider is an unambiguous boundary because it is emitted
-			// before user code runs. Removing through it is resilient to terminal
-			// wrapping or whitespace changes within the displayed source preview.
-			const suffixStart = begin.end + outputDivider.end;
-			value = value.slice(0, beginIndex) + value.slice(suffixStart);
-		} else {
-			// If the runtime disappears mid-prefix, remove only contiguous exact
-			// request lines and preserve any different error text after them.
-			let suffixStart = beginIndex;
-			for (const line of display.prefixLines) {
-				const next = consumeExactDisplayLine(value, suffixStart, line);
-				if (next === null) break;
-				suffixStart = next;
-			}
-			value = value.slice(0, beginIndex) + value.slice(suffixStart);
+		// Remove only our single leading blank line, not the loader's newline
+		// or any additional output whitespace. Older unpadded captures still work.
+		const leadingGap = display.prefixLines[0] === "" && begin.index > 0 &&
+			value[begin.index - 1] === "\n" && (begin.index === 1 || value[begin.index - 2] === "\n");
+		const beginIndex = begin.index - (leadingGap ? 1 : 0);
+		// Unprefixed source can itself contain a line reading "── output ──".
+		// Consume the known preview before its divider rather than treating the
+		// first marker-looking source line as the start of runtime output. If a
+		// prefix is incomplete, preserve everything after the matched portion.
+		let suffixStart = begin.index;
+		const prefixLines = display.prefixLines[0] === "" ? display.prefixLines.slice(1) : display.prefixLines;
+		for (const line of prefixLines) {
+			const next = consumeWrappedDisplayLine(value, suffixStart, line);
+			if (next === null) break;
+			suffixStart = next;
 		}
+		value = value.slice(0, beginIndex) + value.slice(suffixStart);
 	}
-	return removeMarkerLine(value, display.endMarker, true);
+	return removeMarkerLine(value, display.endMarker, true, display.suffixLines?.at(-1) === "");
 }

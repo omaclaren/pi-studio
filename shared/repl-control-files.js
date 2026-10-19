@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 const REPL_CONTROL_TOKEN_BYTES = 8;
+const REPL_CONTROL_FILENAME_PATTERN = /^((?:[a-f0-9]{12}-)?[a-f0-9]{16})\.[A-Za-z0-9]{1,8}$/;
 const REPL_CONTROL_STALE_MS = 24 * 60 * 60 * 1_000;
 const prunedRoots = new Set();
 
@@ -43,6 +44,11 @@ function assertPrivateReplControlRoot(root) {
 	}
 }
 
+function getReplControlFileStem(name) {
+	const match = name.match(REPL_CONTROL_FILENAME_PATTERN);
+	return match?.[0] === name ? match[1] : undefined;
+}
+
 function pruneStaleReplControlFiles(root, now = Date.now()) {
 	if (prunedRoots.has(root)) return;
 	prunedRoots.add(root);
@@ -54,7 +60,7 @@ function pruneStaleReplControlFiles(root, now = Date.now()) {
 	}
 	const uid = currentUid();
 	for (const entry of entries) {
-		if (!/^[a-f0-9]{16}\.(?:[A-Za-z0-9]{1,8}|done)$/.test(entry)) continue;
+		if (!getReplControlFileStem(entry)) continue;
 		const file = join(root, entry);
 		try {
 			const stats = lstatSync(file);
@@ -84,7 +90,7 @@ export function ensurePrivateReplControlRoot(root = getPrivateReplControlRoot())
 
 function normalizeExtension(extension) {
 	const normalized = String(extension || "").replace(/^\.+/, "");
-	if (!/^[A-Za-z0-9]{1,8}$/.test(normalized)) {
+	if (!normalized || normalized.length > 8 || /[^A-Za-z0-9]/.test(normalized)) {
 		throw new Error(`Invalid REPL control-file extension: ${extension}`);
 	}
 	return normalized;
@@ -92,22 +98,28 @@ function normalizeExtension(extension) {
 
 /**
  * Create and populate one private, collision-resistant REPL control file.
+ * An optional display anchor prefixes the independent random allocation token.
  * The builder receives the final paths so it can embed the matching done-file
  * path in the runtime-specific wrapper.
  */
 export function createPrivateReplControlFiles(options) {
 	const extension = normalizeExtension(options?.extension);
+	const anchorId = options?.anchorId;
+	if (anchorId !== undefined && (typeof anchorId !== "string" || anchorId.length !== 12 || !/^[a-f0-9]{12}$/.test(anchorId))) {
+		throw new Error("Invalid REPL submission anchor ID: expected 12 lowercase hex characters.");
+	}
+	const prefix = anchorId === undefined ? "" : `${anchorId}-`;
 	const root = ensurePrivateReplControlRoot(options?.root || getPrivateReplControlRoot());
 	if (typeof options?.buildSource !== "function") {
 		throw new Error("REPL control-file source builder is required.");
 	}
 
 	for (let attempt = 0; attempt < 20; attempt += 1) {
-		const token = randomBytes(REPL_CONTROL_TOKEN_BYTES).toString("hex");
+		const stem = prefix + randomBytes(REPL_CONTROL_TOKEN_BYTES).toString("hex");
 		const paths = {
 			dir: root,
-			sourceFile: join(root, `${token}.${extension}`),
-			doneFile: join(root, `${token}.done`),
+			sourceFile: join(root, `${stem}.${extension}`),
+			doneFile: join(root, `${stem}.done`),
 		};
 		if (existsSync(paths.doneFile)) continue;
 
@@ -146,8 +158,8 @@ export function cleanupPrivateReplControlFiles(paths) {
 	const sourceFile = String(paths.sourceFile || "");
 	const doneFile = String(paths.doneFile || "");
 	const sourceName = basename(sourceFile);
-	const token = sourceName.match(/^([a-f0-9]{16})\.[A-Za-z0-9]{1,8}$/)?.[1];
-	if (!token || dirname(sourceFile) !== root || dirname(doneFile) !== root || basename(doneFile) !== `${token}.done`) return;
+	const stem = getReplControlFileStem(sourceName);
+	if (!stem || dirname(sourceFile) !== root || dirname(doneFile) !== root || basename(doneFile) !== `${stem}.done`) return;
 	for (const file of [sourceFile, doneFile]) {
 		try {
 			unlinkSync(file);

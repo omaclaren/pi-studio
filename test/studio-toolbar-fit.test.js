@@ -42,6 +42,29 @@ test("Send mode lives in the REPL pane's More in the new layout, not the Prompt 
   assert.deepEqual(stored, [["piStudio.replSendMode", "literate"]]); assert.deepEqual(synced, ["literate"]); assert.equal(rendered[0].force, true);
 });
 
+// Oliver, 19 Oct: Pane echo goes under Send mode; the toolbar's menu isn't shown in the new layout.
+test("Pane echo lives in the REPL pane's More, under Send mode, in the new layout", () => {
+  const sendAt = source.indexOf("<label class='repl-more-send-mode'"), echoAt = source.indexOf("<label class='repl-more-echo-mode'");
+  assert(sendAt > 0 && echoAt > sendAt, "Pane echo comes after Send mode");
+  assert.match(source, /\(bufferSwitchingEnabled && studioUiRefreshUi \? "<label class='repl-more-echo-mode'[^"]*'>Pane echo <select class='studio-flat-select' data-repl-echo-mode aria-label='Pane echo'" \+ \(wsState === "Disconnected" \|\| uiBusy \|\| replBusy \? " disabled" : ""\) \+ ">"/);
+  const stored = [], synced = [], rendered = [], statuses = [];
+  class Element { constructor(value) { this.value = value; } closest(selector) { return selector === "[data-repl-echo-mode]" ? this : null; } }
+  const c = { rightView: "repl", Element, replEchoMode: "summary", replEchoModeSelect: { value: "summary" },
+    window: { localStorage: { setItem: (...a) => stored.push(a) } },
+    syncActionButtons: () => synced.push(c.replEchoMode), renderReplViewIfActive: options => rendered.push(options),
+    setStatus: (...a) => statuses.push(a) };
+  vm.createContext(c);
+  vm.runInContext(declaration("normalizeReplEchoMode") + declaration("setReplEchoMode") + declaration("chooseReplEchoMode") + declaration("handleReplPaneChange"), c);
+  c.handleReplPaneChange({ target: new Element("off") });
+  assert.equal(c.replEchoMode, "off"); assert.equal(c.replEchoModeSelect.value, "off");
+  assert.deepEqual(stored, [["piStudio.replEchoMode.v3", "off"]]); assert.deepEqual(synced, ["off"]); assert.equal(rendered[0].force, true);
+  assert.equal(statuses[0][1], "success");
+  c.handleReplPaneChange({ target: new Element("full") });
+  assert.equal(c.replEchoMode, "full"); assert.equal(statuses[1][1], "warning");
+  // The two settings read as one group: a single rule under the last.
+  assert.match(css, /body\.studio-workspace-layout \.repl-more-send-mode:has\(\+ \.repl-more-echo-mode\) \{ padding-bottom: 3px; margin-bottom: 0; border-bottom: 0; \}/);
+});
+
 test("the choose-a-file strip stays pinned while Files scrolls", () => {
   assert.match(css, /body\.studio-workspace-layout \.files-pick-strip \{ position: sticky; top: 0; z-index: 3; \}/);
 });
