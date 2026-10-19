@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Stopping a Python, Julia or other runtime session works again on a Mac that runs a process as `nobody`. Since 0.10.2, Stop refused there with "Could not parse process ownership data; refusing unsafe shutdown."
+
 ## [0.10.3] — 2026-10-19
 
 ### Fixed

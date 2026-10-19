@@ -12,7 +12,8 @@ const paneFormat = "#{pid}\t#{session_id}\t#{session_name}\t#{session_created}\t
 export function parseStopProcessTable(text) {
 	return text.split("\n").filter((line) => line.trim()).map((line) => {
 		const f = line.trim().split(/\s+/);
-		if (f.length !== 11 || !f.slice(0, 4).every((v) => /^\d+$/.test(v) && Number.isSafeInteger(Number(v)))) throw new Error("Could not parse process ownership data; refusing unsafe shutdown.");
+		// macOS lists processes of `nobody` with uid -2; it never matches ours.
+		if (f.length !== 11 || !f.slice(0, 4).every((v, i) => (i === 3 ? /^-?\d+$/ : /^\d+$/).test(v) && Number.isSafeInteger(Number(v)))) throw new Error("Could not parse process ownership data; refusing unsafe shutdown.");
 		return { pid: Number(f[0]), ppid: Number(f[1]), pgid: Number(f[2]), uid: Number(f[3]), tty: f[4], startedAt: f.slice(5, 10).join(" "), state: f[10] };
 	});
 }
