@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { buildStudioReplDeadPaneCloseArgs } from "../shared/studio-repl-tmux.js";
 import { acquireReplSessionSendLease } from "../shared/repl-session-record.js";
 import { createServer, get as httpGet } from "node:http";
@@ -147,9 +147,9 @@ function replClient(ws) {
 		};
 		return reply;
 	};
-	const request = (type, fields, done) => {
+	const request = (type, fields, done, ms) => {
 		const requestId = `c74-${type}-${++next}`;
-		const reply = expect((message) => message.requestId === requestId && done(message));
+		const reply = expect((message) => message.requestId === requestId && done(message), ms);
 		ws.send(JSON.stringify({ type, requestId, ...fields }));
 		return reply;
 	};
@@ -180,7 +180,8 @@ function replClient(ws) {
 			return expect((m) => m.type === "repl_state" && !m.requestId && m.choiceRevision === undefined && m.activeSessionName === sessionName);
 		},
 		async start(runtime, command) {
-			const reply = await request("repl_start_request", { runtime, ...(command ? { command } : {}) }, (m) => m.type === "repl_state");
+			// MATLAB can take half a minute to reach its prompt.
+			const reply = await request("repl_start_request", { runtime, ...(command ? { command } : {}) }, (m) => m.type === "repl_state", runtime === "matlab" ? 150_000 : undefined);
 			return { message: reply.replMessage, error: reply.replError, sessions: reply.sessions, active: reply.activeSessionName };
 		},
 		async capture(sessionName) {
@@ -787,12 +788,12 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	});
 
 	await t.test("a runtime Studio doesn't support gets nothing pasted into it", async () => {
-		assert.equal(tmux("new-session", "-d", "-s", "pi-repl-octave", "sleep 600").status, 0);
-		tmux("set-option", "-t", "=pi-repl-octave", "@pi_repl_runtime", "octave");
-		const sent = await repl.send("pi-repl-octave", "disp(1)");
-		assert.equal(sent.error, "Studio can't send code to pi-repl-octave yet: it doesn't support that runtime.");
-		assert.equal(tmux("capture-pane", "-p", "-t", "=pi-repl-octave:").stdout.trim(), "");
-		tmux("kill-session", "-t", "=pi-repl-octave");
+		assert.equal(tmux("new-session", "-d", "-s", "pi-repl-gnuplot", "sleep 600").status, 0);
+		tmux("set-option", "-t", "=pi-repl-gnuplot", "@pi_repl_runtime", "gnuplot");
+		const sent = await repl.send("pi-repl-gnuplot", "print 1");
+		assert.equal(sent.error, "Studio can't send code to pi-repl-gnuplot yet: it doesn't support that runtime.");
+		assert.equal(tmux("capture-pane", "-p", "-t", "=pi-repl-gnuplot:").stdout.trim(), "");
+		tmux("kill-session", "-t", "=pi-repl-gnuplot");
 	});
 
 	await t.test("IPython: its wrapped loader echo is removed", { skip: !has("ipython") }, async () => {
@@ -902,6 +903,72 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.equal((await repl.stop("pi-studio-repl-java")).message, "Stopped pi-studio-repl-java.");
 		assert.ok(await waitFor(() => jvms.every((pid) => !alive(pid))), "both JVMs exited");
 	});
+
+	// As in pi-repl 0.6.0: the code runs in the base workspace through evalin, and the
+	// driver's function-local onCleanup prints the footer and writes the done file.
+	for (const [runtime, label, command] of [["octave", "Octave", "octave-cli"], ["matlab", "MATLAB", "matlab"]]) {
+		await t.test(`${label}: base workspace, native ans, errors and Ctrl+C complete, and Stop is verified`, { skip: !has(command) }, async () => {
+			const name = `pi-studio-repl-${runtime}`;
+			// Octave dumped its workspace into the working directory when Stop closed it.
+			const dump = join(repositoryRoot, "octave-workspace");
+			const dumped = () => { try { return statSync(dump).mtimeMs; } catch { return 0; } };
+			const before = dumped();
+			// MATLAB's disp indents numbers by four spaces; the record keeps that.
+			const number = async (code) => (await repl.send(name, code)).output.trim();
+			assert.equal((await repl.start(runtime)).message, `Started ${label} REPL.`);
+			assert.equal(await number("x = 41;\ndisp(x + 1)"), "42");
+			assert.match((await repl.send(name, "x + 1")).output, /^ans =\s+42$/, "native ans display");
+			assert.equal(await number("disp(ans)"), "42", "ans is set in the base workspace");
+			assert.equal((await repl.send(name, "fprintf('%s\\n', 'ünï ✓')")).output, "ünï ✓");
+			const failed = await repl.send(name, "error('boom')");
+			assert.equal(failed.status, "captured");
+			assert.match(failed.output, /boom/);
+			assert.equal(await number("disp(x)"), "41", "state survives the error");
+			await showsSummary(name, "disp('a')\ndisp('b')", "a\nb");
+			await showsSummary(name, "fprintf('c')", "c");
+			// Ctrl+C during the code: onCleanup still completes the send, and the next one works.
+			const sending = repl.send(name, "pause(30)");
+			assert.ok(await waitFor(() => scrollback(name).includes("pause(30)"), 15_000), "pause(30) is running");
+			await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+			tmux("send-keys", "-t", `=${name}:`, "C-c");
+			assert.equal((await sending).status, "captured", "the interrupted send completes");
+			assert.equal(await number("disp(x)"), "41");
+			// Sol and Astra (candidate88): the footer's column query is bounded, even when a
+			// NODE_OPTIONS hook would keep its Node running, and Ctrl+C while it waits still
+			// completes the send. The hooks are set in the session, so only its helper sees them.
+			const keepalive = join(root, `${runtime}-keepalive.cjs`);
+			writeFileSync(keepalive, "setInterval(() => {}, 1000);\n");
+			const started = Date.now();
+			assert.equal((await repl.send(name, `setenv('NODE_OPTIONS', '--require ${keepalive}');\ndisp('kept')`)).output, "kept");
+			assert.ok(Date.now() - started < 15_000, `bounded: ${Date.now() - started} ms`);
+			// A query that stalls: its hook notes its process ID, listens for signals as signal-exit
+			// does (which kept perl's alarm from ending it: Astra), then blocks for 12 s. Setting it
+			// stalls that send's own footer, which the 5 s limit ends, leaving only the output (Sol,
+			// Astra: MATLAB once printed the helper's command and "Killed").
+			const mark = join(root, `${runtime}-query-started`);
+			const stall = join(root, `${runtime}-stall.cjs`);
+			writeFileSync(stall, `for (const signal of ["SIGALRM", "SIGINT", "SIGHUP", "SIGTERM"]) process.on(signal, () => {});\nrequire("node:fs").writeFileSync(${JSON.stringify(mark)}, String(process.pid));\nAtomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 12000);\n`);
+			const limited = Date.now();
+			assert.equal((await repl.send(name, `setenv('NODE_OPTIONS', '--require ${stall}');\ndisp('timed')`)).output, "timed");
+			const took = Date.now() - limited;
+			assert.ok(took >= 4_500 && took < 10_000, `ended by the 5 s limit: ${took} ms`);
+			const timedOut = Number(readFileSync(mark, "utf8"));
+			assert.ok(await waitFor(() => !alive(timedOut), 3_000), "the stalled helper has gone");
+			// Ctrl+C while the next send's query stalls: the send completes and the helper goes.
+			rmSync(mark, { force: true });
+			const stalled = repl.send(name, "disp('next')");
+			assert.ok(await waitFor(() => existsSync(mark) && readFileSync(mark, "utf8"), 20_000), "the footer's query has started");
+			const helper = Number(readFileSync(mark, "utf8"));
+			tmux("send-keys", "-t", `=${name}:`, "C-c");
+			assert.equal((await stalled).status, "captured", "Ctrl+C during the footer still completes the send");
+			assert.ok(await waitFor(() => !alive(helper), 7_000), "the interrupted helper has gone");
+			assert.equal(await number("setenv('NODE_OPTIONS', ''); disp(x)"), "41");
+			const pid = panePid(name);
+			assert.equal((await repl.stop(name)).message, `Stopped ${name}.`);
+			assert.ok(await waitFor(() => !alive(pid), 30_000), `${label} exited`);
+			assert.equal(dumped(), before, "no octave-workspace written");
+		});
+	}
 
 	await t.test("Shell: Stop closes it like a terminal, and nohup jobs keep running", async () => {
 		assert.equal((await repl.start("shell")).message, "Started Shell REPL.");

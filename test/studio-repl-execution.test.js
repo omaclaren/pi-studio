@@ -73,6 +73,7 @@ test("Start waits for each runtime's normal prompt, seen on the cursor row", () 
 		python: [">>> ", "In [1]: "], ipython: ["In [12]:", ">>>"], julia: ["julia> "], r: ["> "],
 		ghci: ["ghci> ", "Prelude> ", "*Main> ", "*Main Data.List> "], clojure: ["user=> "],
 		ruby: ["irb(main):001> ", "irb(main):001:0> "], java: ["jshell> "],
+		octave: ["octave:1> ", "octave:12>"], matlab: [">> "],
 	};
 	for (const [runtime, lines] of Object.entries(ready)) {
 		for (const line of lines) assert.equal(isStudioReplReadyLine(runtime, line), true, `${runtime}: ${line}`);
@@ -82,7 +83,8 @@ test("Start waits for each runtime's normal prompt, seen on the cursor row", () 
 		r: ["R version 4.4.1", "+ "], ghci: ["GHCi, version 9.6.7: https://www.haskell.org/ghc/  :? for help", "ghci> 1"],
 		clojure: ["Clojure 1.12.0", ""], shell: ["$ ", "% "],
 		ruby: ["irb(main):001* ", "irb(main):001:1> ", "irb(main):001> 1"], java: ["|  Welcome to JShell -- Version 25", "jshell> 1", "   ...> "],
-		octave: ["octave:1> "],
+		octave: ["octave:1> 1", "GNU Octave, version 10.3.0", ">> "], matlab: ["                            < M A T L A B (R) >", ">> 1", ">>> ", "octave:1> "],
+		gnuplot: ["gnuplot> "],
 	};
 	for (const [runtime, lines] of Object.entries(notReady)) {
 		for (const line of lines) assert.equal(isStudioReplReadyLine(runtime, line), false, `${runtime}: ${line}`);
@@ -94,10 +96,10 @@ test("verified Stop accepts every name Studio gives its own sessions, and nothin
 	for (const name of [
 		"pi-studio-repl-python", "pi-studio-repl-r", "pi-studio-repl-clojure-0123abcd",
 		"pi-studio-repl-julia-mgx2k1z3-a1b2c3", "pi-studio-repl-ghci-0123abcd-mgx2k1z3-a1b2c3",
-		"pi-studio-repl-ruby", "pi-studio-repl-java-0123abcd",
+		"pi-studio-repl-ruby", "pi-studio-repl-java-0123abcd", "pi-studio-repl-octave", "pi-studio-repl-matlab-mgx2k1z3-a1b2c3",
 	]) assert.match(name, STUDIO_REPL_SESSION_NAME, name);
 	for (const name of [
-		"pi-repl-python", "pi-repl-ruby", "pi-studio-repl-octave", "pi-studio-repl-rubyx", "pi-studio-repl-python-x", "pi-studio-repl-pythonx",
+		"pi-repl-python", "pi-repl-ruby", "pi-studio-repl-gnuplot", "pi-studio-repl-octavex", "pi-studio-repl-rubyx", "pi-studio-repl-python-x", "pi-studio-repl-pythonx",
 		"xpi-studio-repl-python", "pi-studio-repl-python-0123ABCD", "pi-studio-repl-python\n",
 	]) assert.doesNotMatch(name, STUDIO_REPL_SESSION_NAME, JSON.stringify(name));
 	assert.equal(STUDIO_REPL_SESSION_NAME.global || STUDIO_REPL_SESSION_NAME.sticky, false);
@@ -140,6 +142,13 @@ test("output cleanup keeps prompt-looking output and removes one trailing prompt
 	assert.equal(cleanStudioReplOutput(`irb(main):003:0> ${rb}\nirb(main):001>\nirb(main):004:0>`, { submissionLine: rb }), "irb(main):001>", "only one prompt, the last");
 	const jv = "/open /tmp/pi-rc-c82test/0123456789abcdef.java";
 	assert.equal(cleanStudioReplOutput(`jshell> ${jv}\nhello\njshell>`, { submissionLine: jv }), "hello");
+	// Octave and MATLAB (as in pi-repl): their prompts count only for their own loader,
+	// whose prompt number Octave has moved on by the time the code finishes.
+	const m = "eval(fileread('/tmp/pi-rc-c88test/0123456789abcdef.m'));";
+	assert.equal(cleanStudioReplOutput(`octave:3> ${m}\nhello\noctave:4>`, { submissionLine: m, promptLine: "octave:3>" }), "hello");
+	assert.equal(cleanStudioReplOutput(`>> ${m}\nhello\n>>`, { submissionLine: m, promptLine: ">>" }), "hello");
+	assert.equal(cleanStudioReplOutput(`>> ${m}\n>>\n>>`, { submissionLine: m }), ">>", "only one prompt, the last");
+	assert.equal(cleanStudioReplOutput(`${py}\n>>\n>>>`, { submissionLine: py }), ">>", "another runtime's >> is output");
 });
 
 test("prompt-looking rows are scaffolding only before this submission's echo", () => {

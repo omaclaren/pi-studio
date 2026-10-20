@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-// Candidate82, REPL parity step 2: the page knows Ruby and Java as runtimes.
+// REPL parity steps 2 and 3: the page knows Ruby and Java (candidate82), and Octave and
+// MATLAB (candidate88), as runtimes.
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 
 function declaration(name) {
@@ -14,10 +15,10 @@ function declaration(name) {
 
 const context = vm.createContext({ getActiveReplRuntime: () => "python" });
 vm.runInContext(["getKnownReplRuntime", "normalizeReplRuntime", "getReplRuntimeLabel", "normalizeMarkdownFenceLanguage",
-	"isFenceLanguageCompatibleWithRuntime", "getReplStudioPrompt", "isReplStudioPromptLine", "extractReplStudioBanner"].map(declaration).join("\n"), context);
+	"isFenceLanguageCompatibleWithRuntime", "getReplStudioPrompt", "isReplStudioPromptLine", "extractReplStudioBanner", "getReplRuntimeHighlightLanguage"].map(declaration).join("\n"), context);
 
 test("Ruby and Java are runtimes the page knows, with their labels and prompts", () => {
-	assert.deepEqual(["ruby", "java", "Ruby", "octave"].map((value) => context.getKnownReplRuntime(value)), ["ruby", "java", "ruby", ""]);
+	assert.deepEqual(["ruby", "java", "Ruby", "gnuplot"].map((value) => context.getKnownReplRuntime(value)), ["ruby", "java", "ruby", ""]);
 	assert.deepEqual(["ruby", "java"].map((value) => context.getReplRuntimeLabel(value)), ["Ruby", "Java"]);
 	assert.deepEqual(["ruby", "java"].map((value) => context.getReplStudioPrompt(value)), ["irb>", "jshell>"]);
 	const options = source.slice(source.indexOf("function buildReplPanelHtml()"), source.indexOf("].map(([value, label])", source.indexOf("function buildReplPanelHtml()")));
@@ -41,10 +42,27 @@ test("JShell's banner shows above the record; prompts end it", () => {
 	assert.equal(context.isReplStudioPromptLine("puts 1", "ruby"), false);
 });
 
-test("a record with JShell's longer prompt gets a wider prompt column", () => {
+test("Octave and MATLAB are separate runtimes, with their own labels, prompts, chunks and menu entries", () => {
+	assert.deepEqual(["octave", "matlab", "MATLAB"].map((value) => context.getKnownReplRuntime(value)), ["octave", "matlab", "matlab"]);
+	assert.deepEqual(["octave", "matlab"].map((value) => context.getReplRuntimeLabel(value)), ["Octave", "MATLAB"]);
+	assert.deepEqual(["octave", "matlab"].map((value) => context.getReplStudioPrompt(value)), ["octave>", ">>"]);
+	assert.deepEqual(["octave", "matlab"].map((value) => context.getReplRuntimeHighlightLanguage(value)), ["matlab", "matlab"], "MATLAB's highlighter for both");
+	const options = source.slice(source.indexOf("function buildReplPanelHtml()"), source.indexOf("].map(([value, label])", source.indexOf("function buildReplPanelHtml()")));
+	assert.match(options, /\["java", "Java"\],\n\s+\["octave", "Octave"\],\n\s+\["matlab", "MATLAB"\],/);
+	// Neither runtime takes the other's chunks, as pi-repl never substitutes one for the other.
+	assert.equal(context.isFenceLanguageCompatibleWithRuntime("octave", "octave"), true);
+	assert.equal(context.isFenceLanguageCompatibleWithRuntime("matlab", "matlab"), true);
+	assert.equal(context.isFenceLanguageCompatibleWithRuntime("matlab", "octave"), false);
+	assert.equal(context.isFenceLanguageCompatibleWithRuntime("octave", "matlab"), false);
+	assert.equal(context.isReplStudioPromptLine("octave:12> x = 1", "octave"), true);
+	assert.equal(context.isReplStudioPromptLine(">> x = 1", "matlab"), true);
+	assert.equal(context.isReplStudioPromptLine(">> x = 1", "octave"), false);
+});
+
+test("a record with JShell's or Octave's longer prompt gets a wider prompt column", () => {
 	const css = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
 	assert.match(source, /"<div class='repl-journal-list" \+ \(visibleEntries\.some\(\(entry\) => getReplStudioPrompt\(entry\.runtime\)\.length > 6\) \? " repl-journal-list-wide-prompt" : ""\) \+ "'>"/);
 	assert.match(css, /\.repl-journal-list-wide-prompt \{\n\s+--repl-studio-prompt-width: 3\.9em;\n\s+\}/);
-	// Only Java's prompt is longer than six characters.
-	assert.deepEqual(["shell", "python", "ipython", "julia", "r", "ghci", "clojure", "ruby", "java"].filter((runtime) => context.getReplStudioPrompt(runtime).length > 6), ["java"]);
+	// Only Java's and Octave's prompts are longer than six characters.
+	assert.deepEqual(["shell", "python", "ipython", "julia", "r", "ghci", "clojure", "ruby", "java", "octave", "matlab"].filter((runtime) => context.getReplStudioPrompt(runtime).length > 6), ["java", "octave"]);
 });

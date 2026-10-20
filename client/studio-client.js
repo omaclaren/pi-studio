@@ -1501,7 +1501,7 @@
       function getKnownReplRuntime(value) {
         const runtime = String(value || "").trim().toLowerCase();
         return runtime === "shell" || runtime === "python" || runtime === "ipython" || runtime === "julia" || runtime === "r" || runtime === "ghci" || runtime === "clojure"
-          || runtime === "ruby" || runtime === "java"
+          || runtime === "ruby" || runtime === "java" || runtime === "octave" || runtime === "matlab"
           ? runtime
           : "";
       }
@@ -1520,6 +1520,8 @@
         if (runtime === "ghci") return "GHCi";
         if (runtime === "ruby") return "Ruby";
         if (runtime === "java") return "Java";
+        if (runtime === "octave") return "Octave";
+        if (runtime === "matlab") return "MATLAB";
         return "Clojure";
       }
 
@@ -2333,6 +2335,8 @@
         if (activeRuntime === "clojure") return lang === "clojure";
         if (activeRuntime === "ruby") return lang === "ruby";
         if (activeRuntime === "java") return lang === "java";
+        if (activeRuntime === "octave") return lang === "octave";
+        if (activeRuntime === "matlab") return lang === "matlab";
         return true;
       }
 
@@ -13949,6 +13953,7 @@
         if (normalized === "shell") return "bash";
         if (normalized === "ipython") return "python";
         if (normalized === "python" || normalized === "julia" || normalized === "r") return normalized;
+        if (normalized === "octave" || normalized === "matlab") return "matlab";
         return "text";
       }
 
@@ -13997,6 +14002,8 @@
         if (normalized === "clojure") return "user=>";
         if (normalized === "ruby") return "irb>";
         if (normalized === "java") return "jshell>";
+        if (normalized === "octave") return "octave>";
+        if (normalized === "matlab") return ">>";
         return ">>>";
       }
 
@@ -14029,6 +14036,8 @@
         if (normalized === "clojure") return /^\s*[A-Za-z0-9_.-]+=>\s?/.test(source);
         if (normalized === "ruby") return /^\s*irb\([^)]*\):\d+(?::\d+)?[>*]\s?/.test(source);
         if (normalized === "java") return /^\s*jshell>\s?/.test(source);
+        if (normalized === "octave") return /^\s*octave:\d+>\s?/.test(source);
+        if (normalized === "matlab") return /^\s*>>\s?/.test(source);
         return false;
       }
 
@@ -14119,7 +14128,7 @@
           + "<div class='repl-journal-header'><h3>Shared REPL Record</h3>" + toggleActions + "</div>"
           + "<p class='repl-journal-description'>What Studio and pi-repl have sent to this session.</p>"
           + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
-          // JShell's seven-character prompt needs a wider prompt column than the others.
+          // JShell's and Octave's seven-character prompts need a wider prompt column than the others.
           + "<div class='repl-journal-list" + (visibleEntries.some((entry) => getReplStudioPrompt(entry.runtime).length > 6) ? " repl-journal-list-wide-prompt" : "") + "'>" + terminalContent + "</div>"
           + "</section>";
       }
@@ -14185,6 +14194,8 @@
           ["clojure", "Clojure"],
           ["ruby", "Ruby"],
           ["java", "Java"],
+          ["octave", "Octave"],
+          ["matlab", "MATLAB"],
         ].map(([value, label]) => "<option value='" + escapeHtml(value) + "'" + (replRuntime === value ? " selected" : "") + ">" + escapeHtml(label) + "</option>").join("");
         const runtimeLabel = getReplRuntimeLabel(replRuntime);
         const visibleSessions = getReplSessionsForRuntime(replRuntime);

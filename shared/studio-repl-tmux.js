@@ -6,7 +6,7 @@ const STUDIO_REPL_PROMPT_COMMAND_ENVIRONMENT = "PROMPT_COMMAND=";
  * Studio's own sessions: pi-studio-repl-<runtime>, then an optional custom-command
  * hash and an optional new-session suffix. Verified Stop accepts only these.
  */
-export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython|julia|r|ghci|clojure|ruby|java)(?:-[a-f0-9]{8})?(?:-[a-z0-9]+-[a-f0-9]{6})?$/;
+export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython|julia|r|ghci|clojure|ruby|java|octave|matlab)(?:-[a-f0-9]{8})?(?:-[a-z0-9]+-[a-f0-9]{6})?$/;
 
 /** Fields read for each pane, in the order firstStudioReplPanes expects. */
 export const STUDIO_REPL_PANE_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_id}\t#{session_name}\t#{session_id}\t#{session_created}\t#{@pi_repl_runtime}\t#{@pi_repl_record_id}\t#{@pi_repl_record_version}";
@@ -110,6 +110,8 @@ const STUDIO_REPL_READY_PROMPTS = {
 	clojure: /^[^\s>]+=>[ \t]*$/,
 	ruby: /^irb\([^\n]*\):\d+(?::0)?>[ \t]*$/,
 	java: /^jshell>[ \t]*$/,
+	octave: /^octave:\d+>[ \t]*$/,
+	matlab: /^>>[ \t]*$/,
 };
 
 /**
@@ -131,12 +133,17 @@ export function isStudioReplReadyLine(runtime, line) {
 	return Boolean(prompt && prompt.test(value));
 }
 
-/** @param {string} line */
-function isStudioReplPrompt(line) {
+/**
+ * @param {string} line
+ * @param {boolean} [mLanguage] an Octave or MATLAB submission. As in pi-repl, their
+ *   prompts count only for them: >> could be another runtime's output.
+ */
+function isStudioReplPrompt(line, mLanguage = false) {
 	return /^(?:>>>|In \[\d+\]:|\.\.\.:|>|\+)\s*$/.test(line)
 		|| /^(?:ghci|Prelude|\*?[A-Za-z0-9_.:]+)>\s*$/.test(line)
 		|| /^[^\s>]+=>\s*$/.test(line)
-		|| /^irb\(.*\)[:\d]+[>*]\s*$/.test(line);
+		|| /^irb\(.*\)[:\d]+[>*]\s*$/.test(line)
+		|| (mLanguage && /^(?:octave:\d+>|>>)\s*$/.test(line));
 }
 
 /** @param {string} text */
@@ -150,13 +157,14 @@ const compact = (text) => text.replace(/\s+/g, "");
  * @param {string[]} lines
  * @param {string} submissionLine
  * @param {boolean} anyPrefix Shell prompts are the user's own
+ * @param {boolean} [mLanguage] an Octave or MATLAB submission
  * @returns {boolean} whether the echo was found and removed
  */
-function removeLoaderEcho(lines, submissionLine, anyPrefix) {
+function removeLoaderEcho(lines, submissionLine, anyPrefix, mLanguage = false) {
 	const first = lines[0] ?? "";
 	const prefixOk = (/** @type {number} */ index) => {
 		const prefix = first.slice(0, index).trim();
-		return anyPrefix || !prefix || isStudioReplPrompt(prefix);
+		return anyPrefix || !prefix || isStudioReplPrompt(prefix, mLanguage);
 	};
 	const index = first.indexOf(submissionLine);
 	if (index >= 0 && prefixOk(index)) {
@@ -209,13 +217,14 @@ export function cleanStudioReplOutput(delta, details) {
 		while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
 	};
 	dropBlankEdges();
+	const mLanguage = (details.submissionLine || "").startsWith("eval(fileread(");
 	// Prompt rows before this submission's echo are scaffolding. Without an echo
 	// (terminal echo off, say) they may be output, so they stay.
 	let lead = 0;
-	while (lead < lines.length && (!lines[lead].trim() || isStudioReplPrompt(lines[lead].trim()))) lead += 1;
+	while (lead < lines.length && (!lines[lead].trim() || isStudioReplPrompt(lines[lead].trim(), mLanguage))) lead += 1;
 	if (lead < lines.length && details.submissionLine) {
 		const rest = lines.slice(lead);
-		if (removeLoaderEcho(rest, details.submissionLine, details.runtime === "shell")) lines.splice(0, lines.length, ...rest);
+		if (removeLoaderEcho(rest, details.submissionLine, details.runtime === "shell", mLanguage)) lines.splice(0, lines.length, ...rest);
 	}
 	const silent = /:pi-studio\/silent\)$/.test(details.submissionLine || "") ? ":pi-studio/silent" : "";
 	const promptLine = String(details.promptLine || "").trim();
@@ -226,7 +235,7 @@ export function cleanStudioReplOutput(delta, details) {
 	while (lines.length) {
 		const last = lines[lines.length - 1].trim();
 		if (!last) { lines.pop(); continue; }
-		if (!removedPrompt && (isStudioReplPrompt(last) || (promptLine && last === promptLine))) {
+		if (!removedPrompt && (isStudioReplPrompt(last, mLanguage) || (promptLine && last === promptLine))) {
 			lines.pop();
 			removedPrompt = true;
 			continue;

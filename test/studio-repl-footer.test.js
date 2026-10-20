@@ -7,6 +7,7 @@ import { join } from "node:path";
 import vm from "node:vm";
 import ts from "typescript";
 
+import { buildMLanguageControlSource, mStringLiteral } from "../shared/repl-m-language.js";
 import { createReplSubmissionDisplay } from "../shared/repl-submission-display.js";
 
 // Candidate80 (Sol, Astra): output that ends mid-line took the done marker onto its row.
@@ -143,14 +144,16 @@ test("each wrapper ends a mid-line row before its footer, and only then", { time
 
 // Candidate82: Ruby and Java ask tmux for the column themselves, as in pi-repl; a fake tmux
 // on PATH answers.
-test("Ruby and Java end a mid-line row before their footer, and only then", { timeout: 180_000 }, async (t) => {
+// Octave (candidate88) uses Studio's port of pi-repl's M driver, whose query also asks tmux.
+test("Ruby, Java and Octave end a mid-line row before their footer, and only then", { timeout: 180_000 }, async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "studio-footer-tmux-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const bin = join(root, "bin");
 	mkdirSync(bin);
 	writeFileSync(join(bin, "tmux"), '#!/bin/sh\n[ "$FAKE_COLUMN" = fail ] && exit 1\nprintf "%s\\n" "$FAKE_COLUMN"\n');
 	chmodSync(join(bin, "tmux"), 0o700);
-	const builders = loadBuilders(process.execPath, ["rubyStringLiteral", "buildStudioRubyControlSource", "buildStudioJavaControlSource", "buildStudioJavaDriverSource", "buildStudioReplSubmissionLine", "juliaStringLiteral", "shellQuote"]);
+	const builders = loadBuilders(process.execPath, ["rubyStringLiteral", "buildStudioRubyControlSource", "buildStudioJavaControlSource", "buildStudioJavaDriverSource", "buildStudioReplSubmissionLine", "juliaStringLiteral", "shellQuote", "buildStudioMLanguageDriverSource", "STUDIO_CURSOR_COLUMN_SUPERVISOR"]);
+	builders.mStringLiteral = mStringLiteral;
 	let runs = 0;
 	const cases = [
 		{ name: "ruby", command: "ruby", code: 'puts "c"', run: (dir, code, doneFile, display) => {
@@ -163,6 +166,12 @@ test("Ruby and Java end a mid-line row before their footer, and only then", { ti
 			writeFileSync(source, builders.buildStudioJavaControlSource(code, doneFile, display));
 			writeFileSync(driver, `${builders.buildStudioJavaDriverSource(source, doneFile, display)}\n/exit\n`);
 			return ["jshell", ["-q", driver]];
+		} },
+		{ name: "octave", command: "octave-cli", code: "disp('c')", run: (dir, code, doneFile, display) => {
+			const source = join(dir, "source.m"), driver = join(dir, "driver.m");
+			writeFileSync(source, buildMLanguageControlSource(code, display));
+			writeFileSync(driver, builders.buildStudioMLanguageDriverSource("octave", source, doneFile, display));
+			return ["octave-cli", ["--quiet", "--no-init-file", "--no-history", driver]];
 		} },
 	];
 	for (const runtime of cases) {

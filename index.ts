@@ -87,6 +87,7 @@ import {
 	cleanupPrivateReplControlFiles,
 	createPrivateReplControlFiles,
 } from "./shared/repl-control-files.js";
+import { buildMLanguageControlSource, mStringLiteral } from "./shared/repl-m-language.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import {
 	buildStudioPendingPage,
@@ -165,7 +166,7 @@ type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 type StudioPromptMode = "response" | "run" | "effective";
 type StudioPromptTriggerKind = "run" | "steer";
-type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure" | "ruby" | "java";
+type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure" | "ruby" | "java" | "octave" | "matlab";
 type ReplSubmissionEchoMode = "off" | "summary" | "full";
 type ReplSubmissionDisplay = ReturnType<typeof createReplSubmissionDisplay>;
 type StudioQuizAngle = "general" | "scientist" | "mathematician" | "statistician" | "developer" | "reviewer";
@@ -1092,6 +1093,8 @@ const STUDIO_REPL_SEND_MAX_CHARS = 200_000;
 const STUDIO_REPL_SEND_DEFAULT_TIMEOUT_MS = 20_000;
 const STUDIO_REPL_SEND_MAX_TIMEOUT_MS = 120_000;
 const STUDIO_REPL_START_WAIT_MS = 20_000;
+// MATLAB took 31 s to reach its prompt on an M-series Mac (R2024b, 20 Oct).
+const STUDIO_REPL_MATLAB_START_WAIT_MS = 120_000;
 const STUDIO_REPL_START_POLL_MS = 250;
 const STUDIO_REPL_JOURNAL_MAX_ENTRIES = 300;
 const STUDIO_REPL_RUNTIME_OPTION = "@pi_repl_runtime";
@@ -1110,11 +1113,13 @@ const STUDIO_REPL_RUNTIME_LABELS: Record<StudioReplRuntime, string> = {
 	clojure: "Clojure",
 	ruby: "Ruby",
 	java: "Java",
+	octave: "Octave",
+	matlab: "MATLAB",
 };
 const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 	code: Type.String({ description: "Code to execute in the active or selected Studio REPL session." }),
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name. If omitted, Studio uses the active REPL session, or the first session matching target." })),
-	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, or java. Used when sessionName is omitted." })),
+	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, or matlab. Used when sessionName is omitted." })),
 	timeoutMs: Type.Optional(Type.Number({ description: "Maximum time to wait for completion when Studio can detect it (default 20000, max 120000).", minimum: 1000, maximum: STUDIO_REPL_SEND_MAX_TIMEOUT_MS })),
 	echoMode: Type.Optional(Type.Union(
 		[Type.Literal("off"), Type.Literal("summary"), Type.Literal("full")],
@@ -1124,7 +1129,7 @@ const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 const STUDIO_REPL_TOOL_ECHO_MODE = normalizeReplSubmissionEchoMode(process.env.PI_STUDIO_REPL_ECHO_MODE) as ReplSubmissionEchoMode;
 const STUDIO_REPL_STATUS_TOOL_PARAMS = Type.Object({
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name to inspect." })),
-	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, or java. If omitted, report all Studio-visible REPL sessions." })),
+	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, or matlab. If omitted, report all Studio-visible REPL sessions." })),
 });
 const STUDIO_EXPORT_INPUT_FORMAT_DESCRIPTION = "Optional input format: auto, markdown, or latex. Defaults to auto.";
 const STUDIO_EXPORT_PDF_OPTIONS_TOOL_PARAMS = Type.Object({
@@ -11215,7 +11220,9 @@ function isStudioReplRuntime(value: unknown): value is StudioReplRuntime {
 		|| value === "ghci"
 		|| value === "clojure"
 		|| value === "ruby"
-		|| value === "java";
+		|| value === "java"
+		|| value === "octave"
+		|| value === "matlab";
 }
 
 function normalizeStudioReplRuntime(value: unknown): StudioReplRuntime | null {
@@ -11233,6 +11240,10 @@ function getDefaultStudioReplRuntimeCommand(runtime: StudioReplRuntime): string 
 	if (runtime === "ghci") return "ghci";
 	if (runtime === "ruby") return "irb";
 	if (runtime === "java") return "jshell";
+	// Stop closes the tmux session, and on SIGHUP or SIGTERM Octave would otherwise dump its
+	// workspace to octave-workspace in the working directory. --persist keeps it interactive.
+	if (runtime === "octave") return "octave-cli --quiet --interactive --persist --eval 'sighup_dumps_octave_core(false); sigterm_dumps_octave_core(false);'";
+	if (runtime === "matlab") return "matlab -nodesktop -nosplash";
 	return "clojure";
 }
 
@@ -11267,7 +11278,7 @@ function inferStudioReplSessionRuntime(sessionName: string): { runtime: StudioRe
 	const studioMatch = sessionName.match(/^pi-studio-repl-([a-z0-9-]+)$/i);
 	if (studioMatch) {
 		const raw = (studioMatch[1] || "").toLowerCase();
-		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "ruby", "java", "r"] as StudioReplRuntime[])
+		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "ruby", "java", "octave", "matlab", "r"] as StudioReplRuntime[])
 			.find((candidate) => raw === candidate || raw.startsWith(`${candidate}-`));
 		return { runtime: runtime ?? "unknown", source: "studio" };
 	}
@@ -11467,7 +11478,9 @@ async function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, o
 		return { ok: true, session, message: `${label} REPL is already running.` };
 	};
 	if (running()) return reuse();
-	const command = getStudioReplRuntimeCommand(runtime, commandOverride);
+	// As in pi-repl, MATLAB is told to start in the working directory; it can otherwise
+	// start in its own userpath.
+	const command = getStudioReplRuntimeCommand(runtime, commandOverride) + (runtime === "matlab" && !commandOverride ? ` -sd ${shellQuote(cwd || process.cwd())}` : "");
 	const created = runStudioTmux(buildStudioReplTmuxStartArgs(sessionName, cwd || process.cwd(), command), { timeout: 5_000 });
 	if (!created.ok) {
 		// Another tab may have started the same session first; share it.
@@ -11482,7 +11495,7 @@ async function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, o
 	const started = `Started ${options?.newSession ? "new " : ""}${label} REPL${commandOverride ? ` with custom command: ${commandOverride}` : ""}`;
 	const exited = `${label} exited while starting. Check the command: ${command}.`;
 	// Wait for the runtime's normal prompt, only reading the pane: no probe, Enter or Ctrl-C (Sol).
-	const deadline = Date.now() + STUDIO_REPL_START_WAIT_MS;
+	const deadline = Date.now() + (runtime === "matlab" ? STUDIO_REPL_MATLAB_START_WAIT_MS : STUDIO_REPL_START_WAIT_MS);
 	let ready = false;
 	while (true) {
 		const row = readStudioReplCursorRow(sessionId, paneId);
@@ -11605,6 +11618,7 @@ function getStudioReplControlExtension(runtime: StudioReplRuntime): string {
 	if (runtime === "clojure") return "clj";
 	if (runtime === "ruby") return "rb";
 	if (runtime === "java") return "java";
+	if (runtime === "octave" || runtime === "matlab") return "m";
 	if (runtime === "shell") return "sh";
 	return "py";
 }
@@ -12028,6 +12042,58 @@ function buildStudioJavaDriverSource(sourceFile: string, doneFile: string, displ
 	].join("\n");
 }
 
+// Octave and MATLAB: pi-repl's shared buildMLanguageDriverSource, with two changes Sol and
+// Astra held candidate88 on, until pi-repl takes them:
+// - The column query is STUDIO_CURSOR_COLUMN_QUERY, which exits once it has written, run by
+//   STUDIO_CURSOR_COLUMN_SUPERVISOR, which kills it after 5 s: system() itself has no time
+//   limit. It writes to a private file, not to system()'s pipe, so nothing it leaves running
+//   can hold that pipe open, and the file goes even if the script is interrupted (as in
+//   pi-repl 0.10.1). The script exits 0 or 1: given a status such as 137, MATLAB printed the
+//   command and "Killed" (Astra).
+// - In Octave, Ctrl+C during a cleanup action ended it before the done file was written.
+//   unwind_protect_cleanup writes it even then. MATLAB finishes a cleanup action despite
+//   Ctrl+C, and has no unwind_protect.
+// Runs STUDIO_CURSOR_COLUMN_QUERY in a child Node, with the caller's NODE_OPTIONS (its
+// argument), and kills it after 5 s. The supervisor runs without NODE_OPTIONS, so no startup
+// hook can stall it, keep it running or catch its timer; SIGKILL can't be caught either. It
+// signals only its own child, which Node tracks, so never a process ID since reused (Sol). A
+// preload that catches SIGALRM made perl's alarm wait for its stall (Astra). It ignores Ctrl+C
+// and hangups, so the deadline holds then too; the query gets the default handling.
+const STUDIO_CURSOR_COLUMN_SUPERVISOR = `for (const signal of ["SIGINT", "SIGHUP", "SIGTERM"]) process.on(signal, () => {}); const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(STUDIO_CURSOR_COLUMN_QUERY)}], { stdio: ["ignore", "inherit", "ignore"], env: { ...process.env, NODE_OPTIONS: process.argv[1] ?? "" } }); const timer = setTimeout(() => child.kill("SIGKILL"), 5000); child.on("error", () => process.exit(1)); child.on("exit", (code) => { clearTimeout(timer); process.exit(code === 0 ? 0 : 1); });`;
+
+function buildStudioMLanguageDriverSource(runtime: "octave" | "matlab", sourceFile: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	const query = [
+		// The shell's own messages would reach the pane through system().
+		"exec 2>/dev/null",
+		"f=$(mktemp) || exit 1",
+		`trap 'rm -f "$f"' EXIT`,
+		"trap 'exit 1' HUP INT TERM",
+		// After --, Node takes "$NODE_OPTIONS" as the script's argument, not as its own option.
+		`NODE_OPTIONS= ${shellQuote(process.execPath)} -e ${shellQuote(STUDIO_CURSOR_COLUMN_SUPERVISOR)} -- "$NODE_OPTIONS" >"$f" </dev/null; s=$?`,
+		'cat "$f"',
+		'[ "$s" = 0 ]',
+	].join("; ");
+	const footer = display.enabled ? [
+		...(runtime === "octave" ? ["fflush(1);"] : []),
+		"try",
+		// /bin/sh whatever the user's shell is: MATLAB runs system() with $SHELL.
+		`  [pi_repl_status,pi_repl_column]=system(${mStringLiteral(`/bin/sh -c ${shellQuote(query)}`)});`,
+		"catch",
+		"  pi_repl_status=-1; pi_repl_column='';",
+		"end",
+		"if pi_repl_status~=0 || ~strcmp(strtrim(pi_repl_column),'0'); fprintf(1,'\\n'); end",
+		...display.suffixLines.map((line) => `fprintf(1,'%s\\n',${mStringLiteral(line)});`),
+	] : [];
+	const done = `fclose(fopen(${mStringLiteral(doneFile)},'w'));`;
+	const finish = (runtime === "octave" && footer.length
+		? ["unwind_protect", ...footer, "unwind_protect_cleanup", done, "end_unwind_protect"]
+		: [...footer, done]).join("\n");
+	// As in pi-repl: parameters give eval its own slots, so no helper variables, ans, cwd or
+	// path changes reach the base workspace, and even clear all can't remove the guard.
+	const cleanup = `onCleanup(@() feval(@(pi_repl_status,pi_repl_column) eval(${mStringLiteral(finish)}),-1,''))`;
+	return `feval(@(pi_repl_error,pi_repl_guard) eval(fileread(${mStringLiteral(sourceFile)})),[],${cleanup});\n`;
+}
+
 function buildStudioShellControlSource(code: string, display: ReplSubmissionDisplay): string {
 	if (!display.enabled) return `${code.replace(/\r/g, "").trimEnd()}\n`;
 	return [
@@ -12049,6 +12115,7 @@ function buildStudioReplControlSource(runtime: StudioReplRuntime, code: string, 
 	if (runtime === "clojure") return buildStudioClojureControlSource(code, doneFile, display);
 	if (runtime === "ruby") return buildStudioRubyControlSource(code, doneFile, display);
 	if (runtime === "java") return buildStudioJavaControlSource(code, doneFile, display);
+	if (runtime === "octave" || runtime === "matlab") return buildMLanguageControlSource(code, display);
 	if (runtime === "shell") return buildStudioShellControlSource(code, display);
 	return null;
 }
@@ -12061,6 +12128,7 @@ function buildStudioReplSubmissionLine(runtime: StudioReplRuntime, sourceFile: s
 	if (runtime === "clojure") return `(do (load-file ${quotedPath}) :pi-studio/silent)`;
 	if (runtime === "ruby") return `load ${rubyStringLiteral(sourceFile)}; nil`;
 	if (runtime === "java") return `/open ${sourceFile}`;
+	if (runtime === "octave" || runtime === "matlab") return `eval(fileread(${mStringLiteral(sourceFile)}));`;
 	if (runtime === "shell") return `. ${shellQuote(sourceFile)}; touch ${shellQuote(doneFile)}`;
 	return `exec(open(${quotedPath}, encoding="utf-8").read(), globals())`;
 }
@@ -12134,6 +12202,23 @@ function prepareStudioReplSubmission(
 				...controlOptions,
 				extension: "java",
 				buildSource: () => buildStudioJavaDriverSource(controlFiles.sourceFile, controlFiles.doneFile, display),
+			});
+			controlFiles.helpers = [driver];
+			loader = driver.sourceFile;
+		} catch (error) {
+			cleanupStudioReplControlFiles(controlFiles);
+			throw error;
+		}
+	}
+	if (runtime === "octave" || runtime === "matlab") {
+		// pi-repl's M driver, as Studio's port below: the code runs in the base workspace,
+		// and a function-local onCleanup writes the footer and done file, even after an
+		// error, return, interrupt or clear all.
+		try {
+			const driver = createPrivateReplControlFiles({
+				...controlOptions,
+				extension: "m",
+				buildSource: () => buildStudioMLanguageDriverSource(runtime, controlFiles.sourceFile, controlFiles.doneFile, display),
 			});
 			controlFiles.helpers = [driver];
 			loader = driver.sourceFile;
@@ -13734,13 +13819,14 @@ export default function (pi: ExtensionAPI) {
 		name: "studio_repl_send",
 		label: "Send to Studio REPL",
 		description: "Execute code in the active or selected Studio tmux-backed REPL session using Studio's safe runtime-specific submission protocol.",
-		promptSnippet: "Execute code in the active Studio REPL session safely, including multiline Python/R/Julia/GHCi/Clojure/Ruby/Java snippets.",
+		promptSnippet: "Execute code in the active Studio REPL session safely, including multiline Python/R/Julia/GHCi/Clojure/Ruby/Java/Octave/MATLAB snippets.",
 		promptGuidelines: [
 			"Use studio_repl_send when the user asks to run code in the active Studio REPL.",
 			"Do not improvise tmux paste-buffer commands for Studio REPL code; studio_repl_send handles multiline quoting and runtime-specific submission.",
 			"studio_repl_send shows bounded submitted code and alignment anchors in the raw pane by default (Summary). Use echoMode='off' when the user asks for quiet output, and echoMode='full' only when explicitly requested.",
 			"If several REPL sessions of the same runtime are running, use studio_repl_status first or pass the exact sessionName when known.",
 			"In Java (JShell), use System.out.println(...) for values you want to see: code is loaded with /open, which doesn't echo expression results.",
+			"Octave and MATLAB are separate runtimes: don't substitute one for the other. Code runs in the base workspace with native semicolon and ans behaviour; use disp or fprintf for explicit output. MATLAB function definitions belong in .m files. clear, clear all, exit and quit change or end the session.",
 		],
 		parameters: STUDIO_REPL_SEND_TOOL_PARAMS,
 		executionMode: "sequential",
