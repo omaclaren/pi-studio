@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-// REPL parity steps 2 to 4: the page knows Ruby and Java (candidate82), Octave and MATLAB
-// (candidate88), and gnuplot (candidate90), as runtimes.
+// REPL parity steps 2 to 5: the page knows Ruby and Java (candidate82), Octave and MATLAB
+// (candidate88), gnuplot (candidate90) and C++ (candidate92), as runtimes.
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 
 function declaration(name) {
@@ -18,7 +18,7 @@ vm.runInContext(["getKnownReplRuntime", "normalizeReplRuntime", "getReplRuntimeL
 	"isFenceLanguageCompatibleWithRuntime", "getReplStudioPrompt", "isReplStudioPromptLine", "extractReplStudioBanner", "getReplRuntimeHighlightLanguage"].map(declaration).join("\n"), context);
 
 test("Ruby and Java are runtimes the page knows, with their labels and prompts", () => {
-	assert.deepEqual(["ruby", "java", "Ruby", "cpp"].map((value) => context.getKnownReplRuntime(value)), ["ruby", "java", "ruby", ""]);
+	assert.deepEqual(["ruby", "java", "Ruby", "bun"].map((value) => context.getKnownReplRuntime(value)), ["ruby", "java", "ruby", ""]);
 	assert.deepEqual(["ruby", "java"].map((value) => context.getReplRuntimeLabel(value)), ["Ruby", "Java"]);
 	assert.deepEqual(["ruby", "java"].map((value) => context.getReplStudioPrompt(value)), ["irb>", "jshell>"]);
 	const options = source.slice(source.indexOf("function buildReplPanelHtml()"), source.indexOf("].map(([value, label])", source.indexOf("function buildReplPanelHtml()")));
@@ -72,6 +72,20 @@ test("gnuplot is a runtime the page knows, with its own label, prompt, chunks an
 	assert.equal(context.isReplStudioPromptLine("plot sin(x)", "gnuplot"), false);
 });
 
+test("C++ is a runtime the page knows, with its own label, prompt, chunks and menu entry", () => {
+	assert.deepEqual(["cpp", "CPP"].map((value) => context.getKnownReplRuntime(value)), ["cpp", "cpp"]);
+	assert.equal(context.getReplRuntimeLabel("cpp"), "C++");
+	assert.equal(context.getReplStudioPrompt("cpp"), "[cling]$");
+	assert.equal(context.getReplRuntimeHighlightLanguage("cpp"), "cpp");
+	const options = source.slice(source.indexOf("function buildReplPanelHtml()"), source.indexOf("].map(([value, label])", source.indexOf("function buildReplPanelHtml()")));
+	assert.match(options, /\["gnuplot", "gnuplot"\],\n\s+\["cpp", "C\+\+"\],/);
+	for (const fence of ["cpp", "c++", "cxx", "hpp"]) assert.equal(context.isFenceLanguageCompatibleWithRuntime(fence, "cpp"), true, fence);
+	assert.equal(context.isFenceLanguageCompatibleWithRuntime("c", "cpp"), false);
+	assert.equal(context.isFenceLanguageCompatibleWithRuntime("cpp", "python"), false);
+	assert.equal(context.isReplStudioPromptLine("[cling]$ int x = 1;", "cpp"), true);
+	assert.equal(context.isReplStudioPromptLine("int x = 1;", "cpp"), false);
+});
+
 // Candidate82 widened the column for prompts over six characters by a fixed 3.9em, which still
 // wrapped jshell> at the 11px font (Astra). Candidate90 sizes it by the longest prompt, in the
 // prompt's own font, and keeps the old width as the minimum.
@@ -81,5 +95,5 @@ test("the record's prompt column fits its longest prompt, measured in the prompt
 	assert.match(css, /grid-template-columns: minmax\(var\(--repl-studio-prompt-width\), max-content\) minmax\(0, 1fr\);/);
 	assert.match(css, /\.repl-studio-prompt,\n\s+\.repl-studio-output-label \{\n\s+min-width: calc\(var\(--repl-studio-prompt-chars, 0\) \* 1ch\);/);
 	assert.doesNotMatch(css, /repl-journal-list-wide-prompt/);
-	assert.deepEqual(["shell", "python", "ipython", "julia", "r", "ghci", "clojure", "ruby", "java", "octave", "matlab", "gnuplot"].map((runtime) => context.getReplStudioPrompt(runtime).length), [1, 3, 3, 6, 1, 5, 6, 4, 7, 7, 2, 8]);
+	assert.deepEqual(["shell", "python", "ipython", "julia", "r", "ghci", "clojure", "ruby", "java", "octave", "matlab", "gnuplot", "cpp"].map((runtime) => context.getReplStudioPrompt(runtime).length), [1, 3, 3, 6, 1, 5, 6, 4, 7, 7, 2, 8, 8]);
 });

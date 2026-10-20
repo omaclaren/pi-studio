@@ -8,6 +8,7 @@ All notable changes to `pi-studio` are documented here.
 - The REPL pane runs **Ruby** (irb) and **Java** (JShell), as pi-repl does. Choose them under **Runtime**, or send to a pi-repl Ruby or Java session. In Java, print values with `System.out.println(…)`: code is loaded with `/open`, which doesn't show expression results. Stop waits for JShell's second JVM to exit too.
 - The REPL pane runs **Octave** (`octave-cli`) and **MATLAB**, as pi-repl does, as separate runtimes. Code runs in the base workspace, with the usual `ans` and semicolon behaviour; errors and Ctrl+C still complete the send. MATLAB starts without its desktop in the working directory, and Studio waits up to two minutes for its prompt. Stopping Octave doesn't leave an `octave-workspace` file in the working directory, unless you start it with your own **Start cmd**.
 - The REPL pane runs **gnuplot**, as pi-repl does. Code runs as written, so your terminal and settings stay as you set them, and errors and Ctrl+C still complete the send. Stop also closes its Qt plot windows.
+- The REPL pane runs **C++** in Cling, as pi-repl does. Send complete prompt groups, with a function's opening brace on its declaration line. Errors, incomplete code and uncaught C++ exceptions still complete the send, and earlier groups keep their effect. Cling and its development headers need to be on your PATH.
 
 ### Changed
 - Pane echo defaults to **Summary**, as in pi-repl, so the tmux pane shows each sent submission above its output. Summary now shows up to 20 lines or 2,000 characters, up from 6 lines or 600. If you chose Full before, Studio keeps it; if you chose Off, choose it again.
@@ -16,6 +17,7 @@ All notable changes to `pi-studio` are documented here.
 - Pane echo looks the same as pi-repl's: `── pi-studio · input · 2 lines · id: … ──`, then the code without `│` bars, the output, `── done · id: … ──` and a blank line. A blank line also separates the code from the line that loads it. Studio's temporary files for a send start with the same id. The record still holds only the code and its output.
 
 ### Fixed
+- When a runtime exits or crashes during a send, the send ends within a couple of seconds with "… ended while running the code." It used to wait out its 20-second timeout and then report that Studio couldn't capture the session. If tmux keeps the dead pane, the record keeps what it shows.
 - In a Julia pane narrower than the line that loads the code, sent code no longer leaves copies of that line in the output. Studio pastes it as one bracketed paste, as pi-repl 0.8.5 does.
 - With Summary or Full, the done marker goes on a line of its own when the output doesn't end with a newline, as with `print("c", end="")`. It used to join the output's last line and end up in the record.
 

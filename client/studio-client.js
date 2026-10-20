@@ -1501,7 +1501,7 @@
       function getKnownReplRuntime(value) {
         const runtime = String(value || "").trim().toLowerCase();
         return runtime === "shell" || runtime === "python" || runtime === "ipython" || runtime === "julia" || runtime === "r" || runtime === "ghci" || runtime === "clojure"
-          || runtime === "ruby" || runtime === "java" || runtime === "octave" || runtime === "matlab" || runtime === "gnuplot"
+          || runtime === "ruby" || runtime === "java" || runtime === "octave" || runtime === "matlab" || runtime === "gnuplot" || runtime === "cpp"
           ? runtime
           : "";
       }
@@ -1523,6 +1523,7 @@
         if (runtime === "octave") return "Octave";
         if (runtime === "matlab") return "MATLAB";
         if (runtime === "gnuplot") return "gnuplot";
+        if (runtime === "cpp") return "C++";
         return "Clojure";
       }
 
@@ -2277,6 +2278,7 @@
         if (first === "hs" || first === "haskell") return "ghci";
         if (first === "clj" || first === "cljc") return "clojure";
         if (first === "rb") return "ruby";
+        if (first === "c++" || first === "cxx" || first === "hpp") return "cpp";
         return first;
       }
 
@@ -2339,6 +2341,7 @@
         if (activeRuntime === "octave") return lang === "octave";
         if (activeRuntime === "matlab") return lang === "matlab";
         if (activeRuntime === "gnuplot") return lang === "gnuplot";
+        if (activeRuntime === "cpp") return lang === "cpp";
         return true;
       }
 
@@ -13956,6 +13959,7 @@
         if (normalized === "ipython") return "python";
         if (normalized === "python" || normalized === "julia" || normalized === "r") return normalized;
         if (normalized === "octave" || normalized === "matlab") return "matlab";
+        if (normalized === "cpp") return "cpp";
         return "text";
       }
 
@@ -14007,6 +14011,7 @@
         if (normalized === "octave") return "octave>";
         if (normalized === "matlab") return ">>";
         if (normalized === "gnuplot") return "gnuplot>";
+        if (normalized === "cpp") return "[cling]$";
         return ">>>";
       }
 
@@ -14042,6 +14047,7 @@
         if (normalized === "octave") return /^\s*octave:\d+>\s?/.test(source);
         if (normalized === "matlab") return /^\s*>>\s?/.test(source);
         if (normalized === "gnuplot") return /^\s*gnuplot>\s?/.test(source);
+        if (normalized === "cpp") return /^\s*\[cling\]\$\s?/.test(source);
         return false;
       }
 
@@ -14201,6 +14207,7 @@
           ["octave", "Octave"],
           ["matlab", "MATLAB"],
           ["gnuplot", "gnuplot"],
+          ["cpp", "C++"],
         ].map(([value, label]) => "<option value='" + escapeHtml(value) + "'" + (replRuntime === value ? " selected" : "") + ">" + escapeHtml(label) + "</option>").join("");
         const runtimeLabel = getReplRuntimeLabel(replRuntime);
         const visibleSessions = getReplSessionsForRuntime(replRuntime);

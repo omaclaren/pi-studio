@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { buildStudioReplDeadPaneCloseArgs } from "../shared/studio-repl-tmux.js";
 import { acquireReplSessionSendLease } from "../shared/repl-session-record.js";
 import { createServer, get as httpGet } from "node:http";
@@ -825,12 +825,12 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	});
 
 	await t.test("a runtime Studio doesn't support gets nothing pasted into it", async () => {
-		assert.equal(tmux("new-session", "-d", "-s", "pi-repl-cpp", "sleep 600").status, 0);
-		tmux("set-option", "-t", "=pi-repl-cpp", "@pi_repl_runtime", "cpp");
-		const sent = await repl.send("pi-repl-cpp", "int x = 1;");
-		assert.equal(sent.error, "Studio can't send code to pi-repl-cpp yet: it doesn't support that runtime.");
-		assert.equal(tmux("capture-pane", "-p", "-t", "=pi-repl-cpp:").stdout.trim(), "");
-		tmux("kill-session", "-t", "=pi-repl-cpp");
+		assert.equal(tmux("new-session", "-d", "-s", "pi-repl-bun", "sleep 600").status, 0);
+		tmux("set-option", "-t", "=pi-repl-bun", "@pi_repl_runtime", "bun");
+		const sent = await repl.send("pi-repl-bun", "1 + 1");
+		assert.equal(sent.error, "Studio can't send code to pi-repl-bun yet: it doesn't support that runtime.");
+		assert.equal(tmux("capture-pane", "-p", "-t", "=pi-repl-bun:").stdout.trim(), "");
+		tmux("kill-session", "-t", "=pi-repl-bun");
 	});
 
 	await t.test("IPython: its wrapped loader echo is removed", { skip: !has("ipython") }, async () => {
@@ -1056,6 +1056,92 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.ok(await waitFor(() => !alive(pid), 30_000), "gnuplot exited");
 		assert.ok(await waitFor(() => !alive(helpers.marked), 10_000), "the marked helper has gone");
 		assert.ok(alive(helpers.unmarked) && alive(helpers.other), "unmarked helpers and another owner's are left alone");
+	});
+
+	// C++ (candidate92), as in pi-repl 0.8.0: Cling includes a private driver header. It reads
+	// the code, evaluates it one prompt group at a time, then writes a reply with the result.
+	await t.test("C++: state, errors and exceptions complete, a false done file doesn't, and Stop is verified", { skip: !has("cling") }, async () => {
+		const name = "pi-studio-repl-cpp";
+		assert.equal((await repl.start("cpp")).message, "Started C++ REPL.");
+		assert.equal((await repl.send(name, 'int cpp_seed = 41;\nprintf("SEED=%d\\n", cpp_seed);')).output, "SEED=41");
+		// tmux reads a final ; as a command separator, so the typed line ends with a comment.
+		tmux("send-keys", "-t", `=${name}:`, "-l", "++cpp_seed; // typed");
+		tmux("send-keys", "-t", `=${name}:`, "C-m");
+		assert.ok(await waitFor(() => /\+\+cpp_seed; \/\/ typed\n\[cling\]\$$/.test(scrollback(name).trimEnd()), 10_000), "Cling has run the typed line");
+		assert.equal((await repl.send(name, 'printf("TYPED=%d\\n", cpp_seed);')).output, "TYPED=42", "code typed in the pane shares the state");
+		const failed = await repl.send(name, "int cpp_bad = ;");
+		assert.equal(failed.status, "captured");
+		assert.match(failed.output, /error: expected expression/);
+		const unfinished = await repl.send(name, "int cpp_unfinished(int n) {\nreturn n;");
+		assert.equal(unfinished.status, "captured");
+		assert.match(unfinished.output, /incomplete C\+\+ prompt group/);
+		assert.equal((await repl.send(name, 'printf("AFTER=%d\\n", cpp_seed);')).output, "AFTER=42", "state survives errors");
+		await repl.send(name, 'int cpp_unwound = 0;\nstruct CppGuard { ~CppGuard() { ++cpp_unwound; } };\nvoid cpp_throw() { CppGuard guard; throw std::runtime_error("deliberate"); }');
+		assert.match((await repl.send(name, "cpp_throw();")).output, /caught std::exception: deliberate/);
+		assert.equal((await repl.send(name, 'printf("UNWOUND=%d\\n", cpp_unwound);')).output, "UNWOUND=1");
+		assert.equal((await repl.send(name, 'printf("ünï ✓");')).output, "ünï ✓", "UTF-8, and output without a final newline");
+		await keepsOffMidline(name, 'printf("midline");', 'printf("next\\n");');
+		await showsSummary(name, 'printf("a\\n");\nprintf("b\\n");', "a\nb");
+		// Only a valid reply completes a send: a done file that just exists doesn't. The control
+		// directory is shared, and display anchors repeat across runs, so this send's files are
+		// found by a token in its code: its source, the request naming that source, and the
+		// driver whose initializer is named after the request (Sol).
+		const token = `c92-${process.pid}-${Date.now().toString(36)}`;
+		const waiting = repl.sending(name, `char cpp_input[200]; // ${token}\nfgets(cpp_input, sizeof cpp_input, stdin);\nprintf("INPUT=%s", cpp_input);`);
+		await waiting.ack;
+		assert.ok(await waitFor(() => scrollback(name).includes(token), 15_000), "the input wait is showing");
+		const controlRoot = join("/tmp", `pi-rc-${process.getuid().toString(36)}`);
+		const holding = (suffix, text) => readdirSync(controlRoot).filter((file) => file.endsWith(suffix)).find((file) => { try { return readFileSync(join(controlRoot, file), "utf8").includes(text); } catch { return false; } });
+		const source = holding(".cpp", token);
+		assert.ok(source, "the submission's source file");
+		const request = holding(".req", source.replace(/\.cpp$/, ""));
+		const driver = request && holding(".hxx", `request_${request.replace(/\.req$/, "").replaceAll("-", "_")} =`);
+		assert.ok(request && driver, "its request and driver");
+		const falseDone = join(controlRoot, source.replace(/\.cpp$/, ".done"));
+		writeFileSync(falseDone, "done\n", { mode: 0o600 });
+		let settled = false;
+		waiting.done.then(() => { settled = true; }, () => { settled = true; });
+		await new Promise((resolveWait) => setTimeout(resolveWait, 1_500));
+		assert.equal(settled, false, "a false done file doesn't complete the send");
+		unlinkSync(falseDone);
+		tmux("send-keys", "-t", `=${name}:`, "-l", "TYPED_INPUT");
+		tmux("send-keys", "-t", `=${name}:`, "C-m");
+		const answered = await waiting.done;
+		assert.equal(answered.status, "captured");
+		assert.match(answered.output, /INPUT=TYPED_INPUT/);
+		const own = (file) => [source, request, driver, source.replace(/\.cpp$/, ".done")].includes(file);
+		assert.ok(await waitFor(() => !readdirSync(controlRoot).some(own), 5_000), `its control files are removed: ${readdirSync(controlRoot).filter(own)}`);
+		const pid = panePid(name);
+		assert.equal((await repl.stop(name)).message, `Stopped ${name}.`);
+		assert.ok(await waitFor(() => !alive(pid), 30_000), "Cling exited");
+		// A null dereference crashes Cling. The send ends when the session does, not at its
+		// 20 s timeout.
+		assert.equal((await repl.start("cpp")).message, "Started C++ REPL.");
+		const began = Date.now();
+		const crashed = await repl.send(name, "int *cpp_null = nullptr;\n*cpp_null = 1;");
+		assert.equal(crashed.error, `${name} ended while running the code.`);
+		assert.ok(Date.now() - began < 10_000, `ended after ${Date.now() - began} ms`);
+		assert.equal(hasSession(name), false);
+		// With remain-on-exit, the dead pane still shows what the code printed, and the record
+		// keeps it after the message (Sol).
+		assert.equal((await repl.start("cpp")).message, "Started C++ REPL.");
+		tmux("set-option", "-w", "-t", `=${name}:`, "remain-on-exit", "on");
+		const kept = await repl.send(name, 'printf("before the crash\\n"); fflush(stdout);\nint *cpp_null = nullptr;\n*cpp_null = 1;');
+		assert.equal(kept.error, `${name} ended while running the code.`);
+		assert.equal(kept.status, "error");
+		assert.match(kept.output, new RegExp(`^${name} ended while running the code\\.\\n\\n[\\s\\S]*before the crash`));
+		assert.equal(tmux("display-message", "-p", "-t", `=${name}:`, "#{pane_dead}").stdout.trim(), "1", "its dead pane is kept");
+		tmux("kill-session", "-t", `=${name}`);
+		// The agent's send records the same, as an error even if the output says "timed out" (Sol).
+		assert.equal((await repl.start("cpp")).message, "Started C++ REPL.");
+		tmux("set-option", "-w", "-t", `=${name}:`, "remain-on-exit", "on");
+		const agentCode = 'printf("request timed out\\n"); fflush(stdout);\nint *cpp_null = nullptr;\n*cpp_null = 1;';
+		const agentResult = await rpc.agent("studio_repl_send", { sessionName: name, code: agentCode });
+		assert.match(agentResult.content[0].text, new RegExp(`${name} ended while running the code\\.\\n\\n[\\s\\S]*request timed out`));
+		const agentEntry = (await repl.capture(name)).journalEntries.find((entry) => entry.code === agentCode);
+		assert.equal(agentEntry?.status, "error", JSON.stringify(agentEntry));
+		assert.match(agentEntry.output, /request timed out/);
+		tmux("kill-session", "-t", `=${name}`);
 	});
 
 	await t.test("Shell: Stop closes it like a terminal, and nohup jobs keep running", async () => {

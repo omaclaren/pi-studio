@@ -91,6 +91,7 @@ import {
 import { buildMLanguageControlSource, mStringLiteral } from "./shared/repl-m-language.js";
 import { buildGnuplotDriverSource, buildGnuplotGuardSource, buildGnuplotSubmissionLine } from "./shared/repl-gnuplot.js";
 import { GNUPLOT_OWNER_ENV, GNUPLOT_OWNER_OPTION } from "./shared/repl-gnuplot-processes.js";
+import { buildCppDriverSource, buildCppRequest, cppInclude, createCppControlCleanup, prepareCppSubmission, readCppCompletion } from "./shared/repl-cpp.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import {
 	buildStudioPendingPage,
@@ -169,7 +170,7 @@ type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 type StudioPromptMode = "response" | "run" | "effective";
 type StudioPromptTriggerKind = "run" | "steer";
-type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure" | "ruby" | "java" | "octave" | "matlab" | "gnuplot";
+type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure" | "ruby" | "java" | "octave" | "matlab" | "gnuplot" | "cpp";
 type ReplSubmissionEchoMode = "off" | "summary" | "full";
 type ReplSubmissionDisplay = ReturnType<typeof createReplSubmissionDisplay>;
 type StudioQuizAngle = "general" | "scientist" | "mathematician" | "statistician" | "developer" | "reviewer";
@@ -1119,11 +1120,12 @@ const STUDIO_REPL_RUNTIME_LABELS: Record<StudioReplRuntime, string> = {
 	octave: "Octave",
 	matlab: "MATLAB",
 	gnuplot: "gnuplot",
+	cpp: "C++",
 };
 const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 	code: Type.String({ description: "Code to execute in the active or selected Studio REPL session." }),
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name. If omitted, Studio uses the active REPL session, or the first session matching target." })),
-	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, matlab, or gnuplot. Used when sessionName is omitted." })),
+	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, matlab, gnuplot, or cpp. Used when sessionName is omitted." })),
 	timeoutMs: Type.Optional(Type.Number({ description: "Maximum time to wait for completion when Studio can detect it (default 20000, max 120000).", minimum: 1000, maximum: STUDIO_REPL_SEND_MAX_TIMEOUT_MS })),
 	echoMode: Type.Optional(Type.Union(
 		[Type.Literal("off"), Type.Literal("summary"), Type.Literal("full")],
@@ -1133,7 +1135,7 @@ const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 const STUDIO_REPL_TOOL_ECHO_MODE = normalizeReplSubmissionEchoMode(process.env.PI_STUDIO_REPL_ECHO_MODE) as ReplSubmissionEchoMode;
 const STUDIO_REPL_STATUS_TOOL_PARAMS = Type.Object({
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name to inspect." })),
-	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, matlab, or gnuplot. If omitted, report all Studio-visible REPL sessions." })),
+	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, matlab, gnuplot, or cpp. If omitted, report all Studio-visible REPL sessions." })),
 });
 const STUDIO_EXPORT_INPUT_FORMAT_DESCRIPTION = "Optional input format: auto, markdown, or latex. Defaults to auto.";
 const STUDIO_EXPORT_PDF_OPTIONS_TOOL_PARAMS = Type.Object({
@@ -11227,7 +11229,8 @@ function isStudioReplRuntime(value: unknown): value is StudioReplRuntime {
 		|| value === "java"
 		|| value === "octave"
 		|| value === "matlab"
-		|| value === "gnuplot";
+		|| value === "gnuplot"
+		|| value === "cpp";
 }
 
 function normalizeStudioReplRuntime(value: unknown): StudioReplRuntime | null {
@@ -11250,6 +11253,7 @@ function getDefaultStudioReplRuntimeCommand(runtime: StudioReplRuntime): string 
 	if (runtime === "octave") return "octave-cli --quiet --interactive --persist --eval 'sighup_dumps_octave_core(false); sigterm_dumps_octave_core(false);'";
 	if (runtime === "matlab") return "matlab -nodesktop -nosplash";
 	if (runtime === "gnuplot") return "gnuplot";
+	if (runtime === "cpp") return "cling";
 	return "clojure";
 }
 
@@ -11284,7 +11288,7 @@ function inferStudioReplSessionRuntime(sessionName: string): { runtime: StudioRe
 	const studioMatch = sessionName.match(/^pi-studio-repl-([a-z0-9-]+)$/i);
 	if (studioMatch) {
 		const raw = (studioMatch[1] || "").toLowerCase();
-		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "ruby", "java", "octave", "matlab", "gnuplot", "r"] as StudioReplRuntime[])
+		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "ruby", "java", "octave", "matlab", "gnuplot", "cpp", "r"] as StudioReplRuntime[])
 			.find((candidate) => raw === candidate || raw.startsWith(`${candidate}-`));
 		return { runtime: runtime ?? "unknown", source: "studio" };
 	}
@@ -11458,11 +11462,14 @@ function captureStudioReplSession(sessionName: string, pinned?: StudioReplSessio
 	return { ok: true, transcript: String(result.stdout || "").replace(/[\t ]+$/gm, "").trimEnd(), session };
 }
 
+// tmux's answer when a session or its server has gone, not just a slow or failed call (Sol).
+const STUDIO_TMUX_GONE = /can't find session|no server running|error connecting to/i;
+
 // The pane's cursor row, where a runtime shows its prompt; dead once its command has
 // exited, gone once the pane has closed or left the session.
 function readStudioReplCursorRow(sessionId: string, paneId: string): { gone?: boolean; dead?: boolean; pid?: string; line?: string } {
 	const panes = runStudioTmux(["list-panes", "-s", "-t", sessionId, "-F", "#{pane_id}\t#{pane_dead}\t#{cursor_y}\t#{pane_pid}"], { timeout: 3_000 });
-	if (!panes.ok) return { gone: true };
+	if (!panes.ok) return STUDIO_TMUX_GONE.test(panes.stderr) ? { gone: true } : {};
 	const fields = panes.stdout.split("\n").map((line) => line.split("\t")).find(([id]) => id === paneId);
 	if (!fields) return { gone: true };
 	const [, dead = "", row = "", pid = ""] = fields;
@@ -11577,6 +11584,9 @@ type StudioReplControlFiles = {
 	doneFile: string;
 	// GHCi's guard and driver scripts, removed along with the source.
 	helpers?: Array<{ dir: string; sourceFile: string; doneFile: string }>;
+	// C++ completes when its driver writes a valid reply to the done file, and its
+	// cleanup removes only the control files it created.
+	cpp?: { completion: ReturnType<typeof prepareCppSubmission>["completion"]; cleanup: () => void };
 };
 
 type StudioReplPreparedSubmission = {
@@ -11630,6 +11640,7 @@ function getStudioReplControlExtension(runtime: StudioReplRuntime): string {
 	if (runtime === "java") return "java";
 	if (runtime === "octave" || runtime === "matlab") return "m";
 	if (runtime === "gnuplot") return "gp";
+	if (runtime === "cpp") return "cpp";
 	if (runtime === "shell") return "sh";
 	return "py";
 }
@@ -12130,6 +12141,8 @@ function buildStudioReplControlSource(runtime: StudioReplRuntime, code: string, 
 	if (runtime === "octave" || runtime === "matlab") return buildMLanguageControlSource(code, display);
 	// As in pi-repl: gnuplot loads the code as written; its driver prints the display.
 	if (runtime === "gnuplot") return code + "\n";
+	// As in pi-repl: the driver reads the C++ as written and prints the display itself.
+	if (runtime === "cpp") return code;
 	if (runtime === "shell") return buildStudioShellControlSource(code, display);
 	return null;
 }
@@ -12144,6 +12157,7 @@ function buildStudioReplSubmissionLine(runtime: StudioReplRuntime, sourceFile: s
 	if (runtime === "java") return `/open ${sourceFile}`;
 	if (runtime === "octave" || runtime === "matlab") return `eval(fileread(${mStringLiteral(sourceFile)}));`;
 	if (runtime === "gnuplot") return buildGnuplotSubmissionLine(sourceFile);
+	if (runtime === "cpp") return cppInclude(sourceFile);
 	if (runtime === "shell") return `. ${shellQuote(sourceFile)}; touch ${shellQuote(doneFile)}`;
 	return `exec(open(${quotedPath}, encoding="utf-8").read(), globals())`;
 }
@@ -12154,6 +12168,7 @@ function unsupportedStudioReplRuntimeMessage(sessionName: string): string {
 
 function cleanupStudioReplControlFiles(controlFiles: StudioReplControlFiles | undefined): void {
 	if (!controlFiles) return;
+	if (controlFiles.cpp) return controlFiles.cpp.cleanup();
 	cleanupPrivateReplControlFiles(controlFiles);
 	for (const helper of controlFiles.helpers ?? []) cleanupPrivateReplControlFiles(helper);
 }
@@ -12164,6 +12179,7 @@ function prepareStudioReplSubmission(
 	runtime: StudioReplRuntime,
 ): StudioReplPreparedSubmission {
 	const normalizedSource = String(source || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	if (runtime === "cpp" && normalizedSource.includes("\0")) throw new Error("C++ source cannot contain NUL bytes; no code was sent.");
 	const display = createReplSubmissionDisplay({
 		entryId: details.submissionId,
 		origin: "pi-studio",
@@ -12260,6 +12276,31 @@ function prepareStudioReplSubmission(
 				buildSource: () => buildGnuplotDriverSource(controlFiles.sourceFile, guard.sourceFile, guard.doneFile, controlFiles.doneFile, display),
 			});
 			controlFiles.helpers.push(driver);
+			loader = driver.sourceFile;
+		} catch (error) {
+			cleanupStudioReplControlFiles(controlFiles);
+			throw error;
+		}
+	}
+	if (runtime === "cpp") {
+		// pi-repl's Cling driver: a header Cling includes, whose initializer reads a request
+		// naming the source and the display, both checked by identity. It evaluates the code
+		// one prompt group at a time, prints the footer, then writes a reply with the result.
+		try {
+			const request = createPrivateReplControlFiles({
+				...controlOptions,
+				extension: "req",
+				buildSource: () => buildCppRequest(controlFiles.sourceFile, controlFiles.doneFile, display),
+			});
+			controlFiles.helpers = [request];
+			const cpp = prepareCppSubmission(request.sourceFile, controlFiles.doneFile);
+			const driver = createPrivateReplControlFiles({
+				...controlOptions,
+				extension: "hxx",
+				buildSource: () => buildCppDriverSource(request.sourceFile, controlFiles.doneFile),
+			});
+			controlFiles.helpers.push(driver);
+			controlFiles.cpp = { completion: cpp.completion, cleanup: createCppControlCleanup(cpp.completion, [controlFiles.sourceFile, request.sourceFile, driver.sourceFile]) };
 			loader = driver.sourceFile;
 		} catch (error) {
 			cleanupStudioReplControlFiles(controlFiles);
@@ -12542,15 +12583,50 @@ function clearStudioReplJournal(sessionName: string): void {
 	clearReplSessionRecord(session.recordId, getStudioReplSessionRecordIdentity(session));
 }
 
-async function waitForStudioReplDoneFile(doneFile: string | undefined, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
-	if (!doneFile) return false;
+// As in pi-repl, a C++ submission is complete only once its reply is valid: an empty,
+// partial or replaced done file stays pending.
+function isStudioReplSubmissionDone(controlFiles: StudioReplControlFiles): boolean {
+	return controlFiles.cpp ? readCppCompletion(controlFiles.cpp.completion) !== undefined : existsSync(controlFiles.doneFile);
+}
+
+// Whether the pane a send went to has ended: closed, its session or tmux server gone, or kept
+// dead by remain-on-exit. Undefined when tmux didn't answer, which counts as neither (Sol).
+function hasStudioReplPaneEnded(session: StudioReplSessionInfo): boolean | undefined {
+	const panes = runStudioTmux(["list-panes", "-s", "-t", session.tmuxSessionId, "-F", "#{pane_id}\t#{pane_dead}"], { timeout: 3_000 });
+	if (!panes.ok) return STUDIO_TMUX_GONE.test(panes.stderr) ? true : undefined;
+	const pane = panes.stdout.split("\n").map((line) => line.split("\t")).find(([id]) => id === session.target);
+	return !pane || pane[1] === "1";
+}
+
+// A send whose session ended before it completed. Its record keeps what the pane still showed.
+class StudioReplSessionEndedError extends Error {
+	constructor(sessionName: string, readonly paneOutput = "") {
+		super(`${sessionName} ended while running the code.`);
+	}
+
+	get recordText(): string {
+		return [this.message, this.paneOutput].filter(Boolean).join("\n\n");
+	}
+}
+
+async function waitForStudioReplDoneFile(controlFiles: StudioReplControlFiles | undefined, timeoutMs: number, signal?: AbortSignal, session?: StudioReplSessionInfo): Promise<{ completed: boolean; ended: boolean }> {
+	if (!controlFiles?.doneFile) return { completed: false, ended: false };
 	const deadline = Date.now() + clampStudioReplSendTimeout(timeoutMs);
+	let nextPaneCheck = Date.now() + 1_000;
+	let endedChecks = 0;
 	while (Date.now() < deadline) {
-		if (existsSync(doneFile)) return true;
-		if (signal?.aborted) return false;
+		if (isStudioReplSubmissionDone(controlFiles)) return { completed: true, ended: false };
+		if (signal?.aborted) return { completed: false, ended: false };
+		// A runtime that exits or crashes, as Cling does on a null dereference, ends the
+		// wait instead of the timeout, as in pi-repl. Two checks a second apart.
+		if (session && Date.now() >= nextPaneCheck) {
+			endedChecks = hasStudioReplPaneEnded(session) === true ? endedChecks + 1 : 0;
+			if (endedChecks >= 2 && !isStudioReplSubmissionDone(controlFiles)) return { completed: false, ended: true };
+			nextPaneCheck = Date.now() + 1_000;
+		}
 		await sleep(100);
 	}
-	return existsSync(doneFile);
+	return { completed: isStudioReplSubmissionDone(controlFiles), ended: false };
 }
 
 function sleepWithoutKeepingStudioProcessAlive(ms: number): Promise<void> {
@@ -12572,8 +12648,9 @@ function retainStudioReplSubmissionUntilSettled(
 		let nextIdentityCheck = 0;
 		let missingChecks = 0;
 		try {
-			while (!existsSync(controlFiles.doneFile)) {
-				if (!existsSync(controlFiles.sourceFile)) return;
+			while (!isStudioReplSubmissionDone(controlFiles)) {
+				// As in pi-repl, only a C++ reply settles it, not its missing source.
+				if (!controlFiles.cpp && !existsSync(controlFiles.sourceFile)) return;
 				if (Date.now() >= nextIdentityCheck) {
 					try {
 						const current = inspectStudioReplSession(session.sessionName);
@@ -12603,7 +12680,7 @@ async function releaseOrRetainStudioReplSubmission(
 	session: StudioReplSessionInfo | null,
 	controlFiles: StudioReplControlFiles | undefined,
 ): Promise<void> {
-	if (session && controlFiles && !existsSync(controlFiles.doneFile)) {
+	if (session && controlFiles && !isStudioReplSubmissionDone(controlFiles)) {
 		retainStudioReplSubmissionUntilSettled(session, controlFiles, lease);
 		return;
 	}
@@ -13858,7 +13935,7 @@ export default function (pi: ExtensionAPI) {
 		name: "studio_repl_send",
 		label: "Send to Studio REPL",
 		description: "Execute code in the active or selected Studio tmux-backed REPL session using Studio's safe runtime-specific submission protocol.",
-		promptSnippet: "Execute code in the active Studio REPL session safely, including multiline Python/R/Julia/GHCi/Clojure/Ruby/Java/Octave/MATLAB/gnuplot snippets.",
+		promptSnippet: "Execute code in the active Studio REPL session safely, including multiline Python/R/Julia/GHCi/Clojure/Ruby/Java/Octave/MATLAB/gnuplot/C++ snippets.",
 		promptGuidelines: [
 			"Use studio_repl_send when the user asks to run code in the active Studio REPL.",
 			"Do not improvise tmux paste-buffer commands for Studio REPL code; studio_repl_send handles multiline quoting and runtime-specific submission.",
@@ -13867,6 +13944,7 @@ export default function (pi: ExtensionAPI) {
 			"In Java (JShell), use System.out.println(...) for values you want to see: code is loaded with /open, which doesn't echo expression results.",
 			"Octave and MATLAB are separate runtimes: don't substitute one for the other. Code runs in the base workspace with native semicolon and ans behaviour; use disp or fprintf for explicit output. MATLAB function definitions belong in .m files. clear, clear all, exit and quit change or end the session.",
 			"gnuplot is its own runtime, not another REPL's plotting backend. Send complete gnuplot commands and use print for console results. Keep the user's terminal, output and settings; export a figure only when asked. reset changes state. In sent code, exit returns from that code; exit gnuplot ends the session. Avoid pause and input waits unless asked.",
+			"C++ runs in Cling. Send complete prompt groups, with a function's opening brace on its declaration line, and #include ordinary definition or header files. Dot commands are for the terminal only. Earlier groups may run before a later error, and nothing is replayed. Exiting, a crash or Ctrl+C while code is busy can end the session. Completion means the code returned, not that it succeeded.",
 		],
 		parameters: STUDIO_REPL_SEND_TOOL_PARAMS,
 		executionMode: "sequential",
@@ -13960,8 +14038,9 @@ export default function (pi: ExtensionAPI) {
 				submittedSession = currentSession;
 
 				let completed = false;
+				let ended = false;
 				if (sent.controlFiles?.doneFile) {
-					completed = await waitForStudioReplDoneFile(sent.controlFiles.doneFile, timeoutMs, signal);
+					({ completed, ended } = await waitForStudioReplDoneFile(sent.controlFiles, timeoutMs, signal, currentSession));
 					if (signal?.aborted && !completed) {
 						throw new Error("studio_repl_send was aborted after submission; the shared session remains busy until the running code settles.");
 					}
@@ -13969,7 +14048,7 @@ export default function (pi: ExtensionAPI) {
 					await sleep(Math.min(750, timeoutMs));
 				}
 				const after = captureStudioReplSession(currentSession.sessionName, currentSession);
-				if (!after.ok) throw new Error(`Could not capture ${currentSession.sessionName} after sending: ${after.message}`);
+				if (!after.ok) throw ended ? new StudioReplSessionEndedError(currentSession.sessionName) : new Error(`Could not capture ${currentSession.sessionName} after sending: ${after.message}`);
 				if (!isSameStudioReplSessionLifetime(currentSession, after.session)) {
 					throw new Error(`REPL session ${currentSession.sessionName} changed before Studio captured the result.`);
 				}
@@ -13982,6 +14061,8 @@ export default function (pi: ExtensionAPI) {
 					promptLine: beforeTranscript.split("\n").at(-1),
 					completed,
 				});
+				// A pane kept dead by remain-on-exit still shows what the code printed.
+				if (ended) throw new StudioReplSessionEndedError(currentSession.sessionName, output);
 				const status: StudioReplJournalEntry["status"] = sent.controlFiles?.doneFile
 					? (completed ? "captured" : "timeout")
 					: (output.trim() ? "captured" : "sent");
@@ -14046,19 +14127,22 @@ export default function (pi: ExtensionAPI) {
 					} as Record<string, unknown>,
 				};
 			} catch (error) {
+				// An ended session is an error whatever its output says; only Studio's own messages
+				// are read for "timed out" (Sol).
+				const ended = error instanceof StudioReplSessionEndedError ? error.recordText : undefined;
 				if (journalEntry) {
 					try {
 						recordStudioReplJournalEntry({
 							...journalEntry,
-							output: error instanceof Error ? error.message : String(error),
-							status: error instanceof Error && /timed out/i.test(error.message) ? "timeout" : "error",
+							output: ended ?? (error instanceof Error ? error.message : String(error)),
+							status: ended === undefined && error instanceof Error && /timed out/i.test(error.message) ? "timeout" : "error",
 							completedAt: Date.now(),
 						}, submittedSession || selected.session);
 					} catch {
 						// Preserve the execution error when record maintenance also fails.
 					}
 				}
-				throw error;
+				throw ended === undefined ? error : new Error(ended);
 			} finally {
 				if (!published) broadcastStudioReplSelection();
 				await releaseOrRetainStudioReplSubmission(lease, submittedSession, submittedControlFiles);
@@ -17154,13 +17238,14 @@ export default function (pi: ExtensionAPI) {
 					});
 					const timeoutMs = STUDIO_REPL_SEND_DEFAULT_TIMEOUT_MS;
 					let completed = false;
+					let ended = false;
 					if (sent.controlFiles?.doneFile) {
-						completed = await waitForStudioReplDoneFile(sent.controlFiles.doneFile, timeoutMs);
+						({ completed, ended } = await waitForStudioReplDoneFile(sent.controlFiles, timeoutMs, undefined, currentSession));
 					} else {
 						await sleep(Math.min(750, timeoutMs));
 					}
 					const after = captureStudioReplSession(msg.sessionName, currentSession);
-					if (!after.ok) throw new Error(`Could not capture ${msg.sessionName} after sending: ${after.message}`);
+					if (!after.ok) throw ended ? new StudioReplSessionEndedError(msg.sessionName) : new Error(`Could not capture ${msg.sessionName} after sending: ${after.message}`);
 					if (!isSameStudioReplSessionLifetime(currentSession, after.session)) {
 						throw new Error(`REPL session ${msg.sessionName} changed before Studio captured the result.`);
 					}
@@ -17173,6 +17258,8 @@ export default function (pi: ExtensionAPI) {
 						promptLine: beforeTranscript.split("\n").at(-1),
 						completed,
 					});
+					// A pane kept dead by remain-on-exit still shows what the code printed.
+					if (ended) throw new StudioReplSessionEndedError(msg.sessionName, output);
 					updateStudioReplJournalEntryOutput(
 						msg.requestId,
 						msg.sessionName,
@@ -17186,7 +17273,7 @@ export default function (pi: ExtensionAPI) {
 					if (journalEntry) updateStudioReplJournalEntryOutput(
 						msg.requestId,
 						msg.sessionName,
-						message,
+						error instanceof StudioReplSessionEndedError ? error.recordText : message,
 						"error",
 						submittedSession || session,
 					);

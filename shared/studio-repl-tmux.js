@@ -6,7 +6,7 @@ const STUDIO_REPL_PROMPT_COMMAND_ENVIRONMENT = "PROMPT_COMMAND=";
  * Studio's own sessions: pi-studio-repl-<runtime>, then an optional custom-command
  * hash and an optional new-session suffix. Verified Stop accepts only these.
  */
-export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython|julia|r|ghci|clojure|ruby|java|octave|matlab|gnuplot)(?:-[a-f0-9]{8})?(?:-[a-z0-9]+-[a-f0-9]{6})?$/;
+export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython|julia|r|ghci|clojure|ruby|java|octave|matlab|gnuplot|cpp)(?:-[a-f0-9]{8})?(?:-[a-z0-9]+-[a-f0-9]{6})?$/;
 
 /** Studio's gnuplot sessions. Their Stop also ends gnuplot and Qt helpers that carry the session's owner marker. */
 export const isStudioGnuplotSession = (name) => /^pi-studio-repl-gnuplot(?:-|$)/.test(name);
@@ -118,6 +118,7 @@ const STUDIO_REPL_READY_PROMPTS = {
 	octave: /^octave:\d+>[ \t]*$/,
 	matlab: /^>>[ \t]*$/,
 	gnuplot: /^gnuplot>[ \t]*$/,
+	cpp: /^\[cling\]\$[ \t]*$/,
 };
 
 /**
@@ -140,16 +141,28 @@ export function isStudioReplReadyLine(runtime, line) {
 }
 
 /**
- * @param {string} line
- * @param {boolean} [mLanguage] an Octave or MATLAB submission. As in pi-repl, their
- *   prompts count only for them: >> could be another runtime's output.
+ * As in pi-repl, Octave and MATLAB's prompts count only for their own submissions, and
+ * so does Cling's: >> or [cling]$ could be another runtime's output.
+ *
+ * @param {string} submissionLine
+ * @returns {RegExp | null}
  */
-function isStudioReplPrompt(line, mLanguage = false) {
+function scopedPromptFor(submissionLine) {
+	if (submissionLine.startsWith("eval(fileread(")) return /^(?:octave:\d+>|>>)\s*$/;
+	if (submissionLine.startsWith("#include ")) return /^\[cling\]\$\s*$/;
+	return null;
+}
+
+/**
+ * @param {string} line
+ * @param {RegExp | null} [scoped] the submission's own runtime prompt, from scopedPromptFor
+ */
+function isStudioReplPrompt(line, scoped = null) {
 	return /^(?:>>>|In \[\d+\]:|\.\.\.:|>|\+)\s*$/.test(line)
 		|| /^(?:ghci|Prelude|\*?[A-Za-z0-9_.:]+)>\s*$/.test(line)
 		|| /^[^\s>]+=>\s*$/.test(line)
 		|| /^irb\(.*\)[:\d]+[>*]\s*$/.test(line)
-		|| (mLanguage && /^(?:octave:\d+>|>>)\s*$/.test(line));
+		|| Boolean(scoped && scoped.test(line));
 }
 
 /** @param {string} text */
@@ -163,14 +176,14 @@ const compact = (text) => text.replace(/\s+/g, "");
  * @param {string[]} lines
  * @param {string} submissionLine
  * @param {boolean} anyPrefix Shell prompts are the user's own
- * @param {boolean} [mLanguage] an Octave or MATLAB submission
+ * @param {RegExp | null} [scoped] the submission's own runtime prompt
  * @returns {boolean} whether the echo was found and removed
  */
-function removeLoaderEcho(lines, submissionLine, anyPrefix, mLanguage = false) {
+function removeLoaderEcho(lines, submissionLine, anyPrefix, scoped = null) {
 	const first = lines[0] ?? "";
 	const prefixOk = (/** @type {number} */ index) => {
 		const prefix = first.slice(0, index).trim();
-		return anyPrefix || !prefix || isStudioReplPrompt(prefix, mLanguage);
+		return anyPrefix || !prefix || isStudioReplPrompt(prefix, scoped);
 	};
 	const index = first.indexOf(submissionLine);
 	if (index >= 0 && prefixOk(index)) {
@@ -223,14 +236,14 @@ export function cleanStudioReplOutput(delta, details) {
 		while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
 	};
 	dropBlankEdges();
-	const mLanguage = (details.submissionLine || "").startsWith("eval(fileread(");
+	const scoped = scopedPromptFor(details.submissionLine || "");
 	// Prompt rows before this submission's echo are scaffolding. Without an echo
 	// (terminal echo off, say) they may be output, so they stay.
 	let lead = 0;
-	while (lead < lines.length && (!lines[lead].trim() || isStudioReplPrompt(lines[lead].trim(), mLanguage))) lead += 1;
+	while (lead < lines.length && (!lines[lead].trim() || isStudioReplPrompt(lines[lead].trim(), scoped))) lead += 1;
 	if (lead < lines.length && details.submissionLine) {
 		const rest = lines.slice(lead);
-		if (removeLoaderEcho(rest, details.submissionLine, details.runtime === "shell", mLanguage)) lines.splice(0, lines.length, ...rest);
+		if (removeLoaderEcho(rest, details.submissionLine, details.runtime === "shell", scoped)) lines.splice(0, lines.length, ...rest);
 	}
 	const silent = /:pi-studio\/silent\)$/.test(details.submissionLine || "") ? ":pi-studio/silent" : "";
 	const promptLine = String(details.promptLine || "").trim();
@@ -241,7 +254,7 @@ export function cleanStudioReplOutput(delta, details) {
 	while (lines.length) {
 		const last = lines[lines.length - 1].trim();
 		if (!last) { lines.pop(); continue; }
-		if (!removedPrompt && (isStudioReplPrompt(last, mLanguage) || (promptLine && last === promptLine))) {
+		if (!removedPrompt && (isStudioReplPrompt(last, scoped) || (promptLine && last === promptLine))) {
 			lines.pop();
 			removedPrompt = true;
 			continue;
