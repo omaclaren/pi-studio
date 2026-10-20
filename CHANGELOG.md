@@ -4,12 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- The REPL pane runs **Ruby** (irb) and **Java** (JShell), as pi-repl does. Choose them under **Runtime**, or send to a pi-repl Ruby or Java session. In Java, print values with `System.out.println(…)`: code is loaded with `/open`, which doesn't show expression results. Stop waits for JShell's second JVM to exit too.
+
 ### Changed
 - Pane echo defaults to **Summary**, as in pi-repl, so the tmux pane shows each sent submission above its output. Summary now shows up to 20 lines or 2,000 characters, up from 6 lines or 600. If you chose Full before, Studio keeps it; if you chose Off, choose it again.
 - In dual mode, **Pane echo** is under the REPL pane's **More**, below **Send mode**. The toolbar had stopped showing it, so it couldn't be changed there. Choose **Off** for a quiet pane.
 - Pane echo looks the same as pi-repl's: `── pi-studio · input · 2 lines · id: … ──`, then the code without `│` bars, the output, `── done · id: … ──` and a blank line. A blank line also separates the code from the line that loads it. Studio's temporary files for a send start with the same id. The record still holds only the code and its output.
 
 ### Fixed
+- In a Julia pane narrower than the line that loads the code, sent code no longer leaves copies of that line in the output. Studio pastes it as one bracketed paste, as pi-repl 0.8.5 does.
 - With Summary or Full, the done marker goes on a line of its own when the output doesn't end with a newline, as with `print("c", end="")`. It used to join the output's last line and end up in the record.
 
 ## [0.10.5] — 2026-10-20

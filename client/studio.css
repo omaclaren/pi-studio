@@ -4990,6 +4990,10 @@
       white-space: pre-wrap;
     }
 
+    .repl-journal-list-wide-prompt {
+      --repl-studio-prompt-width: 3.9em;
+    }
+
     .repl-studio-code-row,
     .repl-studio-output-row {
       display: grid;

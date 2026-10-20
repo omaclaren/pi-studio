@@ -1501,6 +1501,7 @@
       function getKnownReplRuntime(value) {
         const runtime = String(value || "").trim().toLowerCase();
         return runtime === "shell" || runtime === "python" || runtime === "ipython" || runtime === "julia" || runtime === "r" || runtime === "ghci" || runtime === "clojure"
+          || runtime === "ruby" || runtime === "java"
           ? runtime
           : "";
       }
@@ -1517,6 +1518,8 @@
         if (runtime === "julia") return "Julia";
         if (runtime === "r") return "R";
         if (runtime === "ghci") return "GHCi";
+        if (runtime === "ruby") return "Ruby";
+        if (runtime === "java") return "Java";
         return "Clojure";
       }
 
@@ -2270,6 +2273,7 @@
         if (first === "bash") return "shell";
         if (first === "hs" || first === "haskell") return "ghci";
         if (first === "clj" || first === "cljc") return "clojure";
+        if (first === "rb") return "ruby";
         return first;
       }
 
@@ -2327,6 +2331,8 @@
         if (activeRuntime === "shell") return lang === "shell" || lang === "bash" || lang === "sh";
         if (activeRuntime === "ghci") return lang === "ghci" || lang === "haskell";
         if (activeRuntime === "clojure") return lang === "clojure";
+        if (activeRuntime === "ruby") return lang === "ruby";
+        if (activeRuntime === "java") return lang === "java";
         return true;
       }
 
@@ -13989,6 +13995,8 @@
         if (normalized === "shell") return "$";
         if (normalized === "ghci") return "ghci>";
         if (normalized === "clojure") return "user=>";
+        if (normalized === "ruby") return "irb>";
+        if (normalized === "java") return "jshell>";
         return ">>>";
       }
 
@@ -14019,6 +14027,8 @@
         if (normalized === "r") return /^\s*(?:>|\+)\s?/.test(source);
         if (normalized === "ghci") return /^\s*(?:ghci>|Prelude>|\*?[A-Za-z0-9_.:]+>)\s?/.test(source);
         if (normalized === "clojure") return /^\s*[A-Za-z0-9_.-]+=>\s?/.test(source);
+        if (normalized === "ruby") return /^\s*irb\([^)]*\):\d+(?::\d+)?[>*]\s?/.test(source);
+        if (normalized === "java") return /^\s*jshell>\s?/.test(source);
         return false;
       }
 
@@ -14034,7 +14044,7 @@
           if (bannerLines.length >= 16) break;
         }
         const banner = bannerLines.join("\n").trim();
-        if (!/^(?:Python\s|IPython\s|R version\s|GHCi,\s|Clojure\s|Julia\s|julia\s)/i.test(banner)) return "";
+        if (!/^(?:Python\s|IPython\s|R version\s|GHCi,\s|Clojure\s|Julia\s|julia\s|\|\s+Welcome to JShell\b)/i.test(banner)) return "";
         return banner;
       }
 
@@ -14109,7 +14119,8 @@
           + "<div class='repl-journal-header'><h3>Shared REPL Record</h3>" + toggleActions + "</div>"
           + "<p class='repl-journal-description'>What Studio and pi-repl have sent to this session.</p>"
           + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
-          + "<div class='repl-journal-list'>" + terminalContent + "</div>"
+          // JShell's seven-character prompt needs a wider prompt column than the others.
+          + "<div class='repl-journal-list" + (visibleEntries.some((entry) => getReplStudioPrompt(entry.runtime).length > 6) ? " repl-journal-list-wide-prompt" : "") + "'>" + terminalContent + "</div>"
           + "</section>";
       }
 
@@ -14172,6 +14183,8 @@
           ["r", "R"],
           ["ghci", "GHCi"],
           ["clojure", "Clojure"],
+          ["ruby", "Ruby"],
+          ["java", "Java"],
         ].map(([value, label]) => "<option value='" + escapeHtml(value) + "'" + (replRuntime === value ? " selected" : "") + ">" + escapeHtml(label) + "</option>").join("");
         const runtimeLabel = getReplRuntimeLabel(replRuntime);
         const visibleSessions = getReplSessionsForRuntime(replRuntime);

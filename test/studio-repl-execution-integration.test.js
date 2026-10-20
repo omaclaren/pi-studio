@@ -787,11 +787,12 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	});
 
 	await t.test("a runtime Studio doesn't support gets nothing pasted into it", async () => {
-		assert.equal(tmux("new-session", "-d", "-s", "pi-repl-ruby", "sleep 600").status, 0);
-		tmux("set-option", "-t", "=pi-repl-ruby", "@pi_repl_runtime", "ruby");
-		const sent = await repl.send("pi-repl-ruby", 'puts "hi"');
-		assert.equal(sent.error, "Studio can't send code to pi-repl-ruby yet: it doesn't support that runtime.");
-		assert.equal(tmux("capture-pane", "-p", "-t", "=pi-repl-ruby:").stdout.trim(), "");
+		assert.equal(tmux("new-session", "-d", "-s", "pi-repl-octave", "sleep 600").status, 0);
+		tmux("set-option", "-t", "=pi-repl-octave", "@pi_repl_runtime", "octave");
+		const sent = await repl.send("pi-repl-octave", "disp(1)");
+		assert.equal(sent.error, "Studio can't send code to pi-repl-octave yet: it doesn't support that runtime.");
+		assert.equal(tmux("capture-pane", "-p", "-t", "=pi-repl-octave:").stdout.trim(), "");
+		tmux("kill-session", "-t", "=pi-repl-octave");
 	});
 
 	await t.test("IPython: its wrapped loader echo is removed", { skip: !has("ipython") }, async () => {
@@ -814,6 +815,12 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.equal((await repl.send("pi-studio-repl-julia", 'for i in 1:2\n    println("i=$i")\nend')).output, "i=1\ni=2");
 		await showsSummary("pi-studio-repl-julia", 'println("a")\nprintln("b")', "a\nb");
 		await showsSummary("pi-studio-repl-julia", 'print("c")', "c");
+		// In a pane narrower than the loader line, Julia redrew the wrapped line once per
+		// pasted character, leaving copies in the output, until the paste was bracketed
+		// (pi-repl 0.8.5).
+		assert.equal(tmux("resize-window", "-t", "=pi-studio-repl-julia:", "-x", "40").status, 0);
+		assert.equal(pane("pi-studio-repl-julia", "#{pane_width}"), "40");
+		assert.equal((await repl.send("pi-studio-repl-julia", 'println("narrow")')).output, "narrow");
 		assert.equal((await repl.stop("pi-studio-repl-julia")).message, "Stopped pi-studio-repl-julia.");
 	});
 
@@ -851,6 +858,49 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			await showsSummary("pi-studio-repl-clojure", '(print "c")', "c");
 			assert.equal((await repl.stop("pi-studio-repl-clojure")).message, "Stopped pi-studio-repl-clojure.");
 		} else st.diagnostic("clojure not installed");
+	});
+
+	// Candidate82, REPL parity step 2: Ruby (irb) and Java (JShell), as in pi-repl.
+	const descendants = (pid) => {
+		const rows = spawnSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" }).stdout.trim().split("\n").map((row) => row.trim().split(/\s+/).map(Number));
+		const found = [];
+		for (let frontier = [pid]; frontier.length;) frontier = rows.filter(([, ppid]) => frontier.includes(ppid)).map(([child]) => child).filter((child) => !found.includes(child) && found.push(child));
+		return found;
+	};
+	await t.test("Ruby: irb keeps state, takes code literally, and Stop is verified", { skip: !has("irb") }, async () => {
+		assert.equal((await repl.start("ruby")).message, "Started Ruby REPL.");
+		assert.equal((await repl.send("pi-studio-repl-ruby", 'x = 41\nputs "#{x + 1} \\#{x}"')).output, "42 #{x}");
+		assert.equal((await repl.send("pi-studio-repl-ruby", "x + 1")).output, "42");
+		// The loader's own result is hidden; output that looks like one is kept.
+		assert.equal((await repl.send("pi-studio-repl-ruby", 'puts "=> nil"')).output, "=> nil");
+		assert.equal((await repl.send("pi-studio-repl-ruby", 'puts "ünï ✓"')).output, "ünï ✓");
+		const failed = await repl.send("pi-studio-repl-ruby", 'raise "boom"');
+		assert.equal(failed.status, "captured");
+		assert.match(failed.output, /boom/);
+		await showsSummary("pi-studio-repl-ruby", 'puts "a"\nputs "b"', "a\nb");
+		await showsSummary("pi-studio-repl-ruby", 'print "c"', "c");
+		const runtime = panePid("pi-studio-repl-ruby");
+		assert.equal((await repl.stop("pi-studio-repl-ruby")).message, "Stopped pi-studio-repl-ruby.");
+		assert.ok(await waitFor(() => !alive(runtime)), "irb exited");
+	});
+
+	await t.test("Java: JShell keeps declarations, completes after errors, and Stop ends both JVMs", { skip: !has("jshell") }, async () => {
+		assert.equal((await repl.start("java")).message, "Started Java REPL.");
+		assert.equal((await repl.send("pi-studio-repl-java", "int x = 41;\nSystem.out.println(x + 1);")).output, "42");
+		assert.equal((await repl.send("pi-studio-repl-java", 'System.out.println("ünï ✓ " + x);')).output, "ünï ✓ 41");
+		const failed = await repl.send("pi-studio-repl-java", 'int y = "no";');
+		assert.equal(failed.status, "captured");
+		assert.match(failed.output, /incompatible types/);
+		assert.equal((await repl.send("pi-studio-repl-java", "void f() {")).status, "captured", "an unfinished snippet still completes");
+		assert.equal((await repl.send("pi-studio-repl-java", "System.out.println(x);")).output, "41");
+		await showsSummary("pi-studio-repl-java", 'System.out.println("a");\nSystem.out.println("b");', "a\nb");
+		await showsSummary("pi-studio-repl-java", 'System.out.print("c");', "c");
+		// JShell runs code in a second JVM; Stop waits for both.
+		const runtime = panePid("pi-studio-repl-java");
+		const jvms = [runtime, ...descendants(runtime)];
+		assert.ok(jvms.length >= 2, `JShell and its execution JVM: ${jvms}`);
+		assert.equal((await repl.stop("pi-studio-repl-java")).message, "Stopped pi-studio-repl-java.");
+		assert.ok(await waitFor(() => jvms.every((pid) => !alive(pid))), "both JVMs exited");
 	});
 
 	await t.test("Shell: Stop closes it like a terminal, and nohup jobs keep running", async () => {

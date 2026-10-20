@@ -27,7 +27,7 @@ Watch the [demo](https://github.com/omaclaren/pi-studio/releases/download/demo-p
 - **Files and Changes** — browse folders you've allowed, open or preview files, and see the current git diff.
 - **Comments and scratchpad** — comments anchored to lines or selections, and a scratchpad per document.
 - **Side questions and quizzes** — ask about the text, a folder or the repository in a separate thread that stays out of the main conversation, or quiz yourself on it.
-- **REPL** — send code to tmux-backed Shell, Python, IPython, Julia, R, GHCi or Clojure sessions, shared with [pi-repl](https://github.com/omaclaren/pi-repl).
+- **REPL** — send code to tmux-backed Shell, Python, IPython, Julia, R, GHCi, Clojure, Ruby or Java sessions, shared with [pi-repl](https://github.com/omaclaren/pi-repl).
 - **Export** — PDF (Pandoc and LaTeX) or standalone HTML, from the preview, a file or the last response.
 
 ## Requirements
@@ -36,6 +36,7 @@ Watch the [demo](https://github.com/omaclaren/pi-studio/releases/download/demo-p
 - [Pandoc](https://pandoc.org/installing.html) for full previews and exports (`brew install pandoc` on macOS), and LaTeX (TeX Live or MacTeX) for PDF export
 - Optional:
   - `tmux` for the REPL;
+  - a JDK with `jshell` for the Java REPL, on the PATH Pi runs with, since Studio doesn't start it through a login shell (or give its full path in the REPL pane's **Start cmd**);
   - `quarto` for Quarto previews;
   - Mermaid CLI 11.12+ for diagrams in exported PDFs;
   - `pdftotext` so side questions can read PDFs;

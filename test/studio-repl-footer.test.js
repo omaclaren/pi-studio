@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
@@ -92,18 +92,33 @@ test("each wrapper ends a mid-line row before its footer, and only then", { time
 		});
 	}
 
+	// pi-repl 0.8.6: a query that outlives its wait is stopped after 5 s in every wrapper.
+	// Julia and R used to wait for it without limit, as a NODE_OPTIONS startup hook could make it.
+	for (const runtime of runtimes.filter((candidate) => candidate.name !== "clojure")) {
+		await t.test(`${runtime.name}: a query that outlasts the wait`, { skip: has(runtime.command) ? false : `${runtime.command} is not installed` }, async () => {
+			const query = fake('setTimeout(() => process.stdout.write("0"), 30000)');
+			const sent = run(runtime, query);
+			assert.equal(sent.status, 0, sent.stderr);
+			assert.ok(sent.done);
+			assert.ok(sent.elapsed >= 4_500 && sent.elapsed < 25_000, `waited ${sent.elapsed} ms`);
+			assert.equal(sent.stdout, shown(sent.display, "c", ""), "no column, so a new line");
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			assert.equal(owned(query.pid()), false, "the query was stopped");
+		});
+	}
+
 	const clojure = runtimes.find((runtime) => runtime.name === "clojure");
-	await t.test("Clojure: an interrupt during the wait", { skip: has("clojure") ? false : "clojure is not installed" }, async () => {
-		// The query would print 0 after 3 s. The code's future interrupts once the query has started.
-		const query = fake('setTimeout(() => process.stdout.write("0"), 3000)');
+	await t.test("Clojure: an interrupt during the wait lets the query finish, and is kept", { skip: has("clojure") ? false : "clojure is not installed" }, async () => {
+		// The query prints 0 after 2 s; the code's future interrupts once it has started.
+		// Killing Node early would leave its tmux child running, so the wait goes on (pi-repl 0.8.6).
+		const query = fake('setTimeout(() => process.stdout.write("0"), 2000)');
 		const started = `(pos? (.length (java.io.File. ${JSON.stringify(query.pidFile)})))`;
-		const sent = run(clojure, query, `(let [t (Thread/currentThread)] (future (while (not ${started}) (Thread/sleep 20)) (.interrupt t)) (println "c"))`);
+		const sent = run(clojure, query, `(let [t (Thread/currentThread)] (future (while (not ${started}) (Thread/sleep 20)) (.interrupt t)) (println "c"))`, '(println "interrupted:" (Thread/interrupted))\n(shutdown-agents)');
 		assert.equal(sent.status, 0, sent.stderr);
 		assert.ok(sent.done);
-		assert.ok(sent.elapsed < 15_000, `took ${sent.elapsed} ms`);
-		assert.equal(sent.stdout, shown(sent.display, "c", ""), "no column, so a new line, and one footer");
-		await new Promise((resolve) => setTimeout(resolve, 500));
-		assert.equal(owned(query.pid()), false, "the query was stopped");
+		assert.ok(sent.elapsed >= 2_000 && sent.elapsed < 15_000, `took ${sent.elapsed} ms`);
+		assert.equal(sent.stdout, `${shown(sent.display, "c")}interrupted: true\n`, "the column was read, and the interrupt kept");
+		assert.equal(owned(query.pid()), false, "the query finished");
 	});
 
 	await t.test("Clojure: a query that outlasts the wait", { skip: has("clojure") ? false : "clojure is not installed" }, async () => {
@@ -124,4 +139,125 @@ test("each wrapper ends a mid-line row before its footer, and only then", { time
 		assert.ok(sent.done);
 		assert.equal(sent.stdout, `${shown(sent.display, "c")}pending: true\n`, "the query's column was read, and the interrupt kept");
 	});
+});
+
+// Candidate82: Ruby and Java ask tmux for the column themselves, as in pi-repl; a fake tmux
+// on PATH answers.
+test("Ruby and Java end a mid-line row before their footer, and only then", { timeout: 180_000 }, async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "studio-footer-tmux-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const bin = join(root, "bin");
+	mkdirSync(bin);
+	writeFileSync(join(bin, "tmux"), '#!/bin/sh\n[ "$FAKE_COLUMN" = fail ] && exit 1\nprintf "%s\\n" "$FAKE_COLUMN"\n');
+	chmodSync(join(bin, "tmux"), 0o700);
+	const builders = loadBuilders(process.execPath, ["rubyStringLiteral", "buildStudioRubyControlSource", "buildStudioJavaControlSource", "buildStudioJavaDriverSource", "buildStudioReplSubmissionLine", "juliaStringLiteral", "shellQuote"]);
+	let runs = 0;
+	const cases = [
+		{ name: "ruby", command: "ruby", code: 'puts "c"', run: (dir, code, doneFile, display) => {
+			const file = join(dir, "source.rb");
+			writeFileSync(file, builders.buildStudioRubyControlSource(code, doneFile, display));
+			return ["ruby", [file]];
+		} },
+		{ name: "java", command: "jshell", code: 'System.out.println("c");', run: (dir, code, doneFile, display) => {
+			const source = join(dir, "source.java"), driver = join(dir, "driver.java");
+			writeFileSync(source, builders.buildStudioJavaControlSource(code, doneFile, display));
+			writeFileSync(driver, `${builders.buildStudioJavaDriverSource(source, doneFile, display)}\n/exit\n`);
+			return ["jshell", ["-q", driver]];
+		} },
+	];
+	for (const runtime of cases) {
+		await t.test(runtime.name, { skip: has(runtime.command) ? false : `${runtime.command} is not installed` }, () => {
+			for (const [column, lines] of [["0", ["c"]], ["3", ["c", ""]], ["fail", ["c", ""]]]) {
+				const dir = join(root, String(++runs));
+				mkdirSync(dir);
+				const display = createReplSubmissionDisplay({ entryId: `pi-studio:footer-tmux:${runs}`, origin: "pi-studio", code: runtime.code, mode: "summary" });
+				const doneFile = join(dir, "done");
+				const [command, args] = runtime.run(dir, runtime.code, doneFile, display);
+				const sent = spawnSync(command, args, { encoding: "utf8", timeout: 60_000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMUX_PANE: "%1", FAKE_COLUMN: column } });
+				assert.equal(sent.status, 0, sent.stderr);
+				assert.ok(existsSync(doneFile), `${runtime.name} ${column}: done`);
+				assert.equal(sent.stdout, [...display.prefixLines, ...lines, ...display.suffixLines, ""].join("\n"), `${runtime.name}, column ${column}`);
+			}
+		});
+	}
+});
+
+// Sol (candidate82): Ctrl+C while irb's footer waited for the column skipped the done file
+// (IRB::Abort isn't a StandardError), so Studio waited for that send forever. JShell turns the
+// same Ctrl+C during its wait into an exception the footer already catches; it's checked too.
+// Real irb and JShell run in a private tmux server, with a fake tmux on their PATH whose column
+// query stalls until the test presses Ctrl+C.
+test("Ctrl+C while irb's or JShell's footer waits still writes the done file, and the next send works", { timeout: 240_000 }, async (t) => {
+	const realTmux = spawnSync("/bin/sh", ["-c", "command -v tmux"], { encoding: "utf8" }).stdout.trim();
+	const root = mkdtempSync(join(tmpdir(), "studio-footer-interrupt-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const bin = join(root, "bin");
+	mkdirSync(bin);
+	// Stalls while the mode file says "stall", noting that it started; otherwise answers 0.
+	writeFileSync(join(bin, "tmux"), `#!/bin/sh\nif [ "$(cat "${root}/mode")" = stall ]; then : > "${root}/query-started"; sleep 5; fi\nprintf '0\\n'\n`);
+	chmodSync(join(bin, "tmux"), 0o700);
+	const builders = loadBuilders(process.execPath, ["rubyStringLiteral", "buildStudioRubyControlSource", "buildStudioJavaControlSource", "buildStudioJavaDriverSource", "buildStudioReplSubmissionLine", "juliaStringLiteral", "shellQuote"]);
+	const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	const until = async (check, ms, what) => {
+		const end = Date.now() + ms;
+		while (!check()) {
+			assert.ok(Date.now() < end, what);
+			await sleep(20);
+		}
+	};
+	const cases = [
+		{ name: "irb", command: "irb", start: "irb", ready: /irb\([^)]*\):\d+(:0)?> *$/m, code: (word) => `puts "${word}"`, send: (dir, code, doneFile, display) => {
+			const file = join(dir, "source.rb");
+			writeFileSync(file, builders.buildStudioRubyControlSource(code, doneFile, display));
+			return `load ${builders.rubyStringLiteral(file)}; nil`;
+		} },
+		{ name: "jshell", command: "jshell", start: "jshell -q", ready: /jshell> *$/m, code: (word) => `System.out.println("${word}");`, send: (dir, code, doneFile, display) => {
+			const source = join(dir, "source.java"), driver = join(dir, "driver.java");
+			writeFileSync(source, builders.buildStudioJavaControlSource(code, doneFile, display));
+			writeFileSync(driver, builders.buildStudioJavaDriverSource(source, doneFile, display));
+			return `/open ${driver}`;
+		} },
+	];
+	for (const runtime of cases) {
+		await t.test(runtime.name, { skip: has(runtime.command) && realTmux ? false : `${runtime.command} or tmux is not installed` }, async () => {
+			const server = `studio-footer-interrupt-${process.pid}-${runtime.name}`;
+			const tmux = (...args) => spawnSync(realTmux, ["-L", server, ...args], { encoding: "utf8" });
+			const screen = () => tmux("capture-pane", "-p", "-t", "repl").stdout;
+			writeFileSync(join(root, "mode"), "0");
+			const started = spawnSync(realTmux, ["-L", server, "-f", "/dev/null", "new-session", "-d", "-s", "repl", "-x", "120", "-y", "40", runtime.start], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+			assert.equal(started.status, 0, String(started.stderr));
+			try {
+				await until(() => runtime.ready.test(screen()), 60_000, `${runtime.name} starts`);
+				let sends = 0;
+				let marker = "";
+				const send = (word) => {
+					const dir = join(root, `${runtime.name}-${++sends}`);
+					mkdirSync(dir);
+					const doneFile = join(dir, "done");
+					const display = createReplSubmissionDisplay({ entryId: `pi-studio:footer-interrupt:${runtime.name}:${sends}`, origin: "pi-studio", code: runtime.code(word), mode: "summary" });
+					marker = display.suffixLines[0];
+					tmux("send-keys", "-t", "repl", "-l", runtime.send(dir, runtime.code(word), doneFile, display));
+					tmux("send-keys", "-t", "repl", "Enter");
+					return doneFile;
+				};
+				writeFileSync(join(root, "mode"), "stall");
+				rmSync(join(root, "query-started"), { force: true });
+				const first = send("before");
+				await until(() => existsSync(join(root, "query-started")), 60_000, `${runtime.name}: the footer's query starts`);
+				tmux("send-keys", "-t", "repl", "C-c");
+				await until(() => existsSync(first), 10_000, `${runtime.name}: the interrupted send still writes its done file`);
+				// In irb the interrupt ends the footer, so its done marker isn't printed: Ctrl+C landed
+				// during the wait, not after it.
+				if (runtime.name === "irb") assert.equal(screen().includes(marker), false, "irb: Ctrl+C landed during the footer's wait");
+				writeFileSync(join(root, "mode"), "0");
+				await until(() => runtime.ready.test(screen()), 15_000, `${runtime.name}: back at the prompt`);
+				const second = send("after");
+				await until(() => existsSync(second), 30_000, `${runtime.name}: the next send completes`);
+				// A line of output, not the echoed code (Sol).
+				await until(() => screen().split("\n").some((line) => line.trim() === "after"), 5_000, `${runtime.name}: the next send's output`);
+			} finally {
+				tmux("kill-server");
+			}
+		});
+	}
 });

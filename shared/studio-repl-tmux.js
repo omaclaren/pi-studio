@@ -6,7 +6,7 @@ const STUDIO_REPL_PROMPT_COMMAND_ENVIRONMENT = "PROMPT_COMMAND=";
  * Studio's own sessions: pi-studio-repl-<runtime>, then an optional custom-command
  * hash and an optional new-session suffix. Verified Stop accepts only these.
  */
-export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython|julia|r|ghci|clojure)(?:-[a-f0-9]{8})?(?:-[a-z0-9]+-[a-f0-9]{6})?$/;
+export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython|julia|r|ghci|clojure|ruby|java)(?:-[a-f0-9]{8})?(?:-[a-z0-9]+-[a-f0-9]{6})?$/;
 
 /** Fields read for each pane, in the order firstStudioReplPanes expects. */
 export const STUDIO_REPL_PANE_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_id}\t#{session_name}\t#{session_id}\t#{session_created}\t#{@pi_repl_runtime}\t#{@pi_repl_record_id}\t#{@pi_repl_record_version}";
@@ -108,6 +108,8 @@ const STUDIO_REPL_READY_PROMPTS = {
 	r: /^>[ \t]*$/,
 	ghci: /^\*?[A-Za-z0-9_.:]+(?: \*?[A-Za-z0-9_.:]+)*>[ \t]*$/,
 	clojure: /^[^\s>]+=>[ \t]*$/,
+	ruby: /^irb\([^\n]*\):\d+(?::0)?>[ \t]*$/,
+	java: /^jshell>[ \t]*$/,
 };
 
 /**
@@ -133,7 +135,8 @@ export function isStudioReplReadyLine(runtime, line) {
 function isStudioReplPrompt(line) {
 	return /^(?:>>>|In \[\d+\]:|\.\.\.:|>|\+)\s*$/.test(line)
 		|| /^(?:ghci|Prelude|\*?[A-Za-z0-9_.:]+)>\s*$/.test(line)
-		|| /^[^\s>]+=>\s*$/.test(line);
+		|| /^[^\s>]+=>\s*$/.test(line)
+		|| /^irb\(.*\)[:\d]+[>*]\s*$/.test(line);
 }
 
 /** @param {string} text */

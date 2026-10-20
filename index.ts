@@ -165,7 +165,7 @@ type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 type StudioPromptMode = "response" | "run" | "effective";
 type StudioPromptTriggerKind = "run" | "steer";
-type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure";
+type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure" | "ruby" | "java";
 type ReplSubmissionEchoMode = "off" | "summary" | "full";
 type ReplSubmissionDisplay = ReturnType<typeof createReplSubmissionDisplay>;
 type StudioQuizAngle = "general" | "scientist" | "mathematician" | "statistician" | "developer" | "reviewer";
@@ -1108,11 +1108,13 @@ const STUDIO_REPL_RUNTIME_LABELS: Record<StudioReplRuntime, string> = {
 	r: "R",
 	ghci: "GHCi",
 	clojure: "Clojure",
+	ruby: "Ruby",
+	java: "Java",
 };
 const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 	code: Type.String({ description: "Code to execute in the active or selected Studio REPL session." }),
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name. If omitted, Studio uses the active REPL session, or the first session matching target." })),
-	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, or clojure. Used when sessionName is omitted." })),
+	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, or java. Used when sessionName is omitted." })),
 	timeoutMs: Type.Optional(Type.Number({ description: "Maximum time to wait for completion when Studio can detect it (default 20000, max 120000).", minimum: 1000, maximum: STUDIO_REPL_SEND_MAX_TIMEOUT_MS })),
 	echoMode: Type.Optional(Type.Union(
 		[Type.Literal("off"), Type.Literal("summary"), Type.Literal("full")],
@@ -1122,7 +1124,7 @@ const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 const STUDIO_REPL_TOOL_ECHO_MODE = normalizeReplSubmissionEchoMode(process.env.PI_STUDIO_REPL_ECHO_MODE) as ReplSubmissionEchoMode;
 const STUDIO_REPL_STATUS_TOOL_PARAMS = Type.Object({
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name to inspect." })),
-	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, or clojure. If omitted, report all Studio-visible REPL sessions." })),
+	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, or java. If omitted, report all Studio-visible REPL sessions." })),
 });
 const STUDIO_EXPORT_INPUT_FORMAT_DESCRIPTION = "Optional input format: auto, markdown, or latex. Defaults to auto.";
 const STUDIO_EXPORT_PDF_OPTIONS_TOOL_PARAMS = Type.Object({
@@ -11211,7 +11213,9 @@ function isStudioReplRuntime(value: unknown): value is StudioReplRuntime {
 		|| value === "julia"
 		|| value === "r"
 		|| value === "ghci"
-		|| value === "clojure";
+		|| value === "clojure"
+		|| value === "ruby"
+		|| value === "java";
 }
 
 function normalizeStudioReplRuntime(value: unknown): StudioReplRuntime | null {
@@ -11227,6 +11231,8 @@ function getDefaultStudioReplRuntimeCommand(runtime: StudioReplRuntime): string 
 	if (runtime === "julia") return "julia";
 	if (runtime === "r") return "R";
 	if (runtime === "ghci") return "ghci";
+	if (runtime === "ruby") return "irb";
+	if (runtime === "java") return "jshell";
 	return "clojure";
 }
 
@@ -11261,7 +11267,7 @@ function inferStudioReplSessionRuntime(sessionName: string): { runtime: StudioRe
 	const studioMatch = sessionName.match(/^pi-studio-repl-([a-z0-9-]+)$/i);
 	if (studioMatch) {
 		const raw = (studioMatch[1] || "").toLowerCase();
-		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "r"] as StudioReplRuntime[])
+		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "ruby", "java", "r"] as StudioReplRuntime[])
 			.find((candidate) => raw === candidate || raw.startsWith(`${candidate}-`));
 		return { runtime: runtime ?? "unknown", source: "studio" };
 	}
@@ -11597,6 +11603,8 @@ function getStudioReplControlExtension(runtime: StudioReplRuntime): string {
 	if (runtime === "r") return "R";
 	if (runtime === "ghci") return "ghci";
 	if (runtime === "clojure") return "clj";
+	if (runtime === "ruby") return "rb";
+	if (runtime === "java") return "java";
 	if (runtime === "shell") return "sh";
 	return "py";
 }
@@ -11627,11 +11635,13 @@ function buildStudioClojureDisplayStatements(display: ReplSubmissionDisplay, ind
 	return display.prefixLines.map((line) => `${indent}(clojure.core/println ${JSON.stringify(line)})`);
 }
 
-// As in pi-repl 0.8.4: prints the pane's cursor column, or exits non-zero; tmux gets
+// As in pi-repl 0.8.6: prints the pane's cursor column, or exits non-zero; tmux gets
 // 500 ms. A wrapper runs it with Node and ends a line before its footer unless it prints
 // 0. Only the wrapper reads its output, so it never reaches the pane: a query that
 // outlives its wait can't print after the done file (Sol, Astra, candidate80).
-const STUDIO_CURSOR_COLUMN_QUERY = 'try { process.stdout.write(require("node:child_process").execFileSync("tmux", ["-N", "display-message", "-p", "-t", process.env.TMUX_PANE, "#{cursor_x}"], { encoding: "utf8", timeout: 500, killSignal: "SIGKILL", maxBuffer: 128, stdio: ["ignore", "pipe", "ignore"] }).trim()); } catch { process.exitCode = 1; }';
+// process.exit ends Node even if a startup hook in NODE_OPTIONS would keep it running,
+// and each wrapper also limits the whole helper to 5 s.
+const STUDIO_CURSOR_COLUMN_QUERY = 'let code = 1; try { require("node:fs").writeSync(1, require("node:child_process").execFileSync("tmux", ["-N", "display-message", "-p", "-t", process.env.TMUX_PANE, "#{cursor_x}"], { encoding: "utf8", timeout: 500, killSignal: "SIGKILL", maxBuffer: 128, stdio: ["ignore", "pipe", "ignore"] }).trim()); code = 0; } catch {} process.exit(code);';
 
 function buildStudioPythonFooter(display: ReplSubmissionDisplay): string[] {
 	if (!display.enabled) return [];
@@ -11705,12 +11715,32 @@ function buildStudioJuliaFooter(display: ReplSubmissionDisplay): string[] {
 	const query = `Cmd([${juliaStringLiteral(process.execPath)}, "-e", ${juliaStringLiteral(STUDIO_CURSOR_COLUMN_QUERY)}])`;
 	return [
 		'    local __pi_studio_column = ""',
-		// read throws if the query fails; catch also takes an interrupt here.
+		"    local __pi_studio_query = nothing",
+		// The wait, not the read, is bounded: a child the helper started could
+		// keep the pipe open after the helper exits. An interrupt does not end
+		// the wait, since killing Node early would leave its tmux child
+		// running. After 5 s a helper still running is killed, and the pipe
+		// is closed so that the reader ends too.
 		"    try",
 		"        flush(stdout)",
 		"        flush(stderr)",
-		`        __pi_studio_column = strip(read(pipeline(${query}, stdin=devnull, stderr=devnull), String))`,
+		`        __pi_studio_query = open(pipeline(${query}, stdin=devnull, stderr=devnull), "r")`,
+		"        local __pi_studio_reader = @async read(__pi_studio_query, String)",
+		"        local __pi_studio_deadline = time_ns() + 5_000_000_000",
+		"        local __pi_studio_finished = false",
+		"        while !__pi_studio_finished && time_ns() < __pi_studio_deadline",
+		"            try",
+		"                __pi_studio_finished = timedwait(() -> istaskdone(__pi_studio_reader) && process_exited(__pi_studio_query), max(0.01, (signed(__pi_studio_deadline) - signed(time_ns())) / 1e9); pollint=0.01) === :ok",
+		"            catch",
+		"            end",
+		"        end",
+		"        __pi_studio_finished && success(__pi_studio_query) && (__pi_studio_column = strip(fetch(__pi_studio_reader)))",
 		"    catch",
+		"    finally",
+		"        if !isnothing(__pi_studio_query)",
+		"            process_exited(__pi_studio_query) || kill(__pi_studio_query, Base.SIGKILL)",
+		"            try close(__pi_studio_query.out) catch end",
+		"        end",
 		"    end",
 		'    __pi_studio_column == "0" || Base.println()',
 		...display.suffixLines.map((line) => `    Base.println(${juliaStringLiteral(line)})`),
@@ -11739,9 +11769,10 @@ function buildStudioRFooter(display: ReplSubmissionDisplay): string[] {
 	if (!display.enabled) return [];
 	return [
 		"    try({ flush(stdout()); flush(stderr()) }, silent = TRUE)",
-		// system2 quotes the command but not its arguments. A failed query
-		// sets a status; an error or Ctrl-C here gives NULL, not a lost done file.
-		`    .__pi_studio_column <- tryCatch(suppressWarnings(system2(${JSON.stringify(process.execPath)}, c("-e", ${JSON.stringify(shellQuote(STUDIO_CURSOR_COLUMN_QUERY))}), stdout = TRUE, stderr = FALSE)), error = function(e) NULL, interrupt = function(e) NULL)`,
+		// system2 quotes the command but not its arguments, and kills it after
+		// 5 s. A failed query sets a status; an error or Ctrl-C here gives
+		// NULL, not a lost done file.
+		`    .__pi_studio_column <- tryCatch(suppressWarnings(system2(${JSON.stringify(process.execPath)}, c("-e", ${JSON.stringify(shellQuote(STUDIO_CURSOR_COLUMN_QUERY))}), stdout = TRUE, stderr = FALSE, timeout = 5)), error = function(e) NULL, interrupt = function(e) NULL)`,
 		'    if (!is.null(attr(.__pi_studio_column, "status")) || !identical(trimws(paste(.__pi_studio_column, collapse = "")), "0")) base::cat("\\n")',
 		...display.suffixLines.map((line) => `    base::cat(${JSON.stringify(`${line}\n`)})`),
 	];
@@ -11810,18 +11841,29 @@ function buildStudioClojureFooter(display: ReplSubmissionDisplay): string[] {
 	return [
 		"      (try (.flush *out*) (.flush *err*) (catch Throwable _))",
 		// An interrupt left pending by the code would end the wait at once, so
-		// it is cleared for the query and restored afterwards, as is one that
-		// arrives during the wait. The query is killed on every path.
+		// it is cleared for the query and restored afterwards. One that arrives
+		// during the wait is noted and the wait goes on: killing Node early
+		// would leave its tmux child running. The query is killed after 5 s.
 		"      (let [pi-studio-interrupted (volatile! (Thread/interrupted))",
 		`            pi-studio-query (try (.start (.redirectError ${builder} java.lang.ProcessBuilder$Redirect/DISCARD)) (catch Throwable _ nil))`,
+		"            pi-studio-deadline (+ (System/nanoTime) 5000000000)",
 		"            pi-studio-column (when pi-studio-query",
-		"                               (try",
-		"                                 (.close (.getOutputStream pi-studio-query))",
-		"                                 (when (and (.waitFor pi-studio-query 5 java.util.concurrent.TimeUnit/SECONDS) (zero? (.exitValue pi-studio-query)))",
-		"                                   (.trim ^String (slurp (.getInputStream pi-studio-query))))",
-		"                                 (catch InterruptedException _ (vreset! pi-studio-interrupted true) nil)",
-		"                                 (catch Throwable _ nil)",
-		"                                 (finally (.destroyForcibly pi-studio-query))))]",
+		"                             (try",
+		"                               (.close (.getOutputStream pi-studio-query))",
+		"                               (when (and (loop []",
+		"                                            (let [left (- pi-studio-deadline (System/nanoTime))",
+		"                                                  exited (when (pos? left)",
+		"                                                           (try (.waitFor pi-studio-query left java.util.concurrent.TimeUnit/NANOSECONDS)",
+		"                                                             (catch InterruptedException _ (vreset! pi-studio-interrupted true) :interrupted)))]",
+		"                                              (if (= exited :interrupted) (recur) exited)))",
+		"                                          (zero? (.exitValue pi-studio-query)))",
+		// Only what is waiting: a child of Node could hold the pipe open.
+		"                                 (let [in (.getInputStream pi-studio-query)",
+		"                                       bytes (byte-array (min 32 (.available in)))",
+		"                                       n (.read in bytes)]",
+		'                                   (.trim (String. bytes 0 (int (max 0 n)) "UTF-8"))))',
+		"                               (catch Throwable _ nil)",
+		"                               (finally (.destroyForcibly pi-studio-query))))]",
 		"        (when @pi-studio-interrupted (.interrupt (Thread/currentThread)))",
 		'        (when-not (= pi-studio-column "0") (clojure.core/println))',
 		...display.suffixLines.map((line) => `        (clojure.core/println ${JSON.stringify(line)})`),
@@ -11849,6 +11891,143 @@ function buildStudioClojureControlSource(code: string, doneFile: string, display
 	].join("\n");
 }
 
+// Ruby (irb) and Java (JShell), as in pi-repl 0.8.5: each wrapper queries tmux for the
+// cursor column itself; Java's completion runs from an outer /open driver, as GHCi's does.
+function rubyStringLiteral(value: string): string {
+	// JSON escaping leaves Ruby's #{...}, #@... and #$... interpolation active.
+	// ASCII escapes also keep Unicode paths intact through older IRB input editors.
+	return JSON.stringify(value).replace(/#/g, "\\#")
+		.replace(/[^\x00-\x7f]/gu, (character) => `\\u{${character.codePointAt(0)!.toString(16)}}`);
+}
+
+function buildStudioRubyControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	const prefix = display.enabled ? display.prefixLines.map((line) => `  puts ${rubyStringLiteral(line)}`) : [];
+	// Query the actual terminal column rather than intercepting user stdout.
+	// Keep the old newline guard if the bounded, read-only query is unavailable.
+	const completion = display.enabled ? [
+		'  __pi_studio_column = ""',
+		"  begin",
+		"    $stdout.flush",
+		"    $stderr.flush",
+		// Ruby's $? is thread-local: do not replace the user's last child status.
+		"    __pi_studio_column = Thread.new do",
+		"      begin",
+		`        IO.popen(["tmux", "-N", "display-message", "-p", "-t", ENV.fetch("TMUX_PANE"), ${rubyStringLiteral("#{cursor_x}")}], err: File::NULL) do |__pi_studio_query|`,
+		"          begin",
+		"            if IO.select([__pi_studio_query], nil, nil, 0.5)",
+		"              __pi_studio_bytes = __pi_studio_query.read_nonblock(32, exception: false)",
+		'              __pi_studio_bytes.is_a?(String) ? __pi_studio_bytes.strip : ""',
+		"            else",
+		'              ""',
+		"            end",
+		"          ensure",
+		// Reap only our own query process, including on timeout; never leave an
+		// IO.popen close waiting indefinitely for a stuck tmux client to exit.
+		"            Process.kill('KILL', __pi_studio_query.pid) rescue nil",
+		"          end",
+		"        end",
+		"      rescue StandardError",
+		'        ""',
+		"      end",
+		"    end.value",
+		"  rescue StandardError",
+		'    __pi_studio_column = ""',
+		"  end",
+		'  puts unless __pi_studio_column == "0"',
+		...display.suffixLines.map((line) => `  puts ${rubyStringLiteral(line)}`),
+	] : ["  puts"];
+	return [
+		"begin",
+		...prefix,
+		`  __pi_studio_code = ${rubyStringLiteral(code)}`,
+		"  __pi_studio_context = defined?(IRB) && IRB.respond_to?(:CurrentContext) && IRB.CurrentContext",
+		"  __pi_studio_binding = __pi_studio_context ? __pi_studio_context.workspace.binding : TOPLEVEL_BINDING",
+		"  __pi_studio_result = eval(__pi_studio_code, __pi_studio_binding, '<pi-studio-repl>', 1)",
+		"  p __pi_studio_result unless __pi_studio_result.nil?",
+		"rescue Exception => __pi_studio_e",
+		"  $stderr.puts __pi_studio_e.full_message(highlight: false)",
+		"ensure",
+		// The done file is written even if Ctrl+C lands during the footer: IRB's
+		// IRB::Abort and Ruby's Interrupt aren't StandardErrors, so the query's
+		// rescue lets them through, and Studio would wait for this send forever (Sol).
+		"  begin",
+		...completion.map((line) => `  ${line}`),
+		"  ensure",
+		`    File.write(${rubyStringLiteral(doneFile)}, "done\\n")`,
+		"  end",
+		// IRB checks echo? immediately after evaluating the loader. Suppress
+		// just that result, restoring the original method before returning.
+		"  begin",
+		"    if __pi_studio_context && __pi_studio_context.respond_to?(:echo?)",
+		"      __pi_studio_echo_owner = __pi_studio_context.singleton_class",
+		"      __pi_studio_echo_owned = __pi_studio_echo_owner.instance_methods(false).include?(:echo?)",
+		"      __pi_studio_echo_original = __pi_studio_context.method(:echo?)",
+		"      __pi_studio_context.define_singleton_method(:echo?) do",
+		"        if __pi_studio_echo_owned",
+		"          __pi_studio_echo_owner.send(:define_method, :echo?, __pi_studio_echo_original)",
+		"        else",
+		"          __pi_studio_echo_owner.send(:remove_method, :echo?)",
+		"        end",
+		"        false",
+		"      end",
+		"    end",
+		"  rescue StandardError",
+		// If a customised/frozen context refuses the hook, keep normal IRB
+		// behaviour rather than fail the already completed submission.
+		"  end",
+		"end",
+	].join("\n");
+}
+
+function buildStudioJavaControlSource(code: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	if (/[\r\n]/.test(doneFile)) throw new Error("JShell control paths cannot contain line breaks.");
+	const prefix = display.enabled ? display.prefixLines.map((line) => `java.lang.System.out.println(${JSON.stringify(line)});`) : [];
+	// /open evaluates top-level snippets in the existing JShell. Completion
+	// stays in the outer driver, outside this source file's parser state.
+	return [...prefix, code.replace(/\r/g, "").trimEnd(), ""].join("\n");
+}
+
+function buildStudioJavaDriverSource(sourceFile: string, doneFile: string, display: ReplSubmissionDisplay): string {
+	// Only add a newline when the terminal is mid-line. The scoped query does
+	// not replace System.out/err, change user declarations, or emit another /open.
+	const completion = display.enabled ? [
+		'  String __pi_studio_column = "";',
+		"  java.lang.Process __pi_studio_query = null;",
+		"  try {",
+		"    java.lang.System.out.flush();",
+		"    java.lang.System.err.flush();",
+		`    __pi_studio_query = new java.lang.ProcessBuilder("tmux", "-N", "display-message", "-p", "-t", java.lang.System.getenv("TMUX_PANE"), ${JSON.stringify("#{cursor_x}")}).redirectError(java.lang.ProcessBuilder.Redirect.DISCARD).start();`,
+		"    if (__pi_studio_query.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS) && __pi_studio_query.exitValue() == 0) {",
+		// Do not wait for EOF if an unexpected descendant inherits the pipe.
+		"      byte[] __pi_studio_bytes = new byte[32];",
+		"      int __pi_studio_count = __pi_studio_query.getInputStream().read(__pi_studio_bytes, 0, Math.min(32, __pi_studio_query.getInputStream().available()));",
+		"      __pi_studio_column = new String(__pi_studio_bytes, 0, Math.max(0, __pi_studio_count), java.nio.charset.StandardCharsets.UTF_8).trim();",
+		"    }",
+		"  } catch (Exception __pi_studio_ignored) {",
+		'    __pi_studio_column = "";',
+		"  } finally {",
+		"    if (__pi_studio_query != null) {",
+		"      try { __pi_studio_query.destroyForcibly(); } catch (Exception __pi_studio_ignored) {}",
+		"    }",
+		"  }",
+		'  if (!"0".equals(__pi_studio_column)) java.lang.System.out.println();',
+		...display.suffixLines.map((line) => `  java.lang.System.out.println(${JSON.stringify(line)});`),
+	] : [];
+	return [
+		buildStudioReplSubmissionLine("java", sourceFile, doneFile),
+		"{",
+		// As for Ruby. JShell stops a snippet with an asynchronous StopExecutionException,
+		// which isn't an Exception. During waitFor it surfaces as one the footer catches, but
+		// elsewhere in the footer only finally is sure to run.
+		"try {",
+		...completion,
+		"} finally {",
+		`  java.nio.file.Files.write(java.nio.file.Paths.get(${JSON.stringify(doneFile)}), new byte[]{100, 111, 110, 101, 10});`,
+		"}",
+		"}",
+	].join("\n");
+}
+
 function buildStudioShellControlSource(code: string, display: ReplSubmissionDisplay): string {
 	if (!display.enabled) return `${code.replace(/\r/g, "").trimEnd()}\n`;
 	return [
@@ -11868,6 +12047,8 @@ function buildStudioReplControlSource(runtime: StudioReplRuntime, code: string, 
 	if (runtime === "r") return buildStudioRControlSource(code, doneFile, display);
 	if (runtime === "ghci") return buildStudioGhciControlSource(code, doneFile, display);
 	if (runtime === "clojure") return buildStudioClojureControlSource(code, doneFile, display);
+	if (runtime === "ruby") return buildStudioRubyControlSource(code, doneFile, display);
+	if (runtime === "java") return buildStudioJavaControlSource(code, doneFile, display);
 	if (runtime === "shell") return buildStudioShellControlSource(code, display);
 	return null;
 }
@@ -11878,6 +12059,8 @@ function buildStudioReplSubmissionLine(runtime: StudioReplRuntime, sourceFile: s
 	if (runtime === "r") return `source(${quotedPath}, local=.GlobalEnv)`;
 	if (runtime === "ghci") return `:script ${quotedPath}`;
 	if (runtime === "clojure") return `(do (load-file ${quotedPath}) :pi-studio/silent)`;
+	if (runtime === "ruby") return `load ${rubyStringLiteral(sourceFile)}; nil`;
+	if (runtime === "java") return `/open ${sourceFile}`;
 	if (runtime === "shell") return `. ${shellQuote(sourceFile)}; touch ${shellQuote(doneFile)}`;
 	return `exec(open(${quotedPath}, encoding="utf-8").read(), globals())`;
 }
@@ -11943,6 +12126,22 @@ function prepareStudioReplSubmission(
 			throw error;
 		}
 	}
+	if (runtime === "java") {
+		// As in pi-repl: JShell echoes only the outer /open. Its nested load of the
+		// source returns before completion, even if the source is rejected or unfinished.
+		try {
+			const driver = createPrivateReplControlFiles({
+				...controlOptions,
+				extension: "java",
+				buildSource: () => buildStudioJavaDriverSource(controlFiles.sourceFile, controlFiles.doneFile, display),
+			});
+			controlFiles.helpers = [driver];
+			loader = driver.sourceFile;
+		} catch (error) {
+			cleanupStudioReplControlFiles(controlFiles);
+			throw error;
+		}
+	}
 	return {
 		runtime,
 		usedControlFile: true,
@@ -11952,13 +12151,16 @@ function prepareStudioReplSubmission(
 	};
 }
 
-function pasteTextToStudioReplPane(text: string, paneTarget: string): { ok: true } | { ok: false; message: string; submissionStarted: boolean } {
+function pasteTextToStudioReplPane(text: string, paneTarget: string, bracketed = false): { ok: true } | { ok: false; message: string; submissionStarted: boolean } {
 	const bufferName = `pi-studio-repl-${randomUUID().replace(/-/g, "")}`;
 	const target = paneTarget;
 	const loadResult = runStudioTmux(["load-buffer", "-b", bufferName, "-"], { input: text, timeout: 5_000 });
 	if (!loadResult.ok) return { ok: false, message: loadResult.message || "Failed to load text into tmux buffer.", submissionStarted: false };
 	try {
-		const pasteResult = runStudioTmux(["paste-buffer", "-d", "-b", bufferName, "-t", target], { timeout: 5_000 });
+		// As in pi-repl 0.8.5: -p brackets the paste only if the REPL asked for bracketed
+		// pastes. Julia then draws a line that wraps in the pane once, not once per
+		// character, which left copies of its first row in the output.
+		const pasteResult = runStudioTmux(["paste-buffer", ...(bracketed ? ["-p"] : []), "-d", "-b", bufferName, "-t", target], { timeout: 5_000 });
 		if (!pasteResult.ok) return { ok: false, message: pasteResult.message || "Failed to paste text into REPL session.", submissionStarted: false };
 		const enterResult = runStudioTmux(["send-keys", "-t", target, "C-m"], { timeout: 5_000 });
 		if (!enterResult.ok) return { ok: false, message: enterResult.message || "Failed to send Enter to REPL session.", submissionStarted: true };
@@ -11987,7 +12189,7 @@ function sendTextToStudioReplSession(
 		submissionId: options.submissionId || `pi-studio:local:${randomUUID()}`,
 		echoMode: normalizeReplSubmissionEchoMode(options.echoMode, STUDIO_REPL_TOOL_ECHO_MODE) as ReplSubmissionEchoMode,
 	}, runtime);
-	const pasted = pasteTextToStudioReplPane(prepared.submissionText, paneTarget);
+	const pasted = pasteTextToStudioReplPane(prepared.submissionText, paneTarget, runtime === "julia");
 	if (!pasted.ok) return {
 		ok: false,
 		message: pasted.message,
@@ -13532,12 +13734,13 @@ export default function (pi: ExtensionAPI) {
 		name: "studio_repl_send",
 		label: "Send to Studio REPL",
 		description: "Execute code in the active or selected Studio tmux-backed REPL session using Studio's safe runtime-specific submission protocol.",
-		promptSnippet: "Execute code in the active Studio REPL session safely, including multiline Python/R/Julia/GHCi/Clojure snippets.",
+		promptSnippet: "Execute code in the active Studio REPL session safely, including multiline Python/R/Julia/GHCi/Clojure/Ruby/Java snippets.",
 		promptGuidelines: [
 			"Use studio_repl_send when the user asks to run code in the active Studio REPL.",
 			"Do not improvise tmux paste-buffer commands for Studio REPL code; studio_repl_send handles multiline quoting and runtime-specific submission.",
 			"studio_repl_send shows bounded submitted code and alignment anchors in the raw pane by default (Summary). Use echoMode='off' when the user asks for quiet output, and echoMode='full' only when explicitly requested.",
 			"If several REPL sessions of the same runtime are running, use studio_repl_status first or pass the exact sessionName when known.",
+			"In Java (JShell), use System.out.println(...) for values you want to see: code is loaded with /open, which doesn't echo expression results.",
 		],
 		parameters: STUDIO_REPL_SEND_TOOL_PARAMS,
 		executionMode: "sequential",
