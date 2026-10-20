@@ -4990,20 +4990,19 @@
       white-space: pre-wrap;
     }
 
-    .repl-journal-list-wide-prompt {
-      --repl-studio-prompt-width: 3.9em;
-    }
-
+    /* The prompt column widens for a longer prompt (jshell>, octave>, gnuplot>), measured
+       in the prompt's own font: --repl-studio-prompt-chars is the record's longest prompt. */
     .repl-studio-code-row,
     .repl-studio-output-row {
       display: grid;
-      grid-template-columns: var(--repl-studio-prompt-width) minmax(0, 1fr);
+      grid-template-columns: minmax(var(--repl-studio-prompt-width), max-content) minmax(0, 1fr);
       gap: var(--repl-studio-column-gap);
       align-items: start;
     }
 
     .repl-studio-prompt,
     .repl-studio-output-label {
+      min-width: calc(var(--repl-studio-prompt-chars, 0) * 1ch);
       font-family: var(--font-mono);
       font-size: var(--studio-working-font-size);
       line-height: 1.45;

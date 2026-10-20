@@ -157,17 +157,19 @@ export const PI_REPL_STOP_SESSION_NAME = /^pi-repl-(python|julia|r|ghci|clojure|
 
 /**
  * Explicit stop only. Never used by send, startup, reload, or shutdown hooks.
- * sessionNamePattern names the sessions this host owns; pi-studio passes its own.
+ * sessionNamePattern names the sessions this host owns, and isGnuplotSession picks out
+ * the ones whose detached helpers to clean up; pi-studio passes its own.
  */
-export async function stopVerifiedReplSession({ tmux, sessionName, sessionNamePattern = PI_REPL_STOP_SESSION_NAME, snapshot = readStopProcessTable, signal = (pid, value) => process.kill(pid, value), currentPid = process.pid, uid = process.getuid?.(), graceMs = 500, termMs = 1000, killMs = 2000, findMarked = findOwnedGnuplotProcesses, snapshotSockets = snapshotGnuplotSockets, cleanupSockets = cleanupGnuplotSockets }) {
+export async function stopVerifiedReplSession({ tmux, sessionName, sessionNamePattern = PI_REPL_STOP_SESSION_NAME, isGnuplotSession = (name) => name === "pi-repl-gnuplot", snapshot = readStopProcessTable, signal = (pid, value) => process.kill(pid, value), currentPid = process.pid, uid = process.getuid?.(), graceMs = 500, termMs = 1000, killMs = 2000, findMarked = findOwnedGnuplotProcesses, snapshotSockets = snapshotGnuplotSockets, cleanupSockets = cleanupGnuplotSockets }) {
 	// A global or sticky pattern keeps state between tests; refuse it rather than misjudge a name.
 	if (!(sessionNamePattern instanceof RegExp) || sessionNamePattern.global || sessionNamePattern.sticky) throw new Error("Verified REPL shutdown needs a plain session-name pattern.");
+	if (typeof isGnuplotSession !== "function") throw new Error("Verified REPL shutdown needs a gnuplot-session predicate.");
 	if (typeof uid !== "number" || typeof sessionName !== "string" || !sessionNamePattern.test(sessionName)) throw new Error("Verified REPL shutdown requires a supported local Unix session.");
 	const panes = await readPanes(tmux);
 	const selected = panes.filter((p) => p.sessionName === sessionName);
 	if (!selected.length) throw new Error("The selected session ended or changed before shutdown; no processes were signalled.");
 	const original = selected[0];
-	const gnuplot = sessionName === "pi-repl-gnuplot";
+	const gnuplot = isGnuplotSession(sessionName) === true;
 	const owner = gnuplot && validGnuplotOwner(original.gnuplotOwner) ? original.gnuplotOwner : undefined;
 	const warnings = gnuplot && !owner ? ["Detached gnuplot/Qt helpers cannot be verified: this session has no valid ownership marker. Unattributed detached helpers were left untouched."] : [];
 	function guardOwner(currentPanes) {

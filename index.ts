@@ -59,6 +59,7 @@ import {
 	cleanStudioReplOutput,
 	firstStudioReplPanes,
 	buildStudioReplDeadPaneCloseArgs,
+	isStudioGnuplotSession,
 	isStudioReplReadyLine,
 	STUDIO_REPL_PANE_FORMAT,
 	STUDIO_REPL_SESSION_NAME,
@@ -88,6 +89,8 @@ import {
 	createPrivateReplControlFiles,
 } from "./shared/repl-control-files.js";
 import { buildMLanguageControlSource, mStringLiteral } from "./shared/repl-m-language.js";
+import { buildGnuplotDriverSource, buildGnuplotGuardSource, buildGnuplotSubmissionLine } from "./shared/repl-gnuplot.js";
+import { GNUPLOT_OWNER_ENV, GNUPLOT_OWNER_OPTION } from "./shared/repl-gnuplot-processes.js";
 import { buildStudioForwardingHint, buildStudioSshTunnelHint, isStudioSshSession as isSshSession } from "./shared/studio-ssh-hint.js";
 import {
 	buildStudioPendingPage,
@@ -166,7 +169,7 @@ type StudioSourceKind = "file" | "last-response" | "blank";
 type TerminalActivityPhase = "idle" | "running" | "tool" | "responding";
 type StudioPromptMode = "response" | "run" | "effective";
 type StudioPromptTriggerKind = "run" | "steer";
-type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure" | "ruby" | "java" | "octave" | "matlab";
+type StudioReplRuntime = "shell" | "python" | "ipython" | "julia" | "r" | "ghci" | "clojure" | "ruby" | "java" | "octave" | "matlab" | "gnuplot";
 type ReplSubmissionEchoMode = "off" | "summary" | "full";
 type ReplSubmissionDisplay = ReturnType<typeof createReplSubmissionDisplay>;
 type StudioQuizAngle = "general" | "scientist" | "mathematician" | "statistician" | "developer" | "reviewer";
@@ -1115,11 +1118,12 @@ const STUDIO_REPL_RUNTIME_LABELS: Record<StudioReplRuntime, string> = {
 	java: "Java",
 	octave: "Octave",
 	matlab: "MATLAB",
+	gnuplot: "gnuplot",
 };
 const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 	code: Type.String({ description: "Code to execute in the active or selected Studio REPL session." }),
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name. If omitted, Studio uses the active REPL session, or the first session matching target." })),
-	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, or matlab. Used when sessionName is omitted." })),
+	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, matlab, or gnuplot. Used when sessionName is omitted." })),
 	timeoutMs: Type.Optional(Type.Number({ description: "Maximum time to wait for completion when Studio can detect it (default 20000, max 120000).", minimum: 1000, maximum: STUDIO_REPL_SEND_MAX_TIMEOUT_MS })),
 	echoMode: Type.Optional(Type.Union(
 		[Type.Literal("off"), Type.Literal("summary"), Type.Literal("full")],
@@ -1129,7 +1133,7 @@ const STUDIO_REPL_SEND_TOOL_PARAMS = Type.Object({
 const STUDIO_REPL_TOOL_ECHO_MODE = normalizeReplSubmissionEchoMode(process.env.PI_STUDIO_REPL_ECHO_MODE) as ReplSubmissionEchoMode;
 const STUDIO_REPL_STATUS_TOOL_PARAMS = Type.Object({
 	sessionName: Type.Optional(Type.String({ description: "Exact Studio/pi-repl tmux session name to inspect." })),
-	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, or matlab. If omitted, report all Studio-visible REPL sessions." })),
+	target: Type.Optional(Type.String({ description: "Optional runtime target: shell, python, ipython, julia, r, ghci, clojure, ruby, java, octave, matlab, or gnuplot. If omitted, report all Studio-visible REPL sessions." })),
 });
 const STUDIO_EXPORT_INPUT_FORMAT_DESCRIPTION = "Optional input format: auto, markdown, or latex. Defaults to auto.";
 const STUDIO_EXPORT_PDF_OPTIONS_TOOL_PARAMS = Type.Object({
@@ -11222,7 +11226,8 @@ function isStudioReplRuntime(value: unknown): value is StudioReplRuntime {
 		|| value === "ruby"
 		|| value === "java"
 		|| value === "octave"
-		|| value === "matlab";
+		|| value === "matlab"
+		|| value === "gnuplot";
 }
 
 function normalizeStudioReplRuntime(value: unknown): StudioReplRuntime | null {
@@ -11244,6 +11249,7 @@ function getDefaultStudioReplRuntimeCommand(runtime: StudioReplRuntime): string 
 	// workspace to octave-workspace in the working directory. --persist keeps it interactive.
 	if (runtime === "octave") return "octave-cli --quiet --interactive --persist --eval 'sighup_dumps_octave_core(false); sigterm_dumps_octave_core(false);'";
 	if (runtime === "matlab") return "matlab -nodesktop -nosplash";
+	if (runtime === "gnuplot") return "gnuplot";
 	return "clojure";
 }
 
@@ -11278,7 +11284,7 @@ function inferStudioReplSessionRuntime(sessionName: string): { runtime: StudioRe
 	const studioMatch = sessionName.match(/^pi-studio-repl-([a-z0-9-]+)$/i);
 	if (studioMatch) {
 		const raw = (studioMatch[1] || "").toLowerCase();
-		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "ruby", "java", "octave", "matlab", "r"] as StudioReplRuntime[])
+		const runtime = (["clojure", "python", "ipython", "julia", "shell", "ghci", "ruby", "java", "octave", "matlab", "gnuplot", "r"] as StudioReplRuntime[])
 			.find((candidate) => raw === candidate || raw.startsWith(`${candidate}-`));
 		return { runtime: runtime ?? "unknown", source: "studio" };
 	}
@@ -11481,7 +11487,10 @@ async function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, o
 	// As in pi-repl, MATLAB is told to start in the working directory; it can otherwise
 	// start in its own userpath.
 	const command = getStudioReplRuntimeCommand(runtime, commandOverride) + (runtime === "matlab" && !commandOverride ? ` -sd ${shellQuote(cwd || process.cwd())}` : "");
-	const created = runStudioTmux(buildStudioReplTmuxStartArgs(sessionName, cwd || process.cwd(), command), { timeout: 5_000 });
+	// As in pi-repl: gnuplot and the Qt helpers it starts inherit an owner marker, so Stop
+	// can find helpers that have left the session's process tree.
+	const gnuplotOwner = runtime === "gnuplot" ? randomUUID().replace(/-/g, "") : "";
+	const created = runStudioTmux(buildStudioReplTmuxStartArgs(sessionName, cwd || process.cwd(), command, gnuplotOwner ? [`${GNUPLOT_OWNER_ENV}=${gnuplotOwner}`] : []), { timeout: 5_000 });
 	if (!created.ok) {
 		// Another tab may have started the same session first; share it.
 		if (running()) return reuse();
@@ -11492,6 +11501,7 @@ async function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, o
 	const [sessionId = "", paneId = ""] = created.stdout.trim().split("\t");
 	if (!/^\$\d+$/.test(sessionId) || !/^%\d+$/.test(paneId)) return { ok: false, message: `Started ${sessionName}, but tmux didn't report its ID. Check it before running code.` };
 	runStudioTmux(["set-option", "-q", "-t", sessionId, STUDIO_REPL_RUNTIME_OPTION, runtime], { timeout: 3_000 });
+	if (gnuplotOwner) runStudioTmux(["set-option", "-q", "-t", sessionId, GNUPLOT_OWNER_OPTION, gnuplotOwner], { timeout: 3_000 });
 	const started = `Started ${options?.newSession ? "new " : ""}${label} REPL${commandOverride ? ` with custom command: ${commandOverride}` : ""}`;
 	const exited = `${label} exited while starting. Check the command: ${command}.`;
 	// Wait for the runtime's normal prompt, only reading the pane: no probe, Enter or Ctrl-C (Sol).
@@ -11551,7 +11561,7 @@ async function stopStudioReplSession(sessionName: string): Promise<{ ok: true; m
 		return { ok: true, message: `Closed ${sessionName}.`, session };
 	}
 	try {
-		await stopVerifiedReplSession({ tmux: (args: string[]) => runStudioTmuxAsync(args), sessionName, sessionNamePattern: STUDIO_REPL_SESSION_NAME });
+		await stopVerifiedReplSession({ tmux: (args: string[]) => runStudioTmuxAsync(args), sessionName, sessionNamePattern: STUDIO_REPL_SESSION_NAME, isGnuplotSession: isStudioGnuplotSession });
 		return { ok: true, message: `Stopped ${sessionName}.`, session };
 	} catch (error) {
 		// After tmux has closed the session, the shared stop wraps its reason as the cause.
@@ -11619,6 +11629,7 @@ function getStudioReplControlExtension(runtime: StudioReplRuntime): string {
 	if (runtime === "ruby") return "rb";
 	if (runtime === "java") return "java";
 	if (runtime === "octave" || runtime === "matlab") return "m";
+	if (runtime === "gnuplot") return "gp";
 	if (runtime === "shell") return "sh";
 	return "py";
 }
@@ -11655,10 +11666,13 @@ function buildStudioClojureDisplayStatements(display: ReplSubmissionDisplay, ind
 // outlives its wait can't print after the done file (Sol, Astra, candidate80).
 // process.exit ends Node even if a startup hook in NODE_OPTIONS would keep it running,
 // and each wrapper also limits the whole helper to 5 s.
+// With the display Off, the footers still end a line that output left open, and add
+// nothing else. Otherwise the runtime's prompt follows the output on the same row,
+// which the record mistook for a prompt row, and line editors such as gnuplot's then
+// redraw the next pasted line wrongly (Astra, candidate90).
 const STUDIO_CURSOR_COLUMN_QUERY = 'let code = 1; try { require("node:fs").writeSync(1, require("node:child_process").execFileSync("tmux", ["-N", "display-message", "-p", "-t", process.env.TMUX_PANE, "#{cursor_x}"], { encoding: "utf8", timeout: 500, killSignal: "SIGKILL", maxBuffer: 128, stdio: ["ignore", "pipe", "ignore"] }).trim()); code = 0; } catch {} process.exit(code);';
 
 function buildStudioPythonFooter(display: ReplSubmissionDisplay): string[] {
-	if (!display.enabled) return [];
 	return [
 		"    import subprocess as __pi_studio_subprocess",
 		"    import sys as __pi_studio_sys",
@@ -11725,7 +11739,6 @@ function buildStudioPythonControlSource(runtime: "python" | "ipython", code: str
 }
 
 function buildStudioJuliaFooter(display: ReplSubmissionDisplay): string[] {
-	if (!display.enabled) return [];
 	const query = `Cmd([${juliaStringLiteral(process.execPath)}, "-e", ${juliaStringLiteral(STUDIO_CURSOR_COLUMN_QUERY)}])`;
 	return [
 		'    local __pi_studio_column = ""',
@@ -11780,7 +11793,6 @@ function buildStudioJuliaControlSource(code: string, doneFile: string, display: 
 }
 
 function buildStudioRFooter(display: ReplSubmissionDisplay): string[] {
-	if (!display.enabled) return [];
 	return [
 		"    try({ flush(stdout()); flush(stderr()) }, silent = TRUE)",
 		// system2 quotes the command but not its arguments, and kills it after
@@ -11836,21 +11848,22 @@ function buildStudioGhciControlSource(code: string, doneFile: string, display: R
 	].filter(Boolean).join("\n") + "\n";
 }
 
+// The cursor column for a footer run by a shell: Studio's supervisor below runs the query,
+// bounded, and Ctrl+C stops only the query. Empty if the query fails. ${NODE_OPTIONS-}
+// because the Shell runtime's footer runs in the user's shell, which may have set -u (Astra).
+function buildStudioShellCursorColumn(): string {
+	return `__pi_studio_column=$(NODE_OPTIONS= ${shellQuote(process.execPath)} -e ${shellQuote(STUDIO_CURSOR_COLUMN_SUPERVISOR)} -- "\${NODE_OPTIONS-}" </dev/null 2>/dev/null) || __pi_studio_column=`;
+}
+
 function buildStudioGhciCompletionLine(doneFile: string, display: ReplSubmissionDisplay): string {
-	// As in pi-repl: start the footer on a new line only when output left the
-	// cursor mid-line. Node's bounded cursor query falls back to a plain footer.
-	const footerScript = [
-		'let column = "";',
-		'try { column = require("node:child_process").execFileSync("tmux", ["-N", "display-message", "-p", "-t", process.env.TMUX_PANE, "#{cursor_x}"], { encoding: "utf8", timeout: 500, killSignal: "SIGKILL", maxBuffer: 128, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch {}',
-		`process.stdout.write((column === "0" ? "" : "\\n") + ${JSON.stringify(`${display.suffixLines.join("\n")}\n`)});`,
-	].join(" ");
-	const fallback = `command printf '\\n%s\\n\\n' ${shellQuote(display.endMarker)}`;
-	const completion = display.enabled ? `${shellQuote(process.execPath)} -e ${shellQuote(footerScript)} 2>/dev/null || ${fallback}; ` : "";
-	return `:! ${completion}touch ${shellQuote(doneFile)}`;
+	// As in pi-repl: end the line only when output left the cursor mid-line, then print the
+	// footer. trap : INT keeps Ctrl+C from ending this shell before the done file (Astra,
+	// candidate90); a trap isn't inherited, so the query still stops at once.
+	const suffix = display.suffixLines.map((line) => `command printf '%s\\n' ${shellQuote(line)}; `).join("");
+	return `:! trap : INT; ${buildStudioShellCursorColumn()}; [ "$__pi_studio_column" = 0 ] || command printf '\\n'; ${suffix}touch ${shellQuote(doneFile)}`;
 }
 
 function buildStudioClojureFooter(display: ReplSubmissionDisplay): string[] {
-	if (!display.enabled) return [];
 	const builder = `(java.lang.ProcessBuilder. ^java.util.List [${JSON.stringify(process.execPath)} "-e" ${JSON.stringify(STUDIO_CURSOR_COLUMN_QUERY)}])`;
 	return [
 		"      (try (.flush *out*) (.flush *err*) (catch Throwable _))",
@@ -11918,7 +11931,7 @@ function buildStudioRubyControlSource(code: string, doneFile: string, display: R
 	const prefix = display.enabled ? display.prefixLines.map((line) => `  puts ${rubyStringLiteral(line)}`) : [];
 	// Query the actual terminal column rather than intercepting user stdout.
 	// Keep the old newline guard if the bounded, read-only query is unavailable.
-	const completion = display.enabled ? [
+	const completion = [
 		'  __pi_studio_column = ""',
 		"  begin",
 		"    $stdout.flush",
@@ -11949,7 +11962,7 @@ function buildStudioRubyControlSource(code: string, doneFile: string, display: R
 		"  end",
 		'  puts unless __pi_studio_column == "0"',
 		...display.suffixLines.map((line) => `  puts ${rubyStringLiteral(line)}`),
-	] : ["  puts"];
+	];
 	return [
 		"begin",
 		...prefix,
@@ -12004,7 +12017,7 @@ function buildStudioJavaControlSource(code: string, doneFile: string, display: R
 function buildStudioJavaDriverSource(sourceFile: string, doneFile: string, display: ReplSubmissionDisplay): string {
 	// Only add a newline when the terminal is mid-line. The scoped query does
 	// not replace System.out/err, change user declarations, or emit another /open.
-	const completion = display.enabled ? [
+	const completion = [
 		'  String __pi_studio_column = "";',
 		"  java.lang.Process __pi_studio_query = null;",
 		"  try {",
@@ -12026,7 +12039,7 @@ function buildStudioJavaDriverSource(sourceFile: string, doneFile: string, displ
 		"  }",
 		'  if (!"0".equals(__pi_studio_column)) java.lang.System.out.println();',
 		...display.suffixLines.map((line) => `  java.lang.System.out.println(${JSON.stringify(line)});`),
-	] : [];
+	];
 	return [
 		buildStudioReplSubmissionLine("java", sourceFile, doneFile),
 		"{",
@@ -12073,7 +12086,7 @@ function buildStudioMLanguageDriverSource(runtime: "octave" | "matlab", sourceFi
 		'cat "$f"',
 		'[ "$s" = 0 ]',
 	].join("; ");
-	const footer = display.enabled ? [
+	const footer = [
 		...(runtime === "octave" ? ["fflush(1);"] : []),
 		"try",
 		// /bin/sh whatever the user's shell is: MATLAB runs system() with $SHELL.
@@ -12083,9 +12096,9 @@ function buildStudioMLanguageDriverSource(runtime: "octave" | "matlab", sourceFi
 		"end",
 		"if pi_repl_status~=0 || ~strcmp(strtrim(pi_repl_column),'0'); fprintf(1,'\\n'); end",
 		...display.suffixLines.map((line) => `fprintf(1,'%s\\n',${mStringLiteral(line)});`),
-	] : [];
+	];
 	const done = `fclose(fopen(${mStringLiteral(doneFile)},'w'));`;
-	const finish = (runtime === "octave" && footer.length
+	const finish = (runtime === "octave"
 		? ["unwind_protect", ...footer, "unwind_protect_cleanup", done, "end_unwind_protect"]
 		: [...footer, done]).join("\n");
 	// As in pi-repl: parameters give eval its own slots, so no helper variables, ans, cwd or
@@ -12095,14 +12108,13 @@ function buildStudioMLanguageDriverSource(runtime: "octave" | "matlab", sourceFi
 }
 
 function buildStudioShellControlSource(code: string, display: ReplSubmissionDisplay): string {
-	if (!display.enabled) return `${code.replace(/\r/g, "").trimEnd()}\n`;
 	return [
 		...display.prefixLines.map((line) => `command printf '%s\\n' ${shellQuote(line)}`),
 		code.replace(/\r/g, "").trimEnd(),
 		"__pi_studio_repl_status=$?",
-		// The column query, as for the other runtimes; only the shell reads its output.
-		`[ "$(${shellQuote(process.execPath)} -e ${shellQuote(STUDIO_CURSOR_COLUMN_QUERY)} </dev/null 2>/dev/null)" = 0 ] || command printf '\\n'`,
-		...display.suffixLines.map((line) => `command printf '%s\\n' ${shellQuote(line)}`),
+		// The footer runs in a subshell that traps Ctrl+C, so an interrupt there doesn't end the
+		// loader's command line before its done file, in bash or zsh (Astra, candidate90).
+		`( trap : INT; ${buildStudioShellCursorColumn()}; [ "$__pi_studio_column" = 0 ] || command printf '\\n'${display.suffixLines.map((line) => `; command printf '%s\\n' ${shellQuote(line)}`).join("")} )`,
 		"return \"$__pi_studio_repl_status\"",
 	].filter(Boolean).join("\n") + "\n";
 }
@@ -12116,6 +12128,8 @@ function buildStudioReplControlSource(runtime: StudioReplRuntime, code: string, 
 	if (runtime === "ruby") return buildStudioRubyControlSource(code, doneFile, display);
 	if (runtime === "java") return buildStudioJavaControlSource(code, doneFile, display);
 	if (runtime === "octave" || runtime === "matlab") return buildMLanguageControlSource(code, display);
+	// As in pi-repl: gnuplot loads the code as written; its driver prints the display.
+	if (runtime === "gnuplot") return code + "\n";
 	if (runtime === "shell") return buildStudioShellControlSource(code, display);
 	return null;
 }
@@ -12129,6 +12143,7 @@ function buildStudioReplSubmissionLine(runtime: StudioReplRuntime, sourceFile: s
 	if (runtime === "ruby") return `load ${rubyStringLiteral(sourceFile)}; nil`;
 	if (runtime === "java") return `/open ${sourceFile}`;
 	if (runtime === "octave" || runtime === "matlab") return `eval(fileread(${mStringLiteral(sourceFile)}));`;
+	if (runtime === "gnuplot") return buildGnuplotSubmissionLine(sourceFile);
 	if (runtime === "shell") return `. ${shellQuote(sourceFile)}; touch ${shellQuote(doneFile)}`;
 	return `exec(open(${quotedPath}, encoding="utf-8").read(), globals())`;
 }
@@ -12221,6 +12236,30 @@ function prepareStudioReplSubmission(
 				buildSource: () => buildStudioMLanguageDriverSource(runtime, controlFiles.sourceFile, controlFiles.doneFile, display),
 			});
 			controlFiles.helpers = [driver];
+			loader = driver.sourceFile;
+		} catch (error) {
+			cleanupStudioReplControlFiles(controlFiles);
+			throw error;
+		}
+	}
+	if (runtime === "gnuplot") {
+		// pi-repl's shared gnuplot driver: a Node script gnuplot loads through a pipe. It
+		// feeds gnuplot the code and then a guard that acknowledges it returned; on an error
+		// or Ctrl+C gnuplot closes the pipe instead. Either way the driver prints the footer
+		// and writes the done file, without typing into the terminal or changing settings.
+		try {
+			const guard = createPrivateReplControlFiles({
+				...controlOptions,
+				extension: "gp",
+				buildSource: ({ doneFile }: StudioReplControlFiles) => buildGnuplotGuardSource(doneFile),
+			});
+			controlFiles.helpers = [guard];
+			const driver = createPrivateReplControlFiles({
+				...controlOptions,
+				extension: "cjs",
+				buildSource: () => buildGnuplotDriverSource(controlFiles.sourceFile, guard.sourceFile, guard.doneFile, controlFiles.doneFile, display),
+			});
+			controlFiles.helpers.push(driver);
 			loader = driver.sourceFile;
 		} catch (error) {
 			cleanupStudioReplControlFiles(controlFiles);
@@ -13819,7 +13858,7 @@ export default function (pi: ExtensionAPI) {
 		name: "studio_repl_send",
 		label: "Send to Studio REPL",
 		description: "Execute code in the active or selected Studio tmux-backed REPL session using Studio's safe runtime-specific submission protocol.",
-		promptSnippet: "Execute code in the active Studio REPL session safely, including multiline Python/R/Julia/GHCi/Clojure/Ruby/Java/Octave/MATLAB snippets.",
+		promptSnippet: "Execute code in the active Studio REPL session safely, including multiline Python/R/Julia/GHCi/Clojure/Ruby/Java/Octave/MATLAB/gnuplot snippets.",
 		promptGuidelines: [
 			"Use studio_repl_send when the user asks to run code in the active Studio REPL.",
 			"Do not improvise tmux paste-buffer commands for Studio REPL code; studio_repl_send handles multiline quoting and runtime-specific submission.",
@@ -13827,6 +13866,7 @@ export default function (pi: ExtensionAPI) {
 			"If several REPL sessions of the same runtime are running, use studio_repl_status first or pass the exact sessionName when known.",
 			"In Java (JShell), use System.out.println(...) for values you want to see: code is loaded with /open, which doesn't echo expression results.",
 			"Octave and MATLAB are separate runtimes: don't substitute one for the other. Code runs in the base workspace with native semicolon and ans behaviour; use disp or fprintf for explicit output. MATLAB function definitions belong in .m files. clear, clear all, exit and quit change or end the session.",
+			"gnuplot is its own runtime, not another REPL's plotting backend. Send complete gnuplot commands and use print for console results. Keep the user's terminal, output and settings; export a figure only when asked. reset changes state. In sent code, exit returns from that code; exit gnuplot ends the session. Avoid pause and input waits unless asked.",
 		],
 		parameters: STUDIO_REPL_SEND_TOOL_PARAMS,
 		executionMode: "sequential",

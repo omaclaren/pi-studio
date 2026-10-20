@@ -7,10 +7,12 @@ All notable changes to `pi-studio` are documented here.
 ### Added
 - The REPL pane runs **Ruby** (irb) and **Java** (JShell), as pi-repl does. Choose them under **Runtime**, or send to a pi-repl Ruby or Java session. In Java, print values with `System.out.println(…)`: code is loaded with `/open`, which doesn't show expression results. Stop waits for JShell's second JVM to exit too.
 - The REPL pane runs **Octave** (`octave-cli`) and **MATLAB**, as pi-repl does, as separate runtimes. Code runs in the base workspace, with the usual `ans` and semicolon behaviour; errors and Ctrl+C still complete the send. MATLAB starts without its desktop in the working directory, and Studio waits up to two minutes for its prompt. Stopping Octave doesn't leave an `octave-workspace` file in the working directory, unless you start it with your own **Start cmd**.
+- The REPL pane runs **gnuplot**, as pi-repl does. Code runs as written, so your terminal and settings stay as you set them, and errors and Ctrl+C still complete the send. Stop also closes its Qt plot windows.
 
 ### Changed
 - Pane echo defaults to **Summary**, as in pi-repl, so the tmux pane shows each sent submission above its output. Summary now shows up to 20 lines or 2,000 characters, up from 6 lines or 600. If you chose Full before, Studio keeps it; if you chose Off, choose it again.
 - In dual mode, **Pane echo** is under the REPL pane's **More**, below **Send mode**. The toolbar had stopped showing it, so it couldn't be changed there. Choose **Off** for a quiet pane.
+- With Pane echo **Off**, a send whose output doesn't end its line now ends it, as pi-repl does. The record keeps that output, and the runtime's next prompt starts on a line of its own.
 - Pane echo looks the same as pi-repl's: `── pi-studio · input · 2 lines · id: … ──`, then the code without `│` bars, the output, `── done · id: … ──` and a blank line. A blank line also separates the code from the line that loads it. Studio's temporary files for a send start with the same id. The record still holds only the code and its output.
 
 ### Fixed

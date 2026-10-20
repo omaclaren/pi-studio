@@ -6,7 +6,10 @@ const STUDIO_REPL_PROMPT_COMMAND_ENVIRONMENT = "PROMPT_COMMAND=";
  * Studio's own sessions: pi-studio-repl-<runtime>, then an optional custom-command
  * hash and an optional new-session suffix. Verified Stop accepts only these.
  */
-export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython|julia|r|ghci|clojure|ruby|java|octave|matlab)(?:-[a-f0-9]{8})?(?:-[a-z0-9]+-[a-f0-9]{6})?$/;
+export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython|julia|r|ghci|clojure|ruby|java|octave|matlab|gnuplot)(?:-[a-f0-9]{8})?(?:-[a-z0-9]+-[a-f0-9]{6})?$/;
+
+/** Studio's gnuplot sessions. Their Stop also ends gnuplot and Qt helpers that carry the session's owner marker. */
+export const isStudioGnuplotSession = (name) => /^pi-studio-repl-gnuplot(?:-|$)/.test(name);
 
 /** Fields read for each pane, in the order firstStudioReplPanes expects. */
 export const STUDIO_REPL_PANE_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_id}\t#{session_name}\t#{session_id}\t#{session_created}\t#{@pi_repl_runtime}\t#{@pi_repl_record_id}\t#{@pi_repl_record_version}";
@@ -24,9 +27,10 @@ export const STUDIO_REPL_PANE_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_i
  * @param {string} sessionName
  * @param {string} cwd
  * @param {string} command
+ * @param {string[]} [environment] more NAME=value settings for the runtime
  * @returns {string[]}
  */
-export function buildStudioReplTmuxStartArgs(sessionName, cwd, command) {
+export function buildStudioReplTmuxStartArgs(sessionName, cwd, command, environment = []) {
 	return [
 		"new-session",
 		"-d",
@@ -39,6 +43,7 @@ export function buildStudioReplTmuxStartArgs(sessionName, cwd, command) {
 		cwd,
 		"-e",
 		STUDIO_REPL_PROMPT_COMMAND_ENVIRONMENT,
+		...environment.flatMap((setting) => ["-e", setting]),
 		command,
 	];
 }
@@ -112,6 +117,7 @@ const STUDIO_REPL_READY_PROMPTS = {
 	java: /^jshell>[ \t]*$/,
 	octave: /^octave:\d+>[ \t]*$/,
 	matlab: /^>>[ \t]*$/,
+	gnuplot: /^gnuplot>[ \t]*$/,
 };
 
 /**

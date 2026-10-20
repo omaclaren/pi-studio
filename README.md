@@ -27,7 +27,7 @@ Watch the [demo](https://github.com/omaclaren/pi-studio/releases/download/demo-p
 - **Files and Changes** — browse folders you've allowed, open or preview files, and see the current git diff.
 - **Comments and scratchpad** — comments anchored to lines or selections, and a scratchpad per document.
 - **Side questions and quizzes** — ask about the text, a folder or the repository in a separate thread that stays out of the main conversation, or quiz yourself on it.
-- **REPL** — send code to tmux-backed Shell, Python, IPython, Julia, R, GHCi, Clojure, Ruby, Java, Octave or MATLAB sessions, shared with [pi-repl](https://github.com/omaclaren/pi-repl).
+- **REPL** — send code to tmux-backed Shell, Python, IPython, Julia, R, GHCi, Clojure, Ruby, Java, Octave, MATLAB or gnuplot sessions, shared with [pi-repl](https://github.com/omaclaren/pi-repl).
 - **Export** — PDF (Pandoc and LaTeX) or standalone HTML, from the preview, a file or the last response.
 
 ## Requirements

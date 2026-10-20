@@ -7,6 +7,7 @@ import {
 	buildStudioReplDeadPaneCloseArgs,
 	cleanStudioReplOutput,
 	firstStudioReplPanes,
+	isStudioGnuplotSession,
 	isStudioReplReadyLine,
 	STUDIO_REPL_SESSION_NAME,
 	studioReplSessionTarget,
@@ -73,7 +74,7 @@ test("Start waits for each runtime's normal prompt, seen on the cursor row", () 
 		python: [">>> ", "In [1]: "], ipython: ["In [12]:", ">>>"], julia: ["julia> "], r: ["> "],
 		ghci: ["ghci> ", "Prelude> ", "*Main> ", "*Main Data.List> "], clojure: ["user=> "],
 		ruby: ["irb(main):001> ", "irb(main):001:0> "], java: ["jshell> "],
-		octave: ["octave:1> ", "octave:12>"], matlab: [">> "],
+		octave: ["octave:1> ", "octave:12>"], matlab: [">> "], gnuplot: ["gnuplot> "],
 	};
 	for (const [runtime, lines] of Object.entries(ready)) {
 		for (const line of lines) assert.equal(isStudioReplReadyLine(runtime, line), true, `${runtime}: ${line}`);
@@ -84,7 +85,7 @@ test("Start waits for each runtime's normal prompt, seen on the cursor row", () 
 		clojure: ["Clojure 1.12.0", ""], shell: ["$ ", "% "],
 		ruby: ["irb(main):001* ", "irb(main):001:1> ", "irb(main):001> 1"], java: ["|  Welcome to JShell -- Version 25", "jshell> 1", "   ...> "],
 		octave: ["octave:1> 1", "GNU Octave, version 10.3.0", ">> "], matlab: ["                            < M A T L A B (R) >", ">> 1", ">>> ", "octave:1> "],
-		gnuplot: ["gnuplot> "],
+		gnuplot: ["gnuplot> plot sin(x)", "	G N U P L O T", "multiplot> "],
 	};
 	for (const [runtime, lines] of Object.entries(notReady)) {
 		for (const line of lines) assert.equal(isStudioReplReadyLine(runtime, line), false, `${runtime}: ${line}`);
@@ -96,13 +97,20 @@ test("verified Stop accepts every name Studio gives its own sessions, and nothin
 	for (const name of [
 		"pi-studio-repl-python", "pi-studio-repl-r", "pi-studio-repl-clojure-0123abcd",
 		"pi-studio-repl-julia-mgx2k1z3-a1b2c3", "pi-studio-repl-ghci-0123abcd-mgx2k1z3-a1b2c3",
-		"pi-studio-repl-ruby", "pi-studio-repl-java-0123abcd", "pi-studio-repl-octave", "pi-studio-repl-matlab-mgx2k1z3-a1b2c3",
+		"pi-studio-repl-ruby", "pi-studio-repl-java-0123abcd", "pi-studio-repl-octave", "pi-studio-repl-matlab-mgx2k1z3-a1b2c3", "pi-studio-repl-gnuplot-0123abcd",
 	]) assert.match(name, STUDIO_REPL_SESSION_NAME, name);
 	for (const name of [
-		"pi-repl-python", "pi-repl-ruby", "pi-studio-repl-gnuplot", "pi-studio-repl-octavex", "pi-studio-repl-rubyx", "pi-studio-repl-python-x", "pi-studio-repl-pythonx",
+		"pi-repl-python", "pi-repl-ruby", "pi-studio-repl-cpp", "pi-studio-repl-octavex", "pi-studio-repl-gnuplotx", "pi-studio-repl-rubyx", "pi-studio-repl-python-x", "pi-studio-repl-pythonx",
 		"xpi-studio-repl-python", "pi-studio-repl-python-0123ABCD", "pi-studio-repl-python\n",
 	]) assert.doesNotMatch(name, STUDIO_REPL_SESSION_NAME, JSON.stringify(name));
 	assert.equal(STUDIO_REPL_SESSION_NAME.global || STUDIO_REPL_SESSION_NAME.sticky, false);
+});
+
+// Candidate90: pi-repl 0.10.2's stop cleans marked helpers only in sessions the host names as gnuplot.
+test("Stop treats only Studio's gnuplot sessions as gnuplot", () => {
+	for (const name of ["pi-studio-repl-gnuplot", "pi-studio-repl-gnuplot-0123abcd", "pi-studio-repl-gnuplot-mgx2k1z3-a1b2c3"]) assert.equal(isStudioGnuplotSession(name), true, name);
+	for (const name of ["pi-repl-gnuplot", "pi-studio-repl-gnuplotx", "pi-studio-repl-python", "xpi-studio-repl-gnuplot"]) assert.equal(isStudioGnuplotSession(name), false, name);
+	assert.match(serverSource, /sessionNamePattern: STUDIO_REPL_SESSION_NAME, isGnuplotSession: isStudioGnuplotSession \}\)/);
 });
 
 const py = 'exec(open("/tmp/pi-rc-c74test/0123456789abcdef.py", encoding="utf-8").read(), globals())';

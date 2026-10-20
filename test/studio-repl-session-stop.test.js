@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { parseStopProcessTable } from "../shared/repl-session-stop.js";
+import { parseGnuplotCandidates } from "../shared/repl-gnuplot-processes.js";
 
 // macOS lists processes of `nobody` with uid -2 (newmac runs distnoted and dhcp6d so).
 // The parser refused the whole table, so every verified Stop failed on such a Mac (0.10.2,
@@ -26,5 +27,21 @@ test("a negative process, parent or group ID is still refused", () => {
 		"not ownership data",
 	]) {
 		assert.throws(() => parseStopProcessTable(line), /refusing unsafe shutdown/, line);
+	}
+});
+
+// Candidate90 (Sol): a gnuplot Stop also lists every process to find detached helpers, and
+// the same uid -2 refused that list, so every gnuplot Stop failed on such a Mac.
+test("a process owned by nobody (uid -2) no longer stops a gnuplot Stop from finding its helpers", () => {
+	const listing = [
+		"  404    -2 /usr/sbin/distnoted",
+		" 1001   501 /opt/homebrew/bin/gnuplot",
+		" 1002   501 /opt/homebrew/Cellar/gnuplot/6.0.3/libexec/gnuplot/6.0/gnuplot_qt",
+		" 1003   502 /opt/homebrew/bin/gnuplot",
+		" 1004    -2 /opt/homebrew/bin/gnuplot",
+	].join("\n");
+	assert.deepEqual(parseGnuplotCandidates(listing, 501), [1001, 1002]);
+	for (const line of ["-404 501 gnuplot", "404 --2 gnuplot", "404 -2x gnuplot", "not a process"]) {
+		assert.throws(() => parseGnuplotCandidates(line, 501), /refusing unverified cleanup/, line);
 	}
 });

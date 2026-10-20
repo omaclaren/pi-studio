@@ -286,6 +286,42 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.ok(shown.includes(block), `expected\n${block}\nin\n${shown}`);
 		assert.match(shown, new RegExp(`/${id}-[a-f0-9]{16}\\.`), "the loader's file name starts with the id");
 	}
+	// With the display Off, output that ends mid-line is kept, and the next send's record is
+	// clean: the footer still ends the open line, so the prompt doesn't join the output and
+	// the line editor doesn't redraw the next loader over it (Astra, candidate90).
+	async function keepsOffMidline(name, partial, next) {
+		assert.deepEqual(await repl.send(name, partial, { echoMode: "off" }), { output: "midline", status: "captured", error: undefined }, "Off keeps output that ends mid-line");
+		assert.deepEqual(await repl.send(name, next, { echoMode: "off" }), { output: "next", status: "captured", error: undefined }, "and the next Off send's record is clean");
+	}
+	// Ctrl+C while the footer waits for its cursor query still completes the send, in Off and
+	// Summary (Astra, candidate90). A preload holds the query for 3 s, so the interrupt lands
+	// there. Each send prints its own marker in two parts, so neither Summary's echo of the
+	// code nor an earlier send's output counts (Sol).
+	const slowQuery = join(root, "slow-query.cjs");
+	writeFileSync(slowQuery, "const end = Date.now() + 3000; while (Date.now() < end);\n");
+	async function interruptsFooter(name, slow, body, fast) {
+		assert.equal((await repl.send(name, slow)).status, "captured");
+		for (const echoMode of ["off", "summary"]) {
+			const sending = repl.sending(name, body(echoMode), { echoMode });
+			await sending.ack;
+			assert.ok(await waitFor(() => scrollback(name).includes(`BODY-${echoMode}`), 10_000), `${echoMode}: the code has printed`);
+			await sleep(700);
+			tmux("send-keys", "-t", `=${name}:`, "C-c");
+			const result = await sending.done;
+			assert.equal(result.status, "captured", `${echoMode}: Ctrl+C in the footer still completes the send`);
+			assert.match(result.output, new RegExp(`BODY-${echoMode}`));
+		}
+		assert.equal((await repl.send(name, fast)).status, "captured", "and the session takes the next send");
+	}
+	// The Shell footer runs in the user's shell, which may have set -u, with NODE_OPTIONS
+	// unset as usual (Astra, candidate90).
+	async function keepsNounset(name) {
+		assert.equal((await repl.send(name, "unset NODE_OPTIONS; set -u")).status, "captured");
+		for (const echoMode of ["off", "summary", "full"]) {
+			assert.deepEqual(await repl.send(name, "printf midline", { echoMode }), { output: "midline", status: "captured", error: undefined }, `${echoMode}: set -u`);
+		}
+		assert.equal((await repl.send(name, "set +u")).status, "captured");
+	}
 
 	await t.test("with no preference yet, the page's own pick applies without counting", { skip: !has("python3") }, async () => {
 		const slowName = studioName("python", slow(2));
@@ -314,6 +350,7 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.ok(started.sessions.some((s) => s.sessionName === "pi-studio-repl-python"), "its own session, not the lookalike");
 		assert.equal(pane("pi-studio-repl-python", "#{window_index}"), "1");
 		assert.equal(cursorRow("pi-studio-repl-python"), ">>>", "Start answered once the prompt was showing");
+		await keepsOffMidline("pi-studio-repl-python", 'print("midline", end="")', 'print("next")');
 
 		assert.deepEqual(await repl.send("pi-studio-repl-python", 'print("a")\nprint(">>>")'), { output: "a\n>>>", status: "captured", error: undefined });
 		await showsSummary("pi-studio-repl-python", 'print("a")\nprint("b")', "a\nb");
@@ -788,18 +825,19 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	});
 
 	await t.test("a runtime Studio doesn't support gets nothing pasted into it", async () => {
-		assert.equal(tmux("new-session", "-d", "-s", "pi-repl-gnuplot", "sleep 600").status, 0);
-		tmux("set-option", "-t", "=pi-repl-gnuplot", "@pi_repl_runtime", "gnuplot");
-		const sent = await repl.send("pi-repl-gnuplot", "print 1");
-		assert.equal(sent.error, "Studio can't send code to pi-repl-gnuplot yet: it doesn't support that runtime.");
-		assert.equal(tmux("capture-pane", "-p", "-t", "=pi-repl-gnuplot:").stdout.trim(), "");
-		tmux("kill-session", "-t", "=pi-repl-gnuplot");
+		assert.equal(tmux("new-session", "-d", "-s", "pi-repl-cpp", "sleep 600").status, 0);
+		tmux("set-option", "-t", "=pi-repl-cpp", "@pi_repl_runtime", "cpp");
+		const sent = await repl.send("pi-repl-cpp", "int x = 1;");
+		assert.equal(sent.error, "Studio can't send code to pi-repl-cpp yet: it doesn't support that runtime.");
+		assert.equal(tmux("capture-pane", "-p", "-t", "=pi-repl-cpp:").stdout.trim(), "");
+		tmux("kill-session", "-t", "=pi-repl-cpp");
 	});
 
 	await t.test("IPython: its wrapped loader echo is removed", { skip: !has("ipython") }, async () => {
 		assert.equal((await repl.start("ipython")).message, "Started IPython REPL.");
 		assert.equal(pane("pi-studio-repl-ipython", "#{pane_width}"), "80");
 		assert.equal((await repl.send("pi-studio-repl-ipython", 'print("hello")')).output, "hello");
+		await keepsOffMidline("pi-studio-repl-ipython", 'print("midline", end="")', 'print("next")');
 		await showsSummary("pi-studio-repl-ipython", 'print("a")\nprint("b")', "a\nb");
 		await showsSummary("pi-studio-repl-ipython", 'print("c", end="")', "c");
 		// IPython shows a value once, as Out[N]: (Oliver, 19 Oct: it used to be repeated as a bare repr).
@@ -816,6 +854,7 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.equal((await repl.send("pi-studio-repl-julia", 'for i in 1:2\n    println("i=$i")\nend')).output, "i=1\ni=2");
 		await showsSummary("pi-studio-repl-julia", 'println("a")\nprintln("b")', "a\nb");
 		await showsSummary("pi-studio-repl-julia", 'print("c")', "c");
+		await keepsOffMidline("pi-studio-repl-julia", 'print("midline")', 'println("next")');
 		// In a pane narrower than the loader line, Julia redrew the wrapped line once per
 		// pasted character, leaving copies in the output, until the paste was bracketed
 		// (pi-repl 0.8.5).
@@ -827,6 +866,8 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 
 	await t.test("GHCi: completion survives code that reads input and an unclosed :{", { skip: !has("ghci") }, async () => {
 		assert.equal((await repl.start("ghci")).message, "Started GHCi REPL.");
+		await keepsOffMidline("pi-studio-repl-ghci", 'putStr "midline"', 'putStrLn "next"');
+		await interruptsFooter("pi-studio-repl-ghci", `System.Environment.setEnv "NODE_OPTIONS" ${JSON.stringify(`--require ${slowQuery}`)}`, (tag) => `putStr ("BO" ++ "DY-${tag}")`, 'System.Environment.unsetEnv "NODE_OPTIONS"');
 		const reading = repl.send("pi-studio-repl-ghci", 'name <- getLine\nputStrLn ("got: " ++ name)');
 		await sleep(1_500);
 		tmux("send-keys", "-t", "=pi-studio-repl-ghci:", "studio", "Enter");
@@ -850,6 +891,7 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			assert.equal((await repl.send("pi-studio-repl-r", 'cat(">\\n")')).output, ">");
 			await showsSummary("pi-studio-repl-r", 'cat("a\\n")\ncat("b\\n")', "a\nb");
 			await showsSummary("pi-studio-repl-r", 'cat("c")', "c");
+			await keepsOffMidline("pi-studio-repl-r", 'cat("midline")', 'cat("next\\n")');
 			assert.equal((await repl.stop("pi-studio-repl-r")).message, "Stopped pi-studio-repl-r.");
 		} else st.diagnostic("R not installed");
 		if (has("clojure")) {
@@ -857,6 +899,7 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			assert.equal((await repl.send("pi-studio-repl-clojure", '(println "user=>")')).output, "user=>");
 			await showsSummary("pi-studio-repl-clojure", '(println "a")\n(println "b")', "a\nb");
 			await showsSummary("pi-studio-repl-clojure", '(print "c")', "c");
+			await keepsOffMidline("pi-studio-repl-clojure", '(print "midline")', '(println "next")');
 			assert.equal((await repl.stop("pi-studio-repl-clojure")).message, "Stopped pi-studio-repl-clojure.");
 		} else st.diagnostic("clojure not installed");
 	});
@@ -872,6 +915,7 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		assert.equal((await repl.start("ruby")).message, "Started Ruby REPL.");
 		assert.equal((await repl.send("pi-studio-repl-ruby", 'x = 41\nputs "#{x + 1} \\#{x}"')).output, "42 #{x}");
 		assert.equal((await repl.send("pi-studio-repl-ruby", "x + 1")).output, "42");
+		await keepsOffMidline("pi-studio-repl-ruby", 'print "midline"', 'puts "next"');
 		// The loader's own result is hidden; output that looks like one is kept.
 		assert.equal((await repl.send("pi-studio-repl-ruby", 'puts "=> nil"')).output, "=> nil");
 		assert.equal((await repl.send("pi-studio-repl-ruby", 'puts "ünï ✓"')).output, "ünï ✓");
@@ -888,6 +932,7 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	await t.test("Java: JShell keeps declarations, completes after errors, and Stop ends both JVMs", { skip: !has("jshell") }, async () => {
 		assert.equal((await repl.start("java")).message, "Started Java REPL.");
 		assert.equal((await repl.send("pi-studio-repl-java", "int x = 41;\nSystem.out.println(x + 1);")).output, "42");
+		await keepsOffMidline("pi-studio-repl-java", 'System.out.print("midline");', 'System.out.println("next");');
 		assert.equal((await repl.send("pi-studio-repl-java", 'System.out.println("ünï ✓ " + x);')).output, "ünï ✓ 41");
 		const failed = await repl.send("pi-studio-repl-java", 'int y = "no";');
 		assert.equal(failed.status, "captured");
@@ -917,6 +962,7 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			const number = async (code) => (await repl.send(name, code)).output.trim();
 			assert.equal((await repl.start(runtime)).message, `Started ${label} REPL.`);
 			assert.equal(await number("x = 41;\ndisp(x + 1)"), "42");
+			await keepsOffMidline(name, "fprintf('midline')", "disp('next')");
 			assert.match((await repl.send(name, "x + 1")).output, /^ans =\s+42$/, "native ans display");
 			assert.equal(await number("disp(ans)"), "42", "ans is set in the base workspace");
 			assert.equal((await repl.send(name, "fprintf('%s\\n', 'ünï ✓')")).output, "ünï ✓");
@@ -970,6 +1016,48 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		});
 	}
 
+	// gnuplot (candidate90), as in pi-repl 0.7.0: a driver feeds gnuplot the code, then a guard
+	// that acknowledges it returned; on an error or Ctrl+C gnuplot closes the driver's pipe.
+	await t.test("gnuplot: state, errors and Ctrl+C complete, its owner marker is set, and Stop is verified", { skip: !has("gnuplot") }, async () => {
+		const name = "pi-studio-repl-gnuplot";
+		assert.equal((await repl.start("gnuplot")).message, "Started gnuplot REPL.");
+		assert.match(tmux("show-options", "-v", "-t", `=${name}:`, "@pi_repl_gnuplot_owner").stdout.trim(), /^[a-f0-9]{32}$/, "owner marker");
+		assert.equal((await repl.send(name, "x = 41\nprint x + 1")).output, "42");
+		await keepsOffMidline(name, 'system "printf midline"', 'print "next"');
+		assert.equal((await repl.send(name, 'print "ünï ✓"')).output, "ünï ✓");
+		const failed = await repl.send(name, "print nosuchvariable");
+		assert.equal(failed.status, "captured");
+		assert.match(failed.output, /undefined variable/);
+		assert.equal((await repl.send(name, "print x")).output, "41", "state survives the error");
+		await showsSummary(name, 'print "a"\nprint "b"', "a\nb");
+		const sending = repl.send(name, "pause 30");
+		assert.ok(await waitFor(() => scrollback(name).includes("pause 30"), 15_000), "pause 30 is running");
+		await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+		tmux("send-keys", "-t", `=${name}:`, "C-c");
+		assert.equal((await sending).status, "captured", "the interrupted send completes");
+		assert.equal((await repl.send(name, "print x")).output, "41");
+		// Stop also ends helpers that have left the pane's process tree if they carry this
+		// session's marker, as Qt helpers do. A stand-in: a gnuplot in its own session, with
+		// the marker, without it, and with another owner's.
+		// Teardown ends each helper only if it is still the same process (Sol).
+		const helpers = {};
+		for (const [key, prefix] of [["marked", ""], ["unmarked", "env -u PI_REPL_GNUPLOT_OWNER "], ["other", `env PI_REPL_GNUPLOT_OWNER=${"d".repeat(32)} `]]) {
+			const file = join(root, `gnuplot-helper-${key}`);
+			assert.equal((await repl.send(name, `system "${prefix}perl -MPOSIX -e 'exit if fork; POSIX::setsid(); open my $f, q(>), q(${file}); print $f $$; close $f; exec q(gnuplot), q(-e), q(pause 600)' </dev/null >/dev/null 2>&1"`)).status, "captured");
+			assert.ok(await waitFor(() => existsSync(file) && readFileSync(file, "utf8"), 10_000), `${key} helper started`);
+			const helper = Number(readFileSync(file, "utf8"));
+			// Its identity once it is gnuplot: exec changes the command perl started with.
+			assert.ok(await waitFor(() => /gnuplot -e pause 600$/.test(identify(helper)), 5_000), `${key} helper is gnuplot`);
+			helpers[key] = helper;
+			leftovers.push({ pid: helper, identity: identify(helper) });
+		}
+		const pid = panePid(name);
+		assert.equal((await repl.stop(name)).message, `Stopped ${name}.`);
+		assert.ok(await waitFor(() => !alive(pid), 30_000), "gnuplot exited");
+		assert.ok(await waitFor(() => !alive(helpers.marked), 10_000), "the marked helper has gone");
+		assert.ok(alive(helpers.unmarked) && alive(helpers.other), "unmarked helpers and another owner's are left alone");
+	});
+
 	await t.test("Shell: Stop closes it like a terminal, and nohup jobs keep running", async () => {
 		assert.equal((await repl.start("shell")).message, "Started Shell REPL.");
 		// Shell's Start can't recognise the user's prompt, so it doesn't wait for one, and a
@@ -977,6 +1065,19 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		await repl.send("pi-studio-repl-shell", "true");
 		await showsSummary("pi-studio-repl-shell", "echo a\necho b", "a\nb");
 		await showsSummary("pi-studio-repl-shell", "printf c", "c");
+		await keepsOffMidline("pi-studio-repl-shell", "printf midline", "echo next");
+		await interruptsFooter("pi-studio-repl-shell", `export NODE_OPTIONS=${JSON.stringify(`--require ${slowQuery}`)}`, (tag) => `printf BO; printf DY-${tag}`, "unset NODE_OPTIONS");
+		// bash and zsh without their startup files, so the user's own don't decide; zsh, the macOS
+		// default, ends a command line on Ctrl+C unless the child survives it.
+		for (const [shell, command] of [["bash", "bash --norc --noprofile"], ["zsh", "zsh -f"]]) {
+			if (!has(shell)) continue;
+			const name = studioName("shell", command);
+			assert.equal((await repl.start("shell", command)).message, `Started Shell REPL with custom command: ${command}.`);
+			await repl.send(name, "true");
+			await interruptsFooter(name, `export NODE_OPTIONS=${JSON.stringify(`--require ${slowQuery}`)}`, (tag) => `printf BO; printf DY-${tag}`, "unset NODE_OPTIONS");
+			await keepsNounset(name);
+			assert.deepEqual(await repl.stop(name), { message: `Closed ${name}.`, error: undefined });
+		}
 		const sent = await repl.send("pi-studio-repl-shell", "nohup sleep 300 >/dev/null 2>&1 &\necho \"pid=$!\"");
 		const job = Number(sent.output.match(/pid=(\d+)/)?.[1]);
 		leftovers.push({ pid: job, identity: identify(job) });

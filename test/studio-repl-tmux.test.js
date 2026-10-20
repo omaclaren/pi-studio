@@ -22,3 +22,11 @@ test("Studio REPL sessions do not inherit terminal-local PROMPT_COMMAND hooks", 
 		],
 	);
 });
+
+// Candidate90: gnuplot gets pi-repl's owner marker, so Stop can find its Qt helpers.
+test("more environment settings for the runtime go before its command", () => {
+	assert.deepEqual(
+		buildStudioReplTmuxStartArgs("pi-studio-repl-gnuplot", "/tmp/p", "gnuplot", ["PI_REPL_GNUPLOT_OWNER=0123456789abcdef0123456789abcdef"]).slice(-5),
+		["-e", "PROMPT_COMMAND=", "-e", "PI_REPL_GNUPLOT_OWNER=0123456789abcdef0123456789abcdef", "gnuplot"],
+	);
+});

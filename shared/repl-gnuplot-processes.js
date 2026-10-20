@@ -54,7 +54,8 @@ print(json.dumps(rows))
 
 export function parseGnuplotCandidates(text, uid) {
 	return text.split("\n").filter((line) => line.trim()).flatMap((line) => {
-		const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+		// macOS lists processes of `nobody` with uid -2; only the uid may be negative.
+		const match = /^\s*(\d+)\s+(-?\d+)\s+(.+)$/.exec(line);
 		if (!match) throw new Error("Could not parse gnuplot process candidates; refusing unverified cleanup.");
 		const pid = Number(match[1]), ownerUid = Number(match[2]);
 		if (![pid, ownerUid].every(Number.isSafeInteger)) throw new Error("Invalid gnuplot process identity.");

@@ -1501,7 +1501,7 @@
       function getKnownReplRuntime(value) {
         const runtime = String(value || "").trim().toLowerCase();
         return runtime === "shell" || runtime === "python" || runtime === "ipython" || runtime === "julia" || runtime === "r" || runtime === "ghci" || runtime === "clojure"
-          || runtime === "ruby" || runtime === "java" || runtime === "octave" || runtime === "matlab"
+          || runtime === "ruby" || runtime === "java" || runtime === "octave" || runtime === "matlab" || runtime === "gnuplot"
           ? runtime
           : "";
       }
@@ -1522,6 +1522,7 @@
         if (runtime === "java") return "Java";
         if (runtime === "octave") return "Octave";
         if (runtime === "matlab") return "MATLAB";
+        if (runtime === "gnuplot") return "gnuplot";
         return "Clojure";
       }
 
@@ -2337,6 +2338,7 @@
         if (activeRuntime === "java") return lang === "java";
         if (activeRuntime === "octave") return lang === "octave";
         if (activeRuntime === "matlab") return lang === "matlab";
+        if (activeRuntime === "gnuplot") return lang === "gnuplot";
         return true;
       }
 
@@ -14004,6 +14006,7 @@
         if (normalized === "java") return "jshell>";
         if (normalized === "octave") return "octave>";
         if (normalized === "matlab") return ">>";
+        if (normalized === "gnuplot") return "gnuplot>";
         return ">>>";
       }
 
@@ -14038,6 +14041,7 @@
         if (normalized === "java") return /^\s*jshell>\s?/.test(source);
         if (normalized === "octave") return /^\s*octave:\d+>\s?/.test(source);
         if (normalized === "matlab") return /^\s*>>\s?/.test(source);
+        if (normalized === "gnuplot") return /^\s*gnuplot>\s?/.test(source);
         return false;
       }
 
@@ -14128,8 +14132,8 @@
           + "<div class='repl-journal-header'><h3>Shared REPL Record</h3>" + toggleActions + "</div>"
           + "<p class='repl-journal-description'>What Studio and pi-repl have sent to this session.</p>"
           + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
-          // JShell's and Octave's seven-character prompts need a wider prompt column than the others.
-          + "<div class='repl-journal-list" + (visibleEntries.some((entry) => getReplStudioPrompt(entry.runtime).length > 6) ? " repl-journal-list-wide-prompt" : "") + "'>" + terminalContent + "</div>"
+          // The prompt column fits the longest prompt, such as gnuplot>, in the prompt's own font.
+          + "<div class='repl-journal-list' style='--repl-studio-prompt-chars: " + Math.max(0, ...visibleEntries.map((entry) => getReplStudioPrompt(entry.runtime).length)) + "'>" + terminalContent + "</div>"
           + "</section>";
       }
 
@@ -14196,6 +14200,7 @@
           ["java", "Java"],
           ["octave", "Octave"],
           ["matlab", "MATLAB"],
+          ["gnuplot", "gnuplot"],
         ].map(([value, label]) => "<option value='" + escapeHtml(value) + "'" + (replRuntime === value ? " selected" : "") + ">" + escapeHtml(label) + "</option>").join("");
         const runtimeLabel = getReplRuntimeLabel(replRuntime);
         const visibleSessions = getReplSessionsForRuntime(replRuntime);
