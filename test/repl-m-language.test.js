@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mStringLiteral, buildMLanguageControlSource, buildMLanguageDriverSource } from "../shared/repl-m-language.js";
+import { mStringLiteral, buildMLanguageControlSource, buildMLanguageDriverSource, buildMLanguageFinish } from "../shared/repl-m-language.js";
+import { CURSOR_COLUMN_QUERY, CURSOR_COLUMN_SUPERVISOR, boundedCursorColumnCommand } from "../shared/repl-cursor-column.js";
 import { createReplSubmissionDisplay } from "../shared/repl-submission-display.js";
 
 test("M-language strings quote ASCII and encode newlines, backslashes and Unicode as UTF-8", () => {
@@ -28,11 +29,44 @@ for (const runtime of ["octave", "matlab"]) {
 	});
 }
 
-test("Off completion contains no cursor query or display source", () => {
+test("Off ends a line that output left open, and adds no display", () => {
+	// Otherwise the prompt follows the output on the same row and the clean record drops it.
 	const display = createReplSubmissionDisplay({ entryId: "m-off", origin: "pi-repl", code: "1", mode: "off" });
-	const source = buildMLanguageControlSource("1", display);
-	const driver = buildMLanguageDriverSource("matlab", "/tmp/123.m", "/tmp/123.done", display);
-	assert.doesNotMatch(source, /fprintf\(1/);
-	assert.doesNotMatch(driver, /system\(|cursor_x|──|native2unicode/);
-	assert.match(driver, /fclose\(fopen/);
+	assert.doesNotMatch(buildMLanguageControlSource("1", display), /fprintf\(1/);
+	for (const runtime of ["matlab", "octave"]) {
+		const finish = buildMLanguageFinish(runtime, "/tmp/123.done", display);
+		assert.doesNotMatch(finish, /──/);
+		assert.equal(finish.match(/system\(/g).length, 1, runtime);
+		assert.deepEqual(finish.match(/fprintf\(1,[^;]*;/g), ["fprintf(1,'\\n');"], `${runtime}: only the newline`);
+		assert.match(finish, /if pi_repl_status~=0 \|\| ~strcmp\(strtrim\(pi_repl_column\),'0'\); fprintf/);
+		assert.match(buildMLanguageDriverSource(runtime, "/tmp/123.m", "/tmp/123.done", display), /onCleanup\(@\(\) feval\(/);
+	}
+});
+
+test("the footer's helper is bounded, and Octave writes the done file even if the footer is interrupted", () => {
+	const display = createReplSubmissionDisplay({ entryId: "m-finish", origin: "pi-repl", code: "1", mode: "summary" });
+	const command = boundedCursorColumnCommand("/opt/node's/bin/node");
+	assert.match(command, /^\/bin\/sh -c '/);
+	const script = command.slice("/bin/sh -c '".length, -1).replaceAll(`'"'"'`, "'");
+	assert.ok(script.includes(`NODE_OPTIONS= '/opt/node'"'"'s/bin/node' -e '${CURSOR_COLUMN_SUPERVISOR}' -- "\${NODE_OPTIONS-}" >"$f" </dev/null; s=$?`));
+	assert.doesNotMatch(command, /perl|alarm|kill -9|; kill /);
+	assert.match(command, /trap '"'"'rm -f "\$f"'"'"' EXIT; trap '"'"'exit 1'"'"' HUP INT TERM/);
+	assert.match(command, /\[ "\$s" = 0 \]'$/);
+	assert.match(command, /process\.exit\(code\)/);
+	assert.match(command, /\/opt\/node'"'"'"'"'"'"'"'"'s\/bin\/node/);
+	assert.match(CURSOR_COLUMN_QUERY, /writeSync\(1,[\s\S]*process\.exit\(code\)/);
+	const octave = buildMLanguageFinish("octave", "/tmp/123.done", display).split("\n");
+	assert.equal(octave[0], "unwind_protect");
+	assert.deepEqual(octave.slice(-3), ["unwind_protect_cleanup", "fclose(fopen('/tmp/123.done','w'));", "end_unwind_protect"]);
+	assert.ok(octave.includes(`  [pi_repl_status,pi_repl_column]=system(${mStringLiteral(boundedCursorColumnCommand(process.execPath))});`));
+	// MATLAB has no unwind_protect, and completes its cleanup action anyway.
+	const matlab = buildMLanguageFinish("matlab", "/tmp/123.done", display).split("\n");
+	assert.ok(!matlab.some((line) => /unwind_protect/.test(line)));
+	assert.equal(matlab.at(-1), "fclose(fopen('/tmp/123.done','w'));");
+	// Off's footer only ends an open line, and Octave still guards the done file.
+	const off = createReplSubmissionDisplay({ entryId: "m-finish-off", origin: "pi-repl", code: "1", mode: "off" });
+	const octaveOff = buildMLanguageFinish("octave", "/tmp/123.done", off).split("\n");
+	assert.equal(octaveOff[0], "unwind_protect");
+	assert.deepEqual(octaveOff.slice(-3), ["unwind_protect_cleanup", "fclose(fopen('/tmp/123.done','w'));", "end_unwind_protect"]);
+	assert.ok(!octaveOff.some((line) => line.includes("──")));
 });

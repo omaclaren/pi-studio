@@ -7,7 +7,8 @@ import { join } from "node:path";
 import vm from "node:vm";
 import ts from "typescript";
 
-import { buildMLanguageControlSource, mStringLiteral } from "../shared/repl-m-language.js";
+import { CURSOR_COLUMN_QUERY, CURSOR_COLUMN_SUPERVISOR } from "../shared/repl-cursor-column.js";
+import { buildMLanguageControlSource, buildMLanguageDriverSource, mStringLiteral } from "../shared/repl-m-language.js";
 import { createReplSubmissionDisplay } from "../shared/repl-submission-display.js";
 
 // Candidate80 (Sol, Astra): output that ends mid-line took the done marker onto its row.
@@ -21,11 +22,11 @@ const has = (command) => spawnSync("/bin/sh", ["-c", `command -v ${command}`]).s
 
 function loadBuilders(execPath, names) {
 	const tree = ts.createSourceFile("index.ts", serverSource, ts.ScriptTarget.ES2022, true);
-	const wanted = new Set([...names, "STUDIO_CURSOR_COLUMN_QUERY"]);
+	const wanted = new Set(names);
 	const pieces = tree.statements.filter((statement) => (ts.isFunctionDeclaration(statement) && wanted.has(statement.name?.text))
 		|| (ts.isVariableStatement(statement) && statement.declarationList.declarations.some((d) => wanted.has(d.name.getText(tree)))));
 	assert.equal(pieces.length, wanted.size, "every builder was found");
-	const context = vm.createContext({ process: { execPath } });
+	const context = vm.createContext({ process: { execPath }, CURSOR_COLUMN_QUERY, CURSOR_COLUMN_SUPERVISOR });
 	vm.runInContext(ts.transpile(pieces.map((statement) => statement.getText(tree)).join("\n"), { target: ts.ScriptTarget.ES2022 }), context);
 	return context;
 }
@@ -152,7 +153,7 @@ test("Ruby, Java and Octave end a mid-line row before their footer, and only the
 	mkdirSync(bin);
 	writeFileSync(join(bin, "tmux"), '#!/bin/sh\n[ "$FAKE_COLUMN" = fail ] && exit 1\nprintf "%s\\n" "$FAKE_COLUMN"\n');
 	chmodSync(join(bin, "tmux"), 0o700);
-	const builders = loadBuilders(process.execPath, ["rubyStringLiteral", "buildStudioRubyControlSource", "buildStudioJavaControlSource", "buildStudioJavaDriverSource", "buildStudioReplSubmissionLine", "juliaStringLiteral", "shellQuote", "buildStudioMLanguageDriverSource", "STUDIO_CURSOR_COLUMN_SUPERVISOR"]);
+	const builders = loadBuilders(process.execPath, ["rubyStringLiteral", "buildStudioRubyControlSource", "buildStudioJavaControlSource", "buildStudioJavaDriverSource", "buildStudioReplSubmissionLine", "juliaStringLiteral", "shellQuote"]);
 	builders.mStringLiteral = mStringLiteral;
 	let runs = 0;
 	const cases = [
@@ -170,7 +171,7 @@ test("Ruby, Java and Octave end a mid-line row before their footer, and only the
 		{ name: "octave", command: "octave-cli", code: "disp('c')", run: (dir, code, doneFile, display) => {
 			const source = join(dir, "source.m"), driver = join(dir, "driver.m");
 			writeFileSync(source, buildMLanguageControlSource(code, display));
-			writeFileSync(driver, builders.buildStudioMLanguageDriverSource("octave", source, doneFile, display));
+			writeFileSync(driver, buildMLanguageDriverSource("octave", source, doneFile, display));
 			return ["octave-cli", ["--quiet", "--no-init-file", "--no-history", driver]];
 		} },
 	];

@@ -1,5 +1,5 @@
 // MATLAB and Octave share the base-workspace protocol, not a process/session.
-const shellQuote = (value) => `'${value.replace(/'/g, `'"'"'`)}'`;
+import { boundedCursorColumnCommand } from "./repl-cursor-column.js";
 
 export function mStringLiteral(value) {
 	// Single-quoted ASCII is compact in the loader. Encode everything else as
@@ -21,23 +21,32 @@ export function buildMLanguageControlSource(code, display) {
 	].join("\n");
 }
 
+/**
+ * What runs once a submission's code has finished: the footer, then the done
+ * file. In Off the footer still ends a line that output left open, and adds
+ * nothing else. Ctrl-C during Octave's footer interrupts this cleanup action
+ * and skips whatever follows, so for Octave the done file is written by
+ * unwind_protect. MATLAB finishes the action, and has no unwind_protect.
+ */
+export function buildMLanguageFinish(runtime, doneFile, display) {
+	const footer = [
+		...(runtime === "octave" ? ["fflush(1);"] : []),
+		"try",
+		`  [pi_repl_status,pi_repl_column]=system(${mStringLiteral(boundedCursorColumnCommand(process.execPath))});`,
+		"catch",
+		"  pi_repl_status=-1; pi_repl_column='';",
+		"end",
+		"if pi_repl_status~=0 || ~strcmp(strtrim(pi_repl_column),'0'); fprintf(1,'\\n'); end",
+		...display.suffixLines.map((line) => `fprintf(1,'%s\\n',${mStringLiteral(line)});`),
+	];
+	const done = `fclose(fopen(${mStringLiteral(doneFile)},'w'));`;
+	return (runtime === "octave"
+		? ["unwind_protect", ...footer, "unwind_protect_cleanup", done, "end_unwind_protect"]
+		: [...footer, done]).join("\n");
+}
+
 export function buildMLanguageDriverSource(runtime, sourceFile, doneFile, display) {
-	const query = [
-		'try { process.stdout.write(require("node:child_process").execFileSync("tmux", ["-N", "display-message", "-p", "-t", process.env.TMUX_PANE, "#{cursor_x}"], { encoding: "utf8", timeout: 500, killSignal: "SIGKILL", maxBuffer: 128, stdio: ["ignore", "pipe", "ignore"] }).trim()); } catch { process.exitCode = 1; }',
-	].join(" ");
-	const finish = [
-		...(display.enabled ? [
-			...(runtime === "octave" ? ["fflush(1);"] : []),
-			"try",
-			`  [pi_repl_status,pi_repl_column]=system(${mStringLiteral(`${shellQuote(process.execPath)} -e ${shellQuote(query)} 2>/dev/null`)});`,
-			"catch",
-			"  pi_repl_status=-1; pi_repl_column='';",
-			"end",
-			"if pi_repl_status~=0 || ~strcmp(strtrim(pi_repl_column),'0'); fprintf(1,'\\n'); end",
-			...display.suffixLines.map((line) => `fprintf(1,'%s\\n',${mStringLiteral(line)});`),
-		] : []),
-		`fclose(fopen(${mStringLiteral(doneFile)},'w'));`,
-	].join("\n");
+	const finish = buildMLanguageFinish(runtime, doneFile, display);
 	// Parameters give eval its own slots in MATLAB's static anonymous-function
 	// workspace. No helper variables/ans, cwd or path changes enter the base
 	// workspace. onCleanup runs on normal completion, return and interruption;

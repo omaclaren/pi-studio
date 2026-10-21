@@ -88,7 +88,8 @@ import {
 	cleanupPrivateReplControlFiles,
 	createPrivateReplControlFiles,
 } from "./shared/repl-control-files.js";
-import { buildMLanguageControlSource, mStringLiteral } from "./shared/repl-m-language.js";
+import { CURSOR_COLUMN_QUERY, CURSOR_COLUMN_SUPERVISOR } from "./shared/repl-cursor-column.js";
+import { buildMLanguageControlSource, buildMLanguageDriverSource, mStringLiteral } from "./shared/repl-m-language.js";
 import { buildGnuplotDriverSource, buildGnuplotGuardSource, buildGnuplotSubmissionLine } from "./shared/repl-gnuplot.js";
 import { GNUPLOT_OWNER_ENV, GNUPLOT_OWNER_OPTION } from "./shared/repl-gnuplot-processes.js";
 import { buildCppDriverSource, buildCppRequest, cppInclude, createCppControlCleanup, prepareCppSubmission, readCppCompletion } from "./shared/repl-cpp.js";
@@ -11671,17 +11672,17 @@ function buildStudioClojureDisplayStatements(display: ReplSubmissionDisplay, ind
 	return display.prefixLines.map((line) => `${indent}(clojure.core/println ${JSON.stringify(line)})`);
 }
 
-// As in pi-repl 0.8.6: prints the pane's cursor column, or exits non-zero; tmux gets
-// 500 ms. A wrapper runs it with Node and ends a line before its footer unless it prints
-// 0. Only the wrapper reads its output, so it never reaches the pane: a query that
-// outlives its wait can't print after the done file (Sol, Astra, candidate80).
+// CURSOR_COLUMN_QUERY (shared with pi-repl) prints the pane's cursor column, or exits
+// non-zero; tmux gets 500 ms. A wrapper runs it with Node and ends a line before its
+// footer unless it prints 0. Only the wrapper reads its output, so it never reaches the
+// pane: a query that outlives its wait can't print after the done file (Sol, Astra,
+// candidate80).
 // process.exit ends Node even if a startup hook in NODE_OPTIONS would keep it running,
 // and each wrapper also limits the whole helper to 5 s.
 // With the display Off, the footers still end a line that output left open, and add
 // nothing else. Otherwise the runtime's prompt follows the output on the same row,
 // which the record mistook for a prompt row, and line editors such as gnuplot's then
 // redraw the next pasted line wrongly (Astra, candidate90).
-const STUDIO_CURSOR_COLUMN_QUERY = 'let code = 1; try { require("node:fs").writeSync(1, require("node:child_process").execFileSync("tmux", ["-N", "display-message", "-p", "-t", process.env.TMUX_PANE, "#{cursor_x}"], { encoding: "utf8", timeout: 500, killSignal: "SIGKILL", maxBuffer: 128, stdio: ["ignore", "pipe", "ignore"] }).trim()); code = 0; } catch {} process.exit(code);';
 
 function buildStudioPythonFooter(display: ReplSubmissionDisplay): string[] {
 	return [
@@ -11691,7 +11692,7 @@ function buildStudioPythonFooter(display: ReplSubmissionDisplay): string[] {
 		"    try:",
 		"        __pi_studio_sys.stdout.flush()",
 		"        __pi_studio_sys.stderr.flush()",
-		`        __pi_studio_query = __pi_studio_subprocess.run([${JSON.stringify(process.execPath)}, '-e', ${JSON.stringify(STUDIO_CURSOR_COLUMN_QUERY)}], stdin=__pi_studio_subprocess.DEVNULL, stdout=__pi_studio_subprocess.PIPE, stderr=__pi_studio_subprocess.DEVNULL, timeout=5)`,
+		`        __pi_studio_query = __pi_studio_subprocess.run([${JSON.stringify(process.execPath)}, '-e', ${JSON.stringify(CURSOR_COLUMN_QUERY)}], stdin=__pi_studio_subprocess.DEVNULL, stdout=__pi_studio_subprocess.PIPE, stderr=__pi_studio_subprocess.DEVNULL, timeout=5)`,
 		"        if __pi_studio_query.returncode == 0:",
 		"            __pi_studio_column = __pi_studio_query.stdout.decode('utf-8', 'replace').strip()",
 		// run() kills the query on any exception. Ctrl-C here must not skip the done file.
@@ -11750,7 +11751,7 @@ function buildStudioPythonControlSource(runtime: "python" | "ipython", code: str
 }
 
 function buildStudioJuliaFooter(display: ReplSubmissionDisplay): string[] {
-	const query = `Cmd([${juliaStringLiteral(process.execPath)}, "-e", ${juliaStringLiteral(STUDIO_CURSOR_COLUMN_QUERY)}])`;
+	const query = `Cmd([${juliaStringLiteral(process.execPath)}, "-e", ${juliaStringLiteral(CURSOR_COLUMN_QUERY)}])`;
 	return [
 		'    local __pi_studio_column = ""',
 		"    local __pi_studio_query = nothing",
@@ -11809,7 +11810,7 @@ function buildStudioRFooter(display: ReplSubmissionDisplay): string[] {
 		// system2 quotes the command but not its arguments, and kills it after
 		// 5 s. A failed query sets a status; an error or Ctrl-C here gives
 		// NULL, not a lost done file.
-		`    .__pi_studio_column <- tryCatch(suppressWarnings(system2(${JSON.stringify(process.execPath)}, c("-e", ${JSON.stringify(shellQuote(STUDIO_CURSOR_COLUMN_QUERY))}), stdout = TRUE, stderr = FALSE, timeout = 5)), error = function(e) NULL, interrupt = function(e) NULL)`,
+		`    .__pi_studio_column <- tryCatch(suppressWarnings(system2(${JSON.stringify(process.execPath)}, c("-e", ${JSON.stringify(shellQuote(CURSOR_COLUMN_QUERY))}), stdout = TRUE, stderr = FALSE, timeout = 5)), error = function(e) NULL, interrupt = function(e) NULL)`,
 		'    if (!is.null(attr(.__pi_studio_column, "status")) || !identical(trimws(paste(.__pi_studio_column, collapse = "")), "0")) base::cat("\\n")',
 		...display.suffixLines.map((line) => `    base::cat(${JSON.stringify(`${line}\n`)})`),
 	];
@@ -11863,7 +11864,7 @@ function buildStudioGhciControlSource(code: string, doneFile: string, display: R
 // bounded, and Ctrl+C stops only the query. Empty if the query fails. ${NODE_OPTIONS-}
 // because the Shell runtime's footer runs in the user's shell, which may have set -u (Astra).
 function buildStudioShellCursorColumn(): string {
-	return `__pi_studio_column=$(NODE_OPTIONS= ${shellQuote(process.execPath)} -e ${shellQuote(STUDIO_CURSOR_COLUMN_SUPERVISOR)} -- "\${NODE_OPTIONS-}" </dev/null 2>/dev/null) || __pi_studio_column=`;
+	return `__pi_studio_column=$(NODE_OPTIONS= ${shellQuote(process.execPath)} -e ${shellQuote(CURSOR_COLUMN_SUPERVISOR)} -- "\${NODE_OPTIONS-}" </dev/null 2>/dev/null) || __pi_studio_column=`;
 }
 
 function buildStudioGhciCompletionLine(doneFile: string, display: ReplSubmissionDisplay): string {
@@ -11875,7 +11876,7 @@ function buildStudioGhciCompletionLine(doneFile: string, display: ReplSubmission
 }
 
 function buildStudioClojureFooter(display: ReplSubmissionDisplay): string[] {
-	const builder = `(java.lang.ProcessBuilder. ^java.util.List [${JSON.stringify(process.execPath)} "-e" ${JSON.stringify(STUDIO_CURSOR_COLUMN_QUERY)}])`;
+	const builder = `(java.lang.ProcessBuilder. ^java.util.List [${JSON.stringify(process.execPath)} "-e" ${JSON.stringify(CURSOR_COLUMN_QUERY)}])`;
 	return [
 		"      (try (.flush *out*) (.flush *err*) (catch Throwable _))",
 		// An interrupt left pending by the code would end the wait at once, so
@@ -12066,58 +12067,6 @@ function buildStudioJavaDriverSource(sourceFile: string, doneFile: string, displ
 	].join("\n");
 }
 
-// Octave and MATLAB: pi-repl's shared buildMLanguageDriverSource, with two changes Sol and
-// Astra held candidate88 on, until pi-repl takes them:
-// - The column query is STUDIO_CURSOR_COLUMN_QUERY, which exits once it has written, run by
-//   STUDIO_CURSOR_COLUMN_SUPERVISOR, which kills it after 5 s: system() itself has no time
-//   limit. It writes to a private file, not to system()'s pipe, so nothing it leaves running
-//   can hold that pipe open, and the file goes even if the script is interrupted (as in
-//   pi-repl 0.10.1). The script exits 0 or 1: given a status such as 137, MATLAB printed the
-//   command and "Killed" (Astra).
-// - In Octave, Ctrl+C during a cleanup action ended it before the done file was written.
-//   unwind_protect_cleanup writes it even then. MATLAB finishes a cleanup action despite
-//   Ctrl+C, and has no unwind_protect.
-// Runs STUDIO_CURSOR_COLUMN_QUERY in a child Node, with the caller's NODE_OPTIONS (its
-// argument), and kills it after 5 s. The supervisor runs without NODE_OPTIONS, so no startup
-// hook can stall it, keep it running or catch its timer; SIGKILL can't be caught either. It
-// signals only its own child, which Node tracks, so never a process ID since reused (Sol). A
-// preload that catches SIGALRM made perl's alarm wait for its stall (Astra). It ignores Ctrl+C
-// and hangups, so the deadline holds then too; the query gets the default handling.
-const STUDIO_CURSOR_COLUMN_SUPERVISOR = `for (const signal of ["SIGINT", "SIGHUP", "SIGTERM"]) process.on(signal, () => {}); const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(STUDIO_CURSOR_COLUMN_QUERY)}], { stdio: ["ignore", "inherit", "ignore"], env: { ...process.env, NODE_OPTIONS: process.argv[1] ?? "" } }); const timer = setTimeout(() => child.kill("SIGKILL"), 5000); child.on("error", () => process.exit(1)); child.on("exit", (code) => { clearTimeout(timer); process.exit(code === 0 ? 0 : 1); });`;
-
-function buildStudioMLanguageDriverSource(runtime: "octave" | "matlab", sourceFile: string, doneFile: string, display: ReplSubmissionDisplay): string {
-	const query = [
-		// The shell's own messages would reach the pane through system().
-		"exec 2>/dev/null",
-		"f=$(mktemp) || exit 1",
-		`trap 'rm -f "$f"' EXIT`,
-		"trap 'exit 1' HUP INT TERM",
-		// After --, Node takes "$NODE_OPTIONS" as the script's argument, not as its own option.
-		`NODE_OPTIONS= ${shellQuote(process.execPath)} -e ${shellQuote(STUDIO_CURSOR_COLUMN_SUPERVISOR)} -- "$NODE_OPTIONS" >"$f" </dev/null; s=$?`,
-		'cat "$f"',
-		'[ "$s" = 0 ]',
-	].join("; ");
-	const footer = [
-		...(runtime === "octave" ? ["fflush(1);"] : []),
-		"try",
-		// /bin/sh whatever the user's shell is: MATLAB runs system() with $SHELL.
-		`  [pi_repl_status,pi_repl_column]=system(${mStringLiteral(`/bin/sh -c ${shellQuote(query)}`)});`,
-		"catch",
-		"  pi_repl_status=-1; pi_repl_column='';",
-		"end",
-		"if pi_repl_status~=0 || ~strcmp(strtrim(pi_repl_column),'0'); fprintf(1,'\\n'); end",
-		...display.suffixLines.map((line) => `fprintf(1,'%s\\n',${mStringLiteral(line)});`),
-	];
-	const done = `fclose(fopen(${mStringLiteral(doneFile)},'w'));`;
-	const finish = (runtime === "octave"
-		? ["unwind_protect", ...footer, "unwind_protect_cleanup", done, "end_unwind_protect"]
-		: [...footer, done]).join("\n");
-	// As in pi-repl: parameters give eval its own slots, so no helper variables, ans, cwd or
-	// path changes reach the base workspace, and even clear all can't remove the guard.
-	const cleanup = `onCleanup(@() feval(@(pi_repl_status,pi_repl_column) eval(${mStringLiteral(finish)}),-1,''))`;
-	return `feval(@(pi_repl_error,pi_repl_guard) eval(fileread(${mStringLiteral(sourceFile)})),[],${cleanup});\n`;
-}
-
 function buildStudioShellControlSource(code: string, display: ReplSubmissionDisplay): string {
 	return [
 		...display.prefixLines.map((line) => `command printf '%s\\n' ${shellQuote(line)}`),
@@ -12242,14 +12191,14 @@ function prepareStudioReplSubmission(
 		}
 	}
 	if (runtime === "octave" || runtime === "matlab") {
-		// pi-repl's M driver, as Studio's port below: the code runs in the base workspace,
+		// pi-repl's M driver: the code runs in the base workspace,
 		// and a function-local onCleanup writes the footer and done file, even after an
 		// error, return, interrupt or clear all.
 		try {
 			const driver = createPrivateReplControlFiles({
 				...controlOptions,
 				extension: "m",
-				buildSource: () => buildStudioMLanguageDriverSource(runtime, controlFiles.sourceFile, controlFiles.doneFile, display),
+				buildSource: () => buildMLanguageDriverSource(runtime, controlFiles.sourceFile, controlFiles.doneFile, display),
 			});
 			controlFiles.helpers = [driver];
 			loader = driver.sourceFile;
