@@ -34,7 +34,7 @@ function harness({ only = false, watched = false } = {}) {
     constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.listeners = {}; this.style = {}; this.dataset = {}; this.className = ""; this.hidden = false; this.open = false; this.disabled = false; this.value = ""; this.textContent = ""; }
     set id(value) { this._id = value; ids.set(value, this); } get id() { return this._id; }
     get childNodes() { return this.children; } get nextSibling() { const peers = this.parentElement?.children || []; return peers[peers.indexOf(this) + 1] || null; }
-    get classList() { return { add: (...values) => { this.className = [...new Set([...this.className.split(" "), ...values])].filter(Boolean).join(" "); }, contains: value => this.className.split(" ").includes(value), remove: value => { this.className = this.className.split(" ").filter(item => item !== value).join(" "); }, toggle: () => {} }; }
+    get classList() { return { add: (...values) => { this.className = [...new Set([...this.className.split(" "), ...values])].filter(Boolean).join(" "); }, contains: value => this.className.split(" ").includes(value), remove: value => { this.className = this.className.split(" ").filter(item => item !== value).join(" "); }, toggle: (value, force) => { const on = force === undefined ? !this.className.split(" ").includes(value) : Boolean(force); if (on) this.classList.add(value); else this.classList.remove(value); return on; } }; }
     append(...nodes) { for (const node of nodes) this.appendChild(node); }
     appendChild(node) { node.parentElement?.removeChild(node); this.children.push(node); node.parentElement = this; return node; }
     removeChild(node) { this.children.splice(this.children.indexOf(node), 1); node.parentElement = null; }
@@ -247,6 +247,29 @@ test("refreshed source preview omits redundant reference line, restoring respons
   assert.equal(f.c.referenceBadgeEl.textContent, "Latest response: none");
   f.c.studioUiRefreshUi = null; f.c.rightView = "editor-preview"; f.c.updateReferenceBadge();
   assert.equal(meta.hidden, false); assert.equal(f.c.referenceBadgeEl.textContent, "Previewing: editor text", "classic presentation remains available");
+});
+
+// Oliver, 22 Oct: "Branch history 9/9" mid-line was hard to spot. The new layout shows the count on its own at
+// the right, marked while an older response is showing; the classic layout keeps its line.
+test("the new layout shows the response count on its own, marked while an older response shows", () => {
+  const f = harness(), meta = f.doc.createElement("div"); meta.className = "reference-meta"; meta.append(f.c.referenceBadgeEl, f.c.referenceHistoryCountEl);
+  Object.assign(f.c, { latestResponseMarkdown: "Answer", latestResponseThinking: "", latestResponseKind: "assistant", latestResponseTimestamp: 0,
+    responseHistory: Array.from({ length: 9 }, () => ({})), responseHistoryIndex: 8 });
+  load(f.c, "updateReferenceBadge", "formatReferenceTime"); f.c.rightView = "preview";
+  const count = f.c.referenceHistoryCountEl, shown = () => [f.c.referenceBadgeEl.textContent, count.textContent, count.hidden, count.classList.contains("is-older")];
+  f.c.updateReferenceBadge();
+  assert.deepEqual(shown(), ["Assistant response", "9/9", false, false]);
+  f.c.responseHistoryIndex = 6; f.c.updateReferenceBadge();
+  assert.deepEqual(shown(), ["Assistant response", "7/9", false, true]);
+  assert.equal(count.title, "Response 7 of 9 in this branch's history");
+  f.c.responseHistoryIndex = 8; f.c.updateReferenceBadge();
+  assert.deepEqual(shown(), ["Assistant response", "9/9", false, false], "back on the latest, the mark goes");
+  f.c.rightView = "editor-preview"; f.c.updateReferenceBadge();
+  assert.equal(count.hidden, true, "other views don't show it");
+  f.c.rightView = "preview"; f.c.latestResponseMarkdown = ""; f.c.updateReferenceBadge();
+  assert.deepEqual([f.c.referenceBadgeEl.textContent, count.hidden], ["Latest response: none", true]);
+  f.c.latestResponseMarkdown = "Answer"; f.c.studioUiRefreshUi = null; f.c.responseHistoryIndex = 6; f.c.updateReferenceBadge();
+  assert.deepEqual([f.c.referenceBadgeEl.textContent, count.hidden], ["Branch history 7/9 · assistant response", true], "classic keeps its line");
 });
 
 test("ordinary action-summary refresh updates the selected filename dirty marker as text changes", () => {

@@ -7589,6 +7589,13 @@
     body.studio-workspace-layout .response-option-select-wrap:not(:has(select)) { display: none; }
     body.studio-workspace-layout .reference-meta .source-badge,
     body.studio-workspace-layout #historyIndexBadge { border: 0; border-radius: 0; background: transparent; }
+    /* The response count sits at the right of the line, in the text colour, and in the accent colour while an
+       older response is showing (Oliver, 22 Oct). */
+    body.studio-workspace-layout .reference-meta:not([hidden]) { display: flex; align-items: center; gap: 8px; }
+    /* As a row its labels' vertical padding would count, making the line 7 px taller than before (Astra). */
+    body.studio-workspace-layout .reference-meta .source-badge { padding-top: 0; padding-bottom: 0; }
+    body.studio-workspace-layout #rightPane #referenceHistoryCount { margin-left: auto; flex: none; color: var(--text); font-variant-numeric: tabular-nums; }
+    body.studio-workspace-layout #rightPane #referenceHistoryCount.is-older { color: var(--accent); }
     body.studio-workspace-layout .studio-refresh-action-line { flex-wrap: wrap; gap: 6px 10px; }
     body.studio-workspace-layout .studio-refresh-menu > button { display: block; width: 100%; text-align: left; white-space: normal; }
     body.studio-workspace-layout .response-result-row { flex-wrap: wrap; }

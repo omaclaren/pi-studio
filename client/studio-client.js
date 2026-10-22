@@ -107,6 +107,7 @@
         ? responseActionsEl.closest(".response-wrap")
         : null;
       const referenceBadgeEl = document.getElementById("referenceBadge");
+      const referenceHistoryCountEl = document.getElementById("referenceHistoryCount");
       const editorViewSelect = document.getElementById("editorViewSelect");
       const editorViewSelectWrap = document.getElementById("editorViewSelectWrap");
       const rightViewSelect = document.getElementById("rightViewSelect");
@@ -7385,6 +7386,7 @@
 
       function updateReferenceBadge() {
         if (!referenceBadgeEl) return;
+        if (referenceHistoryCountEl) referenceHistoryCountEl.hidden = true;
         const referenceMetaEl = referenceBadgeEl.closest(".reference-meta");
         if (rightView === "repl" || (studioUiRefreshUi && rightView === "editor-preview") || (bufferSwitchingEnabled && studioUiRefreshUi && rightView === "files")) {
           if (referenceMetaEl instanceof HTMLElement) referenceMetaEl.hidden = true;
@@ -7491,10 +7493,20 @@
         const selected = total > 0 && responseHistoryIndex >= 0 && responseHistoryIndex < total
           ? responseHistoryIndex + 1
           : 0;
-        const historyPrefix = total > 0 ? "Branch history " + selected + "/" + total + " · " : "";
+        // Oliver, 22 Oct: the new layout shows the count on its own at the right, as agent-markdown-preview
+        // does, so it's quick to find, and in the accent colour while an older response is showing.
+        const countAtRight = Boolean(studioUiRefreshUi && referenceHistoryCountEl && total > 0);
+        if (countAtRight) {
+          referenceHistoryCountEl.textContent = selected + "/" + total;
+          referenceHistoryCountEl.title = "Response " + selected + " of " + total + " in this branch's history";
+          referenceHistoryCountEl.classList.toggle("is-older", selected > 0 && selected < total);
+          referenceHistoryCountEl.hidden = false;
+        }
+        const historyPrefix = total > 0 && !countAtRight ? "Branch history " + selected + "/" + total + " · " : "";
+        const label = countAtRight ? responseLabel.charAt(0).toUpperCase() + responseLabel.slice(1) : responseLabel;
         referenceBadgeEl.textContent = time
-          ? historyPrefix + responseLabel + " · " + time
-          : historyPrefix + responseLabel;
+          ? historyPrefix + label + " · " + time
+          : historyPrefix + label;
       }
 
       function normalizeForCompare(text) {

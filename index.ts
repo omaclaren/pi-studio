@@ -13475,6 +13475,7 @@ ${cssVarsBlock}
       </div>
       <div class="reference-meta">
         <span id="referenceBadge" class="source-badge">Latest response: none</span>
+        <span id="referenceHistoryCount" class="source-badge" hidden></span>
       </div>
       <div id="critiqueView" class="panel-scroll rendered-markdown"><pre class="plain-markdown">No response yet.</pre></div>
       <div class="response-wrap">
