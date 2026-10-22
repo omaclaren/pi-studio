@@ -7548,8 +7548,12 @@
     /* Honor existing handler eligibility after controls are regrouped. */
     body.studio-ui-refresh [hidden] { display: none !important; }
     /* Dogfood workspace: two logical rows, with normal wrapping in small panes. */
-    /* Room for "Running 00:00" from the start, so nothing moves when "Starting…" becomes the clock (Oliver, 14 Oct). */
-    .studio-run-status { color: var(--muted); font-size: 12px; min-width: 13ch; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    /* Room for "Starting…" and "Stopping…", so nothing moves when a run starts, its clock ticks or it's stopped
+       (Oliver, 14 Oct). Hidden copies in the page's own font set the width. The clock itself, "0:16", is narrower,
+       and the old 13ch reserve for "Running 00:00" pushed the tools onto a second row (Oliver, 22 Oct). */
+    .studio-run-status { color: var(--muted); font-size: 12px; min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .studio-run-status::before { content: "Starting…"; display: block; height: 0; overflow: hidden; visibility: hidden; }
+    .studio-run-status::after { content: "Stopping…"; display: block; height: 0; overflow: hidden; visibility: hidden; }
     body.studio-ui-refresh #rightSectionHeader .studio-follow-button {
       color: var(--muted); border: 0; border-radius: 0; background: transparent;
     }

@@ -91,7 +91,7 @@ test("production client Stop survives missing pending-request presentation and s
 
 test("production client shows compaction and disconnect without claiming cancellation remains deliverable", () => {
   const f = clientHarness(), actor = ledger(); actor.start({ id: "owned", kind: "direct" }); actor.compactStart({ reason: "overflow" }); publish(f, actor);
-  assert.equal(f.c.getAbortablePendingKind(), "direct"); assert.equal(f.c.getStudioRuntimeStatusText(), "Compacting context…");
+  assert.equal(f.c.getAbortablePendingKind(), "direct"); assert.equal(f.c.getStudioRuntimeStatusText(), "Compacting…");
   f.c.wsState = "Disconnected";
   assert.equal(f.c.getAbortablePendingKind(), null); assert.equal(f.c.getStudioRuntimeStatusText(), "Run status unknown · reconnecting…");
   assert.equal(f.c.requestCancelForPendingRequest("direct"), false); assert.equal(f.sent.length, 0);

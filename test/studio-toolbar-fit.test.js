@@ -100,3 +100,12 @@ test("Queue steering takes only its label's width in the new layout", () => {
   // The override comes after the shared rule and is more specific, so it wins.
   assert.ok(css.indexOf("body.studio-ui-refresh #queueSteerBtn {\n      min-width: 0;") > css.indexOf("min-width: 10rem;"));
 });
+
+// Oliver, 22 Oct: with that fix the running row was still a few pixels too wide in a narrower window.
+// The clock is now the time alone, and the status keeps room only for Starting… and Stopping….
+test("the run status reserves Starting… and Stopping… in the page's own font", () => {
+  assert.match(css, /\.studio-run-status \{ color: var\(--muted\); font-size: 12px; min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; \}/);
+  assert.match(css, /\.studio-run-status::before \{ content: "Starting…"; display: block; height: 0; overflow: hidden; visibility: hidden; \}/);
+  assert.match(css, /\.studio-run-status::after \{ content: "Stopping…"; display: block; height: 0; overflow: hidden; visibility: hidden; \}/);
+  assert.doesNotMatch(css, /min-width: 13ch/);
+});

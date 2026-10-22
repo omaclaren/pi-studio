@@ -28,7 +28,7 @@ test("a Run waiting for Pi says Starting… beside Run; critique and other busy 
   assert.equal(text({ uiBusy: false, pendingKind: null }), "");
   assert.equal(text({ uiBusy: true, pendingKind: "direct", wsState: "Connecting" }), "Reconnecting…");
   c.wsState = "Ready";
-  assert.match(text({ studioRuntimeActivity: { run: { origin: "studio", startedAt: Date.now() } } }), /^Running 0:0\d$/, "once Pi starts, the run's own status");
+  assert.match(text({ studioRuntimeActivity: { run: { origin: "studio", startedAt: Date.now() } } }), /^0:0\d$/, "once Pi starts, the run's own status");
 });
 
 test("Run keeps its look only while its own request is pending, and Stop still needs the real run", () => {
@@ -89,7 +89,7 @@ reset();
     const sample = async () => { await new Promise(r => setTimeout(r, 200)); return page.evaluate(() => {
       const box = s => document.querySelector(s).getBoundingClientRect(), style = getComputedStyle(sendRunBtn);
       return { editorY: box("#sourceText").y, button: { text: sendRunBtn.textContent, disabled: sendRunBtn.disabled, background: style.backgroundColor, weight: style.fontWeight, opacity: style.opacity, height: box("#sendRunBtn").height },
-        status: document.querySelector(".studio-run-status").textContent };
+        status: document.querySelector(".studio-run-status").textContent, statusWidth: box(".studio-run-status").width, steerX: box("#queueSteerBtn").x };
     }); };
     // Includes Astra's widths that wrapped and then unwrapped in 0.10.0 (480, 490, 710–780).
     for (const width of [480, 490, 600, 700, 710, 740, 780, 1000]) {
@@ -105,7 +105,21 @@ reset();
           ["Run Prompt", true, idle.button.background, idle.button.weight, "0.7", 28], "pending keeps Run's look at " + width + "px");
         assert.equal(pending.status, "Starting…");
       }
-      assert.deepEqual([run.button.text, run.button.disabled, run.status], ["Stop", false, "Running 0:00"]);
+      assert.deepEqual([run.button.text, run.button.disabled, run.status], ["Stop", false, "0:00"]);
+      // Oliver, 22 Oct: the status keeps room for "Starting…" and "Stopping…", so Queue steering doesn't move
+      // when the clock starts, ticks or is stopped, and no more, so the tools fit on the row in more windows.
+      assert.equal(run.statusWidth, started.statusWidth, "the clock keeps Starting…'s width at " + width + "px");
+      const showing = text => page.evaluate(text => {
+        const status = document.querySelector(".studio-run-status"); status.textContent = text;
+        const range = document.createRange(); range.selectNodeContents(status);
+        return { width: status.getBoundingClientRect().width, text: range.getBoundingClientRect().width, steerX: queueSteerBtn.getBoundingClientRect().x };
+      }, text);
+      for (const text of ["10:00", "99:59", "Stopping…"]) {
+        const shown = await showing(text);
+        assert.deepEqual([shown.width, shown.steerX], [run.statusWidth, run.steerX], "nothing moves at " + text + ", at " + width + "px");
+      }
+      const widest = Math.max((await showing("Starting…")).text, (await showing("Stopping…")).text);
+      assert(Math.abs(run.statusWidth - widest) < 1, "the room is no wider than Starting… or Stopping… at " + width + "px: " + run.statusWidth + " vs " + widest);
     }
     assert.deepEqual(errors, []); assert.deepEqual(network, []);
   } finally { await browser?.close(); }

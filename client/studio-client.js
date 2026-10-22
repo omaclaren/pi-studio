@@ -950,13 +950,14 @@
         const run = studioRuntimeActivity?.run;
         if (wsState === "Disconnected" || wsState === "Connecting") return run ? "Run status unknown · reconnecting…" : "Reconnecting…";
         const stopping = run && (run.stopping || studioStopRequestedRunId === run.id);
-        if (stopping) return "Stopping…" + (studioRuntimeActivity.compaction ? " · Compacting context…" : "");
-        if (studioRuntimeActivity?.compaction) return "Compacting context…";
+        if (stopping) return "Stopping…" + (studioRuntimeActivity.compaction ? " · Compacting…" : "");
+        if (studioRuntimeActivity?.compaction) return "Compacting…";
         if (run) {
           if (run.origin === "outside") return "Pi is busy · started outside Studio";
           if (run.origin === "unknown") return "Pi is busy · run origin unknown";
           const seconds = Math.max(0, Math.floor((Date.now() - run.startedAt) / 1000));
-          return "Running " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+          // Oliver, 22 Oct: the clock alone, beside Stop, so the running row fits narrower windows.
+          return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
         }
         // Oliver, 14 Oct: a Run waiting for Pi to start says so briefly here, so Queue steering fits
         // beside it and the toolbar doesn't wrap and jump back. The footer keeps the detail.
