@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-10-22
+
+### Changed
+- While a prompt runs, the status beside **Stop** shows the elapsed time alone ("0:16"), and "Compacting context…" is now "Compacting…". The status keeps only the room "Starting…" and "Stopping…" need, so the toolbar's tools stay on the first row in narrower windows: with the default split, from about 1,315 px wide, down from about 1,390.
+- The line above a response shows which one you're on at its right end ("9/9"), in the accent colour while an older response is showing. The rest of the line reads "Assistant response · 10:08:28 PM".
+- The REPL pane uses pi-repl 0.10.5's shared helpers to end each send's output and to run Octave and MATLAB, in place of its own copies. Code runs as before.
+
 ## [0.11.0] — 2026-10-21
 
 ### Added
