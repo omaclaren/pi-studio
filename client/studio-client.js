@@ -560,11 +560,19 @@
       let traceDisplayContext = { mode: "live", responseId: null, historyIndex: -1, total: 0, summary: null };
       let traceFilter = "all";
       let traceAutoScroll = true;
+      // Whether the person has scrolled up in Working to read: earlier steps don't fold meanwhile (Oliver, 27 Oct).
+      // Only their own scrolling in a pane that scrolls changes it, so a short filtered list can't end it (Sol, c99).
+      let traceStepsPaused = false;
+      // Where Studio last moved the Working pane itself (to the bottom, say). The scroll event that follows is Studio's,
+      // not the person's, so it leaves the pause alone (Sol, c99).
+      let traceOwnScrollTop = null;
       let traceRenderRaf = null;
       const traceExpandedOutputs = new Set();
       const traceOpenDetails = new Set();
       const traceClosedDetails = new Set();
       const traceSectionDefaults = new Map();
+      // Steps last shown open by default: while the person has scrolled up to read, they stay open (Oliver, 27 Oct).
+      const traceStepsShownOpen = new Set();
       let gitChangesState = {
         status: "idle",
         requestId: null,
@@ -1020,6 +1028,7 @@
           status: "idle",
           startedAt: null,
           updatedAt: null,
+          prompt: null,
           entries: [],
         };
       }
@@ -1114,8 +1123,13 @@
           status: normalizeTraceStatus(raw.status),
           startedAt: parseFiniteNumber(raw.startedAt),
           updatedAt: parseFiniteNumber(raw.updatedAt),
+          prompt: normalizeTracePrompt(raw.prompt),
           entries,
         };
+      }
+
+      function normalizeTracePrompt(value) {
+        return typeof value === "string" && value.trim() ? value : null;
       }
 
       function ensureTraceState() {
@@ -1131,6 +1145,8 @@
           traceOpenDetails.clear();
           traceClosedDetails.clear();
           traceSectionDefaults.clear();
+          traceStepsShownOpen.clear();
+          traceStepsPaused = false;
         }
         renderTraceViewIfActive();
       }
@@ -1198,6 +1214,7 @@
         if (Object.prototype.hasOwnProperty.call(message, "status")) {
           state.status = normalizeTraceStatus(message.status);
         }
+        if (Object.prototype.hasOwnProperty.call(message, "prompt")) state.prompt = normalizeTracePrompt(message.prompt);
         renderTraceViewIfActive();
       }
 
@@ -1291,6 +1308,7 @@
         if (Object.prototype.hasOwnProperty.call(message, "startedAt")) state.startedAt = parseFiniteNumber(message.startedAt);
         if (Object.prototype.hasOwnProperty.call(message, "updatedAt")) state.updatedAt = parseFiniteNumber(message.updatedAt);
         if (Object.prototype.hasOwnProperty.call(message, "status")) state.status = normalizeTraceStatus(message.status);
+        if (Object.prototype.hasOwnProperty.call(message, "prompt")) state.prompt = normalizeTracePrompt(message.prompt);
         if (shouldDisplayLiveTrace()) {
           setTraceDisplayContext({ mode: "live", responseId: null, historyIndex: responseHistoryIndex, total: responseHistory.length, summary: null });
           updateTraceStatusFromMessage(message);
@@ -1345,7 +1363,15 @@
 
       function buildVisibleWorkingText(filterOverride) {
         const filter = normalizeTraceFilter(filterOverride || traceFilter);
-        const entries = getTraceEntriesForFilter(filter);
+        // The new layout shows the run's prompt first under every filter, so Copy visible and Load include it, and are
+        // available when it's all there is (Sol, candidate 99).
+        const state = traceState || createEmptyTraceState();
+        const prompt = studioUiRefreshUi && state.prompt && String(state.prompt).trim() ? "Prompt:\n" + String(state.prompt).trim() : "";
+        const body = buildVisibleWorkingEntriesText(filter, getTraceEntriesForFilter(filter));
+        return [prompt, body].filter(Boolean).join(filter === "thinking" ? "\n\n" : "\n\n---\n\n");
+      }
+
+      function buildVisibleWorkingEntriesText(filter, entries) {
         if (!entries.length) return "";
 
         if (filter === "thinking") {
@@ -6733,6 +6759,15 @@
           return;
         }
 
+        // Oliver, 27 Oct: Ctrl+Option+L for the latest response, as in agent-markdown-preview, also while editing: on a
+        // Mac it types nothing. Elsewhere Ctrl+Alt is AltGr, which types letters such as ł, so there only outside text.
+        if (event.ctrlKey && event.altKey && !event.metaKey && !event.shiftKey && code === "KeyL"
+            && (isMacShortcutPlatform() || !isTextEntryShortcutTarget(event.target))) {
+          event.preventDefault();
+          triggerResponseHistoryShortcut("latest");
+          return;
+        }
+
         if (!isTextEntryShortcutTarget(event.target) && !event.metaKey && !event.ctrlKey && event.altKey && !event.shiftKey) {
           if (key === "ArrowLeft") {
             event.preventDefault();
@@ -7437,7 +7472,8 @@
         if (!referenceBadgeEl) return;
         if (referenceHistoryCountEl) referenceHistoryCountEl.hidden = true;
         const referenceMetaEl = referenceBadgeEl.closest(".reference-meta");
-        if (rightView === "repl" || (studioUiRefreshUi && rightView === "editor-preview") || (bufferSwitchingEnabled && studioUiRefreshUi && rightView === "files")) {
+        // Oliver, 27 Oct: in the new layout Working's own header says what this line said (status, steps, start).
+        if (rightView === "repl" || (studioUiRefreshUi && (rightView === "editor-preview" || rightView === "trace")) || (bufferSwitchingEnabled && studioUiRefreshUi && rightView === "files")) {
           if (referenceMetaEl instanceof HTMLElement) referenceMetaEl.hidden = true;
           if (rightView === "editor-preview") referenceBadgeEl.textContent = "";
           return;
@@ -11817,8 +11853,11 @@
       }
 
       function handleTracePaneScroll() {
+        const own = traceOwnScrollTop !== null && critiqueViewEl && Math.abs(critiqueViewEl.scrollTop - traceOwnScrollTop) < 1;
+        traceOwnScrollTop = null;
         if (rightView === "trace") {
           traceAutoScroll = shouldStickTraceToBottom();
+          if (!own && critiqueViewEl && critiqueViewEl.scrollHeight - critiqueViewEl.clientHeight > 4) traceStepsPaused = !traceAutoScroll;
           return;
         }
         if (rightView === "repl") {
@@ -11852,6 +11891,16 @@
           else { traceOpenDetails.delete(key); traceClosedDetails.add(key); }
           node.setAttribute("data-trace-expected-open", String(open));
           node.open = open;
+        }
+        // Folding a step can hide the focused control inside it. Keep focus on that step's own line, so the keys and
+        // the next Expand still work (candidate 99).
+        const focused = document.activeElement;
+        if (!open && focused instanceof Element && critiqueViewEl.contains(focused)) {
+          let fold = null;
+          for (let node = focused.parentElement; node && node !== critiqueViewEl; node = node.parentElement) {
+            if (node.matches("details[data-trace-details-key]") && !node.open && node.querySelector(":scope > summary") !== focused) fold = node;
+          }
+          fold?.querySelector(":scope > summary")?.focus({ preventScroll: true });
         }
         if (nodes.length) traceAutoScroll = false;
         return nodes.length > 0;
@@ -13829,6 +13878,12 @@
           return { label: "Code", language: "javascript", text: payload ? payload.code : text,
             extraInput: payload && Object.keys(payload).some(key => key !== "code") ? text : "" };
         }
+        // Oliver, 27 Oct: a Bash step shows its command, not the JSON around it, as codemode shows its Code. Any other
+        // field, such as a timeout, stays in Raw input.
+        if (name === "bash" && payload && typeof payload.command === "string") {
+          return { label: "Command", language: "", text: payload.command,
+            extraInput: Object.keys(payload).some(key => key !== "command") ? text : "" };
+        }
         return { label: name === "repl_send" || name === "studio_repl_send" ? "Code" : "Input", language: "", text, extraInput: "" };
       }
 
@@ -13989,6 +14044,8 @@
         if (presentation.language === "javascript") return renderTraceOutput(presentation.text, entry.id + ":input", { label: "Code", language: "javascript" })
           + (presentation.extraInput ? renderTraceRawInputDetails(presentation.extraInput, entry.id + ":input") : "");
         const toolName = String(entry.toolName || "").trim().toLowerCase();
+        if (toolName === "bash" && presentation.label === "Command") return renderTraceOutput(presentation.text, entry.id + ":input", { label: "Command" })
+          + (presentation.extraInput ? renderTraceRawInputDetails(presentation.extraInput, entry.id + ":input") : "");
         if (toolName === "bash") return renderTraceCommandInput(entry, inputText, "Command");
         if (toolName === "repl_send" || toolName === "studio_repl_send") return renderTraceCommandInput(entry, inputText, "Code");
         const payload = parseTraceToolArgsObject(inputText);
@@ -14344,11 +14401,16 @@
         const historyMeta = (context.mode === "history" || context.mode === "missing" || context.mode === "loading")
           ? getTraceHistoryContextLabel()
           : null;
+        // Oliver, 27 Oct: in the new layout Working reads like agent-markdown-preview's page. The prompt comes first, each
+        // step is one numbered line until opened, and this header is the one line saying the run's state (the pane is
+        // already called Working).
+        const steps = Boolean(studioUiRefreshUi);
         const toolbar = "<div class='trace-toolbar'>"
           + "<div class='trace-summary'>"
-          + "<span class='trace-summary-badge'>Working</span>"
+          + (steps ? "" : "<span class='trace-summary-badge'>Working</span>")
           + "<span class='trace-summary-status trace-status-" + escapeHtml(String(state.status || "idle")) + "'>" + escapeHtml(statusLabel) + "</span>"
           + (historyMeta ? ("<span class='trace-summary-meta'>" + escapeHtml(historyMeta) + "</span>") : "")
+          + (steps && entries.length ? "<span class='trace-summary-meta'>" + entries.length + " step" + (entries.length === 1 ? "" : "s") + "</span>" : "")
           + (started ? ("<span class='trace-summary-meta'>Started " + escapeHtml(started) + "</span>") : "")
           + (context.summary && context.summary.truncated ? "<span class='trace-summary-meta'>Truncated</span>" : "")
           + (filterMeta ? ("<span class='trace-summary-meta'>" + escapeHtml(filterMeta) + "</span>") : "")
@@ -14366,6 +14428,7 @@
           + "</div>"
           + "</div>";
 
+        const promptCard = steps && state.prompt ? renderTracePromptCard(state) : "";
         if (!entries.length) {
           const emptyMessage = context.mode === "loading"
             ? "Loading saved working for this response…"
@@ -14378,8 +14441,25 @@
                   : (state.status === "running"
                     ? "Waiting for the first model or tool update…"
                     : "No live working view yet. Start a run or critique to watch working details here."))));
-          return "<div class='trace-panel'>" + toolbar + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
+          return "<div class='trace-panel'>" + toolbar + (promptCard ? "<div class='trace-list'>" + promptCard + "</div>" : "")
+            + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
         }
+
+        // Numbered by place in the whole run, so a step keeps its number under Thinking or Tools.
+        const positions = new Map(getTraceEntriesForFilter("all").map((entry, index) => [entry.id, index + 1]));
+        const latestId = entries[entries.length - 1].id, shownOpen = new Map();
+        const card = (kindClass, entry, header, body, preview) => {
+          if (!steps) return "<article class='trace-card " + kindClass + "'><div class='trace-card-header'>" + header + "</div>" + body + "</article>";
+          const key = "step:" + entry.id, running = entry.status === "streaming" || entry.status === "pending";
+          // Earlier steps fold as new ones arrive, except while the person has scrolled up to read.
+          const opened = traceStepIsOpen(key, running || entry.id === latestId || (traceStepsPaused && traceStepsShownOpen.has(key)));
+          shownOpen.set(key, opened);
+          const firstLine = String(preview || "").split("\n").find(line => line.trim()) || "";
+          return "<details class='trace-card " + kindClass + " trace-step' data-trace-details-key='" + escapeHtml(key) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
+            + "<summary class='trace-card-header'><span class='trace-step-number'>" + (positions.get(entry.id) || "") + "</span>" + header
+            + (firstLine ? "<span class='trace-step-preview'>" + escapeHtml(firstLine.trim().slice(0, 300)) + "</span>" : "") + "</summary>"
+            + "<div class='trace-step-body'>" + body + "</div></details>";
+        };
 
         const cards = entries.map((entry) => {
           if (entry.type === "assistant") {
@@ -14397,15 +14477,12 @@
             if (!sections.length) {
               sections.push("<div class='trace-empty-inline'>Waiting for streamed content…</div>");
             }
-            return "<article class='trace-card trace-card-assistant'>"
-              + "<div class='trace-card-header'>"
-              + "<span class='trace-kind-badge'>" + escapeHtml(filter === "thinking" ? "Thinking" : "Assistant") + "</span>"
+            return card("trace-card-assistant", entry,
+              "<span class='trace-kind-badge'>" + escapeHtml(filter === "thinking" ? "Thinking" : "Assistant") + "</span>"
               + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
               + renderTraceEntryStatus(state, entry.status, false)
-              + (entry.stopReason === "length" ? "<span class='trace-card-meta'>Cut off at the length limit</span>" : "")
-              + "</div>"
-              + sections.join("")
-              + "</article>";
+              + (entry.stopReason === "length" ? "<span class='trace-card-meta'>Cut off at the length limit</span>" : ""),
+              sections.join(""), filter === "thinking" ? entry.thinking : (entry.text || entry.thinking));
           }
 
           const title = entry.label || entry.toolName || "tool";
@@ -14418,20 +14495,37 @@
           if (imageOutput) outputPieces.push(imageOutput);
           const output = renderTraceSection("Output", entry.output, entry.id + ":output", outputPieces.length ? outputPieces.join("") : "<div class='trace-empty-inline'>No output yet.</div>",
             { imageCount: entry.images?.length || 0, isError: toolError, pending: entry.status === "streaming" || entry.status === "pending" });
-          return "<article class='trace-card trace-card-tool'>"
-            + "<div class='trace-card-header'>"
-            + "<span class='trace-kind-badge'>" + escapeHtml(entry.toolName || "tool") + "</span>"
+          return card("trace-card-tool", entry,
+            "<span class='trace-kind-badge'>" + escapeHtml(entry.toolName || "tool") + "</span>"
             + "<span class='trace-card-title'>" + escapeHtml(title) + "</span>"
             + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
             + (formatTraceEntryDuration(entry) ? "<span class='trace-card-meta'>" + escapeHtml(formatTraceEntryDuration(entry)) + "</span>" : "")
-            + renderTraceEntryStatus(state, entry.status, toolError)
-            + "</div>"
-            + argsSummary
-            + output
-            + "</article>";
+            + renderTraceEntryStatus(state, entry.status, toolError),
+            argsSummary + output, "");
         }).join("");
+        // Only the steps shown now: one hidden by a filter keeps its state, so a filter round trip folds nothing (Astra).
+        for (const [key, opened] of shownOpen) { if (opened) traceStepsShownOpen.add(key); else traceStepsShownOpen.delete(key); }
 
-        return "<div class='trace-panel'>" + toolbar + "<div class='trace-list'>" + cards + "</div></div>";
+        return "<div class='trace-panel'>" + toolbar + "<div class='trace-list'>" + promptCard + cards + "</div></div>";
+      }
+
+      // A step is open while it runs or is the latest, unless the person chose otherwise; earlier steps fold to one line.
+      function traceStepIsOpen(key, byDefault) {
+        if (traceOpenDetails.has(key)) return true;
+        if (traceClosedDetails.has(key)) return false;
+        return Boolean(byDefault);
+      }
+
+      // What Pi is responding to: open when short, otherwise one line with its start, like a long section.
+      function renderTracePromptCard(state) {
+        const text = String(state.prompt || ""), key = "prompt:" + (state.runId || "live");
+        const short = text.length <= TRACE_SECTION_AUTO_OPEN_MAX_CHARS && countTraceTextLines(text) <= TRACE_SECTION_AUTO_OPEN_MAX_LINES;
+        const opened = traceStepIsOpen(key, short);
+        const firstLine = text.split("\n").find(line => line.trim()) || "";
+        return "<details class='trace-card trace-card-prompt trace-step' data-trace-details-key='" + escapeHtml(key) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
+          + "<summary class='trace-card-header'><span class='trace-card-title'>Prompt</span>"
+          + "<span class='trace-step-preview'>" + escapeHtml(firstLine.trim().slice(0, 300)) + "</span></summary>"
+          + "<div class='trace-step-body'><div class='trace-prompt-text'>" + escapeHtml(text) + "</div></div></details>";
       }
 
       const TRACE_RUN_STATUS_LABELS = { running: "Running", complete: "Finished", stopped: "Stopped", error: "Failed", idle: "Idle" };
@@ -14460,6 +14554,7 @@
         } else {
           critiqueViewEl.scrollTop = previousScrollTop;
         }
+        if (Math.abs(critiqueViewEl.scrollTop - previousScrollTop) >= 1) traceOwnScrollTop = critiqueViewEl.scrollTop;
         scheduleResponsePaneRepaintNudge();
       }
 

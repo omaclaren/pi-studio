@@ -36,16 +36,18 @@ test("row 1: View after File, and the file name shortens before the row wraps", 
       const row = document.querySelector(".studio-workspace-row-one"), title = row.querySelector(".studio-refresh-title-group");
       const anchor = nameEl.parentElement, items = [anchor, document.getElementById("saveOverBtn"), document.getElementById("fileBtn").parentElement, document.getElementById("viewBtn").parentElement];
       const r = el => el.getBoundingClientRect(), rects = items.map(r), rowRect = r(row), titleRect = r(title);
+      // Every control showing, including Open in a standalone Document window.
+      const shown = [...row.querySelector(".studio-workspace-file-controls").children].filter(e => e.getClientRects().length).map(r);
       const em = parseFloat(getComputedStyle(row.querySelector(".studio-workspace-file-controls")).fontSize);
       return {
         row: { left: rowRect.left, right: rowRect.right, width: rowRect.width }, title: { width: titleRect.width, bottom: titleRect.bottom, right: titleRect.right },
         // The controls never overlap the tabs: they're after them on the same line, or on a line below.
-        clearOfTabs: rects.every(x => x.left >= titleRect.right - 0.5 || x.top >= titleRect.bottom - 0.5),
+        clearOfTabs: shown.every(x => x.left >= titleRect.right - 0.5 || x.top >= titleRect.bottom - 0.5),
         oneLine: rects.every(x => x.top < titleRect.bottom), gaps: rects.slice(1).map((x, i) => Math.round(x.left - rects[i].right)),
         name: { width: rects[0].width, button: r(nameEl).width, natural: nameEl.scrollWidth + (r(nameEl).width - nameEl.clientWidth), cut: nameEl.scrollWidth > nameEl.clientWidth },
         cqi: (() => { const pane = document.getElementById("leftPane"), style = getComputedStyle(pane); return pane.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight); })(),
         rest: rects.slice(1).reduce((sum, x) => sum + x.width, 0), em,
-        viewRight: rects[3].right, minLeft: Math.min(...rects.map(x => x.left)), maxRight: Math.max(...rects.map(x => x.right)),
+        viewRight: rects[3].right, minLeft: Math.min(...shown.map(x => x.left)), maxRight: Math.max(...shown.map(x => x.right)),
         heights: { controls: r(row.querySelector(".studio-workspace-file-controls")).height, tallest: Math.max(...rects.map(x => x.height)) },
       };
     }, width, name);
@@ -73,6 +75,13 @@ test("row 1: View after File, and the file name shortens before the row wraps", 
       const m = await measure(width, LONG);
       assert(m.minLeft >= m.row.left - 0.5 && m.maxRight <= m.row.right + 0.5, "nothing spills at " + width + "px: " + JSON.stringify(m));
       assert(m.clearOfTabs && !m.oneLine, "the controls take their own line below the tabs at " + width + "px: " + JSON.stringify(m));
+    }
+    // A standalone Document window also shows Open. Under 360 px its controls take their own line, so View isn't
+    // clipped between 300 and 335 px (Astra, candidate 98).
+    await page.evaluate(() => { document.querySelector(".studio-refresh-open-anchor").hidden = false; });
+    for (const width of [440, 420, 400, 380, 360, 340, 320, 300]) {
+      const m = await measure(width, LONG);
+      assert(m.minLeft >= m.row.left - 0.5 && m.maxRight <= m.row.right + 0.5 && m.clearOfTabs, "with Open, nothing spills or overlaps at " + width + "px: " + JSON.stringify(m));
     }
   } finally { await browser?.close(); }
 });

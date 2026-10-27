@@ -7590,8 +7590,9 @@
     body.studio-workspace-layout #leftSectionHeader .studio-workspace-file-controls > :has(> .studio-workspace-filename) { min-width: 0; max-width: min(180px, 35cqi); }
     body.studio-workspace-layout #leftSectionHeader .studio-workspace-file-controls > * > .studio-workspace-filename { max-width: 100%; }
     /* Its own line below the tabs, as before; it must also give up the row-filling size, or it stays beside the tabs
-       and the name overlaps them (candidate 97, seen in a replay screenshot). */
-    @container (max-width: 300px) {
+       and the name overlaps them (candidate 97, seen in a replay screenshot). From 360 px, so a standalone Document
+       window, which also shows Open, doesn't clip View (Astra, candidate 98). */
+    @container (max-width: 360px) {
       body.studio-workspace-layout #leftSectionHeader .studio-workspace-file-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; flex: 0 1 auto; min-width: 0; margin-left: auto; }
     }
     body.studio-workspace-layout .studio-refresh-toolbar-main { display: block; }
@@ -7674,6 +7675,35 @@
     body.studio-workspace-layout .trace-kind-badge,
     body.studio-workspace-layout .repl-journal-chip { border-radius: 0; padding-left: 0; padding-right: 0; }
     body.studio-workspace-layout .trace-summary-badge { color: var(--text); font-size: 13px; font-weight: 700; }
+    /* Oliver, 27 Oct: Working like agent-markdown-preview's page. The prompt and each step are one line until opened;
+       inside a step, Code and Output are plain sections, and only the content keeps its frame. */
+    body.studio-workspace-layout details.trace-step { display: block; padding: 0; }
+    body.studio-workspace-layout details.trace-step > summary.trace-card-header {
+      list-style: none; cursor: pointer; user-select: none; flex-wrap: nowrap; padding: 8px 11px;
+    }
+    body.studio-workspace-layout details.trace-step > summary.trace-card-header::-webkit-details-marker { display: none; }
+    /* The same triangles as the sections' own markers, at the same size. */
+    body.studio-workspace-layout details.trace-step > summary.trace-card-header::before { content: "▶"; flex: none; width: 1em; color: var(--muted); font-size: 9px; }
+    body.studio-workspace-layout details.trace-step[open] > summary.trace-card-header::before { content: "▼"; }
+    body.studio-workspace-layout details.trace-step > summary.trace-card-header:focus-visible { outline: none; text-decoration: underline; text-underline-offset: 3px; }
+    body.studio-workspace-layout details.trace-step > summary > * { flex: none; }
+    body.studio-workspace-layout details.trace-step > summary > .trace-card-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    body.studio-workspace-layout .trace-step-number { min-width: 1.2em; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    body.studio-workspace-layout details.trace-step > summary > .trace-step-preview {
+      flex: 1 1 6em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px;
+    }
+    body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }
+    body.studio-workspace-layout .trace-step-body { display: flex; flex-direction: column; gap: 6px; padding: 0 11px 10px; }
+    body.studio-workspace-layout .trace-step .trace-tool-details { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+    body.studio-workspace-layout .trace-step .trace-tool-details > summary { padding: 3px 0; }
+    body.studio-workspace-layout .trace-step .trace-tool-details[open] > summary { border-bottom: 0; background: transparent; }
+    body.studio-workspace-layout .trace-step .trace-tool-details-body,
+    body.studio-workspace-layout .trace-step .trace-tool-change-body { padding: 4px 0 0; }
+    body.studio-workspace-layout .trace-step .trace-section-fold { margin-top: 0; }
+    body.studio-workspace-layout .trace-prompt-text {
+      max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+      color: var(--text); font-size: var(--studio-working-font-size); line-height: 1.45;
+    }
     body.studio-workspace-layout .trace-filter-btn.is-active { color: var(--accent); }
     body.studio-workspace-layout #scratchpadBtn.has-content:not(:disabled):hover,
     body.studio-workspace-layout #reviewNotesBtn.has-content:not(:disabled):hover,

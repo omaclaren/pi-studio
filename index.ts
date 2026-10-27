@@ -541,6 +541,10 @@ interface StudioTraceState {
 	status: StudioTraceRunStatus;
 	startedAt: number | null;
 	updatedAt: number | null;
+	// The run's first user message, as Pi received it, so Working can show what it's responding to (Oliver, 27 Oct).
+	// It's cut once, on arrival; promptTruncated records that, so a saved copy keeps the same text and count.
+	prompt: string | null;
+	promptTruncated?: boolean;
 	entries: StudioTraceEntry[];
 }
 
@@ -10903,6 +10907,7 @@ function createEmptyStudioTraceState(): StudioTraceState {
 		status: "idle",
 		startedAt: null,
 		updatedAt: null,
+		prompt: null,
 		entries: [],
 	};
 }
@@ -10986,6 +10991,9 @@ function createStudioTraceSnapshot(source: StudioTraceState): { traceState: Stud
 	});
 	if (sourceEntries.length > entries.length) truncated = true;
 
+	// Already cut on arrival: cutting the cut text again would rewrite its omission count (Sol, Astra).
+	if (source.promptTruncated) truncated = true;
+
 	return {
 		traceState: {
 			runId: source.runId,
@@ -10994,6 +11002,8 @@ function createStudioTraceSnapshot(source: StudioTraceState): { traceState: Stud
 			status: source.status,
 			startedAt: source.startedAt,
 			updatedAt: source.updatedAt,
+			prompt: typeof source.prompt === "string" ? source.prompt : null,
+			promptTruncated: source.promptTruncated === true,
 			entries,
 		},
 		truncated,
@@ -13606,7 +13616,7 @@ ${cssVarsBlock}
             <div><dt>Cmd/Ctrl+Option/Alt+Shift+Enter</dt><dd>Load the selected response into the editor without switching views; same replacement safeguards</dd></div>
             <div><dt>Option/Alt+←</dt><dd>Previous response when not editing text</dd></div>
             <div><dt>Option/Alt+→</dt><dd>Next response when not editing text</dd></div>
-            <div><dt>Option/Alt+l</dt><dd>Latest response when not editing text</dd></div>
+            <div><dt>Option/Alt+L, or Ctrl+Option/Alt+L</dt><dd>Latest response when not editing text; Ctrl+Option+L also while editing on a Mac</dd></div>
           </dl>
         </section>
         <section class="shortcuts-group">
@@ -15014,6 +15024,7 @@ export default function (pi: ExtensionAPI) {
 			status: studioTraceState.status,
 			startedAt: studioTraceState.startedAt,
 			updatedAt: studioTraceState.updatedAt,
+			prompt: studioTraceState.prompt,
 		});
 	};
 
@@ -15041,6 +15052,7 @@ export default function (pi: ExtensionAPI) {
 			status: "running",
 			startedAt: now,
 			updatedAt: now,
+			prompt: null,
 			entries: [],
 		};
 		activeStudioTraceAssistantEntryId = null;
@@ -20065,6 +20077,14 @@ export default function (pi: ExtensionAPI) {
 		if (role === "user") {
 			const userPrompt = extractUserText(event.message);
 			pendingTurnPrompt = userPrompt;
+			// Working shows the run's first user message, as Pi received it (Oliver, 27 Oct). Pi starts the run before the
+			// message, so the run's Working is already in place; later messages in the same run don't replace it.
+			if (userPrompt && studioRunLifecycle.snapshot().run && studioTraceState.runId && studioTraceState.prompt == null) {
+				const cut = truncateStudioTraceSnapshotText(userPrompt);
+				studioTraceState.prompt = cut.text;
+				studioTraceState.promptTruncated = cut.truncated;
+				broadcastStudioTraceStatus();
+			}
 			const inputIndex = studioPromptInputs.findIndex(input => input.text === normalizePromptText(userPrompt));
 			const registeredInput = inputIndex >= 0 ? studioPromptInputs.splice(inputIndex, 1)[0] : null;
 			const activatedQueuedRequest = activateQueuedStudioDirectRequestForPrompt(userPrompt);

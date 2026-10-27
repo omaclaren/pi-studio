@@ -33,6 +33,7 @@ function fixture(mode = "switching", raf = true) {
     closest() { return this.control ? this : null; }
   }
   const c = vm.createContext({
+    studioUiRefreshUi: null,
     studioRunFollowing: null, studioRunFollowingAvailable: () => false, getStudioRunWorkingOwner: () => null,
     getStudioSelectedBuffer: () => null, pauseStudioRunFollowing() {}, syncStudioFollowMenu() {},
     Element: Pane, sourceTextEl: new Pane(120), sourcePreviewEl: new Pane(90), critiqueViewEl: new Pane(),

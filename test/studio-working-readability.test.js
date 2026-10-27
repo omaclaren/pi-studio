@@ -4,7 +4,7 @@ const source=fs.readFileSync(new URL('../client/studio-client.js',import.meta.ur
 function section(a,b){const x=source.indexOf(a),y=source.indexOf(b,x);assert(x>=0&&y>x,'missing '+a);return source.slice(x,y);}
 const escape=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 class Node{constructor(key='',open=false){this.key=key;this.open=open;this.attrs={'data-trace-details-key':key,'data-trace-expected-open':String(open)};this.isConnected=true;this.tagName='DETAILS';this.editable=false;}matches(s){return s==='details[data-trace-details-key]';}getAttribute(k){return this.attrs[k]??null;}setAttribute(k,v){this.attrs[k]=String(v);}closest(){return this.editable?this:null;}}
-function fixture(){const nodes=[],c={Element:Node,traceExpandedOutputs:new Set(),traceOpenDetails:new Set(),traceClosedDetails:new Set(),traceSectionDefaults:new Map(),traceAutoScroll:true,TRACE_OUTPUT_PREVIEW_MAX_LINES:50,TRACE_OUTPUT_PREVIEW_MAX_CHARS:8000,TRACE_SECTION_AUTO_OPEN_MAX_LINES:6,TRACE_SECTION_AUTO_OPEN_MAX_CHARS:600,rightView:'trace',readerActive:false,modal:false,escapeHtml:escape,formatCompactNumber:x=>String(x),normalizeFenceLanguage:x=>x,wrapHighlight:(cls,x)=>`<span class='${cls}'>${escape(x)}</span>`,EMPTY_OVERLAY_LINE:'',critiqueViewEl:{querySelectorAll:()=>nodes,contains:n=>nodes.includes(n)||n.inPane},studioLinkedReaderIsActive:()=>c.readerActive,studioModalBlocksDraftAction:()=>c.modal,isTextEntryShortcutTarget:n=>n?.editable===true,normalizeTraceImage:()=>null,renderTraceImages:()=>'',formatReferenceTime:x=>String(x||''),normalizeTraceFilter:x=>x||'all',traceFilter:'all',traceDisplayContext:{},traceState:{status:'running',entries:[]},createEmptyTraceState:()=>({status:'idle',entries:[]}),getTraceHistoryContextLabel:()=>'',buildVisibleWorkingText:()=> 'retained Working text'};
+function fixture(){const nodes=[],c={studioUiRefreshUi:null,document:{activeElement:null},traceStepsShownOpen:new Set(),traceStepsPaused:false,traceOwnScrollTop:null,Element:Node,traceExpandedOutputs:new Set(),traceOpenDetails:new Set(),traceClosedDetails:new Set(),traceSectionDefaults:new Map(),traceAutoScroll:true,TRACE_OUTPUT_PREVIEW_MAX_LINES:50,TRACE_OUTPUT_PREVIEW_MAX_CHARS:8000,TRACE_SECTION_AUTO_OPEN_MAX_LINES:6,TRACE_SECTION_AUTO_OPEN_MAX_CHARS:600,rightView:'trace',readerActive:false,modal:false,escapeHtml:escape,formatCompactNumber:x=>String(x),normalizeFenceLanguage:x=>x,wrapHighlight:(cls,x)=>`<span class='${cls}'>${escape(x)}</span>`,EMPTY_OVERLAY_LINE:'',critiqueViewEl:{querySelectorAll:()=>nodes,contains:n=>nodes.includes(n)||n.inPane},studioLinkedReaderIsActive:()=>c.readerActive,studioModalBlocksDraftAction:()=>c.modal,isTextEntryShortcutTarget:n=>n?.editable===true,normalizeTraceImage:()=>null,renderTraceImages:()=>'',formatReferenceTime:x=>String(x||''),normalizeTraceFilter:x=>x||'all',traceFilter:'all',traceDisplayContext:{},traceState:{status:'running',entries:[]},createEmptyTraceState:()=>({status:'idle',entries:[]}),getTraceHistoryContextLabel:()=>'',buildVisibleWorkingText:()=> 'retained Working text'};
  c.getTraceEntriesForFilter=()=>c.traceState.entries;c.renderTraceViewIfActive=()=>{};vm.createContext(c);vm.runInContext(section('function formatTraceOutputSize(','function renderTraceImages('),c);vm.runInContext(section('function highlightCodeTokens(','function getEditorLanguageForPreview('),c);vm.runInContext(section('function handleTraceDetailsToggle(','function handleReplPaneClick('),c);vm.runInContext(section('function buildTracePanelHtml(','function renderTraceView('),c);return {c,nodes};}
 const tool=(changes={})=>({id:'tool-one',type:'tool',toolName:'codemode',label:'Execute JavaScript',args:JSON.stringify({code:'  const value = 3;\n  console.log(value);'}),output:'3\n',images:[],status:'complete',isError:false,startedAt:1000,updatedAt:2250,...changes});
 test('codemode JSON wrapper becomes Code with exact indentation and modest escaped JavaScript highlighting',()=>{const {c}=fixture(),entry=tool(),p=c.getTraceToolInputPresentation(entry);assert.equal(p.label,'Code');assert.equal(p.language,'javascript');assert.equal(p.text,'  const value = 3;\n  console.log(value);');const html=c.renderTraceToolInput(entry);assert.match(html,/hl-code-kw/);assert.match(html,/  <span/);assert(!html.includes('&quot;code&quot;'));assert(!html.includes('data-repl-action'));assert(!html.includes('textarea'));});
@@ -60,3 +60,139 @@ test('new run clears cached initial defaults together with explicit choices; sam
  c.replaceTraceState({runId:'new',entries:[]});assert.equal(c.traceSectionDefaults.size,0);assert.equal(c.traceOpenDetails.size,0);assert.equal(c.traceSectionIsOpen('section','long'.repeat(5000)),false);
 });
 test('new-run reset and keyboard wiring preserve existing state/filter/shortcut ownership',()=>{assert.match(section('function replaceTraceState(','function upsertTraceEntry('),/traceClosedDetails\.clear\(\)/);assert(source.includes('addEventListener("keydown", handleTracePaneKeydown)'));assert.match(index,/Control.*Shift.*\[/);assert.match(css,/\.trace-output-code/);assert.match(css,/white-space: pre;/);assert.match(css,/\.trace-section-fold\.is-error/);});
+
+// Oliver, 27 Oct: in the new layout Working reads like agent-markdown-preview's page: one header line, the prompt
+// first, and each step one numbered line, open while it runs or is the latest. The classic layout is unchanged.
+const assistant=(changes={})=>({id:'a1',type:'assistant',thinking:'',text:'Answer',status:'complete',stopReason:null,startedAt:1000,updatedAt:2000,...changes});
+const stepRe=(id,n,open)=>new RegExp(`<details class='trace-card [^']*trace-step' data-trace-details-key='step:${id}' data-trace-expected-open='${open}'${open?' open':''}><summary class='trace-card-header'><span class='trace-step-number'>${n}</span>`);
+test('new layout: one header line, the prompt first, and steps as numbered lines open while running or latest',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};
+  c.traceState={status:'running',runId:'run-1',prompt:'Check the repo\nand report',entries:[assistant({text:'Looking at <files>\nmore'}),tool({id:'t1'}),tool({id:'t2',status:'streaming',output:''})]};
+  const html=c.buildTracePanelHtml();
+  assert(!html.includes('trace-summary-badge'),'the pane is already called Working');assert(html.includes('>3 steps<'));assert(html.includes('>Running<'));
+  assert(html.includes("<details class='trace-card trace-card-prompt trace-step' data-trace-details-key='prompt:run-1' data-trace-expected-open='true' open>"));
+  const at=['trace-card-prompt','step:a1','step:t1','step:t2'].map(s=>html.indexOf(s));assert(at[0]>0);assert.deepEqual([...at].sort((a,b)=>a-b),at,'prompt, then the steps in order');
+  assert.match(html,stepRe('a1',1,false));assert.match(html,stepRe('t1',2,false));assert.match(html,stepRe('t2',3,true));
+  assert(html.includes("<span class='trace-step-preview'>Looking at &lt;files&gt;</span>"),'a closed step shows its first line, escaped');
+  assert(html.includes("<div class='trace-prompt-text'>Check the repo\nand report</div>"));
+  assert(!html.includes("<article class='trace-card"),'no boxes inside a box');
+});
+test('new layout: a choice wins over the default, and a finished run opens only its last step',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};c.traceState={status:'running',runId:'r',prompt:null,entries:[assistant(),tool({id:'t1'}),tool({id:'t2',status:'streaming'})]};
+  c.traceOpenDetails.add('step:a1');c.traceClosedDetails.add('step:t2');
+  let html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert.match(html,stepRe('t2',3,false));assert(!html.includes('trace-card-prompt'));
+  c.traceOpenDetails.clear();c.traceClosedDetails.clear();c.traceState.status='complete';c.traceState.entries[2].status='complete';
+  html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,false));assert.match(html,stepRe('t1',2,false));assert.match(html,stepRe('t2',3,true));
+  // A collapsed step still says it failed.
+  c.traceState.entries[1]=tool({id:'t1',isError:true,status:'complete',output:'failure\n'.repeat(80)});html=c.buildTracePanelHtml();
+  const t1=html.slice(html.indexOf("step:t1"),html.indexOf('</summary>',html.indexOf("step:t1")));assert(t1.includes('trace-entry-status-error')&&t1.includes('Error'));
+});
+test('new layout: a long prompt is one line with its start; the prompt shows under any filter and above an empty run',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};const long='First line of a long prompt\n'+'more\n'.repeat(20);
+  c.traceState={status:'running',runId:'r2',prompt:long,entries:[tool({id:'t1'})]};
+  let html=c.buildTracePanelHtml();assert(html.includes("data-trace-details-key='prompt:r2' data-trace-expected-open='false'>"));assert(html.includes("<span class='trace-step-preview'>First line of a long prompt</span>"));
+  c.traceFilter='tools';html=c.buildTracePanelHtml();assert(html.includes('trace-card-prompt'));
+  c.traceFilter='all';c.traceState.entries=[];html=c.buildTracePanelHtml();assert(html.includes('trace-card-prompt')&&html.includes("class='trace-empty'"));
+  c.studioUiRefreshUi=null;c.traceState.entries=[tool()];html=c.buildTracePanelHtml();
+  assert(!html.includes('trace-card-prompt')&&html.includes('trace-summary-badge')&&html.includes("<article class='trace-card trace-card-tool'"),'classic layout unchanged');
+});
+test('new layout: steps keep their whole-run numbers under Thinking and Tools',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);
+  c.traceState={status:'complete',runId:'r3',prompt:null,entries:[assistant({id:'a1',thinking:'Considering',text:''}),tool({id:'t1'}),assistant({id:'a2',text:'Reply'}),tool({id:'t2'})]};
+  c.traceFilter='tools';let html=c.buildTracePanelHtml();assert.match(html,stepRe('t1',2,false));assert.match(html,stepRe('t2',4,true));assert(!html.includes('step:a1'));
+  c.traceFilter='thinking';html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes("<span class='trace-step-preview'>Considering</span>"));
+  assert(css.includes('body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }'),'an open step hides its preview line');
+});
+test('the prompt rides on Working state, its status updates and its saved copy',()=>{
+  assert.match(source,/prompt: normalizeTracePrompt\(raw\.prompt\),/);
+  assert.equal(source.match(/if \(Object\.prototype\.hasOwnProperty\.call\(message, "prompt"\)\) state\.prompt = normalizeTracePrompt\(message\.prompt\);/g).length,2,'live and displayed status');
+  assert.match(source,/\(studioUiRefreshUi && \(rightView === "editor-preview" \|\| rightView === "trace"\)\)/,'the line above Working is hidden in the new layout');
+  assert.match(index,/prompt: studioTraceState\.prompt,\n\t\t\}\);/);
+  // Cut once on arrival; the saved copy keeps that text and the flag, not a second cut (Sol, Astra).
+  assert.match(index,/prompt: typeof source\.prompt === "string" \? source\.prompt : null,\n\t\t\tpromptTruncated: source\.promptTruncated === true,/);
+  assert.match(index,/const cut = truncateStudioTraceSnapshotText\(userPrompt\);\n\t\t\t\tstudioTraceState\.prompt = cut\.text;\n\t\t\t\tstudioTraceState\.promptTruncated = cut\.truncated;/);
+  assert.match(index,/if \(userPrompt && studioRunLifecycle\.snapshot\(\)\.run && studioTraceState\.runId && studioTraceState\.prompt == null\) \{/);
+});
+test('collapsing a step that holds the focus moves the focus to that step\'s own line',()=>{
+  const {c,nodes}=fixture();
+  // Pane > step (details) > section (details) > summary (focused).
+  class El{constructor(tag,parent,key){this.tagName=tag;this.parentElement=parent;this.key=key;this.open=true;this.attrs={'data-trace-details-key':key};this.children=[];this.focused=0;this.isConnected=true;}
+    matches(s){return s==='details[data-trace-details-key]'&&this.tagName==='DETAILS';}querySelector(s){return s===':scope > summary'?this.children.find(n=>n.tagName==='SUMMARY')||null:null;}
+    setAttribute(k,v){this.attrs[k]=String(v);}getAttribute(k){return this.attrs[k]??null;}focus(){this.focused+=1;c.document.activeElement=this;}}
+  const pane=new El('DIV',null),step=new El('DETAILS',pane,'step:t1'),stepLine=new El('SUMMARY',step),section=new El('DETAILS',step,'t1:input'),header=new El('SUMMARY',section);
+  step.children.push(stepLine,section);section.children.push(header);
+  c.Element=El;c.critiqueViewEl={querySelectorAll:()=>[step,section],contains:n=>n!==pane&&n instanceof El};c.document.activeElement=header;
+  assert.equal(c.setTraceVisibleDetails(false),true);assert.equal(step.open,false);assert.equal(stepLine.focused,1);assert.equal(c.document.activeElement,stepLine);
+  // Focus already on a step's own line stays put.
+  stepLine.focused=0;assert.equal(c.setTraceVisibleDetails(false),true);assert.equal(stepLine.focused,0);
+});
+test('new layout: scrolled up to read, an open step stays open when the next one starts; following, it folds',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};
+  c.traceState={status:'running',runId:'r4',prompt:null,entries:[tool({id:'t1',status:'streaming'})]};
+  assert.match(c.buildTracePanelHtml(),stepRe('t1',1,true));
+  c.traceState.entries=[tool({id:'t1'}),tool({id:'t2',status:'streaming'})];c.traceStepsPaused=true;
+  let html=c.buildTracePanelHtml();assert.match(html,stepRe('t1',1,true),'kept open while the person reads');assert.match(html,stepRe('t2',2,true));
+  c.traceStepsPaused=false;html=c.buildTracePanelHtml();assert.match(html,stepRe('t1',1,false),'folds once Working follows again');
+  assert(source.includes('traceSectionDefaults.clear();\n          traceStepsShownOpen.clear();'),'a new run starts afresh');
+});
+test('a Bash step shows its command, not its JSON; other fields stay in Raw input',()=>{
+  const {c}=fixture();
+  const p=c.getTraceToolInputPresentation(tool({toolName:'bash',args:JSON.stringify({command:'npm test',timeout:60})}));
+  assert.deepEqual([p.label,p.text,Boolean(p.extraInput)],['Command','npm test',true]);
+  const html=c.renderTraceToolInput(tool({toolName:'bash',args:JSON.stringify({command:'npm test',timeout:60})}));
+  const raw=html.indexOf("<details class='trace-tool-details trace-tool-raw-input'");assert(raw>0,'the timeout stays in Raw input');
+  assert(html.slice(0,raw).includes('npm test')&&!html.slice(0,raw).includes('&quot;command&quot;'),'the command itself comes first');
+  const plain=c.renderTraceToolInput(tool({toolName:'bash',args:JSON.stringify({command:'ls -la'})}));assert(!plain.includes('command&quot;')&&plain.includes('ls -la'));
+  // Input that isn't JSON is shown as it was.
+  assert(c.renderTraceToolInput(tool({toolName:'bash',args:'echo hi'})).includes('echo hi'));
+});
+test('Ctrl+Option+L goes to the latest response, also while editing on a Mac; the shortcuts list says so',()=>{
+  assert.match(source,/if \(event\.ctrlKey && event\.altKey && !event\.metaKey && !event\.shiftKey && code === "KeyL"\n\s+&& \(isMacShortcutPlatform\(\) \|\| !isTextEntryShortcutTarget\(event\.target\)\)\) \{\n\s+event\.preventDefault\(\);\n\s+triggerResponseHistoryShortcut\("latest"\);/);
+  assert(index.includes('<div><dt>Option/Alt+L, or Ctrl+Option/Alt+L</dt><dd>Latest response when not editing text; Ctrl+Option+L also while editing on a Mac</dd></div>'));
+});
+test('new layout: Copy visible and Load include the prompt shown first, and are available when it is all there is',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};c.describeTraceImageForText=()=>'';
+  vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);
+  vm.runInContext(section('function buildVisibleWorkingText(','function getWorkingDocumentLabel('),c);
+  c.traceState={status:'running',runId:'r6',prompt:'Check the repo',entries:[assistant({text:'Done.'})]};
+  assert.equal(c.buildVisibleWorkingText('all'),'Prompt:\nCheck the repo\n\n---\n\nAssistant\n\n[Response]\nDone.');
+  c.traceState.entries=[];assert.equal(c.buildVisibleWorkingText('all'),'Prompt:\nCheck the repo');
+  const html=c.buildTracePanelHtml();assert(!/data-trace-action='copy'[^>]*disabled/.test(html)&&!/data-trace-action='load'[^>]*disabled/.test(html),'available with only the prompt');
+  c.studioUiRefreshUi=null;assert.equal(c.buildVisibleWorkingText('all'),'','the classic layout shows no prompt and copies none');
+});
+test('new layout: scrolled up, a filter round trip folds nothing (Astra)',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);
+  c.traceState={status:'running',runId:'r7',prompt:null,entries:[assistant({id:'a1',thinking:'Considering',text:'Plan'}),tool({id:'t1',status:'streaming'})]};
+  assert.match(c.buildTracePanelHtml(),stepRe('t1',2,true));
+  c.traceState.entries=[assistant({id:'a1',thinking:'Considering',text:'Plan'}),tool({id:'t1'}),assistant({id:'a2',thinking:'Next',text:'',status:'streaming'})];c.traceStepsPaused=true;
+  assert.match(c.buildTracePanelHtml(),stepRe('t1',2,true),'kept open while paused');
+  c.traceFilter='thinking';assert(!c.buildTracePanelHtml().includes('step:t1'));
+  c.traceFilter='all';assert.match(c.buildTracePanelHtml(),stepRe('t1',2,true),'still open after All → Thinking → All');
+  c.traceStepsPaused=false;assert.match(c.buildTracePanelHtml(),stepRe('t1',2,false),'folds once Working follows');
+});
+test('only the person\'s own scrolling in a pane that scrolls pauses or resumes folding; a short filtered list does neither (Sol)',()=>{
+  const {c}=fixture();const pane={scrollHeight:2000,clientHeight:400,scrollTop:0};c.critiqueViewEl=pane;
+  let atBottom=false;c.shouldStickTraceToBottom=()=>atBottom;c.replFollow=true;
+  vm.runInContext(section('function handleTracePaneScroll(','function handleTraceDetailsToggle('),c);
+  c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,true,'scrolled up in a pane that scrolls');
+  pane.scrollHeight=380;atBottom=true;c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,true,'a short list (Thinking) is "at the bottom" but ends nothing');
+  assert.equal(c.traceAutoScroll,true,'scrolling may still stick to the bottom');
+  pane.scrollHeight=2000;atBottom=true;c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,false,'back at the bottom of a pane that scrolls');
+  assert.match(source,/traceStepsShownOpen\.clear\(\);\n\s+traceStepsPaused = false;/,'a new run starts unpaused');
+  assert.match(source,/traceStepIsOpen\(key, running \|\| entry\.id === latestId \|\| \(traceStepsPaused && traceStepsShownOpen\.has\(key\)\)\)/);
+});
+test('Studio\'s own scroll to the bottom, as on returning to All from a short list, leaves the pause alone (Sol, round 3)',()=>{
+  const {c}=fixture();const pane={scrollHeight:2000,clientHeight:400,top:0,get scrollTop(){return this.top;},set scrollTop(v){this.top=Math.max(0,Math.min(v,this.scrollHeight-this.clientHeight));},set innerHTML(v){},classList:{remove(){}}};
+  c.critiqueViewEl=pane;c.replFollow=true;
+  for(const name of ['finishPreviewRender','decoratePreviewImages','scheduleResponsePaneRepaintNudge'])c[name]=()=>{};
+  vm.runInContext(section('function handleTracePaneScroll(','function handleTraceDetailsToggle('),c);
+  vm.runInContext(section('function shouldStickTraceToBottom(','function getActiveReplJournalSessionName('),c);
+  vm.runInContext(section('function renderTraceView(','function renderReplView('),c);c.buildTracePanelHtml=()=>'';
+  pane.scrollTop=200;c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,true,'the person scrolls up to read');
+  c.traceAutoScroll=true;c.renderTraceView();assert.equal(pane.scrollTop,1600,'Studio sticks to the bottom');
+  c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,true,'its scroll event is Studio\'s, not the person\'s');
+  pane.scrollHeight=2200;c.renderTraceView();assert.equal(pane.scrollTop,1800);c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,true,'still paused at the next streamed update');
+  pane.scrollTop=900;c.handleTracePaneScroll();pane.scrollTop=1800;c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,false,'the person scrolls back to the bottom');
+  pane.scrollTop=200;c.handleTracePaneScroll();pane.scrollTop=1800;c.renderTraceView();c.handleTracePaneScroll();
+  assert.equal(c.traceStepsPaused,false,'a render that doesn\'t move the pane claims no scroll: the person\'s own still counts');
+});
