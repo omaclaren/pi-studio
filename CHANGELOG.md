@@ -4,6 +4,13 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-10-27
+
+### Changed
+- "Queue steering" is now **Steer**, Pi's own term. Its hover text says when the message arrives: when the agent's current step ends, before its next model call.
+- In the new layout, the Prompt pane's **View** menu sits in its top row after **File**, as the response pane's View sits in its header. With the shorter label, the toolbar stays on one line while a prompt runs, with the default split, from about 1,100 px wide, down from about 1,315. A long file name shortens before the top row wraps.
+- Saving a Document no longer briefly shows a notice above the panes, which made them jump, or a recovery warning in the footer, while Studio finishes the save. A save Studio can't finish itself still shows its notice and **Resolve saved backing…**. After a normal save the footer says "Saved NOTES.md.".
+
 ## [0.11.1] — 2026-10-22
 
 ### Changed
