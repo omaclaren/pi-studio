@@ -59,6 +59,7 @@
       let documentHostingReady = false, documentHostingPreparingFile = false, documentHostingRetired = false;
       let documentHostingSaveResolution = null;
       let documentHostingSaveResolutionBufferId = null, documentHostingFilePreparationBufferId = null;
+      let documentHostingSaveResolutionOperationId = null, documentHostingSaveResolutionStartedAt = 0;
       let documentHostingResourceDir = null, documentHostingResourceEditGeneration = 0, documentHostingMetadataLocked = false;
       const settledHostingSaveRequests = new Map();
       const documentHostingOwnerFlights = new Map();
@@ -66,7 +67,7 @@
       let scratchpadHostingProduction = null, reviewNotesHostingProduction = null;
       const documentHostingWaiters = new Set();
       let bufferRecoveryClient = null;
-      let bufferRecoveryIssue = "", bufferRecoveryKeptClosed = false;
+      let bufferRecoveryIssue = "", bufferRecoveryKeptClosed = false, bufferRecoveryIssueChannels = null;
       let bufferRecoveryPanel = null;
       let bufferRecoveryInitializing = false;
       let bufferRecoveryNavigationConsent = null;
@@ -373,7 +374,8 @@
       let studioOperationNotices = new Map();
       let studioOperationNoticesEl = null;
       let studioDocumentDestinationsSection = null;
-      let studioOperationNoticeFingerprint = "";
+      let studioOperationNoticeFingerprint = "", studioHeldSaveNoticeTimer = null;
+      const studioOwnSaveAttemptsEnded = new Set();
       let statusLevel = "";
       let reconnectTimer = null;
       let reconnectAttempt = 0;
@@ -5004,10 +5006,55 @@
         } else if (opening?.error) add({ id: "open:invalid", kind: "open", bufferId: null,
           message: "Opening backup could not be verified. Keep it for recovery; current work was kept.",
           actions: [{ controlId: "studioDownloadOpenBtn", label: "Export backup" }] });
-        for (const save of bufferRecoveryClient?.pendingHostingSaves() || []) add({ id: "save:" + save.operationId, kind: "save", bufferId: save.bufferId,
-          message: "Disk save recorded; attaching its backing is unresolved. Current text kept.",
-          actions: [{ controlId: "studioResolveSaveBtn", label: "Resolve saved backing…", selectedBufferOnly: true }] });
+        for (const save of bufferRecoveryClient?.pendingHostingSaves() || []) {
+          if (holdStudioSaveNotice(save.operationId)) continue;
+          add({ id: "save:" + save.operationId, kind: "save", bufferId: save.bufferId,
+            message: "Disk save recorded; attaching its backing is unresolved. Current text kept.",
+            actions: [{ controlId: "studioResolveSaveBtn", label: "Resolve saved backing…", selectedBufferOnly: true }] });
+        }
         return notices;
+      }
+
+      // Oliver, 27 Oct: every Document save showed its own pending record for about 40 ms, above the panes (so they
+      // jumped) and as a recovery warning in the footer. While this tab is still finishing that save itself, there's
+      // nothing to decide yet; if it's still pending after that, or after 10 s, it shows as before.
+      const STUDIO_OWN_SAVE_HOLD_MS = 10000;
+      // When this tab's hold on a pending save ends, or 0 if it isn't held.
+      function studioSaveHoldEndsAt(operationId) {
+        // Once Studio's own attempt to finish it has ended, a save still pending is a decision to make.
+        if (!operationId || studioOwnSaveAttemptsEnded.has(operationId)) return 0;
+        let endsAt = 0;
+        for (const operation of pendingSaveOperations.values()) {
+          if (operation.hosting?.operationId === operationId) endsAt = Math.max(endsAt, (operation.startedAt || 0) + STUDIO_OWN_SAVE_HOLD_MS);
+        }
+        if (documentHostingSaveResolution && documentHostingSaveResolutionOperationId === operationId) {
+          endsAt = Math.max(endsAt, documentHostingSaveResolutionStartedAt + STUDIO_OWN_SAVE_HOLD_MS);
+        }
+        return endsAt > Date.now() ? endsAt : 0;
+      }
+      function studioSaveIsFinishingItself(operationId) {
+        return studioSaveHoldEndsAt(operationId) > 0;
+      }
+      function holdStudioSaveNotice(operationId) {
+        const endsAt = studioSaveHoldEndsAt(operationId);
+        if (!endsAt) return false;
+        // Look again when the earliest hold ends, in case nothing else does: at its own end, not 10 s from now (Sol, Astra).
+        if (!studioHeldSaveNoticeTimer || studioHeldSaveNoticeTimer.at > endsAt) {
+          if (studioHeldSaveNoticeTimer) clearTimeout(studioHeldSaveNoticeTimer.id);
+          studioHeldSaveNoticeTimer = { at: endsAt, id: setTimeout(() => {
+            studioHeldSaveNoticeTimer = null; syncStudioOperationNotices(); renderStatus();
+          }, Math.max(0, endsAt - Date.now()) + 50) };
+        }
+        return true;
+      }
+      function studioPendingSavesAreFinishing() {
+        const saves = bufferRecoveryClient?.pendingHostingSaves() || [];
+        return saves.length > 0 && saves.every(save => holdStudioSaveNotice(save.operationId));
+      }
+      function getStudioShownRecoveryIssue() {
+        const channels = bufferRecoveryIssueChannels;
+        if (!channels?.["file-save"] || Object.values(channels).join(" ") !== bufferRecoveryIssue || !studioPendingSavesAreFinishing()) return bufferRecoveryIssue;
+        return Object.entries(channels).filter(([channel]) => channel !== "file-save").map(([, message]) => message).join(" ");
       }
 
       function getStudioPriorityOperationNotice() {
@@ -5081,11 +5128,12 @@
         // the footer quiet rather than duplicating it or competing with a short
         // confirmation; retain a fallback if notice rendering is unavailable.
         const operationInNotice = operation && studioOperationNoticesEl?.isConnected && !studioOperationNoticesEl.hidden;
-        statusEl.textContent = bufferRecoveryIssue
-          ? "Recovery: " + bufferRecoveryIssue + (bufferRecoveryKeptClosed ? "" : " Save or copy your text before reloading. " + (operationInNotice ? "" : (operation?.message || statusMessage)))
+        const recoveryIssue = getStudioShownRecoveryIssue();
+        statusEl.textContent = recoveryIssue
+          ? "Recovery: " + recoveryIssue + (bufferRecoveryKeptClosed ? "" : " Save or copy your text before reloading. " + (operationInNotice ? "" : (operation?.message || statusMessage)))
           : operationInNotice ? "" : operation?.message || statusMessage;
-        statusEl.className = bufferRecoveryIssue ? "warning" : operationInNotice ? "" : operation?.severity || (statusLevel || "");
-        statusEl.title = bufferRecoveryIssue || (!operationInNotice && operation?.message) || "";
+        statusEl.className = recoveryIssue ? "warning" : operationInNotice ? "" : operation?.severity || (statusLevel || "");
+        statusEl.title = recoveryIssue || (!operationInNotice && operation?.message) || "";
         if (typeof syncStudioPromptAddUndo === "function") syncStudioPromptAddUndo();
 
         const spinnerActive = shouldAnimateFooterSpinner();
@@ -17430,6 +17478,7 @@
         const current = () => !bufferPageClosed && client === bufferRecoveryClient && generation > 0 && generation === documentHostingGeneration
           && bufferId === client.snapshot().selectedBufferId && facts() === before && !studioModalBlocksDraftAction(decision);
         documentHostingSaveResolutionBufferId = bufferId;
+        documentHostingSaveResolutionOperationId = options.automaticOperationId || null; documentHostingSaveResolutionStartedAt = Date.now();
         syncDocumentHostingReadiness();
         documentHostingSaveResolution = (async () => {
           try {
@@ -17507,10 +17556,19 @@
               if (client.pendingHostingSaves().some(save => save.operationId === record.operationId) || !client.hostingAuthority(bufferId).ok) {
                 throw new Error("The saved baseline is kept locally, but recovery is not acknowledged. Keep this tab and recheck copies before closing.");
               }
-              setStatus("Attached the saved baseline without replacing later typing. The disk file was not rewritten.", "success");
+              // A save Studio finished by itself is just a save (Oliver, 27 Oct); the longer wording stays for a resolved one.
+              setStatus(options.automaticOperationId ? "Saved " + (basenameForStudioPath(record.path) || record.label || "the file") + "."
+                : "Attached the saved baseline without replacing later typing. The disk file was not rewritten.", "success");
             }
           } catch (error) { setStatus(error.message || "The save outcome could not be resolved. Keep current work and recheck.", "warning"); }
-        })().finally(() => { documentHostingSaveResolution = null; documentHostingSaveResolutionBufferId = null; syncDocumentHostingReadiness(); });
+        })().finally(() => {
+          if (options.automaticOperationId) {
+            studioOwnSaveAttemptsEnded.add(options.automaticOperationId);
+            while (studioOwnSaveAttemptsEnded.size > 128) studioOwnSaveAttemptsEnded.delete(studioOwnSaveAttemptsEnded.values().next().value);
+          }
+          documentHostingSaveResolution = null; documentHostingSaveResolutionBufferId = null; documentHostingSaveResolutionOperationId = null;
+          syncDocumentHostingReadiness(); renderStatus();
+        });
         return documentHostingSaveResolution;
       }
       function documentHostingMetadataIsIdle(bufferId) {
@@ -31331,7 +31389,7 @@
         const requestId = beginUiAction("save_as");
         if (!requestId) return false;
         const operation = {
-          kind: "save_as", ...(hosting ? { hosting } : {}),
+          kind: "save_as", ...(hosting ? { hosting } : {}), startedAt: Date.now(),
           sourceKey: getEditorDraftSourceKey(),
           path: cleanPath,
           content: String(content ?? ""),
@@ -31406,7 +31464,7 @@
         const requestId = beginUiAction("save_over");
         if (!requestId) return false;
         const operation = {
-          kind: "save_over", ...(settings.hosting ? { hosting: settings.hosting } : {}),
+          kind: "save_over", ...(settings.hosting ? { hosting: settings.hosting } : {}), startedAt: Date.now(),
           sourceKey: getEditorDraftSourceKey(),
           path,
           content: Object.prototype.hasOwnProperty.call(settings, "content")
@@ -32599,7 +32657,7 @@
               return legacy.status === "unavailable" ? { ok: false, reason: "unavailable", message: "Legacy server recovery could not be checked." } : { ok: true, state: legacy.state };
             },
             // A tab Studio moved away from no longer owns the workspace; its issues don't apply.
-            onIssue: (message) => { if (studioMovedAway) return; bufferRecoveryIssue = message; renderStatus(); },
+            onIssue: (message, channels) => { if (studioMovedAway) return; bufferRecoveryIssue = message; bufferRecoveryIssueChannels = channels || null; renderStatus(); },
           });
           let client = createRecoveryClient();
           try { promptRunIndicatorFresh = !recoveryStorage?.getItem("piStudio.bufferWorkspace.v2:" + studioTabStateId) && document.body.dataset.hostingResume !== "1"; } catch { promptRunIndicatorFresh = false; }

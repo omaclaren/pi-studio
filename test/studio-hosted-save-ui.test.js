@@ -35,7 +35,7 @@ function resolutionHarness({conflict=false,choice=true,commitFails=false}={}){
  const c={documentHostingSaveResolution:null,documentHostingSaveResolutionBufferId:null,documentHostingEnabled:true,documentHostingGeneration:1,documentHostingRetired:false,bufferPageClosed:false,
   bufferConnectionGeneration:1,editorContentGeneration:1,editorSourceGeneration:1,sourceTextEl:{value:'later typing'},sourceState:entry.sourceState,fileBackedBaselineText:'saved',fileBackedDiskRevision:'hash',getCurrentResourceDirValue:()=> '/',editorView:'markdown',rightView:'preview',scratchpadAssociationGeneration:1,reviewNotesAssociationGeneration:1,
   scratchpadText:'Kept scratchpad',reviewNotes:[{id:'n',text:'Kept comment'}],scratchpadAssociation:{key:'old'},reviewNotesAssociation:{key:'old'},scratchpadLoadedKeys:new Set(['old']),reviewNotesLoadedKeys:new Set(['old']),studioMetadataKeyIsLoaded:(keys,key)=>keys.has(key),documentHostingMetadataIsIdle:()=>true,cloneReviewNotes:notes=>notes,
-  studioModalBlocksDraftAction:()=>false,syncDocumentHostingReadiness(){},captureStudioBufferTransientState(){},persistWorkspaceStateNow(){},bindSelectedStudioBuffer:()=>calls.push('bind'),setStatus:t=>statuses.push(t),
+  studioModalBlocksDraftAction:()=>false,syncDocumentHostingReadiness(){},renderStatus(){},basenameForStudioPath:p=>p.split('/').at(-1),studioOwnSaveAttemptsEnded:new Set(),captureStudioBufferTransientState(){},persistWorkspaceStateNow(){},bindSelectedStudioBuffer:()=>calls.push('bind'),setStatus:t=>statuses.push(t),
   pendingSaveOperations:new Map(),settledHostingSaveRequests:new Map(),documentHostingLastRemote:{pendingSaves:claims},abandonPendingSaveRequest(){},studioDecisionState:null,
   openStudioDecision:async opts=>{calls.push(opts);return choice;},
   requestDocumentHosting:async req=>{calls.push(req.operation+(req.choice?':'+req.choice:''));if(req.operation==='discard-save'){claims=[];return{ok:true};}
@@ -47,10 +47,14 @@ function resolutionHarness({conflict=false,choice=true,commitFails=false}={}){
 test('automatic Save As transfers nonempty metadata before attaching and rebinding the saved baseline',async()=>{
  const f=resolutionHarness();await f.c.resolveDocumentHostingSave({automaticOperationId:'op'});
  assert.deepEqual(f.calls,['recheck','save-metadata','save-metadata:carry','recheck','attach','bind']);assert.equal(f.c.scratchpadText,'Kept scratchpad');
+ // Oliver, 27 Oct: a save Studio finished by itself says so plainly.
+ assert.equal(f.statuses.at(-1),'Saved new.md.');assert.equal(f.c.documentHostingSaveResolutionOperationId,null);
+ assert.deepEqual([...f.c.studioOwnSaveAttemptsEnded],['op'],'its own attempt has ended, so a record still pending would show');
 });
 test('automatic Save As stops for destination conflicts and manual resolution explicitly selects destination notes',async()=>{
  const automatic=resolutionHarness({conflict:true});await automatic.c.resolveDocumentHostingSave({automaticOperationId:'op'});assert.deepEqual(automatic.calls,['recheck','save-metadata']);
  const manual=resolutionHarness({conflict:true});await manual.c.resolveDocumentHostingSave();const dialog=manual.calls.find(c=>typeof c==='object');assert.equal(dialog.confirmLabel,'Use destination notes');assert(manual.calls.includes('save-metadata:destination'));assert(manual.calls.includes('attach'));
+ assert.match(manual.statuses.at(-1),/^Attached the saved baseline without replacing later typing/,'a resolved save keeps the longer wording');
 });
 test('changed destination or cancelled consent cannot attach or discard the retained file outcome',async()=>{
  const changed=resolutionHarness({conflict:true,commitFails:true});await changed.c.resolveDocumentHostingSave();assert(!changed.calls.includes('attach'));assert(!changed.calls.includes('discard-save'));assert.equal(changed.c.scratchpadText,'Kept scratchpad');

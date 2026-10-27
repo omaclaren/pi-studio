@@ -13,6 +13,8 @@ function harness() {
     selected: "doc", getStudioSelectedBuffer: () => ({ id: c.selected }), studioOperationNotices: new Map(), studioOperationNoticesEl: null,
     document: { getElementById: id => controls.get(id) }, statusEl: {}, statusMessage: "Copied!", statusLevel: "success", bufferRecoveryIssue: null, bufferRecoveryKeptClosed: false,
     shouldAnimateFooterSpinner: () => false, statusLineEl: null, statusSpinnerEl: null, updateFooterMeta() {},
+    bufferRecoveryIssueChannels: null, pendingSaveOperations: new Map(), documentHostingSaveResolution: null, documentHostingSaveResolutionOperationId: null,
+    documentHostingSaveResolutionStartedAt: 0, studioHeldSaveNoticeTimer: null, studioOwnSaveAttemptsEnded: new Set(), timers: [], setTimeout: (fn, ms) => { c.timers.push(ms); return c.timers.length; }, Date,
   });
   vm.runInContext(section("function collectStudioOperationNotices()", "function setWsState(nextState)"), c);
   const control = id => controls.set(id, { disabled: false, click: () => clicks.push(id) });
@@ -136,4 +138,90 @@ test("public copy receipt retains verified creation independently of later unkno
     await controller.copy(); assert(controller.copyState().record); await controller.forgetCopy();
     assert.equal(controller.copyState().record, null); assert.equal(controller.copyState().destinations[0].bufferId, "copy_doc");
   } finally { controller.dispose(); }
+});
+
+// Oliver, 27 Oct: every Document save flashed its own pending record above the panes, so they jumped, and as a footer
+// recovery warning. While this tab is still finishing that save itself, neither shows; after that, or 10 s, both do.
+test("a save this tab is still finishing shows no notice or recovery warning; anything else still does", () => {
+  const h = harness(), saveIssue = "A disk save needs a backing decision. Use Resolve disk save; current text and the disk output were kept.";
+  // A fixed clock, so the look-again delay is exact under load (Sol, candidate 98 round 2).
+  const now = 1_000_000; h.c.Date = { now: () => now };
+  h.setSaves([{ operationId: "op1", bufferId: "doc" }]);
+  h.c.pendingSaveOperations.set("request-1", { kind: "save_over", hosting: { operationId: "op1" }, startedAt: now });
+  h.c.bufferRecoveryIssue = saveIssue; h.c.bufferRecoveryIssueChannels = { "file-save": saveIssue };
+  h.c.statusMessage = "Studio: saving editor text…"; h.c.statusLevel = "";
+  h.c.studioOperationNotices = h.c.collectStudioOperationNotices(); h.c.renderStatus();
+  assert.equal(h.c.studioOperationNotices.size, 0, "no notice for the save in flight");
+  assert.equal(h.c.statusEl.textContent, "Studio: saving editor text…", "no recovery warning for it either");
+  assert.deepEqual(h.c.timers, [10050], "one look again when the hold runs out");
+  // Studio finishing it automatically still holds it, for the same operation only.
+  h.c.pendingSaveOperations.clear(); h.c.documentHostingSaveResolution = Promise.resolve(); h.c.documentHostingSaveResolutionOperationId = "op1";
+  h.c.documentHostingSaveResolutionStartedAt = now;
+  assert.equal(h.c.collectStudioOperationNotices().size, 0);
+  // Another save's record (another tab's, or an earlier session's) shows at once, and so does a second channel.
+  h.setSaves([{ operationId: "op1", bufferId: "doc" }, { operationId: "other", bufferId: "doc" }]);
+  assert.deepEqual([...h.c.collectStudioOperationNotices().keys()], ["save:other"]);
+  h.c.renderStatus(); assert.match(h.c.statusEl.textContent, /^Recovery: A disk save needs a backing decision/);
+  h.setSaves([{ operationId: "op1", bufferId: "doc" }]);
+  h.c.bufferRecoveryIssue = saveIssue + " Server recovery unacknowledged."; h.c.bufferRecoveryIssueChannels = { "file-save": saveIssue, remote: "Server recovery unacknowledged." };
+  h.c.renderStatus(); assert.match(h.c.statusEl.textContent, /^Recovery: Server recovery unacknowledged\./); assert.doesNotMatch(h.c.statusEl.textContent, /disk save/);
+  // An issue set some other way is shown as it is.
+  h.c.bufferRecoveryIssue = "Recovery could not initialize."; h.c.renderStatus(); assert.match(h.c.statusEl.textContent, /^Recovery: Recovery could not initialize\./);
+  // Once Studio is done, or after 10 s, the record shows as before, with its action.
+  h.c.bufferRecoveryIssue = saveIssue; h.c.bufferRecoveryIssueChannels = { "file-save": saveIssue };
+  h.c.documentHostingSaveResolutionStartedAt = now - 10001;
+  let notice = h.c.collectStudioOperationNotices().get("save:op1"); assert.match(notice.message, /attaching its backing is unresolved/);
+  assert.equal(notice.actions[0].label, "Resolve saved backing…");
+  h.c.renderStatus(); assert.match(h.c.statusEl.textContent, /^Recovery: A disk save needs a backing decision/);
+  h.c.documentHostingSaveResolution = null; h.c.pendingSaveOperations.set("request-2", { hosting: { operationId: "op1" }, startedAt: now - 10001 });
+  assert.equal(h.c.collectStudioOperationNotices().has("save:op1"), true, "a request older than 10 s no longer holds it");
+  // A failed automatic attempt leaves its request in flight; once that attempt has ended, the record shows at once.
+  h.c.pendingSaveOperations.set("request-2", { hosting: { operationId: "op1" }, startedAt: now });
+  assert.equal(h.c.collectStudioOperationNotices().has("save:op1"), false);
+  h.c.studioOwnSaveAttemptsEnded.add("op1"); assert.equal(h.c.collectStudioOperationNotices().has("save:op1"), true);
+});
+
+// Sol and Astra (candidate 98): the look-again timer was always 10 s from when it was set, so a later or late-seen save
+// could stay hidden past its own 10 s. It now fires at the earliest held save's own end. These run the timer callbacks.
+function clockHarness() {
+  const h = harness(), queue = new Map(), cleared = []; let time = 1_000_000, next = 0;
+  Object.assign(h.c, { Date: { now: () => time }, paneResizeHandleEl: null, studioOperationNoticeFingerprint: "", statusMessage: "Saving editor text…", statusLevel: "",
+    setTimeout: (fn, ms) => { const id = ++next; queue.set(id, { at: time + ms, fn }); return id; }, clearTimeout: id => { cleared.push(id); queue.delete(id); } });
+  const saveIssue = "A disk save needs a backing decision. Use Resolve disk save; current text and the disk output were kept.";
+  const raise = () => { h.c.bufferRecoveryIssue = saveIssue; h.c.bufferRecoveryIssueChannels = { "file-save": saveIssue }; };
+  const show = () => { h.c.syncStudioOperationNotices(); h.c.renderStatus(); };
+  const advance = to => { for (;;) { const due = [...queue].filter(([, t]) => t.at <= to).sort((a, b) => a[1].at - b[1].at)[0]; if (!due) break; queue.delete(due[0]); time = due[1].at; due[1].fn(); } time = to; };
+  const wakes = () => [...queue.values()].map(t => t.at - 1_000_000);
+  return { ...h, raise, show, advance, wakes, cleared, t0: 1_000_000, shown: () => [...h.c.studioOperationNotices.keys()], footer: () => h.c.statusEl.textContent };
+}
+
+test("a held save shows at its own 10 s, through the real timer, after staggered saves", () => {
+  const h = clockHarness(), t0 = h.t0;
+  h.setSaves([{ operationId: "first", bufferId: "doc" }]); h.c.pendingSaveOperations.set("r1", { hosting: { operationId: "first" }, startedAt: t0 }); h.raise(); h.show();
+  assert.deepEqual(h.wakes(), [10050]);
+  h.advance(t0 + 50); h.c.pendingSaveOperations.clear(); h.setSaves([]); h.c.bufferRecoveryIssue = ""; h.c.bufferRecoveryIssueChannels = {}; h.show();
+  // A second save, finished by Studio itself, starts 6 s later and is still going when the first's look-again fires.
+  h.advance(t0 + 6000); h.setSaves([{ operationId: "second", bufferId: "doc" }]);
+  h.c.documentHostingSaveResolution = new Promise(() => {}); h.c.documentHostingSaveResolutionOperationId = "second"; h.c.documentHostingSaveResolutionStartedAt = t0 + 6000;
+  h.raise(); h.show(); assert.deepEqual(h.shown(), []); assert.deepEqual(h.wakes(), [10050], "the earlier look-again stays");
+  h.advance(t0 + 10050); assert.deepEqual(h.shown(), []); assert.deepEqual(h.wakes(), [16050], "re-armed for the second save's own end, not 20.1 s");
+  h.advance(t0 + 16049); assert.deepEqual(h.shown(), [], "inside the 50 ms allowance");
+  h.advance(t0 + 16050); assert.deepEqual(h.shown(), ["save:second"]); assert.match(h.footer(), /^Recovery: A disk save needs a backing decision/);
+  assert.deepEqual(h.wakes(), [], "nothing left to look again for");
+});
+
+test("a save first seen late, or a nearer end, gets the nearer look-again", () => {
+  const h = clockHarness(), t0 = h.t0;
+  // First seen 9 s after it was sent: 1 s of hold is left.
+  h.setSaves([{ operationId: "late", bufferId: "doc" }]); h.c.pendingSaveOperations.set("r1", { hosting: { operationId: "late" }, startedAt: t0 - 9000 }); h.raise(); h.show();
+  assert.deepEqual(h.shown(), []); assert.deepEqual(h.wakes(), [1050]);
+  h.advance(t0 + 1050); assert.deepEqual(h.shown(), ["save:late"]); assert.match(h.footer(), /^Recovery:/);
+  // A fresh save holds for 10 s; then one sent 8 s ago appears, whose end is nearer: the timer moves to it.
+  h.c.pendingSaveOperations.clear(); h.setSaves([{ operationId: "fresh", bufferId: "doc" }]); h.c.pendingSaveOperations.set("r2", { hosting: { operationId: "fresh" }, startedAt: h.c.Date.now() });
+  h.show(); assert.deepEqual(h.wakes(), [11100]);
+  h.setSaves([{ operationId: "fresh", bufferId: "doc" }, { operationId: "older", bufferId: "doc" }]);
+  h.c.pendingSaveOperations.set("r3", { hosting: { operationId: "older" }, startedAt: h.c.Date.now() - 8000 }); h.show();
+  assert.deepEqual(h.wakes(), [3100]); assert.equal(h.cleared.length, 1, "the later look-again is replaced");
+  h.advance(t0 + 3100); assert.deepEqual(h.shown(), ["save:older"]); assert.deepEqual(h.wakes(), [11100], "and the fresh save's own look-again follows");
+  h.advance(t0 + 11100); assert.deepEqual(h.shown(), ["save:fresh", "save:older"]);
 });

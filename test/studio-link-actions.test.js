@@ -112,7 +112,8 @@ test("in the new layout the REPL never takes the accent from Run Prompt; classic
 
 test("the connection notice says it once", () => {
   assert.match(bufferClient, /"Connection closed\. New edits aren't being checkpointed to the server\."/);
-  assert.match(declaration("renderStatus"), /"Recovery: " \+ bufferRecoveryIssue \+ \(bufferRecoveryKeptClosed \? "" : " Save or copy your text before reloading\. " \+/);
+  // Oliver, 27 Oct: the footer shows the issue less a save this tab is still finishing (studio-operation-notices.test.js).
+  assert.match(declaration("renderStatus"), /const recoveryIssue = getStudioShownRecoveryIssue\(\);\n\s+statusEl\.textContent = recoveryIssue\n\s+\? "Recovery: " \+ recoveryIssue \+ \(bufferRecoveryKeptClosed \? "" : " Save or copy your text before reloading\. " \+/);
   assert.doesNotMatch(source + bufferClient, /Save\/copy current text before refreshing|Server recovery is paused/);
 });
 
@@ -121,7 +122,7 @@ test("Keep closed is a choice, not a failure to start", () => {
   assert.match(source, /bufferRecoveryIssue = \(bufferRecoveryKeptClosed \? "" : "Buffer recovery could not initialize\. Existing snapshots were retained\. "\) \+ \(error\.message \|\| ""\)/);
   const c = { bufferRecoveryIssue: "Workspace kept closed. Retained recovery wasn't discarded. Reload and choose “Resume here” to reopen it.", bufferRecoveryKeptClosed: true,
     statusEl: {}, statusLineEl: null, statusSpinnerEl: null, studioOperationNoticesEl: null, statusMessage: "Disconnected (code 1005). Reconnecting in 600ms…", statusLevel: "",
-    getStudioPriorityOperationNotice: () => null, shouldAnimateFooterSpinner: () => false, updateFooterMeta() {} };
+    getStudioPriorityOperationNotice: () => null, getStudioShownRecoveryIssue: () => c.bufferRecoveryIssue, shouldAnimateFooterSpinner: () => false, updateFooterMeta() {} };
   vm.createContext(c); vm.runInContext(declaration("renderStatus"), c); c.renderStatus();
   assert.equal(c.statusEl.textContent.trim(), "Recovery: Workspace kept closed. Retained recovery wasn't discarded. Reload and choose “Resume here” to reopen it.");
   c.bufferRecoveryKeptClosed = false; c.statusMessage = ""; c.bufferRecoveryIssue = "Connection closed. New edits aren't being checkpointed to the server."; c.renderStatus();

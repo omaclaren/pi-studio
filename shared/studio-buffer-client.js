@@ -64,7 +64,7 @@ export function createStudioBufferClient(options) {
 	const issues = new Map();
 	function issue(channel, result) {
 		if (result) issues.set(channel, result.message || "Recovery is unavailable."); else issues.delete(channel);
-		options.onIssue?.([...issues.values()].join(" "));
+		options.onIssue?.([...issues.values()].join(" "), Object.fromEntries(issues));
 	}
 	function ack() {
 		try {
