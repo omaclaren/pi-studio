@@ -960,7 +960,7 @@
           // Oliver, 22 Oct: the clock alone, beside Stop, so the running row fits narrower windows.
           return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
         }
-        // Oliver, 14 Oct: a Run waiting for Pi to start says so briefly here, so Queue steering fits
+        // Oliver, 14 Oct: a Run waiting for Pi to start says so briefly here, so Steer fits
         // beside it and the toolbar doesn't wrap and jump back. The footer keeps the detail.
         if (uiBusy && pendingKind === "direct") return "Starting…";
         return uiBusy ? getStudioBusyStatus(pendingKind) : "";
@@ -4067,13 +4067,14 @@
           (isEditorOnlyMode || isWatchedFilePreview || followMenu) ? null : activityTrackingSelect,
           (bufferSwitchingEnabled && !followMenu) ? documentPreviewFollowSelect : null]);
         appendStudioUiRefreshMenuSection(viewMenu.menu, "Annotations", [annotationModeSelect, insertHeaderBtn, stripAnnotationsBtn, saveAnnotatedBtn]);
+        // View sits after File in row 1, as the right pane's View sits in its header, so row 2 fits narrower panes (Oliver, 27 Oct).
+        headerToolsEl.appendChild(viewMenu.anchor);
         // Row 2 mirrors row 1: the main action on the left, the tools on the right (Oliver, 10 Oct).
         const toolsEl = makeStudioUiRefreshElement("span", "studio-refresh-tools");
         if (reviewNotesBtn) toolsEl.appendChild(reviewNotesBtn);
         if (scratchpadBtn) toolsEl.appendChild(scratchpadBtn);
         if (isEditorOnlyMode && askAsideBtn) toolsEl.appendChild(askAsideBtn);
         if (reviewMenu) toolsEl.appendChild(reviewMenu.anchor);
-        toolsEl.appendChild(viewMenu.anchor);
         actionLineOneEl.appendChild(toolsEl);
 
         toolbarMainEl.appendChild(actionsEl);
@@ -28081,7 +28082,7 @@
             queueSteerBtn.disabled = true;
             queueSteerBtn.classList.remove("request-stop-active");
             queueSteerBtn.hidden = true;
-            queueSteerBtn.title = "Queue steering is unavailable in editor-only mode.";
+            queueSteerBtn.title = "Steer is unavailable in editor-only mode.";
           }
           if (sendReplBtn) {
             sendReplBtn.hidden = !showReplSend;
@@ -28151,9 +28152,9 @@
           queueSteerBtn.classList.remove("request-stop-active");
           queueSteerBtn.title = canQueueSteering
             ? (annotationsEnabled
-              ? "Queue the current editor text as a steering message for the active run. Shortcut: Cmd/Ctrl+Enter."
-              : "Queue the current editor text as a steering message for the active run after stripping [an: ...] markers. Shortcut: Cmd/Ctrl+Enter.")
-            : "Queue steering is available while Run editor text is active.";
+              ? "Steer the active run with the editor text. Pi adds it when the agent's current step ends, before its next model call. Shortcut: Cmd/Ctrl+Enter."
+              : "Steer the active run with the editor text, without its [an: ...] markers. Pi adds it when the agent's current step ends, before its next model call. Shortcut: Cmd/Ctrl+Enter.")
+            : "Steer is available while a Studio run is active.";
         }
 
         if (sendReplBtn) {
@@ -31776,7 +31777,7 @@
             return;
           }
           if (!studioRunChainActive) {
-            setStatus("Queue steering is only available while Run editor text is active.", "warning");
+            setStatus("Steer is only available while a Studio run is active.", "warning");
             return;
           }
 

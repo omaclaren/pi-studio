@@ -13247,7 +13247,7 @@ ${cssVarsBlock}
           <div class="source-actions">
             <div class="source-actions-row">
               <button id="sendRunBtn" type="button" title="Run editor text. If Studio loaded or staged an unchanged Pi terminal draft, clear that draft after Pi accepts the run. While a direct run is active, this button becomes Stop. Cmd/Ctrl+Enter queues steering from the current editor text. Stop the active request with Esc.">Run editor text</button>
-              <button id="queueSteerBtn" type="button" title="Queue steering is available while Run editor text is active." disabled>Queue steering</button>
+              <button id="queueSteerBtn" type="button" title="Steer is available while a Studio run is active." disabled>Steer</button>
             </div>
             <div class="source-actions-row repl-action-line" hidden>
               <button id="sendReplBtn" type="button" hidden title="Send the current selection, or the full editor text, to the active REPL session shown in the right pane.">Send to REPL</button>
@@ -13591,7 +13591,7 @@ ${cssVarsBlock}
             <div><dt>Cmd/Ctrl+S</dt><dd>Save editor when the disk revision still matches</dd></div>
             <div><dt>Cmd/Ctrl+Shift+S</dt><dd>Save editor as a new file</dd></div>
             <div><dt>Cmd/Ctrl+Shift+L</dt><dd>Load the current Pi terminal input draft without clearing it</dd></div>
-            <div class="shortcuts-full-only"><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or queue steering during an active run</dd></div>
+            <div class="shortcuts-full-only"><dt>Cmd/Ctrl+Enter</dt><dd>Run editor text, or steer an active run</dd></div>
             <div><dt>Option/Alt+Tab or Cmd/Ctrl+Shift+Space</dt><dd>Suggest a completion at the editor cursor</dd></div>
             <div><dt>Tab</dt><dd>Insert a visible completion suggestion; otherwise indent selected editor text</dd></div>
             <div><dt>Esc</dt><dd>Dismiss a visible completion suggestion, close overlays, exit pane focus, or stop an active request</dd></div>

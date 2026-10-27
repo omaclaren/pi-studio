@@ -7580,6 +7580,18 @@
     /* Natural widths with a small gap (Oliver, trial48): the unselected label may shift a little on switching. */
     body.studio-workspace-layout .studio-workspace-file-controls { min-width: 0; margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
     body.studio-workspace-layout .studio-workspace-filename { min-width: 0; max-width: min(180px, 35cqi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+    /* With View beside File, the name shortens before anything wraps (Oliver, 27 Oct). Its column can narrow to 4em, so
+       row 1 wraps only when even that won't fit. Otherwise the controls take the rest of the row, and the name what's left
+       of that, up to its cap. In a very narrow pane the controls wrap among themselves, as before. */
+    body.studio-workspace-layout #leftSectionHeader .studio-workspace-file-controls {
+      display: grid; grid-auto-flow: column; grid-template-columns: minmax(4em, max-content); grid-auto-columns: max-content;
+      justify-content: end; justify-items: stretch; align-items: center; column-gap: 8px; flex: 1 1 0%; min-width: min-content;
+    }
+    body.studio-workspace-layout #leftSectionHeader .studio-workspace-file-controls > :has(> .studio-workspace-filename) { min-width: 0; max-width: min(180px, 35cqi); }
+    body.studio-workspace-layout #leftSectionHeader .studio-workspace-file-controls > * > .studio-workspace-filename { max-width: 100%; }
+    @container (max-width: 300px) {
+      body.studio-workspace-layout #leftSectionHeader .studio-workspace-file-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+    }
     body.studio-workspace-layout .studio-refresh-toolbar-main { display: block; }
     body.studio-workspace-layout .studio-refresh-toolbar-actions { gap: 0; min-width: 0; width: 100%; }
     body.studio-workspace-layout .studio-refresh-toolbar-actions > .studio-refresh-action-line { min-width: 0; width: 100%; }

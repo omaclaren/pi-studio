@@ -85,16 +85,18 @@ test("the REPL pane's More stacks plain items like the other menus", () => {
 // Oliver, 10 Oct: row 2 mirrors row 1, with the main action left and the tools right.
 test("toolbar tools sit in a right-aligned group after the main action", () => {
   const setup = source.slice(source.indexOf('const toolsEl = makeStudioUiRefreshElement("span", "studio-refresh-tools");'), source.indexOf("actionLineOneEl.appendChild(toolsEl);") + 40);
-  for (const item of ["reviewNotesBtn", "scratchpadBtn", "askAsideBtn", "reviewMenu.anchor", "viewMenu.anchor"]) assert.match(setup, new RegExp("toolsEl\\.appendChild\\(" + item.replace(".", "\\.") + "\\)"));
+  for (const item of ["reviewNotesBtn", "scratchpadBtn", "askAsideBtn", "reviewMenu.anchor"]) assert.match(setup, new RegExp("toolsEl\\.appendChild\\(" + item.replace(".", "\\.") + "\\)"));
+  // Oliver, 27 Oct: View moved up to row 1, after File.
+  assert.doesNotMatch(setup, /toolsEl\.appendChild\(viewMenu\.anchor\)/);
   assert.match(css, /body\.studio-workspace-layout \.studio-refresh-tools \{ margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end;/);
   assert.match(css, /\.studio-refresh-action-line > \.studio-refresh-tools > button,\n/);
   // Add to Prompt still goes in after the main action, before the tools.
   assert.match(source, /studioUiRefreshUi\.actionLine\.insertBefore\(addMenu\.anchor, queueSteerBtn\?\.nextSibling \|\| sendRunBtn\?\.nextSibling \|\| null\)/);
 });
 
-// Oliver, 19 Oct (13-inch Mac): Queue steering is plain text in the new layout, so the old
+// Oliver, 19 Oct (13-inch Mac): steering is plain text in the new layout, so the old
 // 10rem button width only left a gap before it and pushed the tools onto a second row.
-test("Queue steering takes only its label's width in the new layout", () => {
+test("Steer takes only its label's width in the new layout", () => {
   assert.match(css, /#sendRunBtn,\n\s+#queueSteerBtn,\n\s+#sendReplBtn \{\n\s+min-width: 10rem;/);
   assert.match(css, /body\.studio-ui-refresh #queueSteerBtn \{\n\s+min-width: 0;\n\s+\}/);
   // The override comes after the shared rule and is more specific, so it wins.
@@ -108,4 +110,16 @@ test("the run status reserves Starting… and Stopping… in the page's own font
   assert.match(css, /\.studio-run-status::before \{ content: "Starting…"; display: block; height: 0; overflow: hidden; visibility: hidden; \}/);
   assert.match(css, /\.studio-run-status::after \{ content: "Stopping…"; display: block; height: 0; overflow: hidden; visibility: hidden; \}/);
   assert.doesNotMatch(css, /min-width: 13ch/);
+});
+
+// Oliver, 27 Oct: in Muxy, with its sidebar open, the running row still wrapped. Queue steering is "Steer", and View
+// sits in row 1 after File, as the right pane's View sits in its header.
+test("the steering button reads Steer, and View sits after File in row 1", () => {
+  const index = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+  assert.match(index, /<button id="queueSteerBtn" type="button" title="Steer is available while a Studio run is active\." disabled>Steer<\/button>/);
+  assert.ok(!(index + source).includes("Queue steering"), "no old label left");
+  const header = source.slice(source.indexOf('const headerToolsEl = makeStudioUiRefreshElement("div", "studio-refresh-pane-tools studio-workspace-file-controls");'), source.indexOf("const toolsEl = makeStudioUiRefreshElement"));
+  // The name comes first, since row 1's first column is the one that narrows; View comes after File.
+  assert.match(header, /headerToolsEl\.append\(filenameButton, openMenu\.anchor\);\n\s+if \(saveOverBtn\) headerToolsEl\.appendChild\(saveOverBtn\);\n\s+if \(contextMenu\) headerToolsEl\.appendChild\(contextMenu\.anchor\);/);
+  assert.ok(header.indexOf("headerToolsEl.appendChild(viewMenu.anchor);") > header.indexOf("headerToolsEl.appendChild(contextMenu.anchor);"));
 });

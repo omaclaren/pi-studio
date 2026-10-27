@@ -130,7 +130,8 @@ test("actual refreshed constructor relocates original controls into two workspac
   const { c } = harness(); const ui = c.studioUiRefreshUi;
   assert.equal(c.bufferSwitcherUi.prompt.textContent, "Prompt"); assert.equal(c.bufferSwitcherUi.document.textContent, "Document (Raw) ▾");
   assert.equal(c.bufferSwitcherUi.prompt.closest(".studio-workspace-tabs-host"), ui.tabsHost);
-  assert.deepEqual(ui.fileControls.children.map(node => node.textContent || node.children[0]?.textContent), ["NOTES.md", "Save", "File"], "Open folds into File (trial48 finding 15)");
+  assert.deepEqual(ui.fileControls.children.map(node => node.textContent || node.children[0]?.textContent), ["NOTES.md", "Save", "File", "View"], "Open folds into File (trial48 finding 15); View follows File (Oliver, 27 Oct)");
+  assert(!ui.actionLine.querySelector(".studio-refresh-tools").children.some(node => node.children[0]?.textContent === "View"), "View is no longer in row 2");
   assert.equal(ui.actionLine.children[0], c.sendRunBtn);
   assert.equal(c.bufferSwitcherUi.addMenu.anchor.parentElement, ui.actionLine);
   assert.equal(c.saveAsBtn.closest(".studio-refresh-menu").getAttribute("aria-label"), "File");
