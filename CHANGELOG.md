@@ -4,6 +4,17 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.3] — 2026-10-28
+
+### Added
+- **Ctrl+Option+L** (Ctrl+Alt+L) goes to the latest response, as in agent-markdown-preview. On a Mac it also works while you're editing text. Elsewhere Ctrl+Alt is AltGr, which types letters such as ł, so there it works only outside text. **Option+L** is unchanged.
+
+### Changed
+- In the new layout, **Working** starts with the run's prompt, as Pi received it, and keeps it with the saved response. A long prompt is folded to its first line.
+- Each Working step is one numbered line until you open it. The running step and the latest are open, and earlier steps fold as the run goes on while Working follows the bottom. Scrolled up to read, nothing open folds.
+- Working's header is one line ("Running · 4 steps · Started 4:28 PM"), and the "Working: running · 9 entries" line above the pane is gone. Inside a step, Code, Input and Output are plain sections, and a Bash step shows its command, not its JSON. **Copy visible** and **Load** include the prompt.
+- In a pane under 360 px wide (300 px before), the file controls take their own line, so **View** isn't clipped when **Open** also shows.
+
 ## [0.11.2] — 2026-10-27
 
 ### Changed
