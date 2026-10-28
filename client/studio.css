@@ -6810,11 +6810,11 @@
       min-width: 8.6rem;
     }
 
-    /* Stop is the one filled action while running; steering stays plain. */
+    /* Stop is the one filled action while running; Steer beside it is outlined (Oliver, 28 Oct). */
     body.studio-ui-refresh #queueSteerBtn:not(:disabled) {
       background: transparent;
-      border-color: transparent;
-      color: var(--accent);
+      border-color: var(--control-border);
+      color: var(--text);
       font-weight: 600;
     }
 
@@ -6822,7 +6822,7 @@
       background: var(--studio-header-action-hover-bg, var(--panel-2));
     }
 
-    /* Plain text needs no button width. The old 10rem left a gap before it and, on a
+    /* Steer needs no fixed width. The old 10rem left a gap before it and, on a
        13-inch screen, pushed the tools onto a second row while running (Oliver, 19 Oct). */
     body.studio-ui-refresh #queueSteerBtn {
       min-width: 0;

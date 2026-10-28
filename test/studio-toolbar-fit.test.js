@@ -90,11 +90,23 @@ test("toolbar tools sit in a right-aligned group after the main action", () => {
   assert.doesNotMatch(setup, /toolsEl\.appendChild\(viewMenu\.anchor\)/);
   assert.match(css, /body\.studio-workspace-layout \.studio-refresh-tools \{ margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end;/);
   assert.match(css, /\.studio-refresh-action-line > \.studio-refresh-tools > button,\n/);
-  // Add to Prompt still goes in after the main action, before the tools.
-  assert.match(source, /studioUiRefreshUi\.actionLine\.insertBefore\(addMenu\.anchor, queueSteerBtn\?\.nextSibling \|\| sendRunBtn\?\.nextSibling \|\| null\)/);
+  // Add to Prompt still goes in after the main action and its clock, before the tools.
+  assert.match(source, /studioUiRefreshUi\.actionLine\.insertBefore\(addMenu\.anchor, studioUiRefreshUi\.runStatus\?\.nextSibling \|\| null\)/);
 });
 
-// Oliver, 19 Oct (13-inch Mac): steering is plain text in the new layout, so the old
+// Oliver, 28 Oct: Steer as plain teal text, after the clock's spare room, looked stray. It sits beside Stop,
+// outlined, and the clock follows it.
+test("Steer sits beside Stop, outlined, and the clock follows it", () => {
+  const setup = source.slice(source.indexOf('const actionLineOneEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");'), source.indexOf("const actionLineTwoEl"));
+  const at = text => { const index = setup.indexOf(text); assert(index > 0, text); return index; };
+  const run = at("actionLineOneEl.appendChild(sendRunBtn)"), steer = at("actionLineOneEl.appendChild(queueSteerBtn)");
+  const indicator = at("actionLineOneEl.appendChild(promptRunIndicator)"), status = at("actionLineOneEl.appendChild(runStatus)");
+  assert(run < steer && steer < indicator && indicator < status);
+  assert.equal(setup.split("appendChild(queueSteerBtn)").length, 2, "Steer goes in once");
+  assert.match(css, /body\.studio-ui-refresh #queueSteerBtn:not\(:disabled\) \{\n\s+background: transparent;\n\s+border-color: var\(--control-border\);\n\s+color: var\(--text\);\n\s+font-weight: 600;\n\s+\}/);
+});
+
+// Oliver, 19 Oct (13-inch Mac): Steer has no fixed width in the new layout, since the old
 // 10rem button width only left a gap before it and pushed the tools onto a second row.
 test("Steer takes only its label's width in the new layout", () => {
   assert.match(css, /#sendRunBtn,\n\s+#queueSteerBtn,\n\s+#sendReplBtn \{\n\s+min-width: 10rem;/);

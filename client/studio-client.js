@@ -4078,6 +4078,8 @@
         const actionsEl = makeStudioUiRefreshElement("div", "studio-refresh-toolbar-actions");
         const actionLineOneEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line");
         if (!isEditorOnlyMode && sendRunBtn) actionLineOneEl.appendChild(sendRunBtn);
+        // Steer sits beside Stop, and the clock follows it (Oliver, 28 Oct).
+        if (!isEditorOnlyMode && queueSteerBtn) actionLineOneEl.appendChild(queueSteerBtn);
         const promptRunIndicator = makeStudioUiRefreshElement("span", "studio-prompt-run-indicator");
         promptRunIndicator.id = "studioPromptRunIndicator"; promptRunIndicator.hidden = true;
         promptRunIndicator.setAttribute("role", "status"); promptRunIndicator.setAttribute("aria-live", "polite");
@@ -4085,7 +4087,6 @@
         // The run status takes the indicator's place while running, so the row keeps its width.
         const runStatus = makeStudioUiRefreshElement("span", "studio-run-status");
         runStatus.hidden = true; actionLineOneEl.appendChild(runStatus);
-        if (!isEditorOnlyMode && queueSteerBtn) actionLineOneEl.appendChild(queueSteerBtn);
         const actionLineTwoEl = makeStudioUiRefreshElement("div", "studio-refresh-action-line studio-refresh-utility-action-line");
         if (!contextMenu && copyDraftBtn) actionLineTwoEl.appendChild(copyDraftBtn);
         if (!contextMenu && suggestCompletionBtn) actionLineTwoEl.appendChild(suggestCompletionBtn);
@@ -18842,7 +18843,7 @@
             if (openCompanionBtn) addItem(loadMenu, openCompanionBtn, "studioNewDocumentWindowInfo", openCompanionBtn.title);
           }
           studioUiRefreshUi.menus = studioUiRefreshUi.menus.filter(item => item !== studioUiRefreshUi.openMenu);
-          studioUiRefreshUi.actionLine.insertBefore(addMenu.anchor, queueSteerBtn?.nextSibling || sendRunBtn?.nextSibling || null);
+          studioUiRefreshUi.actionLine.insertBefore(addMenu.anchor, studioUiRefreshUi.runStatus?.nextSibling || null);
           // One click (Oliver, 9 Oct): the real guarded buttons sit in the row and only the one that
           // applies shows, "Add selection to Prompt" with text selected, else "Add document to Prompt".
           addMenu.button.hidden = true;

@@ -75,7 +75,7 @@ ${names.map(extract).join("\n")}
 ${source.slice(clickStart, clickEnd)}
 reset();
 `;
-  const html = `<!doctype html><html><head><meta charset='utf-8'><style>:root{--bg:#faf4ed;--panel:#fffaf3;--panel-2:#f2e9e1;--text:#575279;--muted:#797593;--panel-border:#dfdad9;--control-border:#cecacd;--accent:#56949f;--accent-contrast:#fff;--error:#b4637a;--error-contrast:#fff;} #fixture{margin:24px;width:700px;} #sourceText{display:block;width:100%;height:180px;resize:none;} </style></head><body class='studio-ui-refresh studio-workspace-layout' data-buffer-switching='1'><div id='fixture'><div class='source-meta'><div class='studio-refresh-toolbar'><div class='studio-refresh-toolbar-main'><div class='studio-refresh-toolbar-actions'><div class='studio-refresh-action-line'><button id='sendRunBtn' type='button'>Run editor text</button><span class='studio-prompt-run-indicator' hidden></span><span class='studio-run-status' hidden></span><button id='queueSteerBtn' type='button' hidden disabled>Steer</button><span class='studio-refresh-tools'><button id='reviewNotesBtn'>Comments</button><button id='scratchpadBtn'>Scratchpad</button><span class='studio-refresh-menu-anchor studio-refresh-review-anchor'><button class='studio-refresh-tool-tab studio-refresh-review-btn studio-refresh-chip'>Review</button></span></span></div><div class='studio-refresh-action-line studio-refresh-utility-action-line'></div><div class='studio-refresh-action-line repl-action-line' hidden></div></div><div class='studio-refresh-toolbar-state'></div></div></div></div><textarea id='sourceText'>Fixture only. No model request is sent.</textarea></div></body></html>`;
+  const html = `<!doctype html><html><head><meta charset='utf-8'><style>:root{--bg:#faf4ed;--panel:#fffaf3;--panel-2:#f2e9e1;--text:#575279;--muted:#797593;--panel-border:#dfdad9;--control-border:#cecacd;--accent:#56949f;--accent-contrast:#fff;--error:#b4637a;--error-contrast:#fff;} #fixture{margin:24px;width:700px;} #sourceText{display:block;width:100%;height:180px;resize:none;} </style></head><body class='studio-ui-refresh studio-workspace-layout' data-buffer-switching='1'><div id='fixture'><div class='source-meta'><div class='studio-refresh-toolbar'><div class='studio-refresh-toolbar-main'><div class='studio-refresh-toolbar-actions'><div class='studio-refresh-action-line'><button id='sendRunBtn' type='button'>Run editor text</button><button id='queueSteerBtn' type='button' hidden disabled>Steer</button><span class='studio-prompt-run-indicator' hidden></span><span class='studio-run-status' hidden></span><span class='studio-refresh-menu-anchor'><button id='addDocumentBtn' type='button'>Add document to Prompt</button></span><span class='studio-refresh-tools'><button id='reviewNotesBtn'>Comments</button><button id='scratchpadBtn'>Scratchpad</button><span class='studio-refresh-menu-anchor studio-refresh-review-anchor'><button class='studio-refresh-tool-tab studio-refresh-review-btn studio-refresh-chip'>Review</button></span></span></div><div class='studio-refresh-action-line studio-refresh-utility-action-line'></div><div class='studio-refresh-action-line repl-action-line' hidden></div></div><div class='studio-refresh-toolbar-state'></div></div></div></div><textarea id='sourceText'>Fixture only. No model request is sent.</textarea></div></body></html>`;
   let browser;
   const errors = [], network = [];
   try {
@@ -89,7 +89,7 @@ reset();
     const sample = async () => { await new Promise(r => setTimeout(r, 200)); return page.evaluate(() => {
       const box = s => document.querySelector(s).getBoundingClientRect(), style = getComputedStyle(sendRunBtn);
       return { editorY: box("#sourceText").y, button: { text: sendRunBtn.textContent, disabled: sendRunBtn.disabled, background: style.backgroundColor, weight: style.fontWeight, opacity: style.opacity, height: box("#sendRunBtn").height },
-        status: document.querySelector(".studio-run-status").textContent, statusWidth: box(".studio-run-status").width, steerX: box("#queueSteerBtn").x };
+        status: document.querySelector(".studio-run-status").textContent, statusWidth: box(".studio-run-status").width, steerX: box("#queueSteerBtn").x, addX: box("#addDocumentBtn").x };
     }); };
     // Includes Astra's widths that wrapped and then unwrapped in 0.10.0 (480, 490, 710–780).
     for (const width of [480, 490, 600, 700, 710, 740, 780, 1000]) {
@@ -106,17 +106,21 @@ reset();
         assert.equal(pending.status, "Starting…");
       }
       assert.deepEqual([run.button.text, run.button.disabled, run.status], ["Stop", false, "0:00"]);
-      // Oliver, 22 Oct: the status keeps room for "Starting…" and "Stopping…", so Steer doesn't move
+      // Oliver, 22 Oct: the status keeps room for "Starting…" and "Stopping…", so what follows it doesn't move
       // when the clock starts, ticks or is stopped, and no more, so the tools fit on the row in more windows.
+      // Oliver, 28 Oct: Steer sits beside Stop, before the clock.
+      const steer = await page.evaluate(() => sendRunBtn.getBoundingClientRect().right < queueSteerBtn.getBoundingClientRect().x
+        && queueSteerBtn.getBoundingClientRect().right <= document.querySelector(".studio-run-status").getBoundingClientRect().x);
+      assert(steer, "Run, Steer, then the clock at " + width + "px");
       assert.equal(run.statusWidth, started.statusWidth, "the clock keeps Starting…'s width at " + width + "px");
       const showing = text => page.evaluate(text => {
         const status = document.querySelector(".studio-run-status"); status.textContent = text;
         const range = document.createRange(); range.selectNodeContents(status);
-        return { width: status.getBoundingClientRect().width, text: range.getBoundingClientRect().width, steerX: queueSteerBtn.getBoundingClientRect().x };
+        return { width: status.getBoundingClientRect().width, text: range.getBoundingClientRect().width, steerX: queueSteerBtn.getBoundingClientRect().x, addX: addDocumentBtn.getBoundingClientRect().x };
       }, text);
       for (const text of ["10:00", "99:59", "Stopping…"]) {
         const shown = await showing(text);
-        assert.deepEqual([shown.width, shown.steerX], [run.statusWidth, run.steerX], "nothing moves at " + text + ", at " + width + "px");
+        assert.deepEqual([shown.width, shown.steerX, shown.addX], [run.statusWidth, run.steerX, run.addX], "nothing moves at " + text + ", at " + width + "px");
       }
       const widest = Math.max((await showing("Starting…")).text, (await showing("Stopping…")).text);
       assert(Math.abs(run.statusWidth - widest) < 1, "the room is no wider than Starting… or Stopping… at " + width + "px: " + run.statusWidth + " vs " + widest);
