@@ -1120,6 +1120,16 @@
             isError: Boolean(entry.isError),
           };
         }
+        if (entry.type === "steer") {
+          return {
+            id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : ("trace-steer-" + fallbackIndex),
+            type: "steer",
+            startedAt: parseFiniteNumber(entry.startedAt) || Date.now(),
+            updatedAt: parseFiniteNumber(entry.updatedAt) || Date.now(),
+            text: typeof entry.text === "string" ? entry.text : "",
+            status: "complete",
+          };
+        }
         return null;
       }
 
@@ -1355,6 +1365,7 @@
           if (entry.type === "assistant") {
             return Boolean(String(entry.thinking || "").trim() || String(entry.text || "").trim());
           }
+          if (entry.type === "steer") return Boolean(String(entry.text || "").trim());
           return true;
         });
       }
@@ -1406,6 +1417,7 @@
             }
             return ["Assistant", ...parts].join("\n\n").trim();
           }
+          if (entry.type === "steer") return "Steer:\n" + String(entry.text || "").trim();
 
           const header = entry.label && entry.label !== entry.toolName
             ? ("Tool: " + String(entry.toolName || "tool") + " — " + entry.label)
@@ -13844,7 +13856,9 @@
         const preview = getTraceOutputPreview(value);
         const visibleText = isExpanded || !preview.truncated ? value : preview.text;
         const code = options && options.language === "javascript";
-        const rendered = code ? visibleText.replace(/\r\n/g, "\n").split("\n").map(line => highlightCodeLine(line, "javascript", "overlay")).join("\n") : escapeHtml(visibleText);
+        let rendered = code ? visibleText.replace(/\r\n/g, "\n").split("\n").map(line => highlightCodeLine(line, "javascript", "overlay")).join("\n") : escapeHtml(visibleText);
+        // A line that is all bold, as in "**Formulating a response**", reads as a heading without its markers (Oliver, 29 Oct).
+        if (options && options.headings) rendered = rendered.replace(/^\*\*(?![\s*])((?:(?!\*\*)[^\n])*?[^\s*])\*\*[ \t\r]*$/gm, "<strong>$1</strong>");
         const body = "<pre class='plain-markdown trace-output" + (code ? " trace-output-code" : "") + (options && options.prose ? " trace-output-prose" : "") + "'>" + rendered + "</pre>";
         if (!preview.truncated) return body;
 
@@ -13885,10 +13899,14 @@
         const opened = studioUiRefreshUi ? traceStepIsOpen(key, true)
           : traceSectionIsOpen(key, value, images > 1 ? false : undefined, !settings.pending || Boolean(value) || images > 0);
         const metrics = value ? formatTraceTextMetrics(value) : (images ? "" : (settings.pending ? "Waiting for output" : "No output"));
-        const summary = [label, settings.isError ? "Error" : "", metrics, images ? images + " image" + (images === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
+        const details = [settings.isError ? "Error" : "", metrics, images ? images + " image" + (images === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
+        // In the new layout the name, then its size in plain weight (Oliver, 29 Oct).
+        const summary = studioUiRefreshUi
+          ? "<span class='trace-section-name'>" + escapeHtml(label) + "</span>" + (details ? " <span class='trace-section-metrics'>" + escapeHtml(details) + "</span>" : "")
+          : escapeHtml([label, details].filter(Boolean).join(" · "));
         return "<details class='trace-tool-details trace-section-fold" + (settings.isError ? " is-error" : "") + "' data-trace-details-key='" + escapeHtml(key)
           + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
-          + "<summary>" + escapeHtml(summary) + "</summary><div class='trace-tool-details-body'>" + body + "</div></details>";
+          + "<summary>" + summary + "</summary><div class='trace-tool-details-body'>" + body + "</div></details>";
       }
 
       function formatTraceEntryDuration(entry) {
@@ -14473,16 +14491,24 @@
         // Numbered by place in the whole run, so a step keeps its number under Thinking or Tools.
         const positions = new Map(getTraceEntriesForFilter("all").map((entry, index) => [entry.id, index + 1]));
         const latestId = entries[entries.length - 1].id, shownOpen = new Map();
-        const card = (kindClass, entry, header, body, preview) => {
-          if (!steps) return "<article class='trace-card " + kindClass + "'><div class='trace-card-header'>" + header + "</div>" + body + "</article>";
+        // Oliver, 29 Oct (option C): a step's line is its number, its kind, what a tool acted on, and its time on the right,
+        // as on agent-markdown-preview's page. A folded step adds its first line, muted.
+        const card = (kindClass, entry, line, body, options) => {
+          const settings = options || {};
+          if (!steps) return "<article class='trace-card " + kindClass + "'><div class='trace-card-header'>" + line.classic + "</div>" + body + "</article>";
           const key = "step:" + entry.id, running = entry.status === "streaming" || entry.status === "pending";
-          // Earlier steps fold as new ones arrive, except while the person has scrolled up to read.
-          const opened = traceStepIsOpen(key, !traceStepsFolded && (running || entry.id === latestId || (traceStepsPaused && traceStepsShownOpen.has(key))));
+          // Earlier steps fold as new ones arrive, except while the person has scrolled up to read. A steer, like the
+          // prompt, is open when short.
+          const opened = traceStepIsOpen(key, !traceStepsFolded && (typeof settings.openByDefault === "boolean" ? settings.openByDefault
+            : (running || entry.id === latestId || (traceStepsPaused && traceStepsShownOpen.has(key)))));
           shownOpen.set(key, opened);
-          const firstLine = String(preview || "").split("\n").find(line => line.trim()) || "";
+          const preview = String(settings.preview || "").split("\n").find(part => part.trim()) || "";
           return "<details class='trace-card " + kindClass + " trace-step' data-trace-details-key='" + escapeHtml(key) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
-            + "<summary class='trace-card-header'><span class='trace-step-number'>" + (positions.get(entry.id) || "") + "</span>" + header
-            + (firstLine ? "<span class='trace-step-preview'>" + escapeHtml(firstLine.trim().slice(0, 300)) + "</span>" : "") + "</summary>"
+            + "<summary class='trace-card-header'><span class='trace-step-number'>" + (positions.get(entry.id) || "") + "</span>"
+            + "<span class='trace-card-title'>" + escapeHtml(line.kind) + "</span>"
+            + (line.detail ? "<span class='trace-step-detail'>" + escapeHtml(line.detail) + "</span>" : "")
+            + (preview ? "<span class='trace-step-preview'>" + escapeHtml(preview.trim().slice(0, 300)) + "</span>" : "")
+            + "<span class='trace-step-meta'>" + line.meta + "</span></summary>"
             + "<div class='trace-step-body'>" + body + "</div></details>";
         };
 
@@ -14491,7 +14517,7 @@
             const sections = [];
             if (String(entry.thinking || "").trim()) {
               sections.push(
-                renderTraceSection("Thinking", entry.thinking, entry.id + ":thinking", renderTraceOutput(entry.thinking, entry.id + ":thinking", { label: "Thinking", prose: true }))
+                renderTraceSection("Thinking", entry.thinking, entry.id + ":thinking", renderTraceOutput(entry.thinking, entry.id + ":thinking", { label: "Thinking", prose: true, headings: steps }))
               );
             }
             if (filter === "all" && String(entry.text || "").trim()) {
@@ -14502,14 +14528,21 @@
             if (!sections.length) {
               sections.push("<div class='trace-empty-inline'>Waiting for streamed content…</div>");
             }
-            const title = steps ? plainTraceTitle((filter === "thinking" ? entry.thinking : (entry.text || entry.thinking)) || "") : "";
-            return card("trace-card-assistant", entry,
-              "<span class='trace-kind-badge'>" + escapeHtml(filter === "thinking" ? "Thinking" : "Assistant") + "</span>"
-              + (title ? "<span class='trace-card-title'>" + escapeHtml(title) + "</span>" : "")
-              + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
+            const kind = filter === "thinking" ? "Thinking" : "Assistant";
+            const meta = "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
               + renderTraceEntryStatus(state, entry.status, false)
-              + (entry.stopReason === "length" ? "<span class='trace-card-meta'>Cut off at the length limit</span>" : ""),
-              sections.join(""), "");
+              + (entry.stopReason === "length" ? "<span class='trace-card-meta'>Cut off at the length limit</span>" : "");
+            return card("trace-card-assistant", entry, { classic: "<span class='trace-kind-badge'>" + escapeHtml(kind) + "</span>" + meta, kind, meta },
+              sections.join(""), { preview: steps ? plainTraceTitle((filter === "thinking" ? entry.thinking : (entry.text || entry.thinking)) || "") : "" });
+          }
+
+          if (entry.type === "steer") {
+            const text = String(entry.text || "");
+            const meta = "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>";
+            const short = text.length <= TRACE_SECTION_AUTO_OPEN_MAX_CHARS && countTraceTextLines(text) <= TRACE_SECTION_AUTO_OPEN_MAX_LINES;
+            return card("trace-card-steer", entry, { classic: "<span class='trace-kind-badge'>Steer</span>" + meta, kind: "Steer", meta },
+              steps ? "<div class='trace-prompt-text'>" + escapeHtml(text) + "</div>" : renderTraceOutput(text, entry.id + ":steer", { label: "Steer", prose: true }),
+              { preview: text, openByDefault: short });
           }
 
           const title = entry.label || entry.toolName || "tool";
@@ -14522,18 +14555,26 @@
           if (imageOutput) outputPieces.push(imageOutput);
           const output = renderTraceSection("Output", entry.output, entry.id + ":output", outputPieces.length ? outputPieces.join("") : "<div class='trace-empty-inline'>No output yet.</div>",
             { imageCount: entry.images?.length || 0, isError: toolError, pending: entry.status === "streaming" || entry.status === "pending" });
-          return card("trace-card-tool", entry,
-            "<span class='trace-kind-badge'>" + escapeHtml(entry.toolName || "tool") + "</span>"
-            + "<span class='trace-card-title'>" + escapeHtml(title) + "</span>"
-            + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
+          const meta = "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
             + (formatTraceEntryDuration(entry) ? "<span class='trace-card-meta'>" + escapeHtml(formatTraceEntryDuration(entry)) + "</span>" : "")
-            + renderTraceEntryStatus(state, entry.status, toolError),
-            argsSummary + output, "");
+            + renderTraceEntryStatus(state, entry.status, toolError);
+          return card("trace-card-tool", entry, {
+            classic: "<span class='trace-kind-badge'>" + escapeHtml(entry.toolName || "tool") + "</span><span class='trace-card-title'>" + escapeHtml(title) + "</span>" + meta,
+            kind: entry.toolName || "tool", detail: getTraceToolStepDetail(entry), meta }, argsSummary + output);
         }).join("");
         // Only the steps shown now: one hidden by a filter keeps its state, so a filter round trip folds nothing (Astra).
         for (const [key, opened] of shownOpen) { if (opened) traceStepsShownOpen.add(key); else traceStepsShownOpen.delete(key); }
 
         return "<div class='trace-panel'>" + toolbar + "<div class='trace-list'>" + promptCard + cards + "</div></div>";
+      }
+
+      // What a tool step acted on, for its line: the file's name for read, write and edit, otherwise its activity label,
+      // unless that only repeats the tool's name.
+      function getTraceToolStepDetail(entry) {
+        const name = String(entry.toolName || "").trim().toLowerCase(), label = String(entry.label || "").trim();
+        const file = /^(?:read|write|edit)$/.test(name) ? label.match(/^(?:Reading|Writing|Editing) (.+)$/) : null;
+        if (file) return file[1] === "file" ? "" : file[1];
+        return label.toLowerCase() === name || label.toLowerCase() === "running " + name ? "" : label;
       }
 
       // A line of Markdown as plain words for a step's title: "**Inspecting alias settings**" reads "Inspecting alias
@@ -14563,10 +14604,11 @@
         const text = String(state.prompt || ""), key = "prompt:" + (state.runId || "live");
         const short = text.length <= TRACE_SECTION_AUTO_OPEN_MAX_CHARS && countTraceTextLines(text) <= TRACE_SECTION_AUTO_OPEN_MAX_LINES;
         const opened = traceStepIsOpen(key, short);
-        const firstLine = text.split("\n").find(line => line.trim()) || "";
+        const firstLine = text.split("\n").find(line => line.trim()) || "", time = formatReferenceTime(state.startedAt);
         return "<details class='trace-card trace-card-prompt trace-step' data-trace-details-key='" + escapeHtml(key) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
           + "<summary class='trace-card-header'><span class='trace-card-title'>Prompt</span>"
-          + "<span class='trace-step-preview'>" + escapeHtml(firstLine.trim().slice(0, 300)) + "</span></summary>"
+          + "<span class='trace-step-preview'>" + escapeHtml(firstLine.trim().slice(0, 300)) + "</span>"
+          + (time ? "<span class='trace-step-meta'><span class='trace-card-meta'>" + escapeHtml(time) + "</span></span>" : "") + "</summary>"
           + "<div class='trace-step-body'><div class='trace-prompt-text'>" + escapeHtml(text) + "</div></div></details>";
       }
 

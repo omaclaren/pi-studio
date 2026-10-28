@@ -73,8 +73,9 @@ test('new layout: one header line, the prompt first, and steps as numbered lines
   assert(html.includes("<details class='trace-card trace-card-prompt trace-step' data-trace-details-key='prompt:run-1' data-trace-expected-open='true' open>"));
   const at=['trace-card-prompt','step:a1','step:t1','step:t2'].map(s=>html.indexOf(s));assert(at[0]>0);assert.deepEqual([...at].sort((a,b)=>a-b),at,'prompt, then the steps in order');
   assert.match(html,stepRe('a1',1,false));assert.match(html,stepRe('t1',2,false));assert.match(html,stepRe('t2',3,true));
-  assert(html.includes("<span class='trace-kind-badge'>Assistant</span><span class='trace-card-title'>Looking at &lt;files&gt;</span>"),'an Assistant step\'s title is its first line, escaped');
-  assert(!html.includes("trace-step-preview'>Looking at"),'not a preview that shows only while closed');
+  // Oliver, 29 Oct (option C): a step's line names its kind; a folded Assistant step adds its first line, a tool what it acted on.
+  assert(html.includes("<span class='trace-step-number'>1</span><span class='trace-card-title'>Assistant</span><span class='trace-step-preview'>Looking at &lt;files&gt;</span><span class='trace-step-meta'>"),'escaped');
+  assert(html.includes("<span class='trace-card-title'>codemode</span><span class='trace-step-detail'>Execute JavaScript</span><span class='trace-step-meta'><span class='trace-card-meta'>2250</span>"));
   assert(html.includes("<div class='trace-prompt-text'>Check the repo\nand report</div>"));
   assert(!html.includes("<article class='trace-card"),'no boxes inside a box');
 });
@@ -101,7 +102,7 @@ test('new layout: steps keep their whole-run numbers under Thinking and Tools',(
   const {c}=fixture();c.studioUiRefreshUi={};vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);
   c.traceState={status:'complete',runId:'r3',prompt:null,entries:[assistant({id:'a1',thinking:'Considering',text:''}),tool({id:'t1'}),assistant({id:'a2',text:'Reply'}),tool({id:'t2'})]};
   c.traceFilter='tools';let html=c.buildTracePanelHtml();assert.match(html,stepRe('t1',2,false));assert.match(html,stepRe('t2',4,true));assert(!html.includes('step:a1'));
-  c.traceFilter='thinking';html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes("<span class='trace-kind-badge'>Thinking</span><span class='trace-card-title'>Considering</span>"));
+  c.traceFilter='thinking';html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes("<span class='trace-card-title'>Thinking</span><span class='trace-step-preview'>Considering</span>"));
   assert(css.includes('body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }'),'an open step hides its preview line');
 });
 test('the prompt rides on Working state, its status updates and its saved copy',()=>{
@@ -111,8 +112,8 @@ test('the prompt rides on Working state, its status updates and its saved copy',
   assert.match(index,/prompt: studioTraceState\.prompt,\n\t\t\}\);/);
   // Cut once on arrival; the saved copy keeps that text and the flag, not a second cut (Sol, Astra).
   assert.match(index,/prompt: typeof source\.prompt === "string" \? source\.prompt : null,\n\t\t\tpromptTruncated: source\.promptTruncated === true,/);
-  assert.match(index,/const cut = truncateStudioTraceSnapshotText\(userPrompt\);\n\t\t\t\tstudioTraceState\.prompt = cut\.text;\n\t\t\t\tstudioTraceState\.promptTruncated = cut\.truncated;/);
-  assert.match(index,/if \(userPrompt && studioRunLifecycle\.snapshot\(\)\.run && studioTraceState\.runId && studioTraceState\.prompt == null\) \{/);
+  // The run's first user message, before any step; a later one is a steer step (Oliver, 29 Oct).
+  assert.match(index,/const cut = userPrompt \? truncateStudioTraceSnapshotText\(userPrompt\) : null;\n\t\t\t\tif \(cut && first\) \{\n\t\t\t\t\tstudioTraceState\.prompt = cut\.text;\n\t\t\t\t\tstudioTraceState\.promptTruncated = cut\.truncated;/);
 });
 test('collapsing a step that holds the focus moves the focus to that step\'s own line',()=>{
   const {c,nodes}=fixture();
@@ -180,7 +181,7 @@ test('only the person\'s own scrolling in a pane that scrolls pauses or resumes 
   assert.equal(c.traceAutoScroll,true,'scrolling may still stick to the bottom');
   pane.scrollHeight=2000;atBottom=true;c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,false,'back at the bottom of a pane that scrolls');
   assert.match(source,/traceStepsShownOpen\.clear\(\);\n\s+traceStepsPaused = false;/,'a new run starts unpaused');
-  assert.match(source,/traceStepIsOpen\(key, !traceStepsFolded && \(running \|\| entry\.id === latestId \|\| \(traceStepsPaused && traceStepsShownOpen\.has\(key\)\)\)\)/);
+  assert.match(source,/traceStepIsOpen\(key, !traceStepsFolded && \(typeof settings\.openByDefault === "boolean" \? settings\.openByDefault\n\s+: \(running \|\| entry\.id === latestId \|\| \(traceStepsPaused && traceStepsShownOpen\.has\(key\)\)\)\)\)/);
 });
 test('Studio\'s own scroll to the bottom, as on returning to All from a short list, leaves the pause alone (Sol, round 3)',()=>{
   const {c}=fixture();const pane={scrollHeight:2000,clientHeight:400,top:0,get scrollTop(){return this.top;},set scrollTop(v){this.top=Math.max(0,Math.min(v,this.scrollHeight-this.clientHeight));},set innerHTML(v){},classList:{remove(){}}};
@@ -227,7 +228,7 @@ test('new layout: a section is open whenever its step is, whatever its length, u
   c.traceClosedDetails.add('k4');assert(c.renderTraceSection('Thinking',long,'k4','').includes("data-trace-expected-open='false'"),'the person\'s fold wins');
   c.studioUiRefreshUi=null;assert(c.renderTraceSection('Thinking',long,'k5','').includes("data-trace-expected-open='false'"));
 });
-test('new layout: an Assistant step\'s title is its first line in plain words, open or closed; Thinking and Response read as prose',()=>{
+test('new layout: an Assistant step\'s line adds its first line in plain words, shown while folded; Thinking and Response read as prose',()=>{
   const {c}=fixture();c.studioUiRefreshUi={};
   for(const [text,title] of [['**Inspecting alias settings**\n\nI need to check','Inspecting alias settings'],['\n## Plan\nx','Plan'],['- run `npm test` first','run npm test first'],['See [the docs](http://x) now','See the docs now'],['**Inspect','Inspect'],['snake_case_name and a*b*c','snake_case_name and a*b*c'],['x'.repeat(400),'x'.repeat(300)],
     // Astra, c100: code spans keep their text, underscores are left alone, and leading markers go however many there are.
@@ -235,22 +236,27 @@ test('new layout: an Assistant step\'s title is its first line in plain words, o
     ['> ## Heading','Heading'],['**bold** and `code` and **more**','bold and code and more']])assert.equal(c.plainTraceTitle(text),title);
   c.traceState={status:'complete',runId:'r1',prompt:null,entries:[assistant({id:'a1',thinking:'**Inspecting alias settings**\n\nMore.',text:''}),assistant({id:'a2',text:'Done.'})]};
   let html=c.buildTracePanelHtml();
-  assert.match(html,stepRe('a1',1,false));assert(html.includes("<span class='trace-kind-badge'>Assistant</span><span class='trace-card-title'>Inspecting alias settings</span>"),'closed');
-  c.traceOpenDetails.add('step:a1');html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes("<span class='trace-card-title'>Inspecting alias settings</span>"),'and open');
-  assert(!/data-trace-details-key='step:a\d'[^]*?<span class='trace-step-preview'>/.test(html),'no preview line for an Assistant step');
+  const line="<span class='trace-card-title'>Assistant</span><span class='trace-step-preview'>Inspecting alias settings</span>";
+  assert.match(html,stepRe('a1',1,false));assert(html.includes(line),'folded');
+  c.traceOpenDetails.add('step:a1');html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes(line),'open, where the stylesheet hides it');
   assert.equal(html.match(/trace-output trace-output-prose/g).length,2,'the Thinking and the Response');
+  assert(html.includes('<strong>Inspecting alias settings</strong>\n\nMore.'),'Thinking\'s bold line reads as a heading');
   assert(!c.renderTraceOutput('ls','t1:input',{label:'Command'}).includes('trace-output-prose'),'code and output stay monospaced');
-  c.studioUiRefreshUi=null;assert(!c.buildTracePanelHtml().includes('trace-card-title'),'the earlier layout is unchanged');
+  c.studioUiRefreshUi=null;html=c.buildTracePanelHtml();assert(!html.includes('trace-card-title')&&!html.includes('<strong>'),'the earlier layout is unchanged');
 });
-test('new layout CSS: steps are the light surface on the pane\'s page colour, with no frames inside them',()=>{
+test('new layout CSS: steps are the light surface on the pane\'s page colour, with no frames inside them; a step\'s line is its kind in bold, the time on the right',()=>{
   for(const rule of ['body.studio-workspace-layout #critiqueView:has(> .trace-panel) { background: var(--bg); }',
     'body.studio-workspace-layout details.trace-step { border-color: var(--panel-border); background: var(--panel); box-shadow: none; }',
     'body.studio-workspace-layout details.trace-step > .trace-step-body { gap: 4px; border-top: 1px solid var(--panel-border); padding: 8px 14px 10px; }',
     'body.studio-workspace-layout .trace-step .trace-image-gallery { border: 0; border-radius: 0; background: transparent; padding-left: 0; padding-right: 0; }',
     'body.studio-workspace-layout .trace-prompt-text { font-family: inherit; line-height: 1.5; }',
-    'body.studio-workspace-layout .trace-card-assistant > summary > .trace-card-title { font-weight: 400; }',
+    'body.studio-workspace-layout details.trace-step > summary > .trace-step-detail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }',
+    'body.studio-workspace-layout details.trace-step > summary > .trace-step-meta { margin-left: auto; padding-left: 8px; display: inline-flex; align-items: baseline; gap: 8px; }',
+    'body.studio-workspace-layout .trace-step .trace-section-fold:not(.is-error) > summary { color: var(--muted); }',
+    'body.studio-workspace-layout .trace-section-metrics { font-weight: 400; }',
     'body.studio-workspace-layout .trace-step code.trace-tool-field-value { padding: 0; border: 0; background: transparent; }',
     'body.studio-workspace-layout .trace-step .trace-output-truncation { padding: 4px 0; background: transparent; }'])assert(css.includes(rule),rule);
+  assert(!css.includes('.trace-card-assistant > summary > .trace-card-title { font-weight: 400; }'),'an Assistant step\'s kind is bold like any other');
 });
 test('Working shows a tool\'s output without terminal colour codes, hyperlinks or a code cut off by a streamed update; the text stays',()=>{
   const c={parseFiniteNumber:Number,parseNonEmptyString:x=>typeof x==='string'&&x.trim()?x:null,normalizeTraceEntryStatus:x=>x,normalizeTraceImage:x=>x};vm.createContext(c);
@@ -284,4 +290,111 @@ test('saved Working: a hyperlink cut off by the snapshot\'s omission keeps the n
   assert.equal(count(shown),count(saved),'every retained diagnostic');assert(notice.test(shown),'and the omission notice');assert(!/[\u001b\u0007]/.test(shown),'without terminal codes');
   c.traceState={status:'complete',entries:[{...tool,output:shown}]};c.getTraceEntriesForFilter=()=>c.traceState.entries;
   const copied=c.buildVisibleWorkingText('all');assert.equal(count(copied),count(saved));assert(notice.test(copied),'Copy visible and Load keep them too');
+});
+
+// Oliver, 29 Oct (option C): a steer is a step of its own where it arrived; a step's line is its number, its kind, what a
+// tool acted on and its time; Thinking's bold lines read as headings; a section's header is its name, then its size.
+const steer=(changes={})=>({id:'s1',type:'steer',text:'hi',status:'complete',startedAt:3000,updatedAt:3000,...changes});
+test('new layout: a steer is a numbered step where it arrived, open when short, its time on the right; Thinking and Tools leave it out',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);
+  c.traceState={status:'complete',runId:'r7',startedAt:500,prompt:'that is pretty cool!',entries:[assistant({id:'a1',thinking:'**Formulating a response**\n\nShort.',text:'Right?'}),steer(),assistant({id:'a2',text:'Hey Oliver!'})]};
+  let html=c.buildTracePanelHtml();assert(html.includes('>3 steps<'));
+  assert.match(html,stepRe('a1',1,false));assert.match(html,stepRe('s1',2,true),'open when short, though not the latest');assert.match(html,stepRe('a2',3,true));
+  assert(html.includes("<span class='trace-card-title'>Steer</span><span class='trace-step-preview'>hi</span><span class='trace-step-meta'><span class='trace-card-meta'>3000</span></span></summary><div class='trace-step-body'><div class='trace-prompt-text'>hi</div></div>"));
+  assert(html.includes("<span class='trace-card-title'>Prompt</span><span class='trace-step-preview'>that is pretty cool!</span><span class='trace-step-meta'><span class='trace-card-meta'>500</span></span>"),'the prompt has its run\'s start time');
+  c.traceState.entries[1]=steer({text:'Long steer\n'+'more\n'.repeat(20)});html=c.buildTracePanelHtml();assert.match(html,stepRe('s1',2,false),'a long steer is one line, like a long prompt');
+  assert(html.includes("<span class='trace-step-preview'>Long steer</span>"));
+  c.traceClosedDetails.add('step:s1');c.traceState.entries[1]=steer();assert.match(c.buildTracePanelHtml(),stepRe('s1',2,false),'the person\'s choice wins');c.traceClosedDetails.clear();
+  c.traceStepsFolded=true;assert.match(c.buildTracePanelHtml(),stepRe('s1',2,false),'after Collapse all it arrives folded');c.traceStepsFolded=false;
+  for(const filter of ['tools','thinking']){c.traceFilter=filter;html=c.buildTracePanelHtml();assert(!html.includes('step:s1'),filter);}
+  c.traceFilter='all';c.traceState.entries[1]=steer({text:'  \n '});html=c.buildTracePanelHtml();assert(!html.includes('step:s1'),'nothing to show');assert.match(html,stepRe('a2',2,true),'and numbers close up');
+  c.studioUiRefreshUi=null;c.traceState.entries[1]=steer({text:'hi <b>'});html=c.buildTracePanelHtml();
+  assert(html.includes("<article class='trace-card trace-card-steer'><div class='trace-card-header'><span class='trace-kind-badge'>Steer</span><span class='trace-card-meta'>3000</span></div>"),'the classic layout shows it as a card');
+  assert(html.includes('hi &lt;b&gt;')&&!html.includes('hi <b>'),'escaped');
+});
+test('Copy visible and Load include a steer where it arrived; a steer survives the client\'s normalising',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};c.describeTraceImageForText=()=>'';
+  vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);
+  vm.runInContext(section('function buildVisibleWorkingText(','function getWorkingDocumentLabel('),c);
+  c.traceState={status:'complete',runId:'r8',prompt:'that is pretty cool!',entries:[assistant({text:'Right?'}),steer(),assistant({id:'a2',text:'Hey Oliver!'})]};
+  assert.equal(c.buildVisibleWorkingText('all'),'Prompt:\nthat is pretty cool!\n\n---\n\nAssistant\n\n[Response]\nRight?\n\n---\n\nSteer:\nhi\n\n---\n\nAssistant\n\n[Response]\nHey Oliver!');
+  assert(!c.buildVisibleWorkingText('tools').includes('Steer')&&!c.buildVisibleWorkingText('thinking').includes('Steer'));
+  const n={parseFiniteNumber:Number,parseNonEmptyString:x=>typeof x==='string'&&x.trim()?x:null,normalizeTraceEntryStatus:x=>x,normalizeTraceImage:x=>x};vm.createContext(n);
+  vm.runInContext(section('const TRACE_TERMINAL_CODE_RE','function normalizeTraceState('),n);
+  assert.deepEqual(JSON.parse(JSON.stringify(n.normalizeTraceEntry({type:'steer',id:'s1',text:'hi',startedAt:5,updatedAt:6,status:'streaming',extra:'x'},0))),{id:'s1',type:'steer',startedAt:5,updatedAt:6,text:'hi',status:'complete'});
+  assert.equal(n.normalizeTraceEntry({type:'steer',text:7},3).text,'');assert.equal(n.normalizeTraceEntry({type:'steer'},3).id,'trace-steer-3');
+});
+test('the server keeps the run\'s first user message as its prompt and makes a later one a steer step, cut once on arrival and saved with the run',()=>{
+  assert.match(index,/\} else if \(cut\) \{\n\t\t\t\t\tconst now = Date\.now\(\);\n\t\t\t\t\tupsertStudioTraceEntry\(\{ id: randomUUID\(\), type: "steer", startedAt: now, updatedAt: now, text: cut\.text, textTruncated: cut\.truncated, status: "complete" \}\);\n\t\t\t\t\}/);
+  assert.match(index,/type StudioTraceEntry = StudioTraceAssistantEntry \| StudioTraceToolEntry \| StudioTraceSteerEntry;/);
+  const start=index.indexOf('function truncateStudioTraceSnapshotText('),end=index.indexOf('\nfunction summarizeStudioTraceSnapshot(',start);
+  const server={};vm.createContext(server);
+  for(const name of ['STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES','STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS','STUDIO_TRACE_SNAPSHOT_MAX_IMAGES','STUDIO_TRACE_SNAPSHOT_MAX_IMAGE_BASE64_CHARS'])
+    vm.runInContext(index.match(new RegExp('^const '+name+' = [\\d_]+;','m'))[0].replace('const ','var '),server);
+  Object.assign(server,{normalizeStudioTraceImageMimeType:x=>x,isStudioTraceSafeImageMimeType:()=>true,estimateStudioTraceBase64ByteLength:x=>x.length});
+  vm.runInContext(ts.transpileModule(index.slice(start,end),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText,server);
+  const state=entries=>({runId:'r1',requestId:null,requestKind:null,status:'complete',startedAt:1,updatedAt:2,prompt:'p',entries});
+  const cut=server.truncateStudioTraceSnapshotText('x'.repeat(server.STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS+10));assert(cut.truncated);
+  let saved=server.createStudioTraceSnapshot(state([{id:'s1',type:'steer',startedAt:1,updatedAt:1,text:'hi',textTruncated:false,status:'complete'}]));
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.traceState.entries)),[{id:'s1',type:'steer',startedAt:1,updatedAt:1,text:'hi',textTruncated:false,status:'complete'}]);assert.equal(saved.truncated,false);
+  saved=server.createStudioTraceSnapshot(state([{id:'s1',type:'steer',startedAt:1,updatedAt:1,text:cut.text,textTruncated:true,status:'complete'}]));
+  assert.equal(saved.traceState.entries[0].text,cut.text,'not cut a second time');assert.equal(saved.truncated,true,'and the saved copy says it was cut');
+});
+test('a tool step\'s line adds what it acted on: a file\'s name for read, write and edit, otherwise its label unless that repeats the tool',()=>{
+  const {c}=fixture();
+  for(const [toolName,label,detail] of [['read','Reading SKILL.md','SKILL.md'],['write','Writing butterfly.html','butterfly.html'],['edit','Editing index.ts','index.ts'],['read','Reading file',''],
+    ['bash','Inspecting git changes','Inspecting git changes'],['codemode','Execute JavaScript','Execute JavaScript'],['studio_repl_status','Running studio_repl_status',''],['grep','grep',''],['find',null,''],['read','Reading <x>','<x>']])
+    assert.equal(c.getTraceToolStepDetail({toolName,label}),detail,toolName+' '+label);
+  c.studioUiRefreshUi={};c.traceState={status:'complete',runId:'r9',prompt:null,entries:[tool({id:'t1',toolName:'read',label:'Reading <x>'})]};
+  assert(c.buildTracePanelHtml().includes("<span class='trace-card-title'>read</span><span class='trace-step-detail'>&lt;x&gt;</span>"),'escaped');
+});
+test('new layout: a Thinking line that is all bold reads as a heading; bold inside a line, other sections and the classic layout keep their text',()=>{
+  const {c}=fixture();
+  const text='**Formulating a response**\n\nI want **this** kept.\n**Two** and **three**\n**<b>**\n** spaced **\n****\n**a**\r\nend';
+  assert(c.renderTraceOutput(text,'k',{label:'Thinking',prose:true,headings:true}).includes('<strong>Formulating a response</strong>\n\nI want **this** kept.\n**Two** and **three**\n<strong>&lt;b&gt;</strong>\n** spaced **\n****\n<strong>a</strong>\nend'));
+  assert(!c.renderTraceOutput(text,'k',{label:'Response',prose:true}).includes('<strong>'));
+  c.studioUiRefreshUi={};c.traceState={status:'complete',runId:'r10',prompt:null,entries:[assistant({thinking:'**Plan**\nx',text:'**Done**'})]};
+  const html=c.buildTracePanelHtml();assert(html.includes('<strong>Plan</strong>')&&html.includes('**Done**')&&!html.includes('<strong>Done</strong>'),'Thinking only');
+});
+test('new layout: a section\'s header is its name, then its size in plain weight; the classic layout keeps one line of text',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};
+  const metrics=c.formatTraceTextMetrics('a\nb');
+  assert(c.renderTraceSection('Output','a\nb','k1','',{isError:true}).includes(`<summary><span class='trace-section-name'>Output</span> <span class='trace-section-metrics'>Error · ${metrics}</span></summary>`));
+  assert(c.renderTraceSection('Output','','k2','',{imageCount:1}).includes("<summary><span class='trace-section-name'>Output</span> <span class='trace-section-metrics'>1 image</span></summary>"));
+  c.studioUiRefreshUi=null;assert(c.renderTraceSection('Output','a\nb','k3','',{isError:true}).includes(`<summary>Output · Error · ${metrics}</summary>`));
+});
+test('a steer Pi delivers before the first reply, after an image-only first message, is a steer step, not the prompt; live, saved and copied (Sol, c103)',()=>{
+  // The actual capture branch from the user message_end handler, with the actual snapshot and Copy/Load code.
+  const start=index.indexOf('\t\t\tif (studioRunLifecycle.snapshot().run && studioTraceState.runId) {\n\t\t\t\tconst first = !studioTraceUserMessageSeen;'),end=index.indexOf('\n\t\t\tconst inputIndex = studioPromptInputs',start);
+  assert(start>=0&&end>start,'capture branch');
+  const lo=index.indexOf('function truncateStudioTraceSnapshotText('),hi=index.indexOf('\nfunction summarizeStudioTraceSnapshot(',lo);
+  const server={entries:[],broadcasts:0};vm.createContext(server);
+  for(const name of ['STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES','STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS','STUDIO_TRACE_SNAPSHOT_MAX_IMAGES','STUDIO_TRACE_SNAPSHOT_MAX_IMAGE_BASE64_CHARS'])
+    vm.runInContext(index.match(new RegExp('^const '+name+' = [\\d_]+;','m'))[0].replace('const ','var '),server);
+  Object.assign(server,{normalizeStudioTraceImageMimeType:x=>x,isStudioTraceSafeImageMimeType:()=>true,estimateStudioTraceBase64ByteLength:x=>x.length});
+  vm.runInContext(ts.transpileModule(index.slice(lo,hi),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText,server);
+  const body=ts.transpileModule('function deliver(userPrompt) {\n'+index.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText;
+  vm.runInContext(`var studioTraceUserMessageSeen=false,ids=0,studioRunLifecycle={snapshot:()=>({run:{id:'r1'}})},randomUUID=()=>'steer-'+ ++ids;
+    var studioTraceState={runId:'r1',requestId:null,requestKind:null,status:'running',startedAt:1,updatedAt:1,prompt:null,entries:[]};
+    var broadcastStudioTraceStatus=()=>{broadcasts++;},upsertStudioTraceEntry=e=>{studioTraceState.entries.push(e);};
+    function newRun(){studioTraceState={runId:'r2',requestId:null,requestKind:null,status:'running',startedAt:2,updatedAt:2,prompt:null,entries:[]};studioTraceUserMessageSeen=false;}
+    ${body}`,server);
+  // Pi's own order: the image-only prompt, then the queued steer, before any assistant message.
+  server.deliver(null);server.deliver('Please describe the screenshot briefly.');
+  const live=JSON.parse(JSON.stringify(server.studioTraceState));
+  assert.equal(live.prompt,null,'the prompt is not replaced with the steer');
+  assert.deepEqual(live.entries.map(e=>[e.type,e.text]),[['steer','Please describe the screenshot briefly.']]);
+  server.studioTraceState.entries.push({id:'a1',type:'assistant',thinking:'',text:'A screenshot of a chart.',status:'complete',stopReason:'stop',startedAt:3,updatedAt:3});
+  const saved=JSON.parse(JSON.stringify(server.createStudioTraceSnapshot(server.studioTraceState).traceState));
+  assert.equal(saved.prompt,null);assert.deepEqual(saved.entries.map(e=>e.type),['steer','assistant']);
+  const {c}=fixture();c.studioUiRefreshUi={};c.describeTraceImageForText=()=>'';
+  vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);vm.runInContext(section('function buildVisibleWorkingText(','function getWorkingDocumentLabel('),c);
+  c.traceState=saved;
+  assert.equal(c.buildVisibleWorkingText('all'),'Steer:\nPlease describe the screenshot briefly.\n\n---\n\nAssistant\n\n[Response]\nA screenshot of a chart.');
+  // Controls: a text prompt then a steer; and a new run starts over.
+  vm.runInContext('newRun()',server);server.deliver('that is pretty cool!');server.deliver('hi');
+  const control=JSON.parse(JSON.stringify(server.studioTraceState));assert.equal(control.prompt,'that is pretty cool!');assert.deepEqual(control.entries.map(e=>[e.type,e.text]),[['steer','hi']]);
+  vm.runInContext('newRun()',server);server.deliver('and another thing');assert.equal(server.studioTraceState.prompt,'and another thing');assert.equal(server.studioTraceState.entries.length,0);
+  // Every place that starts a run's Working over also starts the first-message count over.
+  assert.equal(index.match(/activeStudioTraceAssistantEntryId = null;\n\t\tstudioTraceUserMessageSeen = false;/g).length,2,'resetStudioTraceForRun and clearStudioTrace');
 });

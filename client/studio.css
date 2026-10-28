@@ -7706,8 +7706,7 @@
     }
     /* Oliver, 28 Oct: lit like agent-markdown-preview's Working page. Steps are the light surface on the pane's darker
        one, an open step has a rule under its line, and inside a step the text sits on the step without frames of its
-       own. The prompt, Thinking and Response read as prose; an Assistant step's title is its first line, so it isn't
-       bold like a tool's label. */
+       own. The prompt, Thinking and Response read as prose. */
     body.studio-workspace-layout #critiqueView:has(> .trace-panel) { background: var(--bg); }
     body.studio-workspace-layout details.trace-step { border-color: var(--panel-border); background: var(--panel); box-shadow: none; }
     body.studio-workspace-layout details.trace-step > summary.trace-card-header { padding: 9px 14px; }
@@ -7719,7 +7718,12 @@
     body.studio-workspace-layout .trace-step .trace-output { margin: 0; padding-top: 2px; padding-bottom: 4px; }
     body.studio-workspace-layout .trace-step .trace-output-prose,
     body.studio-workspace-layout .trace-prompt-text { font-family: inherit; line-height: 1.5; }
-    body.studio-workspace-layout .trace-card-assistant > summary > .trace-card-title { font-weight: 400; }
+    /* Oliver, 29 Oct (option C): a step's line names its kind in bold, as on agent-markdown-preview's page, then what a tool
+       acted on, muted, and the time on the right. A section's header is its name, then its size in plain weight. */
+    body.studio-workspace-layout details.trace-step > summary > .trace-step-detail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+    body.studio-workspace-layout details.trace-step > summary > .trace-step-meta { margin-left: auto; padding-left: 8px; display: inline-flex; align-items: baseline; gap: 8px; }
+    body.studio-workspace-layout .trace-step .trace-section-fold:not(.is-error) > summary { color: var(--muted); }
+    body.studio-workspace-layout .trace-section-metrics { font-weight: 400; }
     body.studio-workspace-layout .trace-step code.trace-tool-field-value { padding: 0; border: 0; background: transparent; }
     body.studio-workspace-layout .trace-step .trace-output-truncation { padding: 4px 0; background: transparent; }
     body.studio-workspace-layout .trace-filter-btn.is-active { color: var(--accent); }

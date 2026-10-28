@@ -532,7 +532,19 @@ interface StudioTraceToolEntry {
 	isError: boolean;
 }
 
-type StudioTraceEntry = StudioTraceAssistantEntry | StudioTraceToolEntry;
+// A user message that arrived after the run's prompt, such as a steer: a step of its own, where it arrived (Oliver, 29 Oct).
+// Cut once, on arrival, like the prompt; textTruncated records that, so a saved copy is marked.
+interface StudioTraceSteerEntry {
+	id: string;
+	type: "steer";
+	startedAt: number;
+	updatedAt: number;
+	text: string;
+	textTruncated?: boolean;
+	status: "complete";
+}
+
+type StudioTraceEntry = StudioTraceAssistantEntry | StudioTraceToolEntry | StudioTraceSteerEntry;
 
 interface StudioTraceState {
 	runId: string | null;
@@ -11098,6 +11110,10 @@ function createStudioTraceSnapshot(source: StudioTraceState): { traceState: Stud
 				text: text.text,
 			};
 		}
+		if (entry.type === "steer") {
+			truncated = truncated || entry.textTruncated === true;
+			return { ...entry };
+		}
 		const argsSummary = truncateStudioTraceSnapshotText(entry.argsSummary ?? "");
 		const args = truncateStudioTraceSnapshotText(entry.args ?? entry.argsSummary ?? "");
 		const output = truncateStudioTraceSnapshotText(entry.output);
@@ -13869,6 +13885,8 @@ export default function (pi: ExtensionAPI) {
 	let studioTraceState: StudioTraceState = createEmptyStudioTraceState();
 	let studioTraceHistory = new Map<string, { traceState: StudioTraceState; summary: StudioTraceSnapshotSummary }>();
 	let activeStudioTraceAssistantEntryId: string | null = null;
+	// Whether this run's Working has had its first user message, text or not: the next one is a steer (Sol, c103).
+	let studioTraceUserMessageSeen = false;
 	const studioTraceToolEntryIds = new Map<string, string>();
 	let contextUsageSnapshot: StudioContextUsageSnapshot = {
 		tokens: null,
@@ -15183,6 +15201,7 @@ export default function (pi: ExtensionAPI) {
 			entries: [],
 		};
 		activeStudioTraceAssistantEntryId = null;
+		studioTraceUserMessageSeen = false;
 		studioTraceToolEntryIds.clear();
 		broadcastStudioTraceReset();
 	};
@@ -15327,6 +15346,7 @@ export default function (pi: ExtensionAPI) {
 	const clearStudioTrace = () => {
 		studioTraceState = createEmptyStudioTraceState();
 		activeStudioTraceAssistantEntryId = null;
+		studioTraceUserMessageSeen = false;
 		studioTraceToolEntryIds.clear();
 		broadcastStudioTraceReset();
 	};
@@ -20244,12 +20264,21 @@ export default function (pi: ExtensionAPI) {
 			const userPrompt = extractUserText(event.message);
 			pendingTurnPrompt = userPrompt;
 			// Working shows the run's first user message, as Pi received it (Oliver, 27 Oct). Pi starts the run before the
-			// message, so the run's Working is already in place; later messages in the same run don't replace it.
-			if (userPrompt && studioRunLifecycle.snapshot().run && studioTraceState.runId && studioTraceState.prompt == null) {
-				const cut = truncateStudioTraceSnapshotText(userPrompt);
-				studioTraceState.prompt = cut.text;
-				studioTraceState.promptTruncated = cut.truncated;
-				broadcastStudioTraceStatus();
+			// message, so the run's Working is already in place. A later message in the same run, such as a steer, is a step
+			// of its own where it arrived (Oliver, 29 Oct). The first message counts even with no text, such as an image
+			// alone, so a steer Pi delivers before the first reply isn't taken for the prompt (Sol, c103).
+			if (studioRunLifecycle.snapshot().run && studioTraceState.runId) {
+				const first = !studioTraceUserMessageSeen;
+				studioTraceUserMessageSeen = true;
+				const cut = userPrompt ? truncateStudioTraceSnapshotText(userPrompt) : null;
+				if (cut && first) {
+					studioTraceState.prompt = cut.text;
+					studioTraceState.promptTruncated = cut.truncated;
+					broadcastStudioTraceStatus();
+				} else if (cut) {
+					const now = Date.now();
+					upsertStudioTraceEntry({ id: randomUUID(), type: "steer", startedAt: now, updatedAt: now, text: cut.text, textTruncated: cut.truncated, status: "complete" });
+				}
 			}
 			const inputIndex = studioPromptInputs.findIndex(input => input.text === normalizePromptText(userPrompt));
 			const registeredInput = inputIndex >= 0 ? studioPromptInputs.splice(inputIndex, 1)[0] : null;
