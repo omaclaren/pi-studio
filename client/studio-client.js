@@ -179,6 +179,7 @@
       const completionSuggestionPanelEl = document.getElementById("completionSuggestionPanel");
       const completionSuggestionTextEl = document.getElementById("completionSuggestionText");
       const completionSuggestionMetaEl = document.getElementById("completionSuggestionMeta");
+      const completionSuggestionTitleEl = document.getElementById("completionSuggestionTitle");
       const completionSuggestionRegenerateBtn = document.getElementById("completionSuggestionRegenerateBtn");
       const completionSuggestionInsertBtn = document.getElementById("completionSuggestionInsertBtn");
       const completionSuggestionDismissBtn = document.getElementById("completionSuggestionDismissBtn");
@@ -3173,6 +3174,9 @@
       let completionSuggestionModelValue = readCompletionSuggestionModelValue();
       let completionSuggestionModelOptions = [];
       let completionSuggestionInFlight = false;
+      // Bumped by /tree and by a lost connection (a session switch restarts the server), so a suggested prompt
+      // from another branch goes even when that branch's history looks the same, e.g. both end "Done." (Sol, c102).
+      let nextPromptConversationEpoch = 0;
       let completionSuggestionRequestId = null;
       let completionSuggestionPendingSnapshot = null;
       let completionSuggestionRefocusEditorOnResult = false;
@@ -3929,7 +3933,7 @@
             completionModelSelect.hidden = false;
             suggestionItems.push(completionModelSelect);
           }
-          const completionThinkingNoteEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note completion-thinking-note", "Suggest: thinking off; model choice only affects suggestions.");
+          const completionThinkingNoteEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note completion-thinking-note", "Suggest: thinking off; model choice only affects suggestions. With Editor + latest response and the Prompt empty, it suggests a next prompt.");
           completionThinkingNoteEl.setAttribute("aria-label", "Suggestion model note");
           suggestionItems.push(completionThinkingNoteEl);
           appendStudioUiRefreshMenuSection(reviewMenu ? reviewMenu.menu : contextMenu.menu, "Suggestions", [suggestCompletionBtn, ...suggestionItems]);
@@ -7402,6 +7406,7 @@
         const previousId = previousItem && typeof previousItem.id === "string" ? previousItem.id : null;
 
         responseHistory = normalized;
+        if (typeof retireStaleNextPromptSuggestion === "function") retireStaleNextPromptSuggestion();
         const documentView = bufferSwitchingEnabled && isStudioDocumentBufferView();
         // A Document showing a response or Working repaints it, so the display, its link ownership
         // and Copy all match the current history entries (Sol, 8 Oct).
@@ -17068,13 +17073,16 @@
         copyDraftBtn.disabled = uiBusy;
         if (suggestCompletionBtn) {
           const hasSuggestionForCurrentText = Boolean(completionSuggestionState && sourceTextEl && sourceTextEl.value === completionSuggestionState.baseText);
-          suggestCompletionBtn.disabled = isWatchedFilePreview || wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || !String(sourceTextEl.value || "").trim()));
+          const editorEmpty = !String(sourceTextEl.value || "").trim();
+          suggestCompletionBtn.disabled = isWatchedFilePreview || wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || (editorEmpty && !canSuggestNextPrompt())));
           suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Stop" : (hasSuggestionForCurrentText ? "Try another" : "Suggest");
           suggestCompletionBtn.title = completionSuggestionInFlight
             ? "Stop the current suggestion request."
             : (hasSuggestionForCurrentText
               ? "Ask for a different suggestion at the same cursor position."
-              : "Ask for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.");
+              : (editorEmpty && canSuggestNextPrompt()
+                ? "Suggest a next prompt from Pi's last prompt and reply. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor."
+                : "Ask for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor."));
         }
         if (suggestCompletionOptionsBtn) suggestCompletionOptionsBtn.disabled = uiBusy || completionSuggestionInFlight;
         syncBufferRecoveryMenuAccess();
@@ -19380,7 +19388,7 @@
           if (window.localStorage) window.localStorage.setItem(COMPLETION_CONTEXT_STORAGE_KEY, completionSuggestionContextMode);
         } catch {}
         setStatus(completionSuggestionContextMode === "session"
-          ? "Suggestions will include the latest response as context."
+          ? "Suggestions will include the latest prompt and response as context."
           : "Suggestions will use cursor-local editor context only.");
       }
 
@@ -19494,6 +19502,7 @@
 
       function showCompletionSuggestion(state) {
         completionSuggestionState = state;
+        if (completionSuggestionTitleEl) completionSuggestionTitleEl.textContent = state && state.nextPrompt ? "Suggested prompt" : "Suggested completion";
         if (completionSuggestionTextEl) completionSuggestionTextEl.textContent = state && state.suggestion ? state.suggestion : "";
         if (completionSuggestionMetaEl) {
           const modelLabelText = state && state.modelLabel ? String(state.modelLabel) : getCompletionSuggestionModelLabel();
@@ -19587,6 +19596,34 @@
         }
       }
 
+      // With the Prompt empty, Suggest offers a next prompt from the conversation, as pi-next does (Oliver, 28 Oct).
+      // A Document, an editor-only tab or a watched file keeps "Editor is empty."
+      function isNextPromptEditor() {
+        return !isEditorOnlyMode && !isWatchedFilePreview && (!bufferSwitchingEnabled || !isStudioDocumentBufferView());
+      }
+
+      // Only with Editor + latest response: Editor only keeps the conversation from the Suggest model (Sol, c102).
+      function canSuggestNextPrompt() {
+        return isNextPromptEditor() && completionSuggestionContextMode === "session";
+      }
+
+      // A suggested prompt follows the branch's latest response, and goes when that or the branch changes (Sol, c102).
+      function getNextPromptConversationKey() {
+        const latest = responseHistory.length ? responseHistory[responseHistory.length - 1] : null;
+        return nextPromptConversationEpoch + ":" + responseHistory.length + ":" + (latest && latest.id ? latest.id : "");
+      }
+
+      function markNextPromptBranchChange() {
+        nextPromptConversationEpoch++;
+      }
+
+      function retireStaleNextPromptSuggestion(options) {
+        if (!completionSuggestionState || !completionSuggestionState.nextPrompt
+            || completionSuggestionState.conversationKey === getNextPromptConversationKey()) return;
+        hideCompletionSuggestion();
+        if (!(options && options.quiet)) setStatus("Suggested prompt dismissed: the conversation changed.", "warning");
+      }
+
       function requestCompletionSuggestion(options) {
         if (isEditorOnlyMode && !sourceTextEl) return;
         if (completionSuggestionInFlight) {
@@ -19596,8 +19633,9 @@
         const regenerateRequested = Boolean((options && options.regenerate) || (completionSuggestionState && sourceTextEl.value === completionSuggestionState.baseText));
         const existingSuggestion = regenerateRequested ? completionSuggestionState : null;
         const text = existingSuggestion ? String(existingSuggestion.baseText || "") : String(sourceTextEl.value || "");
-        if (!text.trim()) {
-          setStatus("Editor is empty.", "warning");
+        const nextPrompt = !text.trim() && canSuggestNextPrompt();
+        if (!text.trim() && !nextPrompt) {
+          setStatus(isNextPromptEditor() ? "Editor is empty. To suggest a next prompt, set Suggest's context to Editor + latest response." : "Editor is empty.", "warning");
           return;
         }
         if (existingSuggestion && (String(sourceTextEl.value || "") !== text
@@ -19608,18 +19646,19 @@
         }
         const selectionStart = existingSuggestion ? existingSuggestion.selectionStart : (typeof sourceTextEl.selectionStart === "number" ? sourceTextEl.selectionStart : text.length);
         const selectionEnd = existingSuggestion ? existingSuggestion.selectionEnd : (typeof sourceTextEl.selectionEnd === "number" ? sourceTextEl.selectionEnd : selectionStart);
-        const contextText = getCompletionSuggestionContextText();
+        const contextText = nextPrompt ? "" : getCompletionSuggestionContextText();
         const selectedModel = getCompletionSuggestionModelSelection();
         const requestId = makeRequestId();
         const previousSuggestion = existingSuggestion && existingSuggestion.suggestion ? String(existingSuggestion.suggestion) : "";
         completionSuggestionInFlight = true;
         completionSuggestionRequestId = requestId;
-        completionSuggestionPendingSnapshot = { text, selectionStart, selectionEnd, previousSuggestion,
+        completionSuggestionPendingSnapshot = { text, selectionStart, selectionEnd, previousSuggestion, nextPrompt,
+          conversationKey: nextPrompt ? getNextPromptConversationKey() : null,
           consent: bufferRecoveryEnabled ? captureEditorAsyncConsent() : null, editorView };
         completionSuggestionRefocusEditorOnResult = shouldRefocusEditorForCompletionRequest();
         hideCompletionSuggestion();
         syncActionButtons();
-        setStatus(existingSuggestion ? "Generating another suggestion…" : "Generating completion suggestion…", "warning");
+        setStatus(existingSuggestion ? "Generating another suggestion…" : (nextPrompt ? "Suggesting a next prompt…" : "Generating completion suggestion…"), "warning");
         const message = {
           type: "completion_suggestion_request",
           requestId,
@@ -19633,6 +19672,7 @@
           contextText: contextText || undefined,
           previousSuggestion: previousSuggestion || undefined,
         };
+        if (nextPrompt) message.nextPrompt = true;
         if (selectedModel) {
           message.suggestionModelProvider = selectedModel.provider;
           message.suggestionModelId = selectedModel.id;
@@ -19653,6 +19693,11 @@
           setStatus("No suggestion to insert.", "warning");
           return;
         }
+        if (state.nextPrompt && state.conversationKey !== getNextPromptConversationKey()) {
+          hideCompletionSuggestion();
+          setStatus("Suggested prompt dismissed: the conversation changed.", "warning");
+          return;
+        }
         if (bufferRecoveryEnabled && !editorAsyncConsentIsCurrent(state.consent)) {
           hideCompletionSuggestion();
           setStatus("Editor changed. Request a fresh suggestion before inserting.", "warning");
@@ -19671,7 +19716,7 @@
         applySourceTextEdit(nextText, caret, caret);
         hideCompletionSuggestion();
         focusSourceTextNoScroll();
-        setStatus("Inserted completion suggestion.", "success");
+        setStatus(state.nextPrompt ? "Inserted suggested prompt." : "Inserted completion suggestion.", "success");
       }
 
       function handleCompletionSuggestionServerMessage(message) {
@@ -19717,6 +19762,10 @@
           setStatus("Editor changed while the suggestion was generating. Please request a fresh suggestion.", "warning");
           return true;
         }
+        if (pendingSnapshot && pendingSnapshot.nextPrompt && pendingSnapshot.conversationKey !== getNextPromptConversationKey()) {
+          setStatus("The conversation changed while the suggestion was generating. Ask again.", "warning");
+          return true;
+        }
         const baseText = pendingSnapshot ? pendingSnapshot.text : text;
         const start = Math.max(0, Math.min(pendingSnapshot ? pendingSnapshot.selectionStart : (Number(message.selectionStart) || 0), baseText.length));
         const end = Math.max(start, Math.min(pendingSnapshot ? pendingSnapshot.selectionEnd : (Number(message.selectionEnd) || start), baseText.length));
@@ -19727,6 +19776,8 @@
           selectionStart: start,
           selectionEnd: end,
           previousSuggestion: pendingSnapshot && pendingSnapshot.previousSuggestion ? pendingSnapshot.previousSuggestion : "",
+          nextPrompt: Boolean(pendingSnapshot && pendingSnapshot.nextPrompt),
+          conversationKey: pendingSnapshot && pendingSnapshot.nextPrompt ? pendingSnapshot.conversationKey : null,
           modelLabel: typeof message.modelLabel === "string" ? message.modelLabel : getCompletionSuggestionModelLabel(),
         });
         const activeEl = document.activeElement;
@@ -29434,6 +29485,7 @@
           // A tree change replaces branch authority, even when its history is
           // empty. Ordinary empty history can still accompany a valid payload.
           if (bufferSwitchingEnabled && isTreeSync) queuedLatestResponse = null;
+          if (isTreeSync && typeof markNextPromptBranchChange === "function") markNextPromptBranchChange();
           setResponseHistory(message.items, {
             autoSelectLatest: isTreeSync ? true : followLatest,
             preserveSelection: isTreeSync ? true : !followLatest,
@@ -29956,6 +30008,7 @@
           bufferConnectionGeneration++;
           documentHostingGeneration = 0; documentHostingContinuation = null; syncDocumentHostingReadiness();
           clearEditorAsyncOperations();
+          if (typeof markNextPromptBranchChange === "function") { markNextPromptBranchChange(); retireStaleNextPromptSuggestion({ quiet: true }); }
           pendingEditorRefresh = null;
           bufferRecoveryClient?.invalidateRemoteRecovery();
           window.clearTimeout(connectWatchdog);

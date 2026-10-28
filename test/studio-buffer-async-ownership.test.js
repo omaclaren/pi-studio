@@ -23,7 +23,7 @@ function harness() {
 		studioBusyEpoch: 0, // copies pin how many busy starts they've seen (candidate53)
 		completionSuggestionState: null, completionSuggestionInFlight: false, completionSuggestionRequestId: null,
 		completionSuggestionPendingSnapshot: null, completionSuggestionRefocusEditorOnResult: false,
-		completionSuggestionPanelEl: null, completionSuggestionTextEl: null, completionSuggestionMetaEl: null,
+		completionSuggestionPanelEl: null, completionSuggestionTextEl: null, completionSuggestionMetaEl: null, completionSuggestionTitleEl: null,
 		isEditorOnlyMode: false, isWatchedFilePreview: false, suggestCompletionBtn: {}, importFileBtn: null, Element,
 		document: { activeElement: null, body: {}, documentElement: {} }, window: { setTimeout(fn) { timers.push(fn); } },
 		modal: false, studioModalBlocksDraftAction: () => c.modal || Boolean(c.studioDecisionState),
