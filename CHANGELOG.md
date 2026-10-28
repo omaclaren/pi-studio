@@ -4,6 +4,20 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.5] — 2026-10-29
+
+### Added
+- With the Prompt empty, **Suggest** offers a next prompt from your last three prompts and Pi's latest reply, as pi-next does. It runs only when you ask, shows as "Suggested prompt", and **Insert** puts it in the Prompt without running it. A suggestion is dropped if the conversation changes before you insert it: /tree, a new reply or run, another session, or a context edit.
+- In the new layout, **Suggest** sits beside **Compact** in the footer and does what the Review menu's Suggest does.
+
+### Changed
+- Suggest's context setting (Editor only, or Editor + latest response) is gone. In the Prompt, a completion also sends your last three prompts and the reply that's showing; in a Document, Suggest sends only the Document. If you choose a Suggest model from another provider, that provider now receives the Prompt's conversation.
+- In the new layout, a Working step's line is its number, its kind in bold (Assistant, Thinking, Steer or the tool's name), what a tool acted on, such as a file's name, and its time on the right, as in agent-markdown-preview. A folded step adds its first line, muted; in 0.11.4 an Assistant step's first line was its title. The prompt's line shows when the run started.
+- In Thinking, a line that is all bold reads as a heading, without its markers. A section's header is its name, then its size, in quieter text.
+
+### Fixed
+- A message sent during a run, such as a steer, shows in Working as a step of its own where it arrived, live, in the saved Working, and in **Copy visible** and **Load**. Before, Working showed only the run's first prompt, so the replies either side of a steer sat with nothing between them.
+
 ## [0.11.4] — 2026-10-28
 
 ### Changed
