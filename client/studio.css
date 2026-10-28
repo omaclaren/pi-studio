@@ -6777,11 +6777,6 @@
       text-align: left;
     }
 
-    body.studio-ui-refresh .completion-context-option.is-selected {
-      color: var(--text);
-      font-weight: 650;
-    }
-
     body.studio-ui-refresh .studio-refresh-menu-item > button:not(:disabled):hover,
     body.studio-ui-refresh .studio-refresh-menu-item > select:not(:disabled):hover {
       background: var(--studio-header-action-hover-bg, var(--panel-2));

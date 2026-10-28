@@ -1,6 +1,7 @@
 // Suggest with the Prompt empty offers a next prompt, after Oliver's pi-next (28 Oct). The server's
 // payload, output checks and model call run from index.ts with the model stubbed; the client's
-// request path runs from studio-client.js. No Pi, provider or browser.
+// request path runs from studio-client.js. No Pi, provider or browser. Since c104 there is no
+// context setting: the Prompt has the conversation, a Document only itself (Oliver, 29 Oct).
 import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
@@ -37,12 +38,13 @@ const answer = (text, stopReason = "stop") => ({ stopReason, content: [{ type: "
 // Raw entries as a Pi without context edits projects them.
 const project = (entries) => entries.filter((entry) => entry.type === "message").map((entry) => ({ source: entry, message: entry.message }));
 
-test("the payload is the latest finished reply and the prompt before it, as Editor + latest response says", () => {
+test("the payload is the latest finished reply and up to three prompts before it, as pi-next sends (Oliver, c104)", () => {
 	const s = server();
 	const entries = [user("one"), reply("a"), user("two"), reply("b"), { type: "custom_message", customType: "note", content: "not a prompt" },
 		user("three"), { type: "message", message: { role: "toolResult", content: [{ type: "text", text: "tool" }] } }, user("four"), reply("Done: the tests pass.")];
 	const built = s.buildStudioNextPromptPayload(project(entries));
-	assert.deepEqual(JSON.parse(built.payload), { userMessages: ["four"], assistantReply: "Done: the tests pass." });
+	assert.deepEqual(JSON.parse(built.payload), { userMessages: ["two", "three", "four"], assistantReply: "Done: the tests pass." });
+	assert.deepEqual(JSON.parse(s.buildStudioNextPromptPayload(project([user("only"), reply("ok")])).payload).userMessages, ["only"]);
 	assert.deepEqual(JSON.parse(s.buildStudioNextPromptPayload(project(entries), "Show me an example").payload).previousSuggestion, "Show me an example");
 });
 
@@ -58,7 +60,7 @@ test("no suggestion without a finished reply, after an approval ask, or when the
 	assert.equal(skip([user("tidy up"), reply("Shall I push the fix to main?")]), "approval");
 	assert.equal(skip([user("[telegram] status?"), reply("All good.")]), "no-reply", "a Telegram exchange");
 	const local = s.buildStudioNextPromptPayload(project([user("[telegram] status?"), reply("ok"), user("now the docs"), reply("Docs updated.")]));
-	assert.deepEqual(JSON.parse(local.payload).userMessages, ["now the docs"], "only the latest exchange");
+	assert.deepEqual(JSON.parse(local.payload).userMessages, ["now the docs"], "an earlier remote prompt is left out");
 });
 
 test("long or escape-heavy text is clipped to the context limit and stays valid JSON", () => {
@@ -70,6 +72,10 @@ test("long or escape-heavy text is clipped to the context limit and stays valid 
 		assert(data.userMessages.length >= 1 && data.assistantReply.length > 0);
 		assert(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(built.payload), "no split surrogate");
 	}
+	// Three escape-heavy prompts and a full reply are over the limit: earlier prompts go before the reply is cut, as in pi-next.
+	const quotes = "\"".repeat(1_000), built = s.buildStudioNextPromptPayload(project([user("a" + quotes), reply("ok"), user("b" + quotes), reply("ok"), user("c" + quotes), reply("x".repeat(4_000))]));
+	assert.deepEqual(JSON.parse(built.payload).userMessages.map((text) => text[0]), ["c"]);
+	assert.equal(JSON.parse(built.payload).assistantReply, "x".repeat(4_000));
 });
 
 test("the model's answer must be one short line; NO_SUGGESTION declines; a repeat is not another", () => {
@@ -124,17 +130,19 @@ function handler() {
 	return { s, sent, branch, ask, final, release: (text) => release(text), tick: () => new Promise((r) => setImmediate(r)) };
 }
 
-test("the handler: next prompt only for an empty request with Editor + latest response, and not while Pi is working", async () => {
+test("the handler: a next prompt for an empty request, whatever its contextMode, and not while Pi is working", async () => {
 	let h = handler();
-	h.ask({ contextMode: "cursor" });
-	assert.equal(h.final().message, "Editor is empty. To suggest a next prompt, set Suggest's context to Editor + latest response.");
 	h.ask({ nextPrompt: undefined });
 	assert.equal(h.final().message, "Editor is empty.");
 	h.s.agentBusy = true; h.ask();
 	assert.equal(h.final().message, "Suggest offers a next prompt once Pi has finished.");
-	assert.equal(h.s.calls.length, 0, "no model request in any of these");
-	h = handler(); h.ask(); await h.tick(); h.release(); await h.tick(); await h.tick();
-	assert.deepEqual([h.final().type, h.final().suggestion, h.final().nextPrompt], ["completion_suggestion_result", "Explain the third step", true]);
+	assert.equal(h.s.calls.length, 0, "no model request in either");
+	// c102 refused contextMode "cursor"; with no setting, the Prompt always has the conversation (Oliver, c104).
+	for (const contextMode of ["session", "cursor", undefined]) {
+		h = handler(); h.ask({ contextMode }); await h.tick(); h.release(); await h.tick(); await h.tick();
+		assert.deepEqual([h.final().type, h.final().suggestion, h.final().nextPrompt], ["completion_suggestion_result", "Explain the third step", true], String(contextMode));
+	}
+	assert.doesNotMatch(index, /set Suggest's context/);
 	assert.match(index, /nextPrompt: msg\.nextPrompt === true \? true : undefined,/);
 	assert.match(index, /latestSessionManager = ctx\.sessionManager;/);
 });
@@ -159,15 +167,15 @@ test("a next prompt generated for an exchange the conversation has left is not d
 	assert.equal(unchanged.final().type, "completion_suggestion_result", "an entry that isn't a message doesn't count");
 });
 
-function client({ text = "", role = "prompt", editorOnly = false, watched = false, switching = true, context = "session" } = {}) {
+function client({ text = "", role = "prompt", editorOnly = false, watched = false, switching = true } = {}) {
 	const sent = [];
 	const c = {
 		bufferRecoveryEnabled: false, isEditorOnlyMode: editorOnly, isWatchedFilePreview: watched, bufferSwitchingEnabled: switching,
 		sourceTextEl: { value: text, selectionStart: text.length, selectionEnd: text.length }, editorLanguage: "markdown", sourceState: { label: "Prompt" }, editorView: "markdown",
 		completionSuggestionState: null, completionSuggestionInFlight: false, completionSuggestionRequestId: null, completionSuggestionPendingSnapshot: null,
-		completionSuggestionRefocusEditorOnResult: false, completionSuggestionContextMode: context, responseHistory: [{ id: "response-a-001", markdown: "Alpha has three steps." }], nextPromptConversationEpoch: 0,
+		completionSuggestionRefocusEditorOnResult: false, responseHistory: [{ id: "response-a-001", markdown: "Alpha has three steps." }], nextPromptConversationEpoch: 0,
 		completionSuggestionPanelEl: { hidden: true }, completionSuggestionTextEl: { textContent: "" }, completionSuggestionMetaEl: { textContent: "" },
-		completionSuggestionTitleEl: { textContent: "Suggested completion" }, suggestCompletionBtn: {},
+		completionSuggestionTitleEl: { textContent: "Suggested completion" }, suggestCompletionBtn: {}, footerSuggestBtn: null,
 		document: { activeElement: null }, Element: class {}, window: { setTimeout() {} },
 		getStudioSelectedBuffer: () => ({ role }), getCompletionSuggestionContextText: () => "Latest response:\nsomething",
 		getCompletionSuggestionModelSelection: () => null, getCompletionSuggestionModelLabel: () => "test model",
@@ -180,11 +188,12 @@ function client({ text = "", role = "prompt", editorOnly = false, watched = fals
 	return { c, sent };
 }
 
-test("Suggest on an empty Prompt asks for a next prompt; Editor only, an empty Document, editor-only tab or watched file doesn't", () => {
+test("Suggest on an empty Prompt asks for a next prompt; an empty Document, editor-only tab or watched file doesn't", () => {
 	let { c, sent } = client();
 	c.requestCompletionSuggestion();
 	assert.equal(sent.length, 1);
 	assert.equal(sent[0].nextPrompt, true); assert.equal(sent[0].text, ""); assert.equal(sent[0].contextText, undefined, "the server reads the session itself");
+	assert.equal(sent[0].contextMode, "session", "a next prompt is from the conversation");
 	assert.equal(c.status, "Suggesting a next prompt…");
 	({ c, sent } = client({ switching: false }));
 	c.requestCompletionSuggestion(); assert.equal(sent[0].nextPrompt, true, "without buffer switching the editor is the prompt");
@@ -193,14 +202,15 @@ test("Suggest on an empty Prompt asks for a next prompt; Editor only, an empty D
 		c.requestCompletionSuggestion();
 		assert.equal(sent.length, 0, JSON.stringify(options)); assert.equal(c.status, "Editor is empty.");
 	}
-	({ c, sent } = client({ context: "cursor" }));
-	c.requestCompletionSuggestion();
-	assert.equal(sent.length, 0, "Editor only sends no conversation (Sol, c102)");
-	assert.equal(c.status, "Editor is empty. To suggest a next prompt, set Suggest's context to Editor + latest response.");
 	({ c, sent } = client({ text: "Draft " }));
 	c.requestCompletionSuggestion();
 	assert.equal(sent[0].nextPrompt, undefined, "text in the editor is an ordinary completion");
 	assert.equal(sent[0].contextText, "Latest response:\nsomething");
+	assert.equal(sent[0].contextMode, "session", "the mode says what is sent");
+	({ c, sent } = client({ text: "Draft ", role: "document" }));
+	c.getCompletionSuggestionContextText = () => "";
+	c.requestCompletionSuggestion();
+	assert.equal(sent[0].contextText, undefined); assert.equal(sent[0].contextMode, "cursor");
 });
 
 test("a suggested prompt shows under its own title, Try another sends it back, and Insert puts it in the Prompt", () => {
@@ -223,9 +233,9 @@ test("a suggested prompt shows under its own title, Try another sends it back, a
 
 test("the Suggest button stays enabled on an empty Prompt and says what it will do", () => {
 	const sync = between(source, "        if (suggestCompletionBtn) {\n          const hasSuggestionForCurrentText", "        if (suggestCompletionOptionsBtn)");
-	assert.match(sync, /\(editorEmpty && !canSuggestNextPrompt\(\)\)/);
-	assert.match(sync, /"Suggest a next prompt from Pi's last prompt and reply\./);
-	assert.match(source, /With Editor \+ latest response and the Prompt empty, it suggests a next prompt\./);
+	assert.match(sync, /\(editorEmpty && !isNextPromptEditor\(\)\)/);
+	assert.match(sync, /"Suggest a next prompt from Pi's recent prompts and latest reply\./);
+	assert.match(source, /In the Prompt it reads the conversation too, and suggests a next prompt when the Prompt is empty; in a Document, only the Document\./);
 	assert.match(index, /<strong id="completionSuggestionTitle">Suggested completion<\/strong>/);
 });
 
@@ -291,7 +301,7 @@ test("Suggest sends the conversation as the model sees it: omitted or replaced t
 	const s = server(), text = (content) => ({ content: [{ type: "text", text: content }] });
 	const payload = (edit) => s.buildStudioNextPromptPayload(s.readStudioNextPromptMessages(editedSession(edit)));
 	let built = payload((m, ids) => { m.appendContextEdit(ids.prompt, text("Explain the retry logic")); m.appendContextEdit(ids.reply, text("It retries three times.")); });
-	assert.deepEqual(JSON.parse(built.payload), { userMessages: ["Explain the retry logic"], assistantReply: "It retries three times." }, "replacements");
+	assert.deepEqual(JSON.parse(built.payload), { userMessages: ["an earlier prompt", "Explain the retry logic"], assistantReply: "It retries three times." }, "replacements");
 	built = payload((m, ids) => m.appendContextEdit(ids.prompt, null));
 	assert.deepEqual(JSON.parse(built.payload).userMessages, ["an earlier prompt"], "an omitted prompt is left out");
 	assert.equal(payload((m, ids) => m.appendContextEdit(ids.reply, null)).skip, "no-reply", "an omitted reply leaves nothing to follow");
@@ -353,4 +363,58 @@ test("/tree to a branch whose history looks the same still retires a suggested p
 	assert.equal(h.c.completionSuggestionPanelEl.hidden, true, "a pending one is dropped when it arrives");
 	assert.equal(h.c.status, "The conversation changed while the suggestion was generating. Ask again.");
 	assert.match(source, /clearEditorAsyncOperations\(\);\n\s+if \(typeof markNextPromptBranchChange === "function"\) \{ markNextPromptBranchChange\(\); retireStaleNextPromptSuggestion\(\{ quiet: true \}\); \}/, "a lost connection, as a session switch causes, retires it too");
+});
+
+test("Suggest beside Compact does what the menu's Suggest does, and says the same (Oliver, c104)", () => {
+	assert.match(index, /Compact<\/button><button id="footerSuggestBtn" class="footer-compact-btn" type="button" hidden>Suggest<\/button><\/span>/, "after Compact, hidden until the new layout shows it");
+	assert.match(between(source, "      function setupStudioUiRefreshPrototype() {", "      function debugTrace("), /if \(footerSuggestBtn && suggestCompletionBtn\) footerSuggestBtn.hidden = false;/);
+	assert.match(source, /footerSuggestBtn\.addEventListener\("click", \(\) => \{\n\s+requestCompletionSuggestion\(\);\n\s+\}\);/);
+	// The actual button sync, for an empty Prompt, an empty Document, text, a ready suggestion and a running request.
+	const sync = between(source, "        if (suggestCompletionBtn) {\n          const hasSuggestionForCurrentText", "        if (suggestCompletionOptionsBtn)");
+	const state = (fields) => {
+		const c = vm.createContext({ suggestCompletionBtn: {}, footerSuggestBtn: {}, isWatchedFilePreview: false, wsState: "Ready", uiBusy: false, completionSuggestionInFlight: false,
+			completionSuggestionState: null, sourceTextEl: { value: "" }, isNextPromptEditor: () => true, ...fields });
+		vm.runInContext(sync, c);
+		assert.deepEqual([c.footerSuggestBtn.disabled, c.footerSuggestBtn.textContent, c.footerSuggestBtn.title], [c.suggestCompletionBtn.disabled, c.suggestCompletionBtn.textContent, c.suggestCompletionBtn.title]);
+		return [c.footerSuggestBtn.disabled, c.footerSuggestBtn.textContent, c.footerSuggestBtn.title.split(".")[0]];
+	};
+	assert.deepEqual(state({}), [false, "Suggest", "Suggest a next prompt from Pi's recent prompts and latest reply"]);
+	assert.deepEqual(state({ isNextPromptEditor: () => false }), [true, "Suggest", "Ask for a short completion at the editor cursor"]);
+	assert.deepEqual(state({ sourceTextEl: { value: "Draft" } }), [false, "Suggest", "Ask for a short completion at the editor cursor"]);
+	assert.deepEqual(state({ sourceTextEl: { value: "Draft" }, completionSuggestionState: { baseText: "Draft" } }), [false, "Try another", "Ask for a different suggestion at the same cursor position"]);
+	assert.deepEqual(state({ completionSuggestionInFlight: true, uiBusy: true }), [false, "Stop", "Stop the current suggestion request"]);
+	// Clicked from the footer, a result returns focus to the editor as from the menu's button.
+	const { c } = client();
+	c.footerSuggestBtn = {}; c.document.activeElement = c.footerSuggestBtn;
+	assert.equal(c.shouldRefocusEditorForCompletionRequest(), true);
+	c.document.activeElement = {};
+	assert.equal(c.shouldRefocusEditorForCompletionRequest(), false, "the control: focus elsewhere stays");
+	assert.doesNotMatch(index + source, /completionContextSelect|data-completion-context-mode|piStudio\.completionContextMode/, "the setting is gone");
+});
+
+// The actual context builder for a completion, in the Prompt and in a Document (Oliver, c104).
+function contextClient(options = {}, history = [], index = history.length - 1) {
+	const { c } = client(options);
+	Object.assign(c, { responseHistory: history, latestResponseMarkdown: "", getSelectedHistoryItem: () => history[index] || null });
+	vm.runInContext(source.match(/const COMPLETION_CONTEXT_MAX_CHARS = \d+;/)[0].replace("const ", "var "), c);
+	vm.runInContext(between(source, "function trimCompletionContextText(", "function hideCompletionSuggestion()"), c);
+	return c;
+}
+
+test("a completion in the Prompt has up to three prompts and the shown response; in a Document, nothing more (Oliver, c104)", () => {
+	const item = (n, fields = {}) => ({ id: "r" + n, markdown: "reply " + n, prompt: "prompt " + n, ...fields });
+	const four = [item(1), item(2), item(3, { promptTriggerText: "steer 3" }), item(4)];
+	assert.equal(contextClient({}, four).getCompletionSuggestionContextText(),
+		"Earlier prompt:\nprompt 2\n\n---\n\nEarlier prompt:\nsteer 3\n\n---\n\nLatest prompt:\nprompt 4\n\n---\n\nLatest response:\nreply 4");
+	assert.equal(contextClient({}, four, 1).getCompletionSuggestionContextText(),
+		"Earlier prompt:\nprompt 1\n\n---\n\nLatest prompt:\nprompt 2\n\n---\n\nLatest response:\nreply 2", "an older response shown: the prompts up to it");
+	assert.equal(contextClient({}, [item(1), item(2, { prompt: "prompt 1" })]).getCompletionSuggestionContextText(),
+		"Latest prompt:\nprompt 1\n\n---\n\nLatest response:\nreply 2", "two replies to one prompt give it once");
+	for (const options of [{ role: "document" }, { editorOnly: true }, { watched: true }])
+		assert.equal(contextClient(options, four).getCompletionSuggestionContextText(), "", JSON.stringify(options));
+	// A long response keeps its end and leaves the prompts their room; a long prompt keeps both ends.
+	const long = contextClient({}, [item(1, { prompt: "P".repeat(5_000) + "end" }), item(2, { markdown: "start" + "r".repeat(50_000) + "the end" })]).getCompletionSuggestionContextText();
+	assert(long.length <= 12_000, String(long.length));
+	assert.match(long, /^Earlier prompt:\nP{500} …\[truncated\]… P{497}end\n\n---\n\nLatest prompt:\nprompt 2\n\n---\n\nLatest response:\nr+the end$/);
+	assert.equal(contextClient({}, []).getCompletionSuggestionContextText(), "", "no conversation yet");
 });

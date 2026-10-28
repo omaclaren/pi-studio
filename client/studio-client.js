@@ -173,8 +173,9 @@
       const replEchoModeSelect = document.getElementById("replEchoModeSelect");
       const copyDraftBtn = document.getElementById("copyDraftBtn");
       const suggestCompletionBtn = document.getElementById("suggestCompletionBtn");
+      // Suggest beside Compact in the new layout, where the menu holds the other one (Oliver, 29 Oct).
+      const footerSuggestBtn = document.getElementById("footerSuggestBtn");
       const suggestCompletionOptionsBtn = document.getElementById("suggestCompletionOptionsBtn");
-      const completionContextSelect = document.getElementById("completionContextSelect");
       const completionModelSelect = document.getElementById("completionModelSelect");
       const completionSuggestionPanelEl = document.getElementById("completionSuggestionPanel");
       const completionSuggestionTextEl = document.getElementById("completionSuggestionText");
@@ -614,7 +615,6 @@
       const SIDE_QUESTION_GATHER_STORAGE_KEY = "piStudio.sideQuestionGatherScope";
       const SIDE_QUESTION_TOOLS_STORAGE_KEY = "piStudio.sideQuestionTools";
       const SIDE_QUESTION_TRANSCRIPT_RENDER_MAX_CHARS = 400_000;
-      const COMPLETION_CONTEXT_STORAGE_KEY = "piStudio.completionContextMode";
       const COMPLETION_MODEL_STORAGE_KEY = "piStudio.completionModel";
       const COMPLETION_CONTEXT_MAX_CHARS = 12000;
       const QUIZ_SCOPES = ["editor", "selection", "file", "folder", "repo"];
@@ -3182,7 +3182,6 @@
       let editorLanguage = "markdown";
       let responseHighlightEnabled = false;
       let completionSuggestionState = null;
-      let completionSuggestionContextMode = readCompletionSuggestionContextMode();
       let completionSuggestionModelValue = readCompletionSuggestionModelValue();
       let completionSuggestionModelOptions = [];
       let completionSuggestionInFlight = false;
@@ -3859,7 +3858,6 @@
         let contextMenu = null, pathDetails = null;
         if (suggestCompletionOptionsBtn) {
           suggestCompletionOptionsBtn.hidden = false;
-          if (completionContextSelect) completionContextSelect.hidden = true;
           contextMenu = makeStudioUiRefreshMenu(suggestCompletionOptionsBtn, "context", "studio-refresh-context-anchor");
           sourceOriginSummaryEl = makeStudioUiRefreshElement("div", "source-badge source-origin-summary", "Origin: blank");
           sourceOriginSummaryEl.setAttribute("aria-label", "Current editor origin");
@@ -3926,26 +3924,12 @@
           if (!isEditorOnlyMode) {
             contextMenu.piEditorSection = appendStudioUiRefreshMenuSection(contextMenu.menu, "Pi editor", [sendEditorBtn, clearPiEditorBtn], { collapsed: true });
           }
-          const cursorContextBtn = makeStudioUiRefreshElement("button", "completion-context-option", "Editor only");
-          cursorContextBtn.type = "button";
-          cursorContextBtn.setAttribute("data-completion-context-mode", "cursor");
-          const sessionContextBtn = makeStudioUiRefreshElement("button", "completion-context-option", "Editor + latest response");
-          sessionContextBtn.type = "button";
-          sessionContextBtn.setAttribute("data-completion-context-mode", "session");
-          [cursorContextBtn, sessionContextBtn].forEach((button) => {
-            button.addEventListener("click", (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setCompletionSuggestionContextMode(button.getAttribute("data-completion-context-mode") === "session" ? "session" : "cursor");
-              syncActionButtons();
-            });
-          });
-          const suggestionItems = [cursorContextBtn, sessionContextBtn];
+          const suggestionItems = [];
           if (completionModelSelect) {
             completionModelSelect.hidden = false;
             suggestionItems.push(completionModelSelect);
           }
-          const completionThinkingNoteEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note completion-thinking-note", "Suggest: thinking off; model choice only affects suggestions. With Editor + latest response and the Prompt empty, it suggests a next prompt.");
+          const completionThinkingNoteEl = makeStudioUiRefreshElement("div", "studio-refresh-menu-note completion-thinking-note", "Suggest: thinking off; model choice only affects suggestions. In the Prompt it reads the conversation too, and suggests a next prompt when the Prompt is empty; in a Document, only the Document.");
           completionThinkingNoteEl.setAttribute("aria-label", "Suggestion model note");
           suggestionItems.push(completionThinkingNoteEl);
           appendStudioUiRefreshMenuSection(reviewMenu ? reviewMenu.menu : contextMenu.menu, "Suggestions", [suggestCompletionBtn, ...suggestionItems]);
@@ -4154,6 +4138,7 @@
             .concat(reviewMenu ? [reviewMenu] : []),
         };
         document.body.classList.add("studio-workspace-layout");
+        if (footerSuggestBtn && suggestCompletionBtn) footerSuggestBtn.hidden = false;
         if (saveOverBtn) saveOverBtn.textContent = "Save";
         if (saveAsBtn) saveAsBtn.textContent = "Save As…";
         if (refreshFromDiskBtn) refreshFromDiskBtn.textContent = "Reload from disk";
@@ -17116,15 +17101,20 @@
         if (suggestCompletionBtn) {
           const hasSuggestionForCurrentText = Boolean(completionSuggestionState && sourceTextEl && sourceTextEl.value === completionSuggestionState.baseText);
           const editorEmpty = !String(sourceTextEl.value || "").trim();
-          suggestCompletionBtn.disabled = isWatchedFilePreview || wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || (editorEmpty && !canSuggestNextPrompt())));
+          suggestCompletionBtn.disabled = isWatchedFilePreview || wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || (editorEmpty && !isNextPromptEditor())));
           suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Stop" : (hasSuggestionForCurrentText ? "Try another" : "Suggest");
           suggestCompletionBtn.title = completionSuggestionInFlight
             ? "Stop the current suggestion request."
             : (hasSuggestionForCurrentText
               ? "Ask for a different suggestion at the same cursor position."
-              : (editorEmpty && canSuggestNextPrompt()
-                ? "Suggest a next prompt from Pi's last prompt and reply. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor."
+              : (editorEmpty && isNextPromptEditor()
+                ? "Suggest a next prompt from Pi's recent prompts and latest reply. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor."
                 : "Ask for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor."));
+          if (footerSuggestBtn) {
+            footerSuggestBtn.disabled = suggestCompletionBtn.disabled;
+            footerSuggestBtn.textContent = suggestCompletionBtn.textContent;
+            footerSuggestBtn.title = suggestCompletionBtn.title;
+          }
         }
         if (suggestCompletionOptionsBtn) suggestCompletionOptionsBtn.disabled = uiBusy || completionSuggestionInFlight;
         syncBufferRecoveryMenuAccess();
@@ -19386,15 +19376,6 @@
         return true;
       }
 
-      function readCompletionSuggestionContextMode() {
-        try {
-          const stored = window.localStorage ? String(window.localStorage.getItem(COMPLETION_CONTEXT_STORAGE_KEY) || "") : "";
-          return stored === "session" ? "session" : "cursor";
-        } catch {
-          return "cursor";
-        }
-      }
-
       function readCompletionSuggestionModelValue() {
         try {
           const stored = window.localStorage ? String(window.localStorage.getItem(COMPLETION_MODEL_STORAGE_KEY) || "") : "";
@@ -19420,18 +19401,6 @@
         } catch {
           return null;
         }
-      }
-
-      function setCompletionSuggestionContextMode(mode) {
-        completionSuggestionContextMode = mode === "session" ? "session" : "cursor";
-        if (completionContextSelect) completionContextSelect.value = completionSuggestionContextMode;
-        hideCompletionSuggestion();
-        try {
-          if (window.localStorage) window.localStorage.setItem(COMPLETION_CONTEXT_STORAGE_KEY, completionSuggestionContextMode);
-        } catch {}
-        setStatus(completionSuggestionContextMode === "session"
-          ? "Suggestions will include the latest prompt and response as context."
-          : "Suggestions will use cursor-local editor context only.");
       }
 
       function setCompletionSuggestionModelValue(value) {
@@ -19491,23 +19460,12 @@
       }
 
       function syncCompletionSuggestionContextUi() {
-        if (completionContextSelect) completionContextSelect.value = completionSuggestionContextMode;
         syncCompletionSuggestionModelUi();
         if (suggestCompletionOptionsBtn) {
           suggestCompletionOptionsBtn.textContent = studioUiRefreshUi?.fileButton ? "File" : "Source & context";
-          suggestCompletionOptionsBtn.title = studioUiRefreshUi?.fileButton ? (studioUiRefreshUi.reviewButton ? "File actions, details and workspace recovery. Suggestion settings are under Review." : "File actions, details, workspace recovery and suggestion settings.") : (completionSuggestionContextMode === "session"
-            ? "Document source, working directory, status, and suggestion context. Suggestions include editor plus latest response."
-            : "Document source, working directory, status, and suggestion context. Suggestions use editor-only context.");
+          suggestCompletionOptionsBtn.title = studioUiRefreshUi?.fileButton ? (studioUiRefreshUi.reviewButton ? "File actions, details and workspace recovery. Suggestion settings are under Review." : "File actions, details, workspace recovery and suggestion settings.") : "Document source, working directory, status, and suggestion settings.";
           suggestCompletionOptionsBtn.setAttribute("aria-label", studioUiRefreshUi?.fileButton ? "File" : suggestCompletionOptionsBtn.title);
         }
-        document.querySelectorAll("[data-completion-context-mode]").forEach((button) => {
-          if (!(button instanceof HTMLElement)) return;
-          const mode = button.getAttribute("data-completion-context-mode") === "session" ? "session" : "cursor";
-          const selected = mode === completionSuggestionContextMode;
-          button.classList.toggle("is-selected", selected);
-          button.setAttribute("aria-pressed", selected ? "true" : "false");
-          button.textContent = (selected ? "✓ " : "  ") + (mode === "session" ? "Editor + latest response" : "Editor only");
-        });
       }
 
       function trimCompletionContextText(text) {
@@ -19516,21 +19474,27 @@
         return value.slice(value.length - COMPLETION_CONTEXT_MAX_CHARS);
       }
 
+      // In the Prompt, a completion has the conversation as background: up to three prompts, ending with the shown
+      // response's, and that response, as a next prompt has (Oliver, 29 Oct). A Document has only itself.
       function getCompletionSuggestionContextText() {
-        if (completionSuggestionContextMode !== "session") return "";
+        if (!isNextPromptEditor()) return "";
         const selected = getSelectedHistoryItem ? getSelectedHistoryItem() : null;
         const responseText = selected && typeof selected.markdown === "string" && selected.markdown.trim()
           ? selected.markdown
           : latestResponseMarkdown;
-        const parts = [];
-        if (selected && typeof selected.promptTriggerText === "string" && selected.promptTriggerText.trim()) {
-          parts.push("Latest request/steering:\n" + trimCompletionContextText(selected.promptTriggerText));
-        } else if (selected && typeof selected.prompt === "string" && selected.prompt.trim()) {
-          parts.push("Latest prompt:\n" + trimCompletionContextText(selected.prompt));
+        const end = selected ? responseHistory.indexOf(selected) : -1;
+        const prompts = [];
+        for (const item of end >= 0 ? responseHistory.slice(Math.max(0, end - 2), end + 1) : (selected ? [selected] : [])) {
+          const text = typeof item.promptTriggerText === "string" && item.promptTriggerText.trim() ? item.promptTriggerText.trim()
+            : (typeof item.prompt === "string" ? item.prompt.trim() : "");
+          if (text && text !== prompts[prompts.length - 1]) prompts.push(text);
         }
-        if (String(responseText || "").trim()) {
-          parts.push("Latest response:\n" + trimCompletionContextText(responseText));
-        }
+        const parts = prompts.map((text, i) => (i === prompts.length - 1 ? "Latest prompt:\n" : "Earlier prompt:\n")
+          + (text.length <= 1000 ? text : text.slice(0, 500) + " …[truncated]… " + text.slice(-500)));
+        // The response has the room the prompts leave, and keeps its end, as before.
+        const room = COMPLETION_CONTEXT_MAX_CHARS - parts.join("\n\n---\n\n").length - 40;
+        const response = String(responseText || "").trim();
+        if (response && room > 0) parts.push("Latest response:\n" + (response.length <= room ? response : response.slice(response.length - room)));
         return trimCompletionContextText(parts.join("\n\n---\n\n"));
       }
 
@@ -19602,6 +19566,7 @@
         const targetCanAccept = focusIsUnclaimed
           || target === sourceTextEl
           || target === suggestCompletionBtn
+          || (footerSuggestBtn && target === footerSuggestBtn)
           || Boolean(completionSuggestionPanelEl && target instanceof Element && completionSuggestionPanelEl.contains(target));
         if (!targetCanAccept) return false;
         event.preventDefault();
@@ -19613,6 +19578,7 @@
         const activeEl = document.activeElement;
         return activeEl === sourceTextEl
           || activeEl === suggestCompletionBtn
+          || (footerSuggestBtn && activeEl === footerSuggestBtn)
           || activeEl === document.body
           || activeEl === document.documentElement
           || Boolean(completionSuggestionPanelEl && activeEl instanceof Element && completionSuggestionPanelEl.contains(activeEl));
@@ -19644,11 +19610,6 @@
         return !isEditorOnlyMode && !isWatchedFilePreview && (!bufferSwitchingEnabled || !isStudioDocumentBufferView());
       }
 
-      // Only with Editor + latest response: Editor only keeps the conversation from the Suggest model (Sol, c102).
-      function canSuggestNextPrompt() {
-        return isNextPromptEditor() && completionSuggestionContextMode === "session";
-      }
-
       // A suggested prompt follows the branch's latest response, and goes when that or the branch changes (Sol, c102).
       function getNextPromptConversationKey() {
         const latest = responseHistory.length ? responseHistory[responseHistory.length - 1] : null;
@@ -19675,9 +19636,9 @@
         const regenerateRequested = Boolean((options && options.regenerate) || (completionSuggestionState && sourceTextEl.value === completionSuggestionState.baseText));
         const existingSuggestion = regenerateRequested ? completionSuggestionState : null;
         const text = existingSuggestion ? String(existingSuggestion.baseText || "") : String(sourceTextEl.value || "");
-        const nextPrompt = !text.trim() && canSuggestNextPrompt();
+        const nextPrompt = !text.trim() && isNextPromptEditor();
         if (!text.trim() && !nextPrompt) {
-          setStatus(isNextPromptEditor() ? "Editor is empty. To suggest a next prompt, set Suggest's context to Editor + latest response." : "Editor is empty.", "warning");
+          setStatus("Editor is empty.", "warning");
           return;
         }
         if (existingSuggestion && (String(sourceTextEl.value || "") !== text
@@ -19710,7 +19671,7 @@
           language: editorLanguage || "",
           label: sourceState && sourceState.label ? sourceState.label : "Studio editor",
           path: sourceState && sourceState.path ? sourceState.path : undefined,
-          contextMode: completionSuggestionContextMode,
+          contextMode: nextPrompt || contextText ? "session" : "cursor",
           contextText: contextText || undefined,
           previousSuggestion: previousSuggestion || undefined,
         };
@@ -19828,6 +19789,7 @@
           shouldRefocusEditor
           || activeEl === sourceTextEl
           || activeEl === suggestCompletionBtn
+          || (footerSuggestBtn && activeEl === footerSuggestBtn)
           || activeEl === document.body
           || activeEl === document.documentElement
           || Boolean(completionSuggestionPanelEl && activeEl instanceof Element && completionSuggestionPanelEl.contains(activeEl))
@@ -32125,11 +32087,9 @@
           requestCompletionSuggestion();
         });
       }
-      if (completionContextSelect) {
-        completionContextSelect.value = completionSuggestionContextMode;
-        completionContextSelect.addEventListener("change", () => {
-          setCompletionSuggestionContextMode(completionContextSelect.value);
-          syncActionButtons();
+      if (footerSuggestBtn) {
+        footerSuggestBtn.addEventListener("click", () => {
+          requestCompletionSuggestion();
         });
       }
       if (completionModelSelect) {

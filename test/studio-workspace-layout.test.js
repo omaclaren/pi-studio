@@ -80,6 +80,7 @@ function harness({ only = false, watched = false } = {}) {
     const [, name, id] = match;
     const node = new Node(name.endsWith("Btn") ? "button" : name.endsWith("Select") ? "select" : "div"); node.id = id; node.textContent = name; c[name] = node;
   }
+  c.footerSuggestBtn.hidden = true; // as in the markup
   c.editorViewSelect.value = "markdown";
   c.editorViewSelect.addEventListener("change", () => { events.push(["view", state.selectedBufferId, c.editorViewSelect.value]); c.editorView = c.editorViewSelect.value; });
   c.selectStudioBuffer = id => { if (!c.studioBuffersCanSwitch()) return false; if (id !== state.selectedBufferId) { state.selectedBufferId = id; c.syncStudioBufferSwitcher(); } return true; };
@@ -139,6 +140,8 @@ test("actual refreshed constructor relocates original controls into two workspac
   assert.equal(c.getEditorBtn.closest(".studio-refresh-menu"), ui.menus.find(item => item.name === "context").menu);
   assert.equal(c.sendEditorBtn.closest(".studio-refresh-menu"), ui.menus.find(item => item.name === "context").menu);
   assert.equal(c.suggestCompletionBtn.closest(".studio-refresh-menu"), ui.menus.find(item => item.name === "review").menu);
+  assert.equal(c.footerSuggestBtn.hidden, false, "and Suggest shows beside Compact (Oliver, c104)");
+  assert.deepEqual(c.suggestCompletionBtn.closest(".studio-refresh-menu").querySelectorAll("button").filter(node => /Editor only|latest response/.test(node.textContent)), [], "no context setting");
 });
 
 test("File starts with New and Open, then New Document window; labels stay fixed and act on the buffer you're in; Pi draft only in Prompt", () => {

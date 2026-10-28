@@ -9662,7 +9662,7 @@ function buildStudioCompletionSuggestionPrompt(options: {
 		"",
 		`File/context label: ${label}`,
 		`Language mode: ${language}`,
-		`Suggestion context mode: ${contextText ? "editor plus latest response" : "editor only"}`,
+		`Suggestion context mode: ${contextText ? "editor plus recent conversation" : "editor only"}`,
 		contextText ? ["", "<extra_context>", contextText, "</extra_context>"].join("\n") : "",
 		previousSuggestion ? ["", "<previous_suggestion>", previousSuggestion, "</previous_suggestion>"].join("\n") : "",
 		"",
@@ -9747,8 +9747,8 @@ function readStudioNextPromptMessages(manager: Pick<ExtensionContext["sessionMan
 		.flatMap((entry) => entry.messages.map((message) => ({ source: entry.sourceEntry, message: message as StudioNextPromptMessage["message"] })));
 }
 
-/** The latest finished reply on the branch and the prompt before it, as quoted JSON data. Only the latest exchange,
- * as Suggest's "Editor + latest response" setting says; pi-next also sends two earlier prompts (Sol, c102). */
+/** The latest finished reply on the branch and up to three prompts before it, as quoted JSON data, as pi-next sends
+ * them (Oliver, 29 Oct). A remote prompt, such as a Telegram message, is left out; the latest can't be one. */
 function buildStudioNextPromptPayload(projected: StudioNextPromptMessage[], previousSuggestion?: string): { payload: string } | { skip: StudioNextPromptSkip } {
 	const messages = projected.map((entry) => entry.message);
 	const lastEntry = projected.at(-1), last = lastEntry?.message;
@@ -9765,13 +9765,14 @@ function buildStudioNextPromptPayload(projected: StudioNextPromptMessage[], prev
 	});
 	const current = users.at(-1);
 	if (!current || looksLikeStudioRemotePrompt(current)) return { skip: "no-reply" };
-	const userTexts = [clipStudioNextPromptText(current, 1_000)];
+	const userTexts = users.filter((text) => !looksLikeStudioRemotePrompt(text)).slice(-3).map((text) => clipStudioNextPromptText(text, 1_000));
 	let assistant = clipStudioNextPromptText(reply, 4_000);
 	const previous = String(previousSuggestion || "").trim().slice(0, STUDIO_NEXT_PROMPT_MAX_CHARS);
 	const encode = () => JSON.stringify(previous
 		? { userMessages: userTexts, assistantReply: assistant, previousSuggestion: previous }
 		: { userMessages: userTexts, assistantReply: assistant });
-	// Escape-heavy JSON can exceed the sum of the source string limits.
+	// Escape-heavy JSON can exceed the sum of the source string limits. Earlier prompts go first, as in pi-next.
+	while (encode().length > STUDIO_NEXT_PROMPT_MAX_CONTEXT_CHARS && userTexts.length > 1) userTexts.shift();
 	while (encode().length > STUDIO_NEXT_PROMPT_MAX_CONTEXT_CHARS && assistant.length > 200) assistant = clipStudioNextPromptText(assistant, Math.floor(assistant.length * 0.8));
 	while (encode().length > STUDIO_NEXT_PROMPT_MAX_CONTEXT_CHARS && userTexts[0].length > 100) userTexts[0] = clipStudioNextPromptText(userTexts[0], Math.floor(userTexts[0].length * 0.8));
 	const payload = encode();
@@ -13416,10 +13417,6 @@ ${cssVarsBlock}
               <button id="copyDraftBtn" type="button" title="Copy the editor text to the clipboard.">Copy text</button>
               <button id="suggestCompletionBtn" type="button" title="Ask the current model for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor.">Suggest</button>
               <button id="suggestCompletionOptionsBtn" type="button" hidden title="Suggestion context options">▾</button>
-              <select id="completionContextSelect" class="studio-flat-select" hidden aria-label="Suggestion context mode" title="Choose how much context Suggest includes.">
-                <option value="cursor" selected>Context: editor only</option>
-                <option value="session">Context: editor + latest response</option>
-              </select>
               <select id="completionModelSelect" class="studio-flat-select" hidden aria-label="Suggestion model" title="Choose the model used for Suggest. Suggestions use direct completion with thinking off and do not change the main Pi model.">
                 <option value="current" selected>Suggestion model: current Pi model</option>
               </select>
@@ -13684,7 +13681,7 @@ ${cssVarsBlock}
 
   <footer>
     <span id="statusLine"><span id="statusSpinner" aria-hidden="true"> </span><span id="status">Booting studio…</span></span>
-    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text"><button id="footerMetaModel" class="footer-meta-part footer-meta-model footer-model-btn" type="button" aria-haspopup="menu" aria-expanded="false">${initialModel}</button><span class="footer-meta-sep">·</span><span id="footerMetaTerminal" class="footer-meta-part footer-meta-terminal">${initialTerminal}</span><span class="footer-meta-sep">·</span><span id="footerMetaContext" class="footer-meta-part footer-meta-context">unknown</span></span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button></span>
+    <span id="footerMeta" class="footer-meta"><span id="footerMetaText" class="footer-meta-text"><button id="footerMetaModel" class="footer-meta-part footer-meta-model footer-model-btn" type="button" aria-haspopup="menu" aria-expanded="false">${initialModel}</button><span class="footer-meta-sep">·</span><span id="footerMetaTerminal" class="footer-meta-part footer-meta-terminal">${initialTerminal}</span><span class="footer-meta-sep">·</span><span id="footerMetaContext" class="footer-meta-part footer-meta-context">unknown</span></span><button id="compactBtn" class="footer-compact-btn" type="button" title="Trigger pi context compaction now.">Compact</button><button id="footerSuggestBtn" class="footer-compact-btn" type="button" hidden>Suggest</button></span>
     <div id="footerModelMenu" class="footer-model-menu" hidden></div>
     <div id="footerThemeMenu" class="footer-theme-menu" hidden></div>
     <span class="footer-actions">
@@ -16991,11 +16988,6 @@ export default function (pi: ExtensionAPI) {
 			const nextPrompt = msg.nextPrompt === true && !msg.text.trim();
 			if (!msg.text.trim() && !nextPrompt) {
 				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: "Editor is empty." });
-				return;
-			}
-			// Editor only keeps the conversation from the Suggest model (Sol, c102).
-			if (nextPrompt && msg.contextMode !== "session") {
-				sendToClient(client, { type: "completion_suggestion_error", requestId: msg.requestId, message: "Editor is empty. To suggest a next prompt, set Suggest's context to Editor + latest response." });
 				return;
 			}
 			if (nextPrompt && (agentBusy || compactInProgress)) {
