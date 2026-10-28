@@ -1,10 +1,10 @@
 // Actual Working formatter/state/controller helpers. No SDK/provider/REPL.
-import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import ts from 'typescript';
 const source=fs.readFileSync(new URL('../client/studio-client.js',import.meta.url),'utf8'),css=fs.readFileSync(new URL('../client/studio.css',import.meta.url),'utf8'),index=fs.readFileSync(new URL('../index.ts',import.meta.url),'utf8');
 function section(a,b){const x=source.indexOf(a),y=source.indexOf(b,x);assert(x>=0&&y>x,'missing '+a);return source.slice(x,y);}
 const escape=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 class Node{constructor(key='',open=false){this.key=key;this.open=open;this.attrs={'data-trace-details-key':key,'data-trace-expected-open':String(open)};this.isConnected=true;this.tagName='DETAILS';this.editable=false;}matches(s){return s==='details[data-trace-details-key]';}getAttribute(k){return this.attrs[k]??null;}setAttribute(k,v){this.attrs[k]=String(v);}closest(){return this.editable?this:null;}}
-function fixture(){const nodes=[],c={studioUiRefreshUi:null,document:{activeElement:null},traceStepsShownOpen:new Set(),traceStepsPaused:false,traceOwnScrollTop:null,Element:Node,traceExpandedOutputs:new Set(),traceOpenDetails:new Set(),traceClosedDetails:new Set(),traceSectionDefaults:new Map(),traceAutoScroll:true,TRACE_OUTPUT_PREVIEW_MAX_LINES:50,TRACE_OUTPUT_PREVIEW_MAX_CHARS:8000,TRACE_SECTION_AUTO_OPEN_MAX_LINES:6,TRACE_SECTION_AUTO_OPEN_MAX_CHARS:600,rightView:'trace',readerActive:false,modal:false,escapeHtml:escape,formatCompactNumber:x=>String(x),normalizeFenceLanguage:x=>x,wrapHighlight:(cls,x)=>`<span class='${cls}'>${escape(x)}</span>`,EMPTY_OVERLAY_LINE:'',critiqueViewEl:{querySelectorAll:()=>nodes,contains:n=>nodes.includes(n)||n.inPane},studioLinkedReaderIsActive:()=>c.readerActive,studioModalBlocksDraftAction:()=>c.modal,isTextEntryShortcutTarget:n=>n?.editable===true,normalizeTraceImage:()=>null,renderTraceImages:()=>'',formatReferenceTime:x=>String(x||''),normalizeTraceFilter:x=>x||'all',traceFilter:'all',traceDisplayContext:{},traceState:{status:'running',entries:[]},createEmptyTraceState:()=>({status:'idle',entries:[]}),getTraceHistoryContextLabel:()=>'',buildVisibleWorkingText:()=> 'retained Working text'};
+function fixture(){const nodes=[],c={studioUiRefreshUi:null,document:{activeElement:null},traceStepsShownOpen:new Set(),traceStepsPaused:false,traceOwnScrollTop:null,traceStepsFolded:false,Element:Node,traceExpandedOutputs:new Set(),traceOpenDetails:new Set(),traceClosedDetails:new Set(),traceSectionDefaults:new Map(),traceAutoScroll:true,TRACE_OUTPUT_PREVIEW_MAX_LINES:50,TRACE_OUTPUT_PREVIEW_MAX_CHARS:8000,TRACE_SECTION_AUTO_OPEN_MAX_LINES:6,TRACE_SECTION_AUTO_OPEN_MAX_CHARS:600,rightView:'trace',readerActive:false,modal:false,escapeHtml:escape,formatCompactNumber:x=>String(x),normalizeFenceLanguage:x=>x,wrapHighlight:(cls,x)=>`<span class='${cls}'>${escape(x)}</span>`,EMPTY_OVERLAY_LINE:'',critiqueViewEl:{querySelectorAll:()=>nodes,contains:n=>nodes.includes(n)||n.inPane},studioLinkedReaderIsActive:()=>c.readerActive,studioModalBlocksDraftAction:()=>c.modal,isTextEntryShortcutTarget:n=>n?.editable===true,normalizeTraceImage:()=>null,renderTraceImages:()=>'',formatReferenceTime:x=>String(x||''),normalizeTraceFilter:x=>x||'all',traceFilter:'all',traceDisplayContext:{},traceState:{status:'running',entries:[]},createEmptyTraceState:()=>({status:'idle',entries:[]}),getTraceHistoryContextLabel:()=>'',buildVisibleWorkingText:()=> 'retained Working text'};
  c.getTraceEntriesForFilter=()=>c.traceState.entries;c.renderTraceViewIfActive=()=>{};vm.createContext(c);vm.runInContext(section('function formatTraceOutputSize(','function renderTraceImages('),c);vm.runInContext(section('function highlightCodeTokens(','function getEditorLanguageForPreview('),c);vm.runInContext(section('function handleTraceDetailsToggle(','function handleReplPaneClick('),c);vm.runInContext(section('function buildTracePanelHtml(','function renderTraceView('),c);return {c,nodes};}
 const tool=(changes={})=>({id:'tool-one',type:'tool',toolName:'codemode',label:'Execute JavaScript',args:JSON.stringify({code:'  const value = 3;\n  console.log(value);'}),output:'3\n',images:[],status:'complete',isError:false,startedAt:1000,updatedAt:2250,...changes});
 test('codemode JSON wrapper becomes Code with exact indentation and modest escaped JavaScript highlighting',()=>{const {c}=fixture(),entry=tool(),p=c.getTraceToolInputPresentation(entry);assert.equal(p.label,'Code');assert.equal(p.language,'javascript');assert.equal(p.text,'  const value = 3;\n  console.log(value);');const html=c.renderTraceToolInput(entry);assert.match(html,/hl-code-kw/);assert.match(html,/  <span/);assert(!html.includes('&quot;code&quot;'));assert(!html.includes('data-repl-action'));assert(!html.includes('textarea'));});
@@ -73,7 +73,8 @@ test('new layout: one header line, the prompt first, and steps as numbered lines
   assert(html.includes("<details class='trace-card trace-card-prompt trace-step' data-trace-details-key='prompt:run-1' data-trace-expected-open='true' open>"));
   const at=['trace-card-prompt','step:a1','step:t1','step:t2'].map(s=>html.indexOf(s));assert(at[0]>0);assert.deepEqual([...at].sort((a,b)=>a-b),at,'prompt, then the steps in order');
   assert.match(html,stepRe('a1',1,false));assert.match(html,stepRe('t1',2,false));assert.match(html,stepRe('t2',3,true));
-  assert(html.includes("<span class='trace-step-preview'>Looking at &lt;files&gt;</span>"),'a closed step shows its first line, escaped');
+  assert(html.includes("<span class='trace-kind-badge'>Assistant</span><span class='trace-card-title'>Looking at &lt;files&gt;</span>"),'an Assistant step\'s title is its first line, escaped');
+  assert(!html.includes("trace-step-preview'>Looking at"),'not a preview that shows only while closed');
   assert(html.includes("<div class='trace-prompt-text'>Check the repo\nand report</div>"));
   assert(!html.includes("<article class='trace-card"),'no boxes inside a box');
 });
@@ -100,7 +101,7 @@ test('new layout: steps keep their whole-run numbers under Thinking and Tools',(
   const {c}=fixture();c.studioUiRefreshUi={};vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);
   c.traceState={status:'complete',runId:'r3',prompt:null,entries:[assistant({id:'a1',thinking:'Considering',text:''}),tool({id:'t1'}),assistant({id:'a2',text:'Reply'}),tool({id:'t2'})]};
   c.traceFilter='tools';let html=c.buildTracePanelHtml();assert.match(html,stepRe('t1',2,false));assert.match(html,stepRe('t2',4,true));assert(!html.includes('step:a1'));
-  c.traceFilter='thinking';html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes("<span class='trace-step-preview'>Considering</span>"));
+  c.traceFilter='thinking';html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes("<span class='trace-kind-badge'>Thinking</span><span class='trace-card-title'>Considering</span>"));
   assert(css.includes('body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }'),'an open step hides its preview line');
 });
 test('the prompt rides on Working state, its status updates and its saved copy',()=>{
@@ -179,7 +180,7 @@ test('only the person\'s own scrolling in a pane that scrolls pauses or resumes 
   assert.equal(c.traceAutoScroll,true,'scrolling may still stick to the bottom');
   pane.scrollHeight=2000;atBottom=true;c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,false,'back at the bottom of a pane that scrolls');
   assert.match(source,/traceStepsShownOpen\.clear\(\);\n\s+traceStepsPaused = false;/,'a new run starts unpaused');
-  assert.match(source,/traceStepIsOpen\(key, running \|\| entry\.id === latestId \|\| \(traceStepsPaused && traceStepsShownOpen\.has\(key\)\)\)/);
+  assert.match(source,/traceStepIsOpen\(key, !traceStepsFolded && \(running \|\| entry\.id === latestId \|\| \(traceStepsPaused && traceStepsShownOpen\.has\(key\)\)\)\)/);
 });
 test('Studio\'s own scroll to the bottom, as on returning to All from a short list, leaves the pause alone (Sol, round 3)',()=>{
   const {c}=fixture();const pane={scrollHeight:2000,clientHeight:400,top:0,get scrollTop(){return this.top;},set scrollTop(v){this.top=Math.max(0,Math.min(v,this.scrollHeight-this.clientHeight));},set innerHTML(v){},classList:{remove(){}}};
@@ -195,4 +196,92 @@ test('Studio\'s own scroll to the bottom, as on returning to All from a short li
   pane.scrollTop=900;c.handleTracePaneScroll();pane.scrollTop=1800;c.handleTracePaneScroll();assert.equal(c.traceStepsPaused,false,'the person scrolls back to the bottom');
   pane.scrollTop=200;c.handleTracePaneScroll();pane.scrollTop=1800;c.renderTraceView();c.handleTracePaneScroll();
   assert.equal(c.traceStepsPaused,false,'a render that doesn\'t move the pane claims no scroll: the person\'s own still counts');
+});
+// Oliver, 28 Oct: Collapse all holds for steps that start later; sections are open in an open step; an Assistant
+// step's title is its first line in plain words; Working is lit like agent-markdown-preview's page.
+test('new layout: Collapse all folds the steps and the prompt, not what\'s inside them, and later steps arrive folded until Expand all',()=>{
+  const {c,nodes}=fixture();c.studioUiRefreshUi={};
+  const step=(key,open)=>Object.assign(new Node(key,open),{step:true});
+  nodes.push(step('prompt:r1',true),step('step:a1',true),new Node('a1:thinking',true));
+  c.critiqueViewEl.querySelectorAll=sel=>sel.startsWith('details.trace-step')?nodes.filter(n=>n.step):nodes;
+  c.traceState={status:'running',runId:'r1',prompt:null,entries:[assistant({id:'a1',thinking:'Considering'})]};
+  c.setTraceVisibleDetails(false);
+  assert.deepEqual(nodes.map(n=>n.open),[false,false,true],'the section inside keeps its state');
+  assert(c.traceClosedDetails.has('step:a1')&&!c.traceClosedDetails.has('a1:thinking'));assert.equal(c.traceStepsFolded,true);
+  c.traceState.entries.push(tool({id:'t2',status:'streaming',output:''}));let html=c.buildTracePanelHtml();
+  assert.match(html,stepRe('t2',2,false),'a step that starts after Collapse all arrives folded, though running and latest');
+  assert(html.includes("data-trace-details-key='t2:output' data-trace-expected-open='true'"),'its sections are open for when it is opened');
+  c.traceOpenDetails.add('step:t2');assert.match(c.buildTracePanelHtml(),stepRe('t2',2,true),'opening one by hand still opens it');
+  c.setTraceVisibleDetails(true);assert.equal(c.traceStepsFolded,false);assert(nodes.every(n=>n.open),'Expand all opens everything');
+  c.traceState.entries.push(tool({id:'t3',status:'streaming',output:''}));assert.match(c.buildTracePanelHtml(),stepRe('t3',3,true),'after Expand all, the usual rule');
+  c.setTraceVisibleDetails(false);c.normalizeTraceState=x=>x;vm.runInContext(section('function replaceTraceState(','function upsertTraceEntry('),c);
+  c.replaceTraceState({status:'running',runId:'r2',prompt:null,entries:[tool({id:'n1',status:'streaming',output:''})]});
+  assert.equal(c.traceStepsFolded,false);assert.match(c.buildTracePanelHtml(),stepRe('n1',1,true),'a new run starts unfolded');
+  const old=fixture();old.nodes.push(new Node('a1:thinking',true));old.c.critiqueViewEl.querySelectorAll=sel=>{assert.equal(sel,'details[data-trace-details-key]');return old.nodes;};
+  old.c.setTraceVisibleDetails(false);assert.equal(old.nodes[0].open,false,'the earlier layout still folds every section');assert.equal(old.c.traceStepsFolded,false);
+});
+test('new layout: a section is open whenever its step is, whatever its length, unless the person folds it; the earlier layout keeps its length rule',()=>{
+  const {c}=fixture(),long='x'.repeat(2000),many=Array(40).fill('line').join('\n');
+  c.studioUiRefreshUi={};
+  for(const [key,text,images] of [['k1',long,0],['k2',many,0],['k3','',3]])assert(c.renderTraceSection('Output',text,key,'',{imageCount:images}).includes("data-trace-expected-open='true'"),key);
+  c.traceClosedDetails.add('k4');assert(c.renderTraceSection('Thinking',long,'k4','').includes("data-trace-expected-open='false'"),'the person\'s fold wins');
+  c.studioUiRefreshUi=null;assert(c.renderTraceSection('Thinking',long,'k5','').includes("data-trace-expected-open='false'"));
+});
+test('new layout: an Assistant step\'s title is its first line in plain words, open or closed; Thinking and Response read as prose',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};
+  for(const [text,title] of [['**Inspecting alias settings**\n\nI need to check','Inspecting alias settings'],['\n## Plan\nx','Plan'],['- run `npm test` first','run npm test first'],['See [the docs](http://x) now','See the docs now'],['**Inspect','Inspect'],['snake_case_name and a*b*c','snake_case_name and a*b*c'],['x'.repeat(400),'x'.repeat(300)],
+    // Astra, c100: code spans keep their text, underscores are left alone, and leading markers go however many there are.
+    ['`__init__` prepares the object','__init__ prepares the object'],['Editing __init__.py','Editing __init__.py'],['`**kwargs` passes through','**kwargs passes through'],
+    ['> ## Heading','Heading'],['**bold** and `code` and **more**','bold and code and more']])assert.equal(c.plainTraceTitle(text),title);
+  c.traceState={status:'complete',runId:'r1',prompt:null,entries:[assistant({id:'a1',thinking:'**Inspecting alias settings**\n\nMore.',text:''}),assistant({id:'a2',text:'Done.'})]};
+  let html=c.buildTracePanelHtml();
+  assert.match(html,stepRe('a1',1,false));assert(html.includes("<span class='trace-kind-badge'>Assistant</span><span class='trace-card-title'>Inspecting alias settings</span>"),'closed');
+  c.traceOpenDetails.add('step:a1');html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes("<span class='trace-card-title'>Inspecting alias settings</span>"),'and open');
+  assert(!/data-trace-details-key='step:a\d'[^]*?<span class='trace-step-preview'>/.test(html),'no preview line for an Assistant step');
+  assert.equal(html.match(/trace-output trace-output-prose/g).length,2,'the Thinking and the Response');
+  assert(!c.renderTraceOutput('ls','t1:input',{label:'Command'}).includes('trace-output-prose'),'code and output stay monospaced');
+  c.studioUiRefreshUi=null;assert(!c.buildTracePanelHtml().includes('trace-card-title'),'the earlier layout is unchanged');
+});
+test('new layout CSS: steps are the light surface on the pane\'s page colour, with no frames inside them',()=>{
+  for(const rule of ['body.studio-workspace-layout #critiqueView:has(> .trace-panel) { background: var(--bg); }',
+    'body.studio-workspace-layout details.trace-step { border-color: var(--panel-border); background: var(--panel); box-shadow: none; }',
+    'body.studio-workspace-layout details.trace-step > .trace-step-body { gap: 4px; border-top: 1px solid var(--panel-border); padding: 8px 14px 10px; }',
+    'body.studio-workspace-layout .trace-step .trace-image-gallery { border: 0; border-radius: 0; background: transparent; padding-left: 0; padding-right: 0; }',
+    'body.studio-workspace-layout .trace-prompt-text { font-family: inherit; line-height: 1.5; }',
+    'body.studio-workspace-layout .trace-card-assistant > summary > .trace-card-title { font-weight: 400; }',
+    'body.studio-workspace-layout .trace-step code.trace-tool-field-value { padding: 0; border: 0; background: transparent; }',
+    'body.studio-workspace-layout .trace-step .trace-output-truncation { padding: 4px 0; background: transparent; }'])assert(css.includes(rule),rule);
+});
+test('Working shows a tool\'s output without terminal colour codes, hyperlinks or a code cut off by a streamed update; the text stays',()=>{
+  const c={parseFiniteNumber:Number,parseNonEmptyString:x=>typeof x==='string'&&x.trim()?x:null,normalizeTraceEntryStatus:x=>x,normalizeTraceImage:x=>x};vm.createContext(c);
+  vm.runInContext(section('const TRACE_TERMINAL_CODE_RE','function normalizeTraceState('),c);
+  const E='\u001b',B='\u0007';
+  for(const [raw,shown] of [[E+'[0;32mdefault'+E+'[0m '+E+'[0;90m->'+E+'[0m '+E+'[0;32m22'+E+'[0m','default -> 22'],[E+'[38;2;255;0;0mred'+E+'[39m and '+E+'[1mbold'+E+'[22m','red and bold'],
+    [E+']8;;https://example.org'+B+'link'+E+']8;;'+B+' text',  'link text'],[E+']8;;https://example.org'+E+'\\link'+E+']8;;'+E+'\\ text','link text'],['progress'+E+'[2K'+E+'[1G done','progress done'],
+    ['cut'+E+'[0;3','cut'],['cut'+E+']8;;https://unfinished','cut'],['cut'+E+'[0;3\n\nnext','cut\n\nnext'],['stray '+E+'x and '+B+'bell','stray x and bell'],['charset '+E+'(Bok','charset ok'],
+    // Sol, c100 round 2: a hyperlink cut off by a saved snapshot's omission stops at its line, keeping the notice and what follows.
+    ['prev'+E+']8;;https://exa\n\n… 23000 chars omitted …\n\nwarning: kept\n'+E+']8;;https://e.org'+B+'file.js'+E+']8;;'+B+': warning','prev\n\n… 23000 chars omitted …\n\nwarning: kept\nfile.js: warning'],['plain [brackets], ;semicolons; and \\x1b as text','plain [brackets], ;semicolons; and \\x1b as text'],['line\r\nnext','line\r\nnext']])
+    assert.equal(c.stripTraceTerminalCodes(raw),shown,JSON.stringify(raw));
+  const entry=c.normalizeTraceEntry({type:'tool',id:'t1',toolName:'bash',args:JSON.stringify({command:'nvm ls'}),output:E+'[0;32mdefault'+E+'[0m',status:'complete'},0);
+  assert.equal(entry.output,'default','the entry Working renders, counts, copies and loads');
+  assert.equal(c.normalizeTraceEntry({type:'assistant',id:'a1',text:'Use '+E+'[1m?',status:'complete'},0).text,'Use '+E+'[1m?','only a tool\'s output');
+});
+test('saved Working: a hyperlink cut off by the snapshot\'s omission keeps the notice and every retained line, through the server snapshot, the client and Copy/Load (Sol, c100 round 2)',()=>{
+  const start=index.indexOf('function truncateStudioTraceSnapshotText('),end=index.indexOf('\nfunction summarizeStudioTraceSnapshot(',start);assert(start>=0&&end>start);
+  const server={};vm.createContext(server);
+  for(const name of ['STUDIO_TRACE_SNAPSHOT_MAX_ENTRIES','STUDIO_TRACE_SNAPSHOT_MAX_FIELD_CHARS','STUDIO_TRACE_SNAPSHOT_MAX_IMAGES','STUDIO_TRACE_SNAPSHOT_MAX_IMAGE_BASE64_CHARS'])
+    vm.runInContext(index.match(new RegExp('^const '+name+' = [\\d_]+;','m'))[0].replace('const ','var '),server);
+  Object.assign(server,{normalizeStudioTraceImageMimeType:x=>x,isStudioTraceSafeImageMimeType:()=>true,estimateStudioTraceBase64ByteLength:x=>x.length});
+  vm.runInContext(ts.transpileModule(index.slice(start,end),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText,server);
+  const E='\u001b',B='\u0007',line=E+']8;;https://example.org/aaaaaaaaaa.js'+B+'file.js'+E+']8;;'+B+': warning: check this source line\n';
+  const tool={id:'t1',type:'tool',toolCallId:'c1',toolName:'bash',label:'Lint',args:JSON.stringify({command:'lint'}),output:line.repeat(500),images:[],status:'complete',isError:false,startedAt:1,updatedAt:2};
+  const saved=server.createStudioTraceSnapshot({runId:'r1',requestId:null,requestKind:null,status:'complete',startedAt:1,updatedAt:2,prompt:null,entries:[tool]}).traceState.entries[0].output;
+  const count=text=>text.split('warning: check this source line').length-1,notice=/… \d+ chars omitted from saved Working view …/;
+  assert(notice.test(saved)&&saved.includes(E+']8;;https://exa\n'),'the fixture really cuts a hyperlink at the omission');
+  const {c}=fixture();Object.assign(c,{parseFiniteNumber:Number,parseNonEmptyString:x=>typeof x==='string'&&x.trim()?x:null,normalizeTraceEntryStatus:x=>x,normalizeTraceImage:x=>x,describeTraceImageForText:()=>''});
+  vm.runInContext(section('const TRACE_TERMINAL_CODE_RE','function normalizeTraceState('),c);vm.runInContext(section('function buildVisibleWorkingText(','function getWorkingDocumentLabel('),c);
+  const shown=c.normalizeTraceEntry(saved.length?JSON.parse(JSON.stringify({...tool,output:saved})):null,0).output;
+  assert.equal(count(shown),count(saved),'every retained diagnostic');assert(notice.test(shown),'and the omission notice');assert(!/[\u001b\u0007]/.test(shown),'without terminal codes');
+  c.traceState={status:'complete',entries:[{...tool,output:shown}]};c.getTraceEntriesForFilter=()=>c.traceState.entries;
+  const copied=c.buildVisibleWorkingText('all');assert.equal(count(copied),count(saved));assert(notice.test(copied),'Copy visible and Load keep them too');
 });

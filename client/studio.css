@@ -7676,7 +7676,7 @@
     body.studio-workspace-layout .repl-journal-chip { border-radius: 0; padding-left: 0; padding-right: 0; }
     body.studio-workspace-layout .trace-summary-badge { color: var(--text); font-size: 13px; font-weight: 700; }
     /* Oliver, 27 Oct: Working like agent-markdown-preview's page. The prompt and each step are one line until opened;
-       inside a step, Code and Output are plain sections, and only the content keeps its frame. */
+       inside a step, Code and Output are plain sections. */
     body.studio-workspace-layout details.trace-step { display: block; padding: 0; }
     body.studio-workspace-layout details.trace-step > summary.trace-card-header {
       list-style: none; cursor: pointer; user-select: none; flex-wrap: nowrap; padding: 8px 11px;
@@ -7704,6 +7704,24 @@
       max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
       color: var(--text); font-size: var(--studio-working-font-size); line-height: 1.45;
     }
+    /* Oliver, 28 Oct: lit like agent-markdown-preview's Working page. Steps are the light surface on the pane's darker
+       one, an open step has a rule under its line, and inside a step the text sits on the step without frames of its
+       own. The prompt, Thinking and Response read as prose; an Assistant step's title is its first line, so it isn't
+       bold like a tool's label. */
+    body.studio-workspace-layout #critiqueView:has(> .trace-panel) { background: var(--bg); }
+    body.studio-workspace-layout details.trace-step { border-color: var(--panel-border); background: var(--panel); box-shadow: none; }
+    body.studio-workspace-layout details.trace-step > summary.trace-card-header { padding: 9px 14px; }
+    body.studio-workspace-layout details.trace-step > .trace-step-body { gap: 4px; border-top: 1px solid var(--panel-border); padding: 8px 14px 10px; }
+    body.studio-workspace-layout .trace-step .trace-output-wrap,
+    body.studio-workspace-layout .trace-step .trace-output,
+    body.studio-workspace-layout .trace-step .trace-tool-fields,
+    body.studio-workspace-layout .trace-step .trace-image-gallery { border: 0; border-radius: 0; background: transparent; padding-left: 0; padding-right: 0; }
+    body.studio-workspace-layout .trace-step .trace-output { margin: 0; padding-top: 2px; padding-bottom: 4px; }
+    body.studio-workspace-layout .trace-step .trace-output-prose,
+    body.studio-workspace-layout .trace-prompt-text { font-family: inherit; line-height: 1.5; }
+    body.studio-workspace-layout .trace-card-assistant > summary > .trace-card-title { font-weight: 400; }
+    body.studio-workspace-layout .trace-step code.trace-tool-field-value { padding: 0; border: 0; background: transparent; }
+    body.studio-workspace-layout .trace-step .trace-output-truncation { padding: 4px 0; background: transparent; }
     body.studio-workspace-layout .trace-filter-btn.is-active { color: var(--accent); }
     body.studio-workspace-layout #scratchpadBtn.has-content:not(:disabled):hover,
     body.studio-workspace-layout #reviewNotesBtn.has-content:not(:disabled):hover,

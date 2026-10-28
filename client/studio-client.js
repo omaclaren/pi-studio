@@ -566,6 +566,8 @@
       // Where Studio last moved the Working pane itself (to the bottom, say). The scroll event that follows is Studio's,
       // not the person's, so it leaves the pause alone (Sol, c99).
       let traceOwnScrollTop = null;
+      // After Collapse all, steps that start later in the run arrive folded too, until Expand all (Oliver, 28 Oct).
+      let traceStepsFolded = false;
       let traceRenderRaf = null;
       const traceExpandedOutputs = new Set();
       const traceOpenDetails = new Set();
@@ -1074,6 +1076,16 @@
         return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
       }
 
+      // Terminal colour and cursor codes in a tool's output (nvm, git, test runners) show as boxes on a page. Working shows
+      // the text without them; the saved working keeps them. In order: an OSC sequence (a hyperlink or a title) through
+      // its terminator, but never past the end of its line or the next ESC, so one cut off by a saved snapshot's omission
+      // can't take the notice and the text after it (Sol, c100); a CSI code, as ansi-regex; what's left of one cut off
+      // (at the end of a streamed update, say); a stray BEL (Oliver, 28 Oct).
+      const TRACE_TERMINAL_CODE_RE = /\u001B\][^\u0007\u001B\u009C\n]*(?:\u0007|\u001B\\|\u009C)?|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]|[\u001B\u009B][[\]()#;?]*[\d;:]*|\u0007/g;
+      function stripTraceTerminalCodes(text) {
+        return String(text || "").replace(TRACE_TERMINAL_CODE_RE, "");
+      }
+
       function normalizeTraceEntry(entry, fallbackIndex) {
         if (!entry || typeof entry !== "object") return null;
         if (entry.type === "assistant") {
@@ -1097,7 +1109,7 @@
             label: parseNonEmptyString(entry.label),
             argsSummary: parseNonEmptyString(entry.argsSummary),
             args: parseNonEmptyString(entry.args),
-            output: typeof entry.output === "string" ? entry.output : "",
+            output: typeof entry.output === "string" ? stripTraceTerminalCodes(entry.output) : "",
             images: Array.isArray(entry.images)
               ? entry.images.map((image, imageIndex) => normalizeTraceImage(image, imageIndex)).filter(Boolean)
               : [],
@@ -1147,6 +1159,7 @@
           traceSectionDefaults.clear();
           traceStepsShownOpen.clear();
           traceStepsPaused = false;
+          traceStepsFolded = false;
         }
         renderTraceViewIfActive();
       }
@@ -11884,7 +11897,11 @@
 
       function setTraceVisibleDetails(open) {
         if (rightView !== "trace" || studioLinkedReaderIsActive() || !critiqueViewEl) return false;
-        const nodes = critiqueViewEl.querySelectorAll("details[data-trace-details-key]");
+        // In the new layout Collapse all folds the steps (and the prompt) to their lines and leaves what's inside them
+        // as it was, so a step opened afterwards shows its sections. Expand all opens everything (Oliver, 28 Oct).
+        const steps = Boolean(studioUiRefreshUi);
+        const nodes = critiqueViewEl.querySelectorAll(steps && !open ? "details.trace-step[data-trace-details-key]" : "details[data-trace-details-key]");
+        if (steps) traceStepsFolded = !open;
         for (const node of nodes) {
           const key = node.getAttribute("data-trace-details-key");
           if (open) { traceOpenDetails.add(key); traceClosedDetails.delete(key); }
@@ -13822,7 +13839,7 @@
         const visibleText = isExpanded || !preview.truncated ? value : preview.text;
         const code = options && options.language === "javascript";
         const rendered = code ? visibleText.replace(/\r\n/g, "\n").split("\n").map(line => highlightCodeLine(line, "javascript", "overlay")).join("\n") : escapeHtml(visibleText);
-        const body = "<pre class='plain-markdown trace-output" + (code ? " trace-output-code" : "") + "'>" + rendered + "</pre>";
+        const body = "<pre class='plain-markdown trace-output" + (code ? " trace-output-code" : "") + (options && options.prose ? " trace-output-prose" : "") + "'>" + rendered + "</pre>";
         if (!preview.truncated) return body;
 
         const hiddenParts = [];
@@ -13858,7 +13875,9 @@
 
       function renderTraceSection(label, text, key, body, options) {
         const settings = options || {}, value = String(text || ""), images = settings.imageCount || 0;
-        const opened = traceSectionIsOpen(key, value, images > 1 ? false : undefined, !settings.pending || Boolean(value) || images > 0);
+        // In the new layout a section is open whenever its step is, unless the person folds it (Oliver, 28 Oct).
+        const opened = studioUiRefreshUi ? traceStepIsOpen(key, true)
+          : traceSectionIsOpen(key, value, images > 1 ? false : undefined, !settings.pending || Boolean(value) || images > 0);
         const metrics = value ? formatTraceTextMetrics(value) : (images ? "" : (settings.pending ? "Waiting for output" : "No output"));
         const summary = [label, settings.isError ? "Error" : "", metrics, images ? images + " image" + (images === 1 ? "" : "s") : ""].filter(Boolean).join(" · ");
         return "<details class='trace-tool-details trace-section-fold" + (settings.isError ? " is-error" : "") + "' data-trace-details-key='" + escapeHtml(key)
@@ -14452,7 +14471,7 @@
           if (!steps) return "<article class='trace-card " + kindClass + "'><div class='trace-card-header'>" + header + "</div>" + body + "</article>";
           const key = "step:" + entry.id, running = entry.status === "streaming" || entry.status === "pending";
           // Earlier steps fold as new ones arrive, except while the person has scrolled up to read.
-          const opened = traceStepIsOpen(key, running || entry.id === latestId || (traceStepsPaused && traceStepsShownOpen.has(key)));
+          const opened = traceStepIsOpen(key, !traceStepsFolded && (running || entry.id === latestId || (traceStepsPaused && traceStepsShownOpen.has(key))));
           shownOpen.set(key, opened);
           const firstLine = String(preview || "").split("\n").find(line => line.trim()) || "";
           return "<details class='trace-card " + kindClass + " trace-step' data-trace-details-key='" + escapeHtml(key) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
@@ -14466,23 +14485,25 @@
             const sections = [];
             if (String(entry.thinking || "").trim()) {
               sections.push(
-                renderTraceSection("Thinking", entry.thinking, entry.id + ":thinking", renderTraceOutput(entry.thinking, entry.id + ":thinking", { label: "Thinking" }))
+                renderTraceSection("Thinking", entry.thinking, entry.id + ":thinking", renderTraceOutput(entry.thinking, entry.id + ":thinking", { label: "Thinking", prose: true }))
               );
             }
             if (filter === "all" && String(entry.text || "").trim()) {
               sections.push(
-                renderTraceSection("Response", entry.text, entry.id + ":response", renderTraceOutput(entry.text, entry.id + ":response", { label: "Response" }))
+                renderTraceSection("Response", entry.text, entry.id + ":response", renderTraceOutput(entry.text, entry.id + ":response", { label: "Response", prose: true }))
               );
             }
             if (!sections.length) {
               sections.push("<div class='trace-empty-inline'>Waiting for streamed content…</div>");
             }
+            const title = steps ? plainTraceTitle((filter === "thinking" ? entry.thinking : (entry.text || entry.thinking)) || "") : "";
             return card("trace-card-assistant", entry,
               "<span class='trace-kind-badge'>" + escapeHtml(filter === "thinking" ? "Thinking" : "Assistant") + "</span>"
+              + (title ? "<span class='trace-card-title'>" + escapeHtml(title) + "</span>" : "")
               + "<span class='trace-card-meta'>" + escapeHtml(formatReferenceTime(entry.updatedAt) || "live") + "</span>"
               + renderTraceEntryStatus(state, entry.status, false)
               + (entry.stopReason === "length" ? "<span class='trace-card-meta'>Cut off at the length limit</span>" : ""),
-              sections.join(""), filter === "thinking" ? entry.thinking : (entry.text || entry.thinking));
+              sections.join(""), "");
           }
 
           const title = entry.label || entry.toolName || "tool";
@@ -14507,6 +14528,21 @@
         for (const [key, opened] of shownOpen) { if (opened) traceStepsShownOpen.add(key); else traceStepsShownOpen.delete(key); }
 
         return "<div class='trace-panel'>" + toolbar + "<div class='trace-list'>" + promptCard + cards + "</div></div>";
+      }
+
+      // A line of Markdown as plain words for a step's title: "**Inspecting alias settings**" reads "Inspecting alias
+      // settings". Code spans keep their text as written, and underscores are left alone, as in __init__ (Astra, c100).
+      function plainTraceTitle(text) {
+        const line = String(text || "").split("\n").find(part => part.trim()) || "";
+        const parts = line.trim().replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/, "").split(/(`[^`]*`)/);
+        const last = parts.length - 1;
+        return parts.map((part, index) => {
+          if (index % 2) return part.slice(1, -1);
+          let plain = part.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\*\*(.+?)\*\*/g, "$1");
+          if (index === 0) plain = plain.replace(/^\*\*/, "");
+          if (index === last) plain = plain.replace(/\*\*$/, "");
+          return plain;
+        }).join("").trim().slice(0, 300);
       }
 
       // A step is open while it runs or is the latest, unless the person chose otherwise; earlier steps fold to one line.
