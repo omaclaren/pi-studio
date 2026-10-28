@@ -4,6 +4,17 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.4] — 2026-10-28
+
+### Changed
+- In the new layout, **Working** looks more like agent-markdown-preview. The steps, and the prompt, sit on the pane's page colour, an open step has a rule under its line, and nothing inside a step has a frame of its own. The prompt, Thinking and Response read as prose; code and output stay monospaced.
+- **Collapse all** folds the steps and the prompt and leaves what's inside them as it was. Steps that start later in the run arrive folded, until **Expand all**. A step's sections are open whenever the step is, whatever their length.
+- An Assistant step's line shows its first line in plain words, open or folded, so "\*\*Inspecting alias settings\*\*" reads "Inspecting alias settings". Before, it showed the text only while folded, Markdown markers and all.
+- While a prompt runs, **Steer** sits beside **Stop**, outlined, and the elapsed time follows it. Steer was plain accent text after the time, with a gap that changed as the time grew.
+
+### Fixed
+- A tool's output in Working no longer shows terminal colour or hyperlink codes, in either layout. **Copy visible** and **Load** match what's shown; the saved Working keeps the codes.
+
 ## [0.11.3] — 2026-10-28
 
 ### Added
