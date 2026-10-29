@@ -7687,9 +7687,9 @@
     body.studio-workspace-layout details.trace-step > summary > .trace-step-preview {
       flex: 1 1 6em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px;
     }
-    body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }
-    /* An open Assistant step whose sections are all folded keeps its first line, so its text shows somewhere (Oliver, 29 Oct). */
-    body.studio-workspace-layout details.trace-card-assistant[open]:not(:has(> .trace-step-body > details[open])) > summary > .trace-step-preview { display: block; }
+    /* An Assistant step's line always has its first line, open or folded, whatever is folded inside it (Oliver, 29 Oct). The
+       prompt's and a steer's text sits right under their line when open, so they hide it then. */
+    body.studio-workspace-layout details.trace-step[open]:not(.trace-card-assistant) > summary > .trace-step-preview { display: none; }
     body.studio-workspace-layout .trace-step-body { display: flex; flex-direction: column; gap: 6px; padding: 0 11px 10px; }
     body.studio-workspace-layout .trace-step .trace-tool-details { border: 0; border-radius: 0; background: transparent; overflow: visible; }
     body.studio-workspace-layout .trace-step .trace-tool-details > summary { padding: 3px 0; }

@@ -14461,7 +14461,8 @@
           + "</div>"
           + "<button type='button' class='trace-action-btn' data-trace-action='collapse' aria-keyshortcuts='Control+Shift+[' title='Collapse displayed Working sections (Ctrl+Shift+[ while focused here)'" + (entries.length ? "" : " disabled") + ">Collapse all</button>"
           + "<button type='button' class='trace-action-btn' data-trace-action='expand' aria-keyshortcuts='Control+Shift+]' title='Expand displayed Working sections (Ctrl+Shift+] while focused here); full output stays a separate choice'" + (entries.length ? "" : " disabled") + ">Expand all</button>"
-          + "<button type='button' class='trace-action-btn' data-trace-action='load'" + (hasVisibleContent ? "" : " disabled") + ">Load visible into editor</button>"
+          // The new layout has Copy only, so the row stays one line beside the editor; paste does what Load did (Oliver, 29 Oct).
+          + (steps ? "" : "<button type='button' class='trace-action-btn' data-trace-action='load'" + (hasVisibleContent ? "" : " disabled") + ">Load visible into editor</button>")
           + "<button type='button' class='trace-action-btn' data-trace-action='copy'" + (hasVisibleContent ? "" : " disabled") + ">Copy visible</button>"
           + "</div>"
           + "</div>";
@@ -14489,7 +14490,8 @@
         const positions = new Map(getTraceEntriesForFilter("all").map((entry, index) => [entry.id, index + 1]));
         const latestId = entries[entries.length - 1].id, shownOpen = new Map();
         // Oliver, 29 Oct (option C): a step's line is its number, its kind, what a tool acted on, and its time on the right,
-        // as on agent-markdown-preview's page. A folded step adds its first line, muted.
+        // as on agent-markdown-preview's page. An Assistant step's line adds its first line, muted, open or folded; the prompt's
+        // and a steer's add theirs while folded.
         const card = (kindClass, entry, line, body, options) => {
           const settings = options || {};
           if (!steps) return "<article class='trace-card " + kindClass + "'><div class='trace-card-header'>" + line.classic + "</div>" + body + "</article>";

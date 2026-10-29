@@ -103,7 +103,6 @@ test('new layout: steps keep their whole-run numbers under Thinking and Tools',(
   c.traceState={status:'complete',runId:'r3',prompt:null,entries:[assistant({id:'a1',thinking:'Considering',text:''}),tool({id:'t1'}),assistant({id:'a2',text:'Reply'}),tool({id:'t2'})]};
   c.traceFilter='tools';let html=c.buildTracePanelHtml();assert.match(html,stepRe('t1',2,false));assert.match(html,stepRe('t2',4,true));assert(!html.includes('step:a1'));
   c.traceFilter='thinking';html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes("<span class='trace-card-title'>Thinking</span><span class='trace-step-preview'>Considering</span>"));
-  assert(css.includes('body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }'),'an open step hides its preview line');
 });
 test('the prompt rides on Working state, its status updates and its saved copy',()=>{
   assert.match(source,/prompt: normalizeTracePrompt\(raw\.prompt\),/);
@@ -159,7 +158,8 @@ test('new layout: Copy visible and Load include the prompt shown first, and are 
   c.traceState={status:'running',runId:'r6',prompt:'Check the repo',entries:[assistant({text:'Done.'})]};
   assert.equal(c.buildVisibleWorkingText('all'),'Prompt:\nCheck the repo\n\n---\n\nAssistant\n\n[Response]\nDone.');
   c.traceState.entries=[];assert.equal(c.buildVisibleWorkingText('all'),'Prompt:\nCheck the repo');
-  const html=c.buildTracePanelHtml();assert(!/data-trace-action='copy'[^>]*disabled/.test(html)&&!/data-trace-action='load'[^>]*disabled/.test(html),'available with only the prompt');
+  const html=c.buildTracePanelHtml();assert(html.includes("data-trace-action='copy'")&&!/data-trace-action='copy'[^>]*disabled/.test(html),'available with only the prompt');
+  assert(!html.includes("data-trace-action='load'"),'the new layout has Copy only (Oliver, 29 Oct)');
   c.studioUiRefreshUi=null;assert.equal(c.buildVisibleWorkingText('all'),'','the classic layout shows no prompt and copies none');
 });
 test('new layout: scrolled up, a filter round trip folds nothing (Astra)',()=>{
@@ -228,7 +228,7 @@ test('new layout: a section is open whenever its step is, whatever its length, u
   c.traceClosedDetails.add('k4');assert(c.renderTraceSection('Thinking',long,'k4','').includes("data-trace-expected-open='false'"),'the person\'s fold wins');
   c.studioUiRefreshUi=null;assert(c.renderTraceSection('Thinking',long,'k5','').includes("data-trace-expected-open='false'"));
 });
-test('new layout: an Assistant step\'s line adds its first line in plain words, shown while folded; Thinking and Response read as prose',()=>{
+test('new layout: an Assistant step\'s line adds its first line in plain words, open or folded; Thinking and Response read as prose',()=>{
   const {c}=fixture();c.studioUiRefreshUi={};
   for(const [text,title] of [['**Inspecting alias settings**\n\nI need to check','Inspecting alias settings'],['\n## Plan\nx','Plan'],['- run `npm test` first','run npm test first'],['See [the docs](http://x) now','See the docs now'],['**Inspect','Inspect'],['snake_case_name and a*b*c','snake_case_name and a*b*c'],['x'.repeat(400),'x'.repeat(300)],
     // Astra, c100: code spans keep their text, underscores are left alone, and leading markers go however many there are.
@@ -238,7 +238,7 @@ test('new layout: an Assistant step\'s line adds its first line in plain words, 
   let html=c.buildTracePanelHtml();
   const line="<span class='trace-card-title'>Assistant</span><span class='trace-step-preview'>Inspecting alias settings</span>";
   assert.match(html,stepRe('a1',1,false));assert(html.includes(line),'folded');
-  c.traceOpenDetails.add('step:a1');html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes(line),'open, where the stylesheet hides it');
+  c.traceOpenDetails.add('step:a1');html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,true));assert(html.includes(line),'open too');
   assert.equal(html.match(/trace-output trace-output-prose/g).length,2,'the Thinking and the Response');
   assert(html.includes('<strong>Inspecting alias settings</strong>\n\nMore.'),'Thinking\'s bold line reads as a heading');
   assert(!c.renderTraceOutput('ls','t1:input',{label:'Command'}).includes('trace-output-prose'),'code and output stay monospaced');
@@ -424,8 +424,7 @@ test('new layout: Messages shows the prompt, what Pi wrote along the way and the
   c.studioUiRefreshUi=null;c.traceState.entries=[assistant({id:'a2',thinking:'Hmm',text:'Reply'})];html=c.buildTracePanelHtml();
   assert(html.includes("data-trace-filter='messages'")&&html.includes("<article class='trace-card trace-card-assistant'>")&&!html.includes('a2:thinking'),'the classic layout has it too');
 });
-test('new layout CSS: an open Assistant step whose sections are all folded shows its first line; one with a section open does not',()=>{
-  assert(css.includes('body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }'));
-  assert(css.includes('body.studio-workspace-layout details.trace-card-assistant[open]:not(:has(> .trace-step-body > details[open])) > summary > .trace-step-preview { display: block; }'));
-  assert(css.indexOf('details.trace-card-assistant[open]:not(:has(')>css.indexOf('details.trace-step[open] > summary > .trace-step-preview { display: none; }'),'after the rule it overrides');
+test('new layout CSS: an Assistant step\'s line always has its first line, whatever is folded; an open prompt or steer hides its own',()=>{
+  assert(css.includes('body.studio-workspace-layout details.trace-step[open]:not(.trace-card-assistant) > summary > .trace-step-preview { display: none; }'));
+  assert(!/trace-step-preview[^{]*\{[^}]*display: (?:none|block)/.test(css.replace('body.studio-workspace-layout details.trace-step[open]:not(.trace-card-assistant) > summary > .trace-step-preview { display: none; }','')),'no other rule shows or hides it');
 });
