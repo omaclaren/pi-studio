@@ -4,6 +4,16 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.6] — 2026-10-30
+
+### Added
+- **Messages**, a filter in Working, shows the prompt, what Pi wrote along the way and the steers, without thinking or tools. Steps keep their numbers from the whole run, and **Copy visible** copies just those.
+
+### Changed
+- In the new layout, an Assistant step's line shows its first line whether the step is open or folded, so you can tell what it said whatever is folded inside it. In 0.11.5 it showed only while the step was folded. The prompt and a steer still hide theirs when open, since their text sits right under the line.
+- In the new layout, Working has one **Expand all** / **Collapse all** button, labelled with what a click does, as in agent-markdown-preview. Expand all now holds for the rest of the run, as Collapse all already did: steps that start later arrive open, until Collapse all. Ctrl+Shift+] and Ctrl+Shift+[ are unchanged.
+- In the new layout, Working's row has **Copy visible** and no **Load visible into editor**, so it fits on one line beside the editor; copy and paste does the same. The classic layout keeps Load.
+
 ## [0.11.5] — 2026-10-29
 
 ### Added
