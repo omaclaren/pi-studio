@@ -568,8 +568,10 @@
       // Where Studio last moved the Working pane itself (to the bottom, say). The scroll event that follows is Studio's,
       // not the person's, so it leaves the pause alone (Sol, c99).
       let traceOwnScrollTop = null;
-      // After Collapse all, steps that start later in the run arrive folded too, until Expand all (Oliver, 28 Oct).
+      // After Collapse all, steps that start later in the run arrive folded too, until Expand all (Oliver, 28 Oct); after
+      // Expand all they arrive open, until Collapse all, as in agent-markdown-preview (Oliver, 29 Oct).
       let traceStepsFolded = false;
+      let traceStepsExpanded = false;
       let traceRenderRaf = null;
       const traceExpandedOutputs = new Set();
       const traceOpenDetails = new Set();
@@ -1171,6 +1173,7 @@
           traceStepsShownOpen.clear();
           traceStepsPaused = false;
           traceStepsFolded = false;
+          traceStepsExpanded = false;
         }
         renderTraceViewIfActive();
       }
@@ -11897,6 +11900,7 @@
             || !target.matches("details[data-trace-details-key]")) return;
         const key = target.getAttribute("data-trace-details-key") || "";
         if (!key) return;
+        syncTraceBulkToggle();
         const expected = target.getAttribute("data-trace-expected-open");
         // Initial open attributes also queue native toggles: not user choices.
         if (expected !== null && expected === String(target.open) && target.getAttribute("data-trace-user-toggle") !== "1") return;
@@ -11913,7 +11917,7 @@
         // as it was, so a step opened afterwards shows its sections. Expand all opens everything (Oliver, 28 Oct).
         const steps = Boolean(studioUiRefreshUi);
         const nodes = critiqueViewEl.querySelectorAll(steps && !open ? "details.trace-step[data-trace-details-key]" : "details[data-trace-details-key]");
-        if (steps) traceStepsFolded = !open;
+        if (steps) { traceStepsFolded = !open; traceStepsExpanded = open; }
         for (const node of nodes) {
           const key = node.getAttribute("data-trace-details-key");
           if (open) { traceOpenDetails.add(key); traceClosedDetails.delete(key); }
@@ -11932,7 +11936,28 @@
           fold?.querySelector(":scope > summary")?.focus({ preventScroll: true });
         }
         if (nodes.length) traceAutoScroll = false;
+        syncTraceBulkToggle();
         return nodes.length > 0;
+      }
+
+      // In the new layout one button folds or opens every step, labelled with what a click does: Collapse all only when every
+      // step shown is open, as in agent-markdown-preview (Oliver, 29 Oct). The classic layout keeps its two buttons.
+      function getTraceBulkToggle(allOpen) {
+        return allOpen
+          ? { action: "collapse", label: "Collapse all", keys: "Control+Shift+[", title: "Fold every step; later steps arrive folded, until Expand all (Ctrl+Shift+[ while focused here)" }
+          : { action: "expand", label: "Expand all", keys: "Control+Shift+]", title: "Open every step; later steps arrive open, until Collapse all (Ctrl+Shift+] while focused here)" };
+      }
+
+      function syncTraceBulkToggle() {
+        const button = studioUiRefreshUi && critiqueViewEl ? critiqueViewEl.querySelector("[data-trace-bulk]") : null;
+        if (!button) return;
+        const steps = Array.from(critiqueViewEl.querySelectorAll("details.trace-step[data-trace-details-key]"));
+        const toggle = getTraceBulkToggle(steps.length > 0 && steps.every((step) => step.open));
+        if (button.getAttribute("data-trace-action") === toggle.action) return;
+        button.setAttribute("data-trace-action", toggle.action);
+        button.setAttribute("aria-keyshortcuts", toggle.keys);
+        button.title = toggle.title;
+        button.textContent = toggle.label;
       }
 
       function handleTracePaneKeydown(event) {
@@ -14442,7 +14467,7 @@
         // step is one numbered line until opened, and this header is the one line saying the run's state (the pane is
         // already called Working).
         const steps = Boolean(studioUiRefreshUi);
-        const toolbar = "<div class='trace-toolbar'>"
+        const toolbar = (allOpen) => "<div class='trace-toolbar'>"
           + "<div class='trace-summary'>"
           + (steps ? "" : "<span class='trace-summary-badge'>Working</span>")
           + "<span class='trace-summary-status trace-status-" + escapeHtml(String(state.status || "idle")) + "'>" + escapeHtml(statusLabel) + "</span>"
@@ -14459,8 +14484,9 @@
           + "<button type='button' class='trace-filter-btn" + (filter === "thinking" ? " is-active" : "") + "' data-trace-filter='thinking' aria-pressed='" + (filter === "thinking" ? "true" : "false") + "'>Thinking</button>"
           + "<button type='button' class='trace-filter-btn" + (filter === "tools" ? " is-active" : "") + "' data-trace-filter='tools' aria-pressed='" + (filter === "tools" ? "true" : "false") + "'>Tools</button>"
           + "</div>"
-          + "<button type='button' class='trace-action-btn' data-trace-action='collapse' aria-keyshortcuts='Control+Shift+[' title='Collapse displayed Working sections (Ctrl+Shift+[ while focused here)'" + (entries.length ? "" : " disabled") + ">Collapse all</button>"
-          + "<button type='button' class='trace-action-btn' data-trace-action='expand' aria-keyshortcuts='Control+Shift+]' title='Expand displayed Working sections (Ctrl+Shift+] while focused here); full output stays a separate choice'" + (entries.length ? "" : " disabled") + ">Expand all</button>"
+          + (steps ? renderTraceBulkToggle(getTraceBulkToggle(allOpen), entries.length > 0)
+            : "<button type='button' class='trace-action-btn' data-trace-action='collapse' aria-keyshortcuts='Control+Shift+[' title='Collapse displayed Working sections (Ctrl+Shift+[ while focused here)'" + (entries.length ? "" : " disabled") + ">Collapse all</button>"
+              + "<button type='button' class='trace-action-btn' data-trace-action='expand' aria-keyshortcuts='Control+Shift+]' title='Expand displayed Working sections (Ctrl+Shift+] while focused here); full output stays a separate choice'" + (entries.length ? "" : " disabled") + ">Expand all</button>")
           // The new layout has Copy only, so the row stays one line beside the editor; paste does what Load did (Oliver, 29 Oct).
           + (steps ? "" : "<button type='button' class='trace-action-btn' data-trace-action='load'" + (hasVisibleContent ? "" : " disabled") + ">Load visible into editor</button>")
           + "<button type='button' class='trace-action-btn' data-trace-action='copy'" + (hasVisibleContent ? "" : " disabled") + ">Copy visible</button>"
@@ -14482,7 +14508,7 @@
                     : (state.status === "running"
                       ? "Waiting for the first model or tool update…"
                       : "No live working view yet. Start a run or critique to watch working details here.")))));
-          return "<div class='trace-panel'>" + toolbar + (promptCard ? "<div class='trace-list'>" + promptCard + "</div>" : "")
+          return "<div class='trace-panel'>" + toolbar(false) + (promptCard ? "<div class='trace-list'>" + promptCard + "</div>" : "")
             + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
         }
 
@@ -14498,7 +14524,7 @@
           const key = "step:" + entry.id, running = entry.status === "streaming" || entry.status === "pending";
           // Earlier steps fold as new ones arrive, except while the person has scrolled up to read. A steer, like the
           // prompt, is open when short.
-          const opened = traceStepIsOpen(key, !traceStepsFolded && (typeof settings.openByDefault === "boolean" ? settings.openByDefault
+          const opened = traceStepIsOpen(key, traceStepsExpanded || !traceStepsFolded && (typeof settings.openByDefault === "boolean" ? settings.openByDefault
             : (running || entry.id === latestId || (traceStepsPaused && traceStepsShownOpen.has(key)))));
           shownOpen.set(key, opened);
           const preview = String(settings.preview || "").split("\n").find(part => part.trim()) || "";
@@ -14564,7 +14590,13 @@
         // Only the steps shown now: one hidden by a filter keeps its state, so a filter round trip folds nothing (Astra).
         for (const [key, opened] of shownOpen) { if (opened) traceStepsShownOpen.add(key); else traceStepsShownOpen.delete(key); }
 
-        return "<div class='trace-panel'>" + toolbar + "<div class='trace-list'>" + promptCard + cards + "</div></div>";
+        const allOpen = (!promptCard || tracePromptCardIsOpen(state)) && Array.from(shownOpen.values()).every(Boolean);
+        return "<div class='trace-panel'>" + toolbar(allOpen) + "<div class='trace-list'>" + promptCard + cards + "</div></div>";
+      }
+
+      function renderTraceBulkToggle(toggle, enabled) {
+        return "<button type='button' class='trace-action-btn' data-trace-bulk data-trace-action='" + toggle.action + "' aria-keyshortcuts='" + toggle.keys
+          + "' title='" + escapeHtml(toggle.title) + "'" + (enabled ? "" : " disabled") + ">" + toggle.label + "</button>";
       }
 
       // What a tool step acted on, for its line: the file's name for read, write and edit, otherwise its activity label,
@@ -14599,10 +14631,15 @@
       }
 
       // What Pi is responding to: open when short, otherwise one line with its start, like a long section.
+      function tracePromptCardIsOpen(state) {
+        const text = String(state.prompt || "");
+        const short = text.length <= TRACE_SECTION_AUTO_OPEN_MAX_CHARS && countTraceTextLines(text) <= TRACE_SECTION_AUTO_OPEN_MAX_LINES;
+        return traceStepIsOpen("prompt:" + (state.runId || "live"), short);
+      }
+
       function renderTracePromptCard(state) {
         const text = String(state.prompt || ""), key = "prompt:" + (state.runId || "live");
-        const short = text.length <= TRACE_SECTION_AUTO_OPEN_MAX_CHARS && countTraceTextLines(text) <= TRACE_SECTION_AUTO_OPEN_MAX_LINES;
-        const opened = traceStepIsOpen(key, short);
+        const opened = tracePromptCardIsOpen(state);
         const firstLine = text.split("\n").find(line => line.trim()) || "", time = formatReferenceTime(state.startedAt);
         return "<details class='trace-card trace-card-prompt trace-step' data-trace-details-key='" + escapeHtml(key) + "' data-trace-expected-open='" + opened + "'" + (opened ? " open" : "") + ">"
           + "<summary class='trace-card-header'><span class='trace-card-title'>Prompt</span>"
