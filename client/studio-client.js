@@ -17927,6 +17927,10 @@
             if (!current()) throw new Error("The editor changed. Current work was kept.");
             captureStudioBufferTransientState(); persistWorkspaceStateNow(); await bufferRecoveryClient.settled();
             const ready = await prepareDocumentHostingReplacement(bufferId, current);
+            // The persistence timer can resend an unchanged checkpoint during that request; the open's gate refuses
+            // while any save is in flight, so let it land first. A real change meanwhile still fails the check below
+            // (c73's intermittent refusal after a reload, 30 Oct).
+            await bufferRecoveryClient.settled();
             if (!ready()) throw new Error("The owning checkpoint changed before opening.");
           },
           capture: () => { captureStudioBufferTransientState(); persistWorkspaceStateNow(); },
