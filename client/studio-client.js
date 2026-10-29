@@ -1340,7 +1340,7 @@
       }
 
       function normalizeTraceFilter(filter) {
-        return filter === "thinking" || filter === "tools" ? filter : "all";
+        return filter === "messages" || filter === "thinking" || filter === "tools" ? filter : "all";
       }
 
       function setTraceFilter(nextFilter) {
@@ -1360,6 +1360,10 @@
         }
         if (filter === "thinking") {
           return entries.filter((entry) => entry.type === "assistant" && String(entry.thinking || "").trim());
+        }
+        // What Pi wrote along the way, and the steers, without thinking or tools (Oliver, 29 Oct).
+        if (filter === "messages") {
+          return entries.filter((entry) => (entry.type === "assistant" || entry.type === "steer") && String(entry.text || "").trim());
         }
         return entries.filter((entry) => {
           if (entry.type === "assistant") {
@@ -1406,6 +1410,10 @@
             .join("\n\n");
         }
 
+        if (filter === "messages") {
+          return entries.map((entry) => (entry.type === "steer" ? "Steer:\n" : "Assistant:\n") + String(entry.text || "").trim()).join("\n\n---\n\n");
+        }
+
         return entries.map((entry) => {
           if (entry.type === "assistant") {
             const parts = [];
@@ -1442,6 +1450,7 @@
 
       function getWorkingDocumentLabel(filterOverride) {
         const filter = normalizeTraceFilter(filterOverride || traceFilter);
+        if (filter === "messages") return "working (messages)";
         if (filter === "thinking") return "working (thinking)";
         if (filter === "tools") return "working (tools)";
         return "working";
@@ -14423,9 +14432,9 @@
             : (context.mode === "missing"
               ? "Not saved"
               : (TRACE_RUN_STATUS_LABELS[state.status] || "Idle")));
-        const filterMeta = filter === "thinking"
-          ? "Thinking only"
-          : (filter === "tools" ? "Tools only" : null);
+        const filterMeta = filter === "messages"
+          ? "Messages only"
+          : (filter === "thinking" ? "Thinking only" : (filter === "tools" ? "Tools only" : null));
         const historyMeta = (context.mode === "history" || context.mode === "missing" || context.mode === "loading")
           ? getTraceHistoryContextLabel()
           : null;
@@ -14446,6 +14455,7 @@
           + "<div class='trace-controls'>"
           + "<div class='trace-filter-group' role='tablist' aria-label='Working components'>"
           + "<button type='button' class='trace-filter-btn" + (filter === "all" ? " is-active" : "") + "' data-trace-filter='all' aria-pressed='" + (filter === "all" ? "true" : "false") + "'>All</button>"
+          + "<button type='button' class='trace-filter-btn" + (filter === "messages" ? " is-active" : "") + "' data-trace-filter='messages' aria-pressed='" + (filter === "messages" ? "true" : "false") + "'>Messages</button>"
           + "<button type='button' class='trace-filter-btn" + (filter === "thinking" ? " is-active" : "") + "' data-trace-filter='thinking' aria-pressed='" + (filter === "thinking" ? "true" : "false") + "'>Thinking</button>"
           + "<button type='button' class='trace-filter-btn" + (filter === "tools" ? " is-active" : "") + "' data-trace-filter='tools' aria-pressed='" + (filter === "tools" ? "true" : "false") + "'>Tools</button>"
           + "</div>"
@@ -14462,13 +14472,15 @@
             ? "Loading saved working for this response…"
             : (context.mode === "missing"
               ? "No working was saved for this response."
-              : (filter === "thinking"
-                ? "No thinking steps in this working view yet."
-                : (filter === "tools"
-                  ? "No tool steps in this working view yet."
-                  : (state.status === "running"
-                    ? "Waiting for the first model or tool update…"
-                    : "No live working view yet. Start a run or critique to watch working details here."))));
+              : (filter === "messages"
+                ? "No messages in this working view yet."
+                : (filter === "thinking"
+                  ? "No thinking steps in this working view yet."
+                  : (filter === "tools"
+                    ? "No tool steps in this working view yet."
+                    : (state.status === "running"
+                      ? "Waiting for the first model or tool update…"
+                      : "No live working view yet. Start a run or critique to watch working details here.")))));
           return "<div class='trace-panel'>" + toolbar + (promptCard ? "<div class='trace-list'>" + promptCard + "</div>" : "")
             + "<div class='trace-empty'>" + escapeHtml(emptyMessage) + "</div></div>";
         }
@@ -14500,12 +14512,12 @@
         const cards = entries.map((entry) => {
           if (entry.type === "assistant") {
             const sections = [];
-            if (String(entry.thinking || "").trim()) {
+            if (filter !== "messages" && String(entry.thinking || "").trim()) {
               sections.push(
                 renderTraceSection("Thinking", entry.thinking, entry.id + ":thinking", renderTraceOutput(entry.thinking, entry.id + ":thinking", { label: "Thinking", prose: true, headings: steps }))
               );
             }
-            if (filter === "all" && String(entry.text || "").trim()) {
+            if ((filter === "all" || filter === "messages") && String(entry.text || "").trim()) {
               sections.push(
                 renderTraceSection("Response", entry.text, entry.id + ":response", renderTraceOutput(entry.text, entry.id + ":response", { label: "Response", prose: true }))
               );

@@ -16,7 +16,7 @@ test('explicit collapse and expansion survive streamed text growth and never aff
 test('summary activation commits explicit choice synchronously before a streaming rerender can detach the node',()=>{const {c,nodes}=fixture(),detail=new Node('stream:input',false),summary=new Node();summary.tagName='SUMMARY';summary.parentElement=detail;summary.closest=s=>s==='summary'?summary:null;nodes.push(detail,summary);c.handleTracePaneClick({target:summary,defaultPrevented:false,preventDefault(){}});assert(c.traceOpenDetails.has(detail.key));assert.equal(c.traceSectionIsOpen(detail.key,'x'.repeat(50000)),true);detail.isConnected=false;detail.open=true;c.handleTraceDetailsToggle({target:detail});assert(c.traceOpenDetails.has(detail.key));});
 test('queued toggles from detached/foreign/reader nodes cannot change current Working choices',()=>{for(const kind of ['detached','foreign','reader','view']){const {c,nodes}=fixture(),node=new Node('a',true);if(kind!=='foreign')nodes.push(node);node.open=false;if(kind==='detached')node.isConnected=false;if(kind==='reader')c.readerActive=true;if(kind==='view')c.rightView='preview';c.handleTraceDetailsToggle({target:node});assert.equal(c.traceClosedDetails.size,0,kind);}});
 test('Collapse/Expand affects only currently displayed details, not hidden-filter choices or full-output bounds',()=>{const {c,nodes}=fixture();nodes.push(new Node('shown-input',true),new Node('shown-output',false));c.traceOpenDetails.add('hidden');c.traceExpandedOutputs.add('shown-output');c.setTraceVisibleDetails(false);assert(nodes.every(n=>!n.open));assert(c.traceOpenDetails.has('hidden'));assert(c.traceExpandedOutputs.has('shown-output'));c.setTraceVisibleDetails(true);assert(nodes.every(n=>n.open));assert.equal(c.traceAutoScroll,false);assert(nodes.every(n=>n.getAttribute('data-trace-expected-open')==='true'));});
-test('bulk toolbar controls preserve filters/copy/load and do not add a whole-card nesting layer',()=>{const {c}=fixture();c.traceState.entries=[tool()];const html=c.buildTracePanelHtml();for(const action of ['collapse','expand','copy','load'])assert(html.includes(`data-trace-action='${action}'`));for(const filter of ['all','thinking','tools'])assert(html.includes(`data-trace-filter='${filter}'`));assert(!html.includes('<details class=\'trace-card'));assert(html.includes("<article class='trace-card trace-card-tool'"));});
+test('bulk toolbar controls preserve filters/copy/load and do not add a whole-card nesting layer',()=>{const {c}=fixture();c.traceState.entries=[tool()];const html=c.buildTracePanelHtml();for(const action of ['collapse','expand','copy','load'])assert(html.includes(`data-trace-action='${action}'`));for(const filter of ['all','messages','thinking','tools'])assert(html.includes(`data-trace-filter='${filter}'`));assert(!html.includes('<details class=\'trace-card'));assert(html.includes("<article class='trace-card trace-card-tool'"));});
 test('full/preview remains bounded separately from fold expansion and highlighting escapes truncation',()=>{const {c}=fixture(),text='  const x = "<script>";\n'.repeat(1000);const preview=c.renderTraceOutput(text,'a',{label:'Code',language:'javascript'});assert(preview.includes('Show full code'));assert(!preview.includes('<script>'));c.traceExpandedOutputs.add('a');const full=c.renderTraceOutput(text,'a',{label:'Code',language:'javascript'});assert(full.includes('Collapse code'));assert(full.length>preview.length);});
 test('collapsed errors remain explicit and red even when entry status is complete; timing/tool/status are retained',()=>{const {c}=fixture();c.traceState.entries=[tool({isError:true,status:'complete',output:'failure\n'.repeat(100)})];const html=c.buildTracePanelHtml();assert(html.includes('trace-entry-status-error'));assert(html.includes('Error'));assert(html.includes('codemode'));assert(html.includes('1.3s'));assert(html.includes('is-error'));assert(html.includes('Output ·'));});
 test('explicit error status remains an error even without the separate error flag',()=>{const {c}=fixture();c.traceState.entries=[tool({isError:false,status:'error',output:'Failure fixture\n'.repeat(100)})];const html=c.buildTracePanelHtml();assert(html.includes('trace-entry-status-error'));assert(html.includes('is-error'));assert(html.includes('Output · Error'));assert(!html.includes('>Complete</span>'));});
@@ -397,4 +397,35 @@ test('a steer Pi delivers before the first reply, after an image-only first mess
   vm.runInContext('newRun()',server);server.deliver('and another thing');assert.equal(server.studioTraceState.prompt,'and another thing');assert.equal(server.studioTraceState.entries.length,0);
   // Every place that starts a run's Working over also starts the first-message count over.
   assert.equal(index.match(/activeStudioTraceAssistantEntryId = null;\n\t\tstudioTraceUserMessageSeen = false;/g).length,2,'resetStudioTraceForRun and clearStudioTrace');
+});
+
+// Oliver, 29 Oct: what Pi wrote along the way, and the steers, can be read without the thinking or the tools; and an open
+// Assistant step whose sections are all folded keeps its first line.
+test('new layout: Messages shows the prompt, what Pi wrote along the way and the steers, by their whole-run numbers, without thinking or tools',()=>{
+  const {c}=fixture();c.studioUiRefreshUi={};c.describeTraceImageForText=()=>'';
+  vm.runInContext(section('function normalizeTraceFilter(','function formatTraceImageSize('),c);
+  vm.runInContext(section('function buildVisibleWorkingText(','function getWorkingDocumentLabel('),c);
+  vm.runInContext(section('function getWorkingDocumentLabel(','async function writeTextToClipboard('),c);
+  assert.equal(c.normalizeTraceFilter('messages'),'messages');assert.equal(c.getWorkingDocumentLabel('messages'),'working (messages)');
+  c.traceState={status:'complete',runId:'r9',startedAt:500,prompt:'can you check the status',entries:[assistant({id:'a1',thinking:'Considering',text:''}),tool({id:'t1'}),
+    assistant({id:'a2',thinking:'**Evaluating**',text:'It finished at 4:30.'}),steer({text:'any other runs?'}),assistant({id:'a3',text:'I\'ll check.'}),tool({id:'t2'})]};
+  c.traceFilter='messages';let html=c.buildTracePanelHtml();
+  assert(html.includes("data-trace-filter='messages' aria-pressed='true'>Messages</button>")&&html.includes('>Messages only<'),'its button is on and the header says so');
+  assert(html.indexOf("data-trace-filter='all'")<html.indexOf("data-trace-filter='messages'")&&html.indexOf("data-trace-filter='messages'")<html.indexOf("data-trace-filter='thinking'"),'after All');
+  assert(html.includes('>3 steps<'));assert.match(html,stepRe('a2',3,false));assert.match(html,stepRe('s1',4,true));assert.match(html,stepRe('a3',5,true));
+  assert(!html.includes('step:a1')&&!html.includes('step:t1')&&!html.includes('step:t2'),'no thinking-only step or tool');
+  assert(!html.includes("data-trace-details-key='a2:thinking'")&&html.includes("data-trace-details-key='a2:response'"),'a step with both shows its Response only');
+  assert(html.includes("<span class='trace-card-title'>Assistant</span><span class='trace-step-preview'>It finished at 4:30.</span>"));
+  assert(html.includes("<span class='trace-card-title'>Prompt</span>"),'the prompt comes first, as under every filter');
+  assert.equal(c.buildVisibleWorkingText('messages'),"Prompt:\ncan you check the status\n\n---\n\nAssistant:\nIt finished at 4:30.\n\n---\n\nSteer:\nany other runs?\n\n---\n\nAssistant:\nI'll check.",'Copy visible and Load');
+  c.traceFilter='thinking';html=c.buildTracePanelHtml();assert.match(html,stepRe('a1',1,false));assert(html.includes("data-trace-details-key='a2:thinking'")&&!html.includes("data-trace-details-key='a2:response'"),'Thinking is as it was');
+  c.traceFilter='messages';c.traceState.entries=[assistant({id:'a1',thinking:'Considering',text:''}),tool({id:'t1'}),steer({text:'  '})];
+  html=c.buildTracePanelHtml();assert(html.includes('No messages in this working view yet.'),'nothing written yet');
+  c.studioUiRefreshUi=null;c.traceState.entries=[assistant({id:'a2',thinking:'Hmm',text:'Reply'})];html=c.buildTracePanelHtml();
+  assert(html.includes("data-trace-filter='messages'")&&html.includes("<article class='trace-card trace-card-assistant'>")&&!html.includes('a2:thinking'),'the classic layout has it too');
+});
+test('new layout CSS: an open Assistant step whose sections are all folded shows its first line; one with a section open does not',()=>{
+  assert(css.includes('body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }'));
+  assert(css.includes('body.studio-workspace-layout details.trace-card-assistant[open]:not(:has(> .trace-step-body > details[open])) > summary > .trace-step-preview { display: block; }'));
+  assert(css.indexOf('details.trace-card-assistant[open]:not(:has(')>css.indexOf('details.trace-step[open] > summary > .trace-step-preview { display: none; }'),'after the rule it overrides');
 });

@@ -7688,6 +7688,8 @@
       flex: 1 1 6em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px;
     }
     body.studio-workspace-layout details.trace-step[open] > summary > .trace-step-preview { display: none; }
+    /* An open Assistant step whose sections are all folded keeps its first line, so its text shows somewhere (Oliver, 29 Oct). */
+    body.studio-workspace-layout details.trace-card-assistant[open]:not(:has(> .trace-step-body > details[open])) > summary > .trace-step-preview { display: block; }
     body.studio-workspace-layout .trace-step-body { display: flex; flex-direction: column; gap: 6px; padding: 0 11px 10px; }
     body.studio-workspace-layout .trace-step .trace-tool-details { border: 0; border-radius: 0; background: transparent; overflow: visible; }
     body.studio-workspace-layout .trace-step .trace-tool-details > summary { padding: 3px 0; }
