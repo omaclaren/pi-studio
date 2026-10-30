@@ -204,6 +204,14 @@ function replClient(ws) {
 			const { reply, ...result } = await this.sending(sessionName, text, fields).done;
 			return result;
 		},
+		// A send that outlasts its wait: Studio's reply that the code is still running.
+		stillRunning(sessionName, text) {
+			const journalEntryId = `pi-studio:c74:${++next}`;
+			const requestId = `c74-repl_send_request-${next}`;
+			const reply = expect((m) => m.requestId === requestId && typeof m.replMessage === "string" && m.replMessage.startsWith("Still running"));
+			ws.send(JSON.stringify({ type: "repl_send_request", requestId, sessionName, text, journalEntryId, label: "Test" }));
+			return reply.then((message) => ({ message, journalEntryId }));
+		},
 		// A send's acknowledgement (after the paste) and its result, separately.
 		sending(sessionName, text, fields = {}) {
 			const journalEntryId = `pi-studio:c74:${++next}`;
@@ -229,7 +237,7 @@ const panePid = (sessionName) => Number(tmux("list-panes", "-s", "-t", `=${sessi
 const cursorRow = (sessionName) => tmux("capture-pane", "-p", "-t", `=${sessionName}:`, "-S", pane(sessionName, "#{cursor_y}"), "-E", pane(sessionName, "#{cursor_y}")).stdout.trimEnd();
 
 test("Studio REPL runs real runtimes on the session it means, and stops what it says it stopped", {
-	timeout: 300_000,
+	timeout: 360_000,
 	skip: has("tmux") ? false : "tmux is not installed",
 }, async (t) => {
 	// Cleanup is registered before anything starts.
@@ -821,6 +829,103 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			assert.equal(tmux("capture-pane", "-p", "-t", `=${p}:`).stdout, before);
 		} finally {
 			for (const name of [p, c, a, "pi-repl-julia"]) tmux("kill-session", "-t", `=${name}`);
+		}
+	});
+
+	// Candidate 109: code that outlasts its send's wait keeps the session until it settles,
+	// as in pi-repl, and a person's send is recorded or not sent (R29, R34).
+	await t.test("a send that outlasts its wait keeps the session until its code finishes, then records its output", { skip: !has("python3") }, async () => {
+		const p = "pi-studio-repl-python";
+		try {
+			assert.equal((await repl.start("python")).message, "Started Python REPL.");
+			const record = (await repl.choose(p, "python")).session.recordId;
+			const entry = async (id) => (await repl.capture(p)).journalEntries?.find((candidate) => candidate.id === id);
+
+			let result = await rpc.agent("studio_repl_send", { sessionName: p, code: "import time\ntime.sleep(4)\nprint('late')", timeoutMs: 1_000 });
+			const late = result.details.recordEntryId;
+			const text = result.content[0].text;
+			assert.match(text, /^Timed out after 1000 ms waiting for completion marker\./);
+			assert.ok(text.endsWith(`The code may still be running in ${p}. Don't send it again: Studio keeps the session for it until it finishes or its runtime ends, then records its output (record ${record}, entry ${late}); other sends wait until then.`), text);
+			assert.equal(result.details.pending, true);
+			assert.equal((await entry(late)).status, "sending");
+			// Studio still holds the session, so another client's send waits.
+			await assert.rejects(acquireReplSessionSendLease(record, { root: recordRoot, owner: "c109-test", waitMs: 500 }), /busy in another compatible client/);
+			// The page's send waits its turn, and its output is its own; the late output is the agent's.
+			const next = repl.sending(p, "print('next')");
+			assert.ok(await waitFor(async () => (await entry(late))?.status === "captured", 15_000), "the agent's send settled");
+			assert.equal((await entry(late)).output, "late");
+			const sent = await next.done;
+			assert.deepEqual([sent.output, sent.status], ["next", "captured"]);
+			await (await acquireReplSessionSendLease(record, { root: recordRoot, owner: "c109-test", waitMs: 2_000 })).release();
+
+			// Its runtime ends first: the entry says so, and the session is released.
+			result = await rpc.agent("studio_repl_send", { sessionName: p, code: "import time\ntime.sleep(60)", timeoutMs: 1_000 });
+			const ended = result.details.recordEntryId;
+			assert.equal(result.details.pending, true);
+			tmux("kill-session", "-t", `=${p}`);
+			assert.ok(await waitFor(async () => (await entry(ended))?.status === "error", 8_000), "the ended send settled");
+			assert.match((await entry(ended)).output, new RegExp(`^${p} ended while running the code\\.`));
+			await (await acquireReplSessionSendLease(record, { root: recordRoot, owner: "c109-test", waitMs: 2_000 })).release();
+
+			// Its runtime exits after the wait and its pane stays, dead, by remain-on-exit; the session lives on (Sol).
+			assert.equal((await repl.start("python")).message, "Started Python REPL.");
+			let fresh = (await repl.choose(p, "python")).session;
+			assert.equal(tmux("set-option", "-w", "-t", `${fresh.tmuxSessionId}:`, "remain-on-exit", "on").status, 0);
+			result = await rpc.agent("studio_repl_send", { sessionName: p, code: "import os, time\nprint('before the end', flush=True)\ntime.sleep(3)\nos._exit(3)", timeoutMs: 1_000 });
+			const dead = result.details.recordEntryId;
+			assert.equal(result.details.pending, true);
+			assert.ok(await waitFor(async () => (await entry(dead))?.status === "error", 10_000), "the dead pane's send settled");
+			assert.match((await entry(dead)).output, new RegExp(`^${p} ended while running the code\\.\\n\\nbefore the end`));
+			assert.equal(tmux("has-session", "-t", `=${p}`).status, 0, "its session is still there");
+			await (await acquireReplSessionSendLease(fresh.recordId, { root: recordRoot, owner: "c109-test", waitMs: 2_000 })).release();
+			tmux("kill-session", "-t", `=${p}`);
+
+			// Its session is replaced under the same name: the send has ended, and the successor's text isn't its output.
+			assert.equal((await repl.start("python")).message, "Started Python REPL.");
+			fresh = (await repl.choose(p, "python")).session;
+			result = await rpc.agent("studio_repl_send", { sessionName: p, code: "import time\ntime.sleep(60)", timeoutMs: 1_000 });
+			const replaced = result.details.recordEntryId;
+			assert.equal(result.details.pending, true);
+			tmux("kill-session", "-t", `=${p}`);
+			assert.equal(tmux("new-session", "-d", "-s", p, "sh -c 'echo SUCCESSOR_ONLY; sleep 600'").status, 0);
+			// The page now shows the successor's record, so the send's own record is read from disk.
+			const recorded = () => JSON.parse(readFileSync(fresh.recordPath, "utf8")).entries.find((candidate) => candidate.id === replaced);
+			assert.ok(await waitFor(() => recorded()?.status === "error", 10_000), "the replaced send settled");
+			assert.match(recorded().output, new RegExp(`^${p} ended while running the code\\.`));
+			assert.doesNotMatch(recorded().output, /SUCCESSOR_ONLY/);
+			await (await acquireReplSessionSendLease(fresh.recordId, { root: recordRoot, owner: "c109-test", waitMs: 2_000 })).release();
+			tmux("kill-session", "-t", `=${p}`);
+
+			// A person's send that outlasts Studio's 20-second wait.
+			assert.equal((await repl.start("python")).message, "Started Python REPL.");
+			await repl.choose(p, "python");
+			const { message, journalEntryId } = await repl.stillRunning(p, "import time\ntime.sleep(22)\nprint('slow')");
+			assert.equal(message.replMessage, `Still running in ${p}. Its output is recorded when it finishes, and other sends wait until then.`);
+			assert.equal(message.replError, undefined);
+			assert.equal(message.journalEntries.find((candidate) => candidate.id === journalEntryId).status, "sending");
+			assert.ok(await waitFor(async () => (await entry(journalEntryId))?.status === "captured", 10_000), "the person's send settled");
+			assert.equal((await entry(journalEntryId)).output, "slow");
+		} finally {
+			tmux("kill-session", "-t", `=${p}`);
+		}
+	});
+
+	await t.test("a person's send that can't be recorded isn't sent; the agent's still runs, as in pi-repl", { skip: !has("python3") }, async () => {
+		const s = "pi-repl-python";
+		// Invalid metadata, set by session ID: set-option doesn't take the =name form.
+		const id = tmux("new-session", "-d", "-P", "-F", "#{session_id}", "-s", s, "python3 -q").stdout.trim();
+		assert.equal(tmux("set-option", "-t", id, "@pi_repl_record_id", "not-a-record-id").status, 0);
+		try {
+			assert.ok(await waitFor(() => tmux("capture-pane", "-p", "-t", `=${s}:`).stdout.includes(">>>")), "Python is ready");
+			await repl.choose(s, "python");
+			const refused = await repl.send(s, "print('unrecorded')");
+			assert.equal(refused.error, "Nothing was sent: the session's shared record isn't usable (Invalid shared REPL record metadata; Studio left it untouched), so the send couldn't be recorded.");
+			assert.doesNotMatch(tmux("capture-pane", "-p", "-t", `=${s}:`).stdout, /unrecorded/);
+			const result = await rpc.agent("studio_repl_send", { sessionName: s, code: "print('agent ' + 'sent')" });
+			assert.equal(result.details.ok, true, result.content[0].text);
+			assert.equal(result.details.output, "agent sent");
+		} finally {
+			tmux("kill-session", "-t", `=${s}`);
 		}
 	});
 

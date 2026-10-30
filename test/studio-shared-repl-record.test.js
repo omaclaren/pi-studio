@@ -29,9 +29,11 @@ test("Studio serializes browser and tool sends with the cross-client lease", () 
 	assert.match(serverSource, /captureStudioReplSession\(msg\.sessionName, currentSession\)/);
 	assert.match(serverSource, /captureStudioReplSession\(currentSession\.sessionName, currentSession\)/);
 	assert.match(serverSource, /sendTextToStudioReplSession\(currentSession\.sessionName, params\.code, currentSession\.target, currentSession\.runtime, \{/);
-	assert.match(serverSource, /retainStudioReplSubmissionUntilSettled/);
-	assert.match(serverSource, /releaseOrRetainStudioReplSubmission/);
-	assert.match(serverSource, /shared session remains busy until the running code settles/);
+	// Candidate 109: code still running when a send stops waiting is settled, not just retained.
+	assert.match(serverSource, /settleStudioReplSubmission/);
+	assert.match(serverSource, /releaseOrSettleStudioReplSubmission\(lease, submittedControlFiles, settling\)/);
+	assert.match(serverSource, /studio_repl_send was aborted after submission\./);
+	assert.doesNotMatch(serverSource, /retainStudioReplSubmissionUntilSettled/);
 	assert.match(serverSource, /knownSession \|\| inspectStudioReplSession/);
 	assert.match(serverSource, /submittedSession \|\| selected\.session/);
 	assert.match(serverSource, /submittedSession \|\| session/);
@@ -51,7 +53,7 @@ test("Studio uses compact private request-unique control files and cleans them a
 	assert.match(serverSource, /getStudioReplControlExtension\(runtime\)/);
 	assert.match(serverSource, /cleanupPrivateReplControlFiles\(controlFiles\)/);
 	assert.match(serverSource, /for \(const helper of controlFiles\.helpers \?\? \[\]\) cleanupPrivateReplControlFiles\(helper\)/);
-	assert.match(serverSource, /retainStudioReplSubmissionUntilSettled\(session, controlFiles, lease\)/);
+	assert.match(serverSource, /cleanupStudioReplControlFiles\(send\.controlFiles\)/);
 	assert.doesNotMatch(serverSource, /const STUDIO_REPL_CONTROL_ROOT/);
 });
 

@@ -12730,63 +12730,127 @@ async function waitForStudioReplDoneFile(controlFiles: StudioReplControlFiles | 
 	return { completed: isStudioReplSubmissionDone(controlFiles), ended: false };
 }
 
-function sleepWithoutKeepingStudioProcessAlive(ms: number): Promise<void> {
-	return new Promise((resolveSleep) => {
-		const timer = setTimeout(resolveSleep, ms);
-		timer.unref?.();
-	});
+// Whether a send's own session or pane has verifiably ended: tmux says the session or its
+// server has gone, the name now belongs to a newer session, or the pane has closed or died.
+// Undefined when tmux didn't answer, which isn't evidence either way.
+function hasStudioReplSendEnded(session: StudioReplSessionInfo): boolean | undefined {
+	const target = studioReplSessionTarget(session.sessionName);
+	// Asked first, as in pi-repl: display-message prints nothing, successfully, for a missing session.
+	const exists = runStudioTmux(["has-session", "-t", target], { timeout: 3_000 });
+	if (!exists.ok) return STUDIO_TMUX_GONE.test(exists.stderr) ? true : undefined;
+	// display-message takes a pane target, so the session is named as `=name:`; plain `=name`
+	// also prints blank fields for a live session (Sol).
+	const current = runStudioTmux(["display-message", "-p", "-t", `${target}:`, "#{session_id}\t#{session_created}"], { timeout: 3_000 });
+	if (!current.ok) return undefined;
+	const [id = "", created = ""] = current.stdout.trim().split("\t");
+	if (!/^\$\d+$/.test(id) || !/^\d+$/.test(created)) return undefined;
+	if (id !== session.tmuxSessionId || Number(created) !== session.tmuxSessionCreatedAt) return true;
+	return hasStudioReplPaneEnded(session);
 }
 
-function retainStudioReplSubmissionUntilSettled(
-	session: StudioReplSessionInfo,
-	controlFiles: StudioReplControlFiles,
-	lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null,
-): void {
-	// A caller timeout or abort does not stop code already submitted to tmux.
-	// Keep the private control files (and any shared lease) until the runtime
-	// wrapper reports completion, or until this exact tmux lifetime disappears.
-	void (async () => {
-		let nextIdentityCheck = 0;
-		let missingChecks = 0;
+// What settling a send needs: the pane and lifetime it went to, what the pane showed before,
+// and its entry.
+type StudioReplSettlingSend = {
+	session: StudioReplSessionInfo;
+	controlFiles: StudioReplControlFiles;
+	lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null;
+	beforeTranscript: string;
+	sent: StudioReplSendSuccess | StudioReplSendFailure;
+	entry: StudioReplJournalEntry;
+	// Tells the pages, so a "Still running" message doesn't outlast the code.
+	onSettled: () => void;
+};
+
+// The send's output, from the pane it went to in the same session lifetime.
+function captureSettledStudioReplOutput(send: StudioReplSettlingSend, completed: boolean): { ok: true; output: string } | { ok: false; message: string } {
+	const after = captureStudioReplSession(send.session.sessionName, send.session);
+	if (!after.ok) return after;
+	if (!isSameStudioReplSessionLifetime(send.session, after.session)) return { ok: false, message: `${send.session.sessionName} was replaced` };
+	return {
+		ok: true,
+		output: cleanStudioReplOutput(extractStudioReplTranscriptDelta(send.beforeTranscript, after.transcript), {
+			submissionLine: send.sent.submissionText || "",
+			runtime: send.sent.runtime || send.session.runtime,
+			display: send.sent.display,
+			promptLine: send.beforeTranscript.split("\n").at(-1),
+			completed,
+		}),
+	};
+}
+
+const STUDIO_REPL_SETTLE_POLL_MS = 250;
+
+/**
+ * Settle, as pi-repl's settleReplSubmission: once a send's caller stops waiting, Studio keeps
+ * the session's lease and control files until the code has finished or its runtime has
+ * verifiably ended. On completion it captures the original pane and records the output, and
+ * only then releases the lease, so no other send can take this code's late output as its own.
+ */
+async function settleStudioReplSubmission(send: StudioReplSettlingSend): Promise<void> {
+	const record = (output: string, status: StudioReplJournalEntry["status"]) => {
 		try {
-			while (!isStudioReplSubmissionDone(controlFiles)) {
-				// As in pi-repl, only a C++ reply settles it, not its missing source.
-				if (!controlFiles.cpp && !existsSync(controlFiles.sourceFile)) return;
-				if (Date.now() >= nextIdentityCheck) {
-					try {
-						const current = inspectStudioReplSession(session.sessionName);
-						if (current && isSameStudioReplSessionLifetime(session, current)) {
-							missingChecks = 0;
-						} else {
-							missingChecks += 1;
-							if (missingChecks >= 3) return;
-						}
-					} catch {
-						// A transient inspection failure must not make overlapping sends safe.
-						missingChecks = 0;
-					}
-					nextIdentityCheck = Date.now() + 1_000;
-				}
-				await sleepWithoutKeepingStudioProcessAlive(100);
-			}
-		} finally {
-			cleanupStudioReplControlFiles(controlFiles);
-			await lease?.release().catch(() => undefined);
+			recordStudioReplJournalEntry({ ...send.entry, output, status, completedAt: Date.now(), updatedAt: Date.now() }, send.session);
+		} catch {
+			// The lease is released whether or not the record takes the result.
 		}
-	})();
+	};
+	try {
+		let endedChecks = 0;
+		let nextEndCheck = 0;
+		// Only a verified end releases unfinished code: a failed check or a missing control
+		// file isn't evidence that it has stopped, so settling waits on (R48).
+		while (!isStudioReplSubmissionDone(send.controlFiles)) {
+			if (Date.now() >= nextEndCheck) {
+				// Two checks a second apart, as the caller's wait makes.
+				endedChecks = hasStudioReplSendEnded(send.session) === true ? endedChecks + 1 : 0;
+				if (endedChecks >= 2 && !isStudioReplSubmissionDone(send.controlFiles)) {
+					// A pane kept dead by remain-on-exit still shows what the code printed.
+					const shown = captureSettledStudioReplOutput(send, false);
+					record(new StudioReplSessionEndedError(send.session.sessionName, shown.ok ? shown.output : "").recordText, "error");
+					return;
+				}
+				nextEndCheck = Date.now() + 1_000;
+			}
+			// Unlike the caller's wait, this keeps the process alive: settling is what it waits for.
+			await sleep(STUDIO_REPL_SETTLE_POLL_MS);
+		}
+		const settled = captureSettledStudioReplOutput(send, true);
+		if (settled.ok) record(settled.output, "captured");
+		else record(`It ran, but its output couldn't be captured (${settled.message}).`, "error");
+	} finally {
+		cleanupStudioReplControlFiles(send.controlFiles);
+		await send.lease?.release().catch(() => undefined);
+		try {
+			send.onSettled();
+		} catch {
+			// The record has the result; pages see it on their next poll.
+		}
+	}
 }
 
-async function releaseOrRetainStudioReplSubmission(
+// After a send, releases the session, or hands code still running to settle.
+async function releaseOrSettleStudioReplSubmission(
 	lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null,
-	session: StudioReplSessionInfo | null,
 	controlFiles: StudioReplControlFiles | undefined,
+	settling: StudioReplSettlingSend | null,
 ): Promise<void> {
-	if (session && controlFiles && !isStudioReplSubmissionDone(controlFiles)) {
-		retainStudioReplSubmissionUntilSettled(session, controlFiles, lease);
+	if (settling) {
+		void settleStudioReplSubmission(settling).catch(() => undefined);
 		return;
 	}
 	cleanupStudioReplControlFiles(controlFiles);
 	await lease?.release().catch(() => undefined);
+}
+
+/**
+ * What a sender that stopped waiting is told, as pi-repl's pendingSendNotice: that sending it
+ * again would run it twice, and whether its output will be recorded.
+ */
+function studioReplPendingNotice(sessionName: string, entry: StudioReplJournalEntry, recordId: string | undefined, leased: boolean): string {
+	if (!leased) return `The code may still be running in ${sessionName}. Don't send it again. This session has no usable shared record, so other sends don't wait for it.`;
+	return entry.sharedSynced && recordId
+		? `The code may still be running in ${sessionName}. Don't send it again: Studio keeps the session for it until it finishes or its runtime ends, then records its output (record ${recordId}, entry ${entry.id}); other sends wait until then.`
+		: `The code may still be running in ${sessionName}. Don't send it again: Studio keeps the session for it until it finishes or its runtime ends, and other sends wait until then. Its output won't be recorded: this send's entry couldn't be written.`;
 }
 
 function interruptStudioReplSession(sessionName: string): { ok: true; message: string } | { ok: false; message: string } {
@@ -14087,6 +14151,9 @@ export default function (pi: ExtensionAPI) {
 			let submittedSession: StudioReplSessionInfo | null = null;
 			let submittedControlFiles: StudioReplControlFiles | undefined;
 			let journalEntry: StudioReplJournalEntry | null = null;
+			// Code still running when this call stops waiting: the lease and control files are settle's.
+			let settling: StudioReplSettlingSend | null = null;
+			const pendingNotice = () => studioReplPendingNotice(selected.session!.sessionName, settling!.entry, selected.session!.recordId, Boolean(lease));
 			try {
 				if (selected.session.recordId && !selected.session.recordWarning) {
 					lease = await acquireReplSessionSendLease(selected.session.recordId, {
@@ -14132,8 +14199,12 @@ export default function (pi: ExtensionAPI) {
 						status: "error",
 						completedAt: Date.now(),
 					}, currentSession);
+					// Part of it may have been pasted: if it runs, settle records what it did.
+					if (sent.submissionStarted && sent.controlFiles?.doneFile) {
+						settling = { session: currentSession, controlFiles: sent.controlFiles, lease, beforeTranscript, sent, entry: journalEntry, onSettled: broadcastStudioReplSelection };
+					}
 					return {
-						content: [{ type: "text", text: sent.message }],
+						content: [{ type: "text", text: settling ? `${sent.message}\n\n${pendingNotice()}` : sent.message }],
 						details: { ok: false, error: sent.message, session: selected.session, sessions: selected.sessions, recordEntryId: journalEntry.id } as Record<string, unknown>,
 					};
 				}
@@ -14143,8 +14214,11 @@ export default function (pi: ExtensionAPI) {
 				let ended = false;
 				if (sent.controlFiles?.doneFile) {
 					({ completed, ended } = await waitForStudioReplDoneFile(sent.controlFiles, timeoutMs, signal, currentSession));
-					if (signal?.aborted && !completed) {
-						throw new Error("studio_repl_send was aborted after submission; the shared session remains busy until the running code settles.");
+					if (!completed && !ended) {
+						// This call stops waiting, but the code goes on: Studio keeps the session for it,
+						// and its entry stays pending until settle records the output (R29).
+						settling = { session: currentSession, controlFiles: sent.controlFiles, lease, beforeTranscript, sent, entry: journalEntry, onSettled: broadcastStudioReplSelection };
+						if (signal?.aborted) throw new Error("studio_repl_send was aborted after submission.");
 					}
 				} else {
 					await sleep(Math.min(750, timeoutMs));
@@ -14165,16 +14239,15 @@ export default function (pi: ExtensionAPI) {
 				});
 				// A pane kept dead by remain-on-exit still shows what the code printed.
 				if (ended) throw new StudioReplSessionEndedError(currentSession.sessionName, output);
-				const status: StudioReplJournalEntry["status"] = sent.controlFiles?.doneFile
-					? (completed ? "captured" : "timeout")
-					: (output.trim() ? "captured" : "sent");
-				journalEntry = recordStudioReplJournalEntry({
-					...journalEntry,
-					runtime: sent.runtime === "unknown" ? selected.session.runtime : sent.runtime,
-					output,
-					status,
-					completedAt: Date.now(),
-				}, currentSession);
+				if (!settling) {
+					journalEntry = recordStudioReplJournalEntry({
+						...journalEntry,
+						runtime: sent.runtime === "unknown" ? selected.session.runtime : sent.runtime,
+						output,
+						status: sent.controlFiles?.doneFile || output.trim() ? "captured" : "sent",
+						completedAt: Date.now(),
+					}, currentSession);
+				}
 				const statusLine = sent.controlFiles?.doneFile
 					? (completed ? "Completed." : `Timed out after ${timeoutMs} ms waiting for completion marker.`)
 					: "Submitted.";
@@ -14182,6 +14255,8 @@ export default function (pi: ExtensionAPI) {
 					`${statusLine} ${sent.message}`,
 					output ? "" : undefined,
 					output || undefined,
+					settling ? "" : undefined,
+					settling ? pendingNotice() : undefined,
 				].filter(Boolean).join("\n");
 				// Its result selects only if nothing was chosen since it was admitted.
 				const select = studioReplSelection.isCurrent(ticket);
@@ -14224,11 +14299,14 @@ export default function (pi: ExtensionAPI) {
 						echoMode: sent.display?.mode || "off",
 						submissionAnchorId: sent.display?.enabled ? sent.display.anchorId : undefined,
 						output,
+						pending: Boolean(settling),
 						recordEntryId: journalEntry.id,
 						recordPath: selected.session.recordPath,
 					} as Record<string, unknown>,
 				};
 			} catch (error) {
+				// Settle records what code still running did; this call says only that it stopped waiting.
+				if (settling) throw new Error(`${error instanceof Error ? error.message : String(error)}\n\n${pendingNotice()}`);
 				// An ended session is an error whatever its output says; only Studio's own messages
 				// are read for "timed out" (Sol).
 				const ended = error instanceof StudioReplSessionEndedError ? error.recordText : undefined;
@@ -14247,7 +14325,7 @@ export default function (pi: ExtensionAPI) {
 				throw ended === undefined ? error : new Error(ended);
 			} finally {
 				if (!published) broadcastStudioReplSelection();
-				await releaseOrRetainStudioReplSubmission(lease, submittedSession, submittedControlFiles);
+				await releaseOrSettleStudioReplSubmission(lease, submittedControlFiles, settling);
 				lease = null;
 				submittedControlFiles = undefined;
 			}
@@ -17319,17 +17397,26 @@ export default function (pi: ExtensionAPI) {
 				let submittedSession: StudioReplSessionInfo | null = null;
 				let submittedControlFiles: StudioReplControlFiles | undefined;
 				let ticket: number | null = null;
+				// Code still running when this send stops waiting: the lease and control files are settle's.
+				let settling: StudioReplSettlingSend | null = null;
 				try {
 					if (!session) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
 					if (session.runtime === "unknown") throw new Error(unsupportedStudioReplRuntimeMessage(msg.sessionName));
 					// The send is an explicit choice when admitted, before it waits for the
 					// session's lease, even of the session already selected (Sol, Astra).
 					if (isOpenReplClient(client)) ticket = studioReplSelection.choose({ session });
-					if (session.recordId && !session.recordWarning) {
+					// A person's send is recorded, or not sent at all, as pi-repl's sendAndSettle (R34).
+					if (!session.recordId || session.recordWarning) {
+						const why = session.recordWarning ? ` (${session.recordWarning.replace(/\.$/, "")})` : "";
+						throw new Error(`Nothing was sent: the session's shared record isn't usable${why}, so the send couldn't be recorded.`);
+					}
+					try {
 						lease = await acquireReplSessionSendLease(session.recordId, {
 							owner: `pi-studio:browser:${msg.requestId}`,
 							waitMs: STUDIO_REPL_SEND_DEFAULT_TIMEOUT_MS,
 						});
+					} catch (error) {
+						throw new Error(`Nothing was sent: ${error instanceof Error ? error.message : String(error)}`);
 					}
 					const currentSession = inspectStudioReplSession(msg.sessionName);
 					if (!currentSession || !isSameStudioReplSessionLifetime(session, currentSession)) {
@@ -17358,6 +17445,7 @@ export default function (pi: ExtensionAPI) {
 						status: "sending",
 						skippedChunks: msg.skippedChunks,
 					}, currentSession);
+					if (!journalEntry.sharedSynced) throw new Error("Nothing was sent: the shared record couldn't be written.");
 					const sent = sendTextToStudioReplSession(msg.sessionName, msg.text, currentSession.target, currentSession.runtime, {
 						submissionId: journalEntry.id,
 						echoMode: msg.echoMode,
@@ -17365,6 +17453,10 @@ export default function (pi: ExtensionAPI) {
 					submittedControlFiles = sent.controlFiles;
 					if (!sent.ok) {
 						if (sent.submissionStarted) submittedSession = currentSession;
+						// Part of it may have been pasted: if it runs, settle records what it did.
+						if (sent.submissionStarted && sent.controlFiles?.doneFile) {
+							settling = { session: currentSession, controlFiles: sent.controlFiles, lease, beforeTranscript, sent, entry: journalEntry, onSettled: broadcastStudioReplSelection };
+						}
 						throw new Error(sent.message);
 					}
 					submittedSession = currentSession;
@@ -17380,6 +17472,16 @@ export default function (pi: ExtensionAPI) {
 					let ended = false;
 					if (sent.controlFiles?.doneFile) {
 						({ completed, ended } = await waitForStudioReplDoneFile(sent.controlFiles, timeoutMs, undefined, currentSession));
+						if (!completed && !ended) {
+							// The code goes on: Studio keeps the session for it, and its entry stays
+							// pending until settle records the output (R29).
+							settling = { session: currentSession, controlFiles: sent.controlFiles, lease, beforeTranscript, sent, entry: journalEntry, onSettled: broadcastStudioReplSelection };
+							sendReplSendResultToClient(client, ticket, msg.sessionName, {
+								requestId: msg.requestId,
+								replMessage: `Still running in ${msg.sessionName}. Its output is recorded when it finishes, and other sends wait until then.`,
+							});
+							return;
+						}
 					} else {
 						await sleep(Math.min(750, timeoutMs));
 					}
@@ -17403,7 +17505,7 @@ export default function (pi: ExtensionAPI) {
 						msg.requestId,
 						msg.sessionName,
 						output,
-						sent.controlFiles?.doneFile ? (completed ? "captured" : "timeout") : (output.trim() ? "captured" : "sent"),
+						sent.controlFiles?.doneFile || output.trim() ? "captured" : "sent",
 						currentSession,
 					);
 					sendReplSendResultToClient(client, ticket, msg.sessionName, { requestId: msg.requestId });
@@ -17419,7 +17521,7 @@ export default function (pi: ExtensionAPI) {
 					sendToClient(client, { type: "error", requestId: msg.requestId, message });
 					sendReplSendResultToClient(client, ticket, msg.sessionName, { requestId: msg.requestId, replError: message });
 				} finally {
-					await releaseOrRetainStudioReplSubmission(lease, submittedSession, submittedControlFiles);
+					await releaseOrSettleStudioReplSubmission(lease, submittedControlFiles, settling);
 					lease = null;
 					submittedControlFiles = undefined;
 				}
