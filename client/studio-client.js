@@ -688,6 +688,8 @@
         error: "",
       };
       let replTmuxAvailable = null;
+      // Whether the agent is told of new record entries ("on", "send" or "off"), from Studio's server.
+      let replRecordActivity = "off";
       let replSessions = [];
       let replActiveSessionName = "";
       // Studio's selection as this page last adopted it, with its `shown`, and this page's
@@ -14317,7 +14319,9 @@
           + (hasEntries ? cards : "<div class='repl-studio-empty'>" + escapeHtml(emptyText) + "</div>");
         return "<section class='repl-journal'>"
           + "<div class='repl-journal-header'><h3>Shared REPL Record</h3>" + toggleActions + "</div>"
-          + "<p class='repl-journal-description'>What Studio and pi-repl have sent to this session.</p>"
+          + "<p class='repl-journal-description'>What Studio and pi-repl have sent to this session."
+          + (replRecordActivity === "off" ? "" : " New entries here go to the agent and its model provider.")
+          + "</p>"
           + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
           // The prompt column fits the longest prompt, such as gnuplot>, in the prompt's own font.
           + "<div class='repl-journal-list' style='--repl-studio-prompt-chars: " + Math.max(0, ...visibleEntries.map((entry) => getReplStudioPrompt(entry.runtime).length)) + "'>" + terminalContent + "</div>"
@@ -29204,6 +29208,7 @@
           noteReplChoiceAnswer(message);
           const present = !isReplChoicePending();
           replTmuxAvailable = typeof message.tmuxAvailable === "boolean" ? message.tmuxAvailable : replTmuxAvailable;
+          if (message.recordActivity === "on" || message.recordActivity === "send" || message.recordActivity === "off") replRecordActivity = message.recordActivity;
           const sessionsChanged = setReplSessions(message.sessions);
           if (present) adoptReplSelection(message);
           const journalChanged = mergeReplJournalEntries(message.journalEntries);

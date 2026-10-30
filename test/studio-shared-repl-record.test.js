@@ -292,3 +292,18 @@ test("Studio browser Markdown matches the canonical shared-record renderer", () 
 	};
 	assert.equal(context.renderBrowserRecord(entries), renderReplSessionRecordMarkdown(record));
 });
+
+test("Candidate 110: the agent is told of record entries, read-only, and the page says so", () => {
+	assert.match(serverSource, /pi\.on\("before_agent_start", async \(\) => \{\n\t\tif \(replActivityMode !== "on"\) return undefined;/);
+	assert.match(serverSource, /if \(replActivityMode === "off"\) return "";/);
+	assert.match(serverSource, /recordActivity: replActivityMode,/);
+	// Shown means its text is in what the model is given, not that a result with its ID ended (Astra).
+	assert.match(serverSource, /pi\.on\("context_with_system", async \(event\) => \{[\s\S]{0,600}confirmReplActivityDelivered\(replActivity, texts\);[\s\S]{0,80}return undefined;/);
+	assert.doesNotMatch(serverSource, /releaseReplActivityCommit/);
+	assert.match(clientSource, /replRecordActivity === "off" \? "" : " New entries here go to the agent and its model provider\."/);
+	// The collector reads; it never takes the inspection path, which can create record metadata.
+	const start = serverSource.indexOf("async function observeStudioReplActivity");
+	const body = serverSource.slice(start, serverSource.indexOf("\n}\n", start));
+	assert.ok(start > 0 && body.includes("readReplRecordInert"));
+	assert.doesNotMatch(body, /inspectStudioReplSession|attachStudioReplSessionRecord|ensureReplSessionRecord|readReplSessionRecord\(|upsertReplSessionRecordEntry/);
+});
