@@ -55,6 +55,7 @@ import {
 	STUDIO_ADVERTISED_HOST,
 } from "./shared/studio-network-binding.js";
 import {
+	acceptsStudioReplPaste,
 	buildStudioReplTmuxStartArgs,
 	cleanStudioReplOutput,
 	firstStudioReplPanes,
@@ -11513,6 +11514,16 @@ function readStudioReplTmuxOption(session: string, optionName: string): string |
 	return value || undefined;
 }
 
+// pi-repl's send-path marker, read again before every paste and Interrupt. Read by session
+// ID, from the session's own options: with -q, tmux shows a missing session as an unset
+// option, so a failed read refuses.
+function studioReplSendPathRefusal(sessionId: string, action: "send" | "interrupt"): string | undefined {
+	const result = /^\$\d+$/.test(sessionId) ? runStudioTmux(["show-options", "-t", sessionId], { timeout: 3_000 }) : null;
+	if (result?.ok && acceptsStudioReplPaste(result.stdout)) return undefined;
+	if (action === "interrupt") return result?.ok ? "Interrupt isn't available for this session." : "Studio couldn't check this session, so it didn't interrupt it.";
+	return result?.ok ? "This session takes code only through pi-repl." : "Nothing was sent: Studio couldn't check how this session takes code.";
+}
+
 function setStudioReplTmuxOptionIfAbsent(session: string, optionName: string, value: string): boolean {
 	return runStudioTmux(["set-option", "-qo", "-t", studioReplSessionTarget(session), optionName, value], { timeout: 3_000 }).ok;
 }
@@ -12432,9 +12443,12 @@ function prepareStudioReplSubmission(
 	};
 }
 
-function pasteTextToStudioReplPane(text: string, paneTarget: string, bracketed = false): { ok: true } | { ok: false; message: string; submissionStarted: boolean } {
+function pasteTextToStudioReplPane(text: string, paneTarget: string, sessionId: string, bracketed = false): { ok: true } | { ok: false; message: string; submissionStarted: boolean } {
 	const bufferName = `pi-studio-repl-${randomUUID().replace(/-/g, "")}`;
 	const target = paneTarget;
+	// Checked again here, not only when the send began: pi-repl may have set it since.
+	const refusal = studioReplSendPathRefusal(sessionId, "send");
+	if (refusal) return { ok: false, message: refusal, submissionStarted: false };
 	const loadResult = runStudioTmux(["load-buffer", "-b", bufferName, "-"], { input: text, timeout: 5_000 });
 	if (!loadResult.ok) return { ok: false, message: loadResult.message || "Failed to load text into tmux buffer.", submissionStarted: false };
 	try {
@@ -12456,7 +12470,7 @@ function sendTextToStudioReplSession(
 	text: string,
 	paneTarget: string,
 	runtime: StudioReplRuntime | "unknown",
-	options: { submissionId?: string; echoMode?: string } = {},
+	options: { tmuxSessionId: string; submissionId?: string; echoMode?: string },
 ): StudioReplSendSuccess | StudioReplSendFailure {
 	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
 	// No raw pasting: without its runtime's wrapper, Studio can't tell when code has finished.
@@ -12470,7 +12484,7 @@ function sendTextToStudioReplSession(
 		submissionId: options.submissionId || `pi-studio:local:${randomUUID()}`,
 		echoMode: normalizeReplSubmissionEchoMode(options.echoMode, STUDIO_REPL_TOOL_ECHO_MODE) as ReplSubmissionEchoMode,
 	}, runtime);
-	const pasted = pasteTextToStudioReplPane(prepared.submissionText, paneTarget, runtime === "julia");
+	const pasted = pasteTextToStudioReplPane(prepared.submissionText, paneTarget, options.tmuxSessionId, runtime === "julia");
 	if (!pasted.ok) return {
 		ok: false,
 		message: pasted.message,
@@ -12930,6 +12944,9 @@ function interruptStudioReplSession(sessionName: string): { ok: true; message: s
 	if (!/^[-_.A-Za-z0-9]+$/.test(sessionName)) return { ok: false, message: "Invalid REPL session name." };
 	const session = inspectStudioReplSession(sessionName);
 	if (!session) return { ok: false, message: `No tmux REPL session named ${sessionName}.` };
+	// Ctrl+C in a pi-repl helper session would end the person's prompt, not the code.
+	const refusal = studioReplSendPathRefusal(session.tmuxSessionId, "interrupt");
+	if (refusal) return { ok: false, message: refusal };
 	const result = runStudioTmux(["send-keys", "-t", session.target, "C-c"], { timeout: 5_000 });
 	if (!result.ok) return { ok: false, message: result.message || "Failed to interrupt REPL session." };
 	return { ok: true, message: `Interrupted ${sessionName}.` };
@@ -14251,6 +14268,14 @@ export default function (pi: ExtensionAPI) {
 					details: { ok: false, error: selected.error || "No Studio REPL session selected.", sessions: selected.sessions } as Record<string, unknown>,
 				};
 			}
+			// Refused before it counts as a choice or writes to the session's record.
+			const sendPathRefusal = studioReplSendPathRefusal(selected.session.tmuxSessionId, "send");
+			if (sendPathRefusal) {
+				return {
+					content: [{ type: "text", text: sendPathRefusal }],
+					details: { ok: false, error: sendPathRefusal, session: selected.session, sessions: selected.sessions } as Record<string, unknown>,
+				};
+			}
 			if (selected.session.runtime === "unknown") {
 				const message = unsupportedStudioReplRuntimeMessage(selected.session.sessionName);
 				return {
@@ -14317,6 +14342,7 @@ export default function (pi: ExtensionAPI) {
 					status: "sending",
 				}, currentSession);
 				const sent = sendTextToStudioReplSession(currentSession.sessionName, params.code, currentSession.target, currentSession.runtime, {
+					tmuxSessionId: currentSession.tmuxSessionId,
 					submissionId: journalEntry.id,
 					echoMode: params.echoMode || STUDIO_REPL_TOOL_ECHO_MODE,
 				});
@@ -17536,6 +17562,8 @@ export default function (pi: ExtensionAPI) {
 				let settling: StudioReplSettlingSend | null = null;
 				try {
 					if (!session) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
+					const sendPathRefusal = studioReplSendPathRefusal(session.tmuxSessionId, "send");
+					if (sendPathRefusal) throw new Error(sendPathRefusal);
 					if (session.runtime === "unknown") throw new Error(unsupportedStudioReplRuntimeMessage(msg.sessionName));
 					// The send is an explicit choice when admitted, before it waits for the
 					// session's lease, even of the session already selected (Sol, Astra).
@@ -17582,6 +17610,7 @@ export default function (pi: ExtensionAPI) {
 					}, currentSession);
 					if (!journalEntry.sharedSynced) throw new Error("Nothing was sent: the shared record couldn't be written.");
 					const sent = sendTextToStudioReplSession(msg.sessionName, msg.text, currentSession.target, currentSession.runtime, {
+						tmuxSessionId: currentSession.tmuxSessionId,
 						submissionId: journalEntry.id,
 						echoMode: msg.echoMode,
 					});

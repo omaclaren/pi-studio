@@ -15,6 +15,26 @@ export const isStudioGnuplotSession = (name) => /^pi-studio-repl-gnuplot(?:-|$)/
 export const STUDIO_REPL_PANE_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_id}\t#{session_name}\t#{session_id}\t#{session_created}\t#{@pi_repl_runtime}\t#{@pi_repl_record_id}\t#{@pi_repl_record_version}";
 
 /**
+ * pi-repl's marker for a session that takes code only through pi-repl, such as
+ * LFortran's, where its helper sends code and the first pane is the person's
+ * prompt. As agreed with pi-repl, Studio pastes and interrupts only when the
+ * session's own option is unset or "pane"; a value Studio doesn't know refuses.
+ */
+export const STUDIO_REPL_SEND_PATH_OPTION = "@pi_repl_send_path";
+
+/**
+ * Whether a session takes pasted code, from `tmux show-options -t <session>`:
+ * the session's own options, one per line, with values quoted where needed.
+ *
+ * @param {string} stdout
+ * @returns {boolean}
+ */
+export function acceptsStudioReplPaste(stdout) {
+	const line = String(stdout || "").split(/\r?\n/).find((entry) => entry.split(" ")[0] === STUDIO_REPL_SEND_PATH_OPTION);
+	return line === undefined || line === `${STUDIO_REPL_SEND_PATH_OPTION} pane`;
+}
+
+/**
  * Build the tmux arguments for a Studio-owned REPL session. tmux prints the new
  * session's ID and its first pane's ID, so Studio can address both even if
  * another session takes the name or another window appears.

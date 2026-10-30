@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildStudioReplTmuxStartArgs } from "../shared/studio-repl-tmux.js";
+import { acceptsStudioReplPaste, buildStudioReplTmuxStartArgs } from "../shared/studio-repl-tmux.js";
 
 test("Studio REPL sessions do not inherit terminal-local PROMPT_COMMAND hooks", () => {
 	assert.deepEqual(
@@ -29,4 +29,18 @@ test("more environment settings for the runtime go before its command", () => {
 		buildStudioReplTmuxStartArgs("pi-studio-repl-gnuplot", "/tmp/p", "gnuplot", ["PI_REPL_GNUPLOT_OWNER=0123456789abcdef0123456789abcdef"]).slice(-5),
 		["-e", "PROMPT_COMMAND=", "-e", "PI_REPL_GNUPLOT_OWNER=0123456789abcdef0123456789abcdef", "gnuplot"],
 	);
+});
+
+// Candidate 111: pi-repl's send-path marker, from `tmux show-options -t <session>`.
+test("a session takes pasted code only with no send-path marker, or \"pane\"", () => {
+	const options = (line) => ["@pi_repl_runtime lfortran", ...(line === undefined ? [] : [line]), "default-size 80x24"].join("\n");
+	assert.equal(acceptsStudioReplPaste(options(undefined)), true);
+	assert.equal(acceptsStudioReplPaste(""), true);
+	assert.equal(acceptsStudioReplPaste(options("@pi_repl_send_path pane")), true);
+	for (const line of ["@pi_repl_send_path jupyter-helper", "@pi_repl_send_path ''", '@pi_repl_send_path "pane "', "@pi_repl_send_path pane-x", "@pi_repl_send_path"]) {
+		assert.equal(acceptsStudioReplPaste(options(line)), false, line);
+	}
+	// Other options that share the prefix aren't the marker.
+	assert.equal(acceptsStudioReplPaste(options("@pi_repl_send_path_note jupyter-helper")), true);
+	assert.equal(acceptsStudioReplPaste("@pi_repl_send_path jupyter-helper\r\ndefault-size 80x24\r\n"), false);
 });

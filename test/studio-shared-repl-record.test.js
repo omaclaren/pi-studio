@@ -39,6 +39,22 @@ test("Studio serializes browser and tool sends with the cross-client lease", () 
 	assert.match(serverSource, /submittedSession \|\| session/);
 });
 
+test("Candidate 111: Studio neither pastes nor sends Ctrl+C where pi-repl takes code through its helper", () => {
+	const between = (start, end) => serverSource.slice(serverSource.indexOf(start), serverSource.indexOf(end, serverSource.indexOf(start)));
+	// Without -q: -q shows a missing session as an unset option.
+	assert.match(serverSource, /runStudioTmux\(\["show-options", "-t", sessionId\]/);
+	assert.doesNotMatch(between("function studioReplSendPathRefusal(", "\n}\n"), /"-q/);
+	const paste = between("function pasteTextToStudioReplPane(", "\n}\n");
+	assert.ok(paste.indexOf('studioReplSendPathRefusal(sessionId, "send")') >= 0 && paste.indexOf('studioReplSendPathRefusal(sessionId, "send")') < paste.indexOf('"load-buffer"'));
+	const interrupt = between("function interruptStudioReplSession(", "\n}\n");
+	assert.ok(interrupt.indexOf('studioReplSendPathRefusal(session.tmuxSessionId, "interrupt")') >= 0 && interrupt.indexOf("studioReplSendPathRefusal(") < interrupt.indexOf('"send-keys"'));
+	// Both send paths refuse before the send counts as a choice.
+	for (const [start, choice] of [["async execute(toolCallId, params, signal) {\n\t\t\tconst selected = selectStudioReplSessionForTool", "studioReplSelection.choose("], ['if (msg.type === "repl_send_request")', "studioReplSelection.choose("]]) {
+		const path = between(start, choice);
+		assert.match(path, /studioReplSendPathRefusal\((?:selected\.)?session\.tmuxSessionId, "send"\)/, start);
+	}
+});
+
 test("Studio shell and GHCi sends retain completion after runtime errors", () => {
 	assert.match(serverSource, /runtime === "shell"\) return `\. \$\{shellQuote\(sourceFile\)\}; touch/);
 	assert.match(serverSource, /runtime === "shell"\) return "sh"/);

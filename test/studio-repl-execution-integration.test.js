@@ -1074,6 +1074,67 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		tmux("kill-session", "-t", "=pi-repl-bun");
 	});
 
+	// Candidate 111: pi-repl's LFortran session takes code through its helper; its first
+	// pane is the person's prompt. Python stands in for that prompt here.
+	await t.test("a session that takes code only through pi-repl gets no paste and no Ctrl+C", { skip: !has("python3") }, async () => {
+		const sessions = { lfortran: "pi-repl-lfortran", python: "pi-repl-python" };
+		const ids = {};
+		for (const [runtime, s] of Object.entries(sessions)) {
+			ids[runtime] = tmux("new-session", "-d", "-P", "-F", "#{session_id}", "-s", s, "python3 -q").stdout.trim();
+			assert.equal(tmux("set-option", "-t", ids[runtime], "@pi_repl_runtime", runtime).status, 0);
+			assert.equal(tmux("set-option", "-t", ids[runtime], "@pi_repl_send_path", "jupyter-helper").status, 0);
+		}
+		const shows = (s, pattern) => pattern.test(tmux("capture-pane", "-p", "-t", `=${s}:`).stdout);
+		try {
+			for (const s of Object.values(sessions)) {
+				assert.ok(await waitFor(() => shows(s, />>>/)), `${s} is ready`);
+				const entries = (await repl.capture(s)).journalEntries?.length ?? 0;
+				assert.equal((await repl.send(s, "print('pasted ' + 'in')")).error, "This session takes code only through pi-repl.");
+				const result = await rpc.agent("studio_repl_send", { sessionName: s, code: "print('agent ' + 'pasted')" });
+				assert.equal(result.details.ok, false);
+				assert.equal(result.content[0].text, "This session takes code only through pi-repl.");
+				assert.equal((await repl.interrupt(s)).error, "Interrupt isn't available for this session.");
+				await sleep(500);
+				assert.ok(!shows(s, /pasted in|agent pasted|KeyboardInterrupt/), `nothing reached ${s}'s prompt`);
+				assert.equal((await repl.capture(s)).journalEntries?.length ?? 0, entries, `nothing was recorded for ${s}`);
+			}
+
+			// "pane", or no marker, is a session Studio may type into.
+			const s = sessions.python;
+			assert.equal(tmux("set-option", "-t", ids.python, "@pi_repl_send_path", "pane").status, 0);
+			assert.equal((await repl.send(s, "print('pane ' + 'path')")).output, "pane path");
+			assert.equal(tmux("set-option", "-u", "-t", ids.python, "@pi_repl_send_path").status, 0);
+			// A global marker isn't the session's own.
+			assert.equal(tmux("set-option", "-g", "@pi_repl_send_path", "jupyter-helper").status, 0);
+			try {
+				assert.equal((await repl.send(s, "print('no ' + 'marker')")).output, "no marker");
+				assert.equal((await repl.interrupt(s)).message, `Interrupted ${s}.`);
+			} finally {
+				tmux("set-option", "-gu", "@pi_repl_send_path");
+			}
+
+			// Set while a send waits for the session: the check just before the paste refuses it.
+			const record = (await repl.list()).sessions.find((session) => session.sessionName === s).recordId;
+			const sends = {
+				page: async () => (await repl.send(s, "print('after ' + 'the marker')")).error,
+				agent: async () => (await rpc.agent("studio_repl_send", { sessionName: s, code: "print('after ' + 'the marker')" })).content[0].text,
+			};
+			for (const [from, send] of Object.entries(sends)) {
+				assert.equal(tmux("set-option", "-u", "-t", ids.python, "@pi_repl_send_path").status, 0);
+				const lease = await acquireReplSessionSendLease(record, { root: recordRoot, owner: "c111-test", waitMs: 1_000 });
+				const waiting = send();
+				await sleep(1_000);
+				assert.equal(tmux("set-option", "-t", ids.python, "@pi_repl_send_path", "jupyter-helper").status, 0);
+				await lease.release();
+				assert.equal(await waiting, "This session takes code only through pi-repl.", from);
+				await sleep(500);
+				assert.ok(!shows(s, /after the marker/), `nothing was pasted after the marker was set (${from})`);
+			}
+		} finally {
+			for (const s of Object.values(sessions)) tmux("kill-session", "-t", `=${s}`);
+		}
+	});
+
 	await t.test("IPython: its wrapped loader echo is removed", { skip: !has("ipython") }, async () => {
 		assert.equal((await repl.start("ipython")).message, "Started IPython REPL.");
 		assert.equal(pane("pi-studio-repl-ipython", "#{pane_width}"), "80");
