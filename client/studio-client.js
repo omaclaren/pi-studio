@@ -690,6 +690,18 @@
       let replTmuxAvailable = null;
       // Whether the agent is told of new record entries ("on", "send" or "off"), from Studio's server.
       let replRecordActivity = "off";
+      // The name this page's sends and notes are recorded under: chosen here and kept in this
+      // browser, else the default from Studio's server (PI_REPL_USER_NAME, then pi-repl's saved
+      // name, then "User"). Read once, so another tab choosing a name later leaves this page alone.
+      const REPL_PERSON_NAME_STORAGE_KEY = "piStudio.replPersonName.v1";
+      let replPersonName = loadReplPersonName();
+      let replPersonNameDefault = "User";
+      let replPersonNameSource = "default";
+      let replSenderEditing = false;
+      // What's typed in the name field, kept as it's typed so a redraw by any route keeps it (Sol).
+      let replSenderDraft = "";
+      // After Enter or Esc in the name field, the cursor goes back to ✎.
+      let replSenderReturnFocus = false;
       let replSessions = [];
       let replActiveSessionName = "";
       // Studio's selection as this page last adopted it, with its `shown`, and this page's
@@ -1843,9 +1855,10 @@
 
       function reconcileReplQuickPending() {
         if (!replQuickPending) return false;
-        const entry = replJournalEntries.find((candidate) => candidate.requestId === replQuickPending.requestId);
+        // By its entry: the record gives a page's send its own request ID (studio:send:).
+        const entry = replJournalEntries.find((candidate) => candidate.id === replQuickPending.journalEntryId);
         if (!entry || entry.status === "sending") return false;
-        return settleReplQuickPending(entry.requestId, entry.status !== "error");
+        return settleReplQuickPending(replQuickPending.requestId, entry.status !== "error");
       }
 
       function updateReplQuickComposerActions() {
@@ -2136,7 +2149,8 @@
       // its frame runs: composing, typing, a drag or focus elsewhere can start in between
       // (Sol, Astra). Composing holds even a forced redraw.
       function replRedrawMustWait(force) {
-        return replQuickComposing || (!force && isReplControlFocused() && !canRedrawReplUnderFocus());
+        // Not under the name field while it's open either, even when forced: it would close mid-edit.
+        return replQuickComposing || (replSenderEditing && isReplSenderNameFocused()) || (!force && isReplControlFocused() && !canRedrawReplUnderFocus());
       }
 
       function deferReplRedraw(force) {
@@ -2289,6 +2303,7 @@
           restoreReplQuickComposerCursor(cursor);
           applyReplQuickRefocus();
           if (replQuickFocusRequested) focusReplQuickComposer();
+          focusReplSenderNameIfEditing();
         });
       }
 
@@ -2568,6 +2583,94 @@
         const value = String(text || "").trimEnd();
         if (value.length <= REPL_JOURNAL_OUTPUT_MAX_CHARS) return value;
         return "… " + formatCompactNumber(value.length - REPL_JOURNAL_OUTPUT_MAX_CHARS) + " earlier chars omitted …\n" + value.slice(value.length - REPL_JOURNAL_OUTPUT_MAX_CHARS);
+      }
+
+      // pi-repl's rule for a person's name (shared/repl-person.js): trimmed, at most 80
+      // characters, nothing that could break or disguise it where it's shown.
+      function validateReplPersonName(value) {
+        if (typeof value !== "string") return { error: "a name must be text" };
+        const name = value.trim();
+        if (!name) return { error: "the name is empty" };
+        if ([...name].length > 80) return { error: "the name is longer than 80 characters" };
+        if (/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/u.test(name)) return { error: "the name has control characters" };
+        return { name };
+      }
+
+      function loadReplPersonName() {
+        try {
+          const checked = validateReplPersonName(window.localStorage ? window.localStorage.getItem(REPL_PERSON_NAME_STORAGE_KEY) : null);
+          return checked.error ? "" : checked.name;
+        } catch {
+          return "";
+        }
+      }
+
+      function getReplSenderName() {
+        return replPersonName || replPersonNameDefault || "User";
+      }
+
+      // What sends and notes are recorded under: the name on screen, since a redraw that would
+      // show a new default can be waiting (Astra, Sol). Without the row on screen, the name now.
+      function getShownReplSenderName() {
+        const row = rightView === "repl" && critiqueViewEl ? critiqueViewEl.querySelector("[data-repl-sender-shown]") : null;
+        const shown = row ? validateReplPersonName(row.getAttribute("data-repl-sender-shown")) : null;
+        return shown && !shown.error ? shown.name : getReplSenderName();
+      }
+
+      // A blank name goes back to the default.
+      function chooseReplPersonName(value) {
+        const trimmed = String(value || "").trim();
+        const checked = trimmed ? validateReplPersonName(trimmed) : { name: "" };
+        if (checked.error) return checked;
+        replPersonName = checked.name;
+        try {
+          if (window.localStorage) {
+            if (replPersonName) window.localStorage.setItem(REPL_PERSON_NAME_STORAGE_KEY, replPersonName);
+            else window.localStorage.removeItem(REPL_PERSON_NAME_STORAGE_KEY);
+          }
+        } catch {
+          // The name still applies to this page.
+        }
+        return { name: getReplSenderName() };
+      }
+
+      // A version 4 UUID. getRandomValues, since randomUUID needs a secure context and Studio
+      // can be opened over the network.
+      function makeReplPersonUuid() {
+        const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+        return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+      }
+
+      // A person's request ID under Studio's channel prefix (studio:send: or studio:note:).
+      function makeReplPersonRequestId(kind) {
+        return "studio:" + kind + ":" + makeReplPersonUuid();
+      }
+
+      // This page's send, recorded under studio:send: and the send's request ID.
+      function isReplEntryOfRequest(entry, requestId) {
+        return Boolean(requestId) && (entry.requestId === requestId || entry.requestId === "studio:send:" + requestId);
+      }
+
+      // Who sent an entry, as the shared protocol's readers show it and as Studio tells its
+      // agent (describeReplEntrySender in shared/studio-repl-activity.js): an agent's label; a
+      // name under a person's prefix on its matching origin; otherwise "User".
+      function describeReplEntrySender(entry) {
+        const oneLine = (value) => {
+          const text = String(value == null ? "" : value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g, " ").replace(/\s+/g, " ").trim();
+          return [...text].length > 80 ? [...text].slice(0, 79).join("") + "…" : text;
+        };
+        if (entry.mode === "agent") return oneLine(entry.label) || "Agent";
+        const channels = [
+          { prefix: /^pi:(?:send|env):/, origin: "pi-repl", channel: "Pi" },
+          { prefix: /^cli:(?:send|env):/, origin: "pi-repl", channel: "terminal" },
+          { prefix: /^studio:(?:send|note):/, origin: "pi-studio", channel: "Pi Studio" },
+        ];
+        const person = channels.find((candidate) => candidate.origin === entry.origin && candidate.prefix.test(entry.requestId || ""));
+        if (person) return (oneLine(entry.label) || "User") + " · via " + person.channel;
+        return entry.origin === "pi-studio" ? "User · via Pi Studio" : "User";
       }
 
       function createReplJournalEntry(details) {
@@ -2922,7 +3025,8 @@
           return;
         }
         const entry = addReplJournalEntry({
-          label: "note",
+          requestId: makeReplPersonRequestId("note"),
+          label: getShownReplSenderName(),
           prose: note,
           status: "note",
           mode: "literate",
@@ -2951,7 +3055,8 @@
         if (payload.noteOnly) {
           if (String(payload.prose || "").trim()) {
             const entry = addReplJournalEntry({
-              label: payload.label || "note",
+              requestId: makeReplPersonRequestId("note"),
+              label: getShownReplSenderName(),
               prose: payload.prose,
               status: "note",
               mode: payload.mode || "literate",
@@ -2972,12 +3077,14 @@
           setStatus("REPL submission is empty.", "warning");
           return null;
         }
-        const requestId = makeRequestId();
+        // Recorded under the name shown, as studio:send: and this request's ID, here and by the
+        // server, so the card shows the name while the send waits.
+        const requestId = makeReplPersonUuid();
         const journalEntry = addReplJournalEntry({
-          requestId,
+          requestId: "studio:send:" + requestId,
           sessionName: session.sessionName,
           runtime: getActiveReplRuntime(),
-          label: payload.label,
+          label: getShownReplSenderName(),
           mode: payload.mode,
           prose: payload.prose,
           code: text,
@@ -3001,6 +3108,7 @@
           journalEntryId: journalEntry.id,
           createdAt: journalEntry.createdAt,
           label: journalEntry.label,
+          personName: journalEntry.label,
           mode: journalEntry.mode,
           prose: journalEntry.prose,
           skippedChunks: journalEntry.skippedChunks,
@@ -3059,7 +3167,7 @@
           skippedChunks: 0,
         });
         if (!requestId) return false;
-        replQuickPending = { requestId, key, text };
+        replQuickPending = { requestId, key, text, journalEntryId: activeReplJournalEntryId };
         const activeEl = document.activeElement;
         replQuickRefocus = activeEl instanceof Element && activeEl.closest(".repl-quick-composer") ? { requestId, settled: false } : null;
         renderReplViewIfActive({ force: true });
@@ -12031,6 +12139,13 @@
         if (!actionBtn) return;
         event.preventDefault();
         const action = actionBtn.getAttribute("data-repl-action") || "";
+        // The name isn't the session's, so a pane drawn for another session can still change it.
+        if (action === "sender-edit") {
+          replSenderEditing = true;
+          replSenderDraft = replPersonName || getReplSenderName();
+          renderReplViewIfActive({ force: true });
+          return;
+        }
         if (isReplPaneStale(actionBtn)) {
           refuseStaleReplPaneAction(action === "quick-send" ? "The REPL session changed, so nothing was sent." : "The REPL session changed, so nothing was done.");
           return;
@@ -12177,7 +12292,13 @@
       }
 
       // A redraw that waited for a control runs once focus has left it.
-      function handleReplPaneFocusOut() {
+      function handleReplPaneFocusOut(event) {
+        const target = event && event.target;
+        // Leaving the name field keeps what's in it; a redraw that removed it doesn't count.
+        if (target instanceof HTMLInputElement && target.hasAttribute("data-repl-sender-name") && target.isConnected) {
+          finishReplSenderEdit(true);
+          return;
+        }
         if (!replRedrawDeferred) return;
         window.setTimeout(replayDeferredReplRedraw, 0);
       }
@@ -12207,6 +12328,10 @@
       function handleReplPaneInput(event) {
         if (rightView !== "repl") return;
         const target = event && event.target;
+        if (target instanceof HTMLInputElement && target.hasAttribute("data-repl-sender-name")) {
+          replSenderDraft = target.value;
+          return;
+        }
         if (!(target instanceof HTMLTextAreaElement) || !target.hasAttribute("data-repl-quick-draft")) return;
         replQuickLastInputAt = Date.now();
         // The text belongs to the session the box was drawn for, even if another is selected
@@ -12221,6 +12346,15 @@
       function handleReplPaneKeydown(event) {
         if (rightView !== "repl" || !event || event.isComposing) return;
         const target = event.target;
+        if (target instanceof HTMLInputElement && target.hasAttribute("data-repl-sender-name")) {
+          if (event.key !== "Enter" && event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          replSenderReturnFocus = true;
+          finishReplSenderEdit(event.key === "Enter");
+          if (replSenderEditing) replSenderReturnFocus = false;
+          return;
+        }
         if (!(target instanceof HTMLTextAreaElement) || !target.hasAttribute("data-repl-quick-draft")) return;
         const submitShortcut = event.key === "Enter"
           && (event.metaKey || event.ctrlKey)
@@ -14208,8 +14342,9 @@
       function buildReplStudioMeta(entry) {
         const parts = [];
         const kind = getReplStudioEntryKind(entry);
-        if (kind !== "Raw") parts.push(kind);
-        if (entry.origin) parts.push(entry.origin);
+        // An agent's entry is named by who sent it.
+        if (kind !== "Raw" && kind !== "Pi") parts.push(kind);
+        parts.push(describeReplEntrySender(entry));
         const time = formatReferenceTime(entry.createdAt);
         if (time) parts.push(time);
         if (entry.skippedChunks) parts.push("skipped " + String(entry.skippedChunks));
@@ -14302,8 +14437,9 @@
           const pending = !output && entry.status === "sending"
             ? "<div class='repl-studio-pending'>Running…</div>"
             : "";
+          // Who sent it shows; the rest, such as the time, is in its tooltip.
           return "<article class='repl-journal-card repl-studio-entry'>"
-            + (meta ? "<div class='repl-studio-entry-meta'>" + escapeHtml(meta) + "</div>" : "")
+            + (meta ? "<div class='repl-studio-entry-meta' title='" + escapeHtml(meta) + "'>" + escapeHtml(describeReplEntrySender(entry)) + "</div>" : "")
             + prose
             + code
             + output
@@ -14356,6 +14492,77 @@
         return "tmux attach -t " + String(session.sessionName || "");
       }
 
+      // "Sending as …": the name this page's sends and notes are recorded under, and its editor.
+      function buildReplSenderHtml() {
+        const name = getReplSenderName();
+        if (replSenderEditing) {
+          return "<span class='repl-quick-sender'><label>Sending as <input data-repl-sender-name type='text' value='" + escapeHtml(replSenderDraft) + "' placeholder='" + escapeHtml(replPersonNameDefault || "User") + "' aria-label='Name your sends and notes are recorded under' title='Enter to keep, Esc to cancel. Leave it empty for " + escapeHtml(replPersonNameDefault || "User") + ".'></label></span>";
+        }
+        const from = replPersonName
+          ? "Chosen in this browser."
+          : (replPersonNameSource === "environment"
+            ? "From PI_REPL_USER_NAME."
+            : (replPersonNameSource === "setting" ? "The name saved with /repl name or agent-repl name." : "No name is set."));
+        return "<span class='repl-quick-sender' data-repl-sender-shown='" + escapeHtml(name) + "' title='Your sends and notes are recorded under this name. " + escapeHtml(from) + "'>Sending as <strong>" + escapeHtml(name) + "</strong>"
+          + "<button type='button' class='repl-quick-sender-edit' data-repl-action='sender-edit' aria-label='Change the name your sends and notes are recorded under' title='Change name'>✎</button></span>";
+      }
+
+      function isReplSenderNameFocused() {
+        const activeEl = document.activeElement;
+        return activeEl instanceof HTMLInputElement && activeEl.hasAttribute("data-repl-sender-name");
+      }
+
+      function focusReplSenderNameIfEditing() {
+        if (!critiqueViewEl) return;
+        if (!replSenderEditing) {
+          const button = replSenderReturnFocus ? critiqueViewEl.querySelector("[data-repl-action='sender-edit']") : null;
+          replSenderReturnFocus = false;
+          if (button instanceof HTMLElement) button.focus({ preventScroll: true });
+          return;
+        }
+        if (isReplSenderNameFocused()) return;
+        const input = critiqueViewEl.querySelector("[data-repl-sender-name]");
+        if (!(input instanceof HTMLInputElement)) return;
+        input.focus({ preventScroll: true });
+        input.select();
+      }
+
+      // Where the cursor is in the name field, so a redraw by any route puts it back: a response
+      // can redraw the pane without waiting for the field (Sol).
+      function captureReplSenderCursor() {
+        if (!replSenderEditing || !isReplSenderNameFocused()) return null;
+        const input = document.activeElement;
+        return { start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection };
+      }
+
+      function restoreReplSenderCursor(cursor) {
+        if (!cursor || !replSenderEditing || !critiqueViewEl) return;
+        const input = critiqueViewEl.querySelector("[data-repl-sender-name]");
+        if (!(input instanceof HTMLInputElement)) return;
+        input.focus({ preventScroll: true });
+        try {
+          input.setSelectionRange(cursor.start, cursor.end, cursor.direction || "none");
+        } catch {}
+      }
+
+      // Enter or leaving the field keeps the name; Esc doesn't.
+      function finishReplSenderEdit(keep) {
+        if (!replSenderEditing) return;
+        const input = critiqueViewEl ? critiqueViewEl.querySelector("[data-repl-sender-name]") : null;
+        if (keep && input instanceof HTMLInputElement) {
+          const before = getReplSenderName();
+          const chosen = chooseReplPersonName(input.value);
+          if (chosen.error) {
+            setStatus("Name not changed: " + chosen.error + ".", "warning");
+            if (document.activeElement === input) return;
+          } else if (chosen.name !== before) {
+            setStatus("Sending as " + chosen.name + ".", "success");
+          }
+        }
+        replSenderEditing = false;
+        renderReplViewIfActive({ force: true });
+      }
+
       function buildReplQuickComposerHtml(activeSession, canSendToActiveSession) {
         const key = getReplQuickDraftKey(activeSession);
         const draft = getReplQuickDraft(activeSession);
@@ -14372,7 +14579,7 @@
           + "<div class='repl-quick-header'><div><strong id='replQuickComposerTitle'>Quick send</strong><button type='button' class='repl-quick-target' data-repl-action='jump-controls' title='Target: " + escapeHtml(targetDetails) + ". Jump to REPL session controls.' aria-label='Target: " + escapeHtml(targetDetails) + ". Jump to REPL session controls.'><span class='repl-quick-target-label'>" + escapeHtml(visibleTargetLabel) + "</span><span class='repl-quick-target-arrow' aria-hidden='true'>↑</span></button></div>"
           + "<span class='repl-quick-hint'>Enter adds a line · Cmd/Ctrl+Enter sends</span></div>"
           + "<textarea data-repl-quick-draft data-repl-quick-lifetime='" + escapeHtml(encodeURIComponent(key)) + "'" + (replQuickBoxHeight ? " style='height: " + replQuickBoxHeight + "'" : "") + " rows='3' maxlength='" + REPL_QUICK_DRAFT_MAX_CHARS + "' aria-label='Quick code for " + escapeHtml(targetDetails) + "' aria-keyshortcuts='Meta+Enter Control+Enter' placeholder='" + (activeSession ? (key ? "Type a short command or snippet…" : "Exact tmux identity unavailable; refresh the session list") : "Start or select a REPL session first") + "'" + (inputDisabled ? " disabled" : "") + ">" + escapeHtml(draft) + "</textarea>"
-          + "<div class='repl-quick-actions'><span></span><div>"
+          + "<div class='repl-quick-actions'>" + buildReplSenderHtml() + "<div>"
           + "<button type='button' data-repl-action='quick-clear'" + (pending || !draft ? " disabled" : "") + ">Clear</button>"
           + "<button class='repl-quick-send-btn' type='button' data-repl-action='quick-send'" + (sendDisabled ? " disabled" : "") + ">" + (pending ? "Sending…" : "Send") + "</button>"
           + "</div></div></section>";
@@ -14686,8 +14893,10 @@
         if (!critiqueViewEl) return;
         const shouldStick = shouldAutoStickReplView();
         const previousScrollTop = critiqueViewEl.scrollTop;
+        const senderCursor = captureReplSenderCursor();
         finishPreviewRender(critiqueViewEl);
         critiqueViewEl.innerHTML = buildReplPanelHtml();
+        restoreReplSenderCursor(senderCursor);
         critiqueViewEl.classList.remove("response-scroll-resetting");
         if (shouldStick) {
           critiqueViewEl.scrollTop = critiqueViewEl.scrollHeight;
@@ -29203,12 +29412,16 @@
           const settlesPendingRequest = Boolean(responseRequestId && responseRequestId === replPendingRequestId);
           const previousActiveLifetimeKey = getReplQuickDraftKey(getActiveReplSession());
           const previousRuntime = replRuntime;
+          const previousSender = getReplSenderName() + "\u001e" + replPersonNameSource;
           // Every repl_state states Studio's selection; while this page's own choice is
           // unanswered, only that choice's reply changes what the page shows.
           noteReplChoiceAnswer(message);
           const present = !isReplChoicePending();
           replTmuxAvailable = typeof message.tmuxAvailable === "boolean" ? message.tmuxAvailable : replTmuxAvailable;
           if (message.recordActivity === "on" || message.recordActivity === "send" || message.recordActivity === "off") replRecordActivity = message.recordActivity;
+          const defaultName = validateReplPersonName(message.personName);
+          if (!defaultName.error) replPersonNameDefault = defaultName.name;
+          if (message.personNameSource === "environment" || message.personNameSource === "setting" || message.personNameSource === "default") replPersonNameSource = message.personNameSource;
           const sessionsChanged = setReplSessions(message.sessions);
           if (present) adoptReplSelection(message);
           const journalChanged = mergeReplJournalEntries(message.journalEntries);
@@ -29234,6 +29447,7 @@
             || previousError !== replError
             || previousMessage !== replMessage
             || journalChanged
+            || previousSender !== getReplSenderName() + "\u001e" + replPersonNameSource
             || (!previousCapturedAt && replCapturedAt);
           if (viewChanged) renderReplViewIfActive({ force: activeSessionIdentityChanged });
           updateReferenceBadge();
@@ -29360,7 +29574,7 @@
           if (responseRequestId) settleReplQuickPending(responseRequestId, true);
           mergeReplJournalEntries(message.journalEntries);
           if (typeof message.requestId === "string") {
-            replJournalEntries = replJournalEntries.map((entry) => entry.requestId === message.requestId ? { ...entry, status: "sent", updatedAt: Date.now() } : entry);
+            replJournalEntries = replJournalEntries.map((entry) => isReplEntryOfRequest(entry, message.requestId) ? { ...entry, status: "sent", updatedAt: Date.now() } : entry);
             persistReplJournalEntries();
           }
           setStatus("Sent to REPL.", "success");
@@ -29939,7 +30153,7 @@
             replError = typeof message.message === "string" ? message.message : "REPL request failed.";
             settleReplQuickPending(failedReplRequestId, false);
             if (typeof message.requestId === "string") {
-              replJournalEntries = replJournalEntries.map((entry) => entry.requestId === message.requestId ? { ...entry, status: "error", output: replError, updatedAt: Date.now() } : entry);
+              replJournalEntries = replJournalEntries.map((entry) => isReplEntryOfRequest(entry, message.requestId) ? { ...entry, status: "error", output: replError, updatedAt: Date.now() } : entry);
               persistReplJournalEntries();
             }
             renderReplViewIfActive({ force: true });

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { renderReplSessionRecordMarkdown } from "../shared/repl-session-record.js";
@@ -53,6 +54,24 @@ test("Candidate 111: Studio neither pastes nor sends Ctrl+C where pi-repl takes 
 		const path = between(start, choice);
 		assert.match(path, /studioReplSendPathRefusal\((?:selected\.)?session\.tmuxSessionId, "send"\)/, start);
 	}
+});
+
+test("Candidate 112: a page's sends and notes are recorded under its name, checked before anything is sent", () => {
+	// pi-repl v0.11.7's shared/repl-person.js, unchanged.
+	assert.equal(createHash("sha256").update(readFileSync(new URL("../shared/repl-person.js", import.meta.url))).digest("hex"), "68d2949eb02fc19b7be47a66a02d9a47852977ad253ffa42df643cb7d46fd200");
+	const between = (start, end) => serverSource.slice(serverSource.indexOf(start), serverSource.indexOf(end, serverSource.indexOf(start)));
+	// An unusable name is refused before the send counts as a choice or waits for the session.
+	const send = between('if (msg.type === "repl_send_request")', 'if (msg.type === "repl_journal_upsert_request")');
+	assert.ok(send.indexOf("validatePersonName(msg.personName)") > 0 && send.indexOf("validatePersonName(msg.personName)") < send.indexOf("studioReplSelection.choose("));
+	// Its output reaches the entry under the ID it was recorded with, not the page's request ID.
+	assert.equal((send.match(/updateStudioReplJournalEntryOutput\(\n\t+journalEntry\.requestId,/g) || []).length, 2);
+	assert.doesNotMatch(send, /updateStudioReplJournalEntryOutput\(\n\t+msg\.requestId,/);
+	// The name as sent, so anything but a usable name is refused, not cut or ignored (Sol, Astra).
+	assert.match(serverSource, /\t\t\tpersonName: msg\.personName,\n/);
+	// Both note routes check a name under Studio's prefix, read as the shared record will keep the request ID (Sol).
+	assert.match(serverSource, /String\(entry\.requestId \|\| ""\)\.replace\(\/\[\\r\\n\\0\]\+\/g, ""\)\.trim\(\)\.startsWith\("studio:"\)/);
+	assert.match(between('if (msg.type === "repl_journal_upsert_request")', 'if (msg.type === "repl_journal_import_request")'), /checkStudioReplPersonEntry\(msg\.entry\)/);
+	assert.match(between('if (msg.type === "repl_journal_import_request")', 'if (msg.type === "repl_journal_clear_request")'), /checkStudioReplPersonEntry\(entry\)/);
 });
 
 test("Studio shell and GHCi sends retain completion after runtime errors", () => {

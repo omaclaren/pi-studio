@@ -50,6 +50,9 @@ function page() {
 		"let replRedrawDeferred = false; let replRedrawDeferredForce = false; let replRedrawForced = false; let replQuickBoxHeight = ''; let replRedrawRetryTimer = null; let replQuickComposing = false; let replQuickPointerDown = false; let replQuickLastInputAt = 0;",
 		"const REPL_QUICK_TYPING_PAUSE_MS = 800; let now = 10_000; Date.now = () => now;",
 		"const replQuickDrafts = new Map(); let nextRequest = 0;",
+		// Candidate 112: the name field ("Sending as …") isn't drawn here; let a test focus it.
+		"let activeReplJournalEntryId = ''; let replSenderEditing = false; let senderNameFocused = false; class HTMLInputElement {}",
+		"function isReplSenderNameFocused() { return senderNameFocused; } function focusReplSenderNameIfEditing() {}",
 		// The redraw rebuilds the REPL pane: a new box, disabled while a send runs, and focus
 		// anywhere in the pane (the box, Send, the Runtime select) falls to the page.
 		"let redraws = 0;",

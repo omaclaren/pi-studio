@@ -67,6 +67,7 @@ import {
 	studioReplSessionTarget,
 } from "./shared/studio-repl-tmux.js";
 import { stopVerifiedReplSession } from "./shared/repl-session-stop.js";
+import { resolvePersonName, validatePersonName } from "./shared/repl-person.js";
 import { createReplSelection, sameReplSessionLifetime } from "./shared/studio-repl-selection.js";
 import {
 	REPL_SESSION_RECORD_ID_OPTION,
@@ -886,6 +887,9 @@ interface ReplSendRequestMessage {
 	journalEntryId?: string;
 	createdAt?: number;
 	label?: string;
+	// The name the page shows ("Sending as …"); absent from pages older than names. Kept as
+	// sent, so anything but a usable name is refused rather than cut or ignored (Sol).
+	personName?: unknown;
 	mode?: StudioReplJournalEntry["mode"];
 	prose?: string;
 	skippedChunks?: number;
@@ -1135,6 +1139,8 @@ const STUDIO_REPL_START_WAIT_MS = 20_000;
 const STUDIO_REPL_MATLAB_START_WAIT_MS = 120_000;
 const STUDIO_REPL_START_POLL_MS = 250;
 const STUDIO_REPL_JOURNAL_MAX_ENTRIES = 300;
+// A page's send under its name: studio:send: and the page's request ID, a version 4 UUID.
+const STUDIO_REPL_PERSON_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STUDIO_REPL_RUNTIME_OPTION = "@pi_repl_runtime";
 const STUDIO_SUBPROCESS_OUTPUT_MAX_BYTES = 2_000_000;
 const STUDIO_PANDOC_TIMEOUT_MS = readStudioPositiveEnvMs("PI_STUDIO_PANDOC_TIMEOUT_MS", 120_000, 5_000, 15 * 60_000);
@@ -10231,6 +10237,16 @@ function parseStudioReplJournalEntryInput(value: unknown): Partial<StudioReplJou
 	};
 }
 
+// A note under Studio's person prefix (studio:note:) records a name as its label, checked
+// as pi-repl checks names. An unusable one is an error, so it isn't shown as a name. The
+// request ID is read as the shared record will keep it, without line breaks or NULs and
+// trimmed (Sol).
+function checkStudioReplPersonEntry(entry: Partial<StudioReplJournalEntry>): { entry: Partial<StudioReplJournalEntry>; error?: string } {
+	if (!String(entry.requestId || "").replace(/[\r\n\0]+/g, "").trim().startsWith("studio:")) return { entry };
+	const person = validatePersonName(entry.label);
+	return person.error ? { entry, error: person.error } : { entry: { ...entry, label: person.name } };
+}
+
 function parseIncomingMessage(data: RawData, captureEnvelope?: (message: Record<string, unknown>) => void): IncomingStudioMessage | null {
 	let parsed: unknown;
 	try {
@@ -10566,6 +10582,7 @@ function parseIncomingMessage(data: RawData, captureEnvelope?: (message: Record<
 			journalEntryId: typeof msg.journalEntryId === "string" ? msg.journalEntryId.slice(0, 240) : undefined,
 			createdAt: typeof msg.createdAt === "number" && Number.isFinite(msg.createdAt) ? msg.createdAt : undefined,
 			label: typeof msg.label === "string" ? msg.label.slice(0, 240) : undefined,
+			personName: msg.personName,
 			mode: normalizeStudioReplJournalMode(msg.mode),
 			prose: typeof msg.prose === "string" ? msg.prose.slice(0, 80_000) : undefined,
 			skippedChunks: Math.max(0, Math.min(100_000, Math.floor(Number(msg.skippedChunks) || 0))),
@@ -15300,6 +15317,7 @@ export default function (pi: ExtensionAPI) {
 		const state = listStudioReplSessions();
 		studioReplSelection.resolve(state.sessions);
 		const active = studioReplSelection.session;
+		const person = resolvePersonName();
 		sendToClient(client, {
 			type: "repl_state",
 			tmuxAvailable: state.tmuxAvailable,
@@ -15309,6 +15327,9 @@ export default function (pi: ExtensionAPI) {
 			shown: studioReplSelection.shown,
 			journalEntries: getStudioReplJournalEntries(active?.sessionName ?? null),
 			recordActivity: replActivityMode,
+			// What the page sends as when it hasn't chosen a name.
+			personName: person.name,
+			personNameSource: person.source,
 			error: state.error ?? null,
 			...extra,
 		});
@@ -17565,6 +17586,10 @@ export default function (pi: ExtensionAPI) {
 					const sendPathRefusal = studioReplSendPathRefusal(session.tmuxSessionId, "send");
 					if (sendPathRefusal) throw new Error(sendPathRefusal);
 					if (session.runtime === "unknown") throw new Error(unsupportedStudioReplRuntimeMessage(msg.sessionName));
+					// The name the page shows is the one recorded, under Studio's channel prefix
+					// (the shared protocol's "People's sends"). An older page sends none.
+					const person = msg.personName === undefined ? undefined : validatePersonName(msg.personName);
+					if (person?.error) throw new Error(`Nothing was sent: ${person.error}.`);
 					// The send is an explicit choice when admitted, before it waits for the
 					// session's lease, even of the session already selected (Sol, Astra).
 					if (isOpenReplClient(client)) ticket = studioReplSelection.choose({ session });
@@ -17596,12 +17621,13 @@ export default function (pi: ExtensionAPI) {
 					const beforeTranscript = before.transcript;
 					journalEntry = recordStudioReplJournalEntry({
 						id: msg.journalEntryId,
-						requestId: msg.requestId,
+						// The page's UUID request ID, so its card is the record's while the send waits.
+						requestId: person ? `studio:send:${STUDIO_REPL_PERSON_UUID.test(msg.requestId) ? msg.requestId : randomUUID()}` : msg.requestId,
 						createdAt: msg.createdAt,
 						sessionName: msg.sessionName,
 						runtime: session.runtime,
 						origin: "pi-studio",
-						label: msg.label || "Studio",
+						label: person ? person.name : (msg.label || "Studio"),
 						mode: msg.mode || "raw",
 						prose: msg.prose || "",
 						code: msg.text,
@@ -17666,7 +17692,7 @@ export default function (pi: ExtensionAPI) {
 					// A pane kept dead by remain-on-exit still shows what the code printed.
 					if (ended) throw new StudioReplSessionEndedError(msg.sessionName, output);
 					updateStudioReplJournalEntryOutput(
-						msg.requestId,
+						journalEntry.requestId,
 						msg.sessionName,
 						output,
 						sent.controlFiles?.doneFile || output.trim() ? "captured" : "sent",
@@ -17676,7 +17702,7 @@ export default function (pi: ExtensionAPI) {
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					if (journalEntry) updateStudioReplJournalEntryOutput(
-						msg.requestId,
+						journalEntry.requestId,
 						msg.sessionName,
 						error instanceof StudioReplSessionEndedError ? error.recordText : message,
 						"error",
@@ -17700,8 +17726,10 @@ export default function (pi: ExtensionAPI) {
 			}
 			try {
 				if (!inspectStudioReplSession(msg.sessionName)) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
+				const checked = checkStudioReplPersonEntry(msg.entry);
+				if (checked.error) throw new Error(`Not recorded: ${checked.error}.`);
 				recordStudioReplJournalEntry({
-					...msg.entry,
+					...checked.entry,
 					sessionName: msg.sessionName,
 					origin: "pi-studio",
 				});
@@ -17725,7 +17753,9 @@ export default function (pi: ExtensionAPI) {
 			try {
 				if (!inspectStudioReplSession(msg.sessionName)) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
 				for (const entry of msg.entries) {
-					recordStudioReplJournalEntry({ ...entry, sessionName: msg.sessionName, origin: "pi-studio" });
+					// Kept, but not under the prefix, if its name can't be used.
+					const checked = checkStudioReplPersonEntry(entry);
+					recordStudioReplJournalEntry({ ...(checked.error ? { ...entry, requestId: "" } : checked.entry), sessionName: msg.sessionName, origin: "pi-studio" });
 				}
 				sendToClient(client, {
 					type: "repl_journal_ack",

@@ -31,11 +31,15 @@ function page(runtime = "python", { realJournal = false } = {}) {
 		"let replServerSelection = { sessionName: '', runtime: '' }; let replShownBasis = null; let replChoiceRevision = 0; let replChoiceAnswered = 0; let replChoicePin = null;",
 		"let replReconcileSent = ''; let replTranscriptOwner = ''; let replTranscript = ''; let replError = ''; let replMessage = ''; let replCapturedAt = 0;",
 		"let replBusy = false; let replPendingRequestId = ''; let activeReplJournalEntryId = ''; let replJournalEntries = []; let wsState = 'Ready'; let rightView = 'repl';",
+		// Candidate 112: repl_state carries the name the page sends as when it hasn't chosen one.
+		"let replPersonName = ''; let replPersonNameDefault = 'User'; let replPersonNameSource = 'default';",
+		slice("      // pi-repl's rule for a person's name", "      function loadReplPersonName"),
+		slice("      function getReplSenderName", "      function getShownReplSenderName"),
 		"const REPL_TRANSCRIPT_MAX_CHARS = 100000; const sent = []; const added = [];",
 		"function sendMessage(message) { sent.push(message); return true; }",
 		"function formatCompactNumber(value) { return String(value); } function reconcileReplQuickPending() {} function maybeImportLegacyReplJournalEntries() {}",
 		...journal,
-		"function syncActionButtons() {} function renderReplViewIfActive() {} function updateReferenceBadge() {} function persistReplJournalEntries() {}",
+		"let renders = 0; function syncActionButtons() {} function renderReplViewIfActive() { renders += 1; } function updateReferenceBadge() {} function persistReplJournalEntries() {}",
 		"function addReplJournalEntry(entry) { added.push(entry); replJournalEntries = [...replJournalEntries, entry]; return entry; }",
 		slice("      function getKnownReplRuntime", "      function getReplRuntimeLabel"),
 		slice("      function normalizeReplSession", "      function normalizeReplCommandOverride"),
@@ -54,6 +58,8 @@ function page(runtime = "python", { realJournal = false } = {}) {
 		"globalThis.startEntry = (entry) => { replJournalEntries = [entry]; activeReplJournalEntryId = entry.id; };",
 		"globalThis.entryOutput = (id) => replJournalEntries.find((entry) => entry.id === id)?.output;",
 		"globalThis.set = (fields) => { if ('activeReplJournalEntryId' in fields) activeReplJournalEntryId = fields.activeReplJournalEntryId; if ('replPendingRequestId' in fields) replPendingRequestId = fields.replPendingRequestId; };",
+		"globalThis.person = () => [replPersonNameDefault, replPersonNameSource, renders];",
+		"globalThis.choosePersonName = (name) => { replPersonName = name; };",
 		"globalThis.state = () => ({ runtime: replRuntime, active: replActiveSessionName, transcript: replTranscript, capturedAt: replCapturedAt, basis: replShownBasis, entry: activeReplJournalEntryId, pendingRequest: replPendingRequestId, error: replError, sessions: replSessions.map((s) => s.sessionName) });",
 	].join("\n"), context);
 	return context;
@@ -249,4 +255,26 @@ test("while a choice is unanswered, the chosen session keeps its lifetime and Pr
 	q.handle(selected(c9, 4, { choiceRevision: 1, transcript: "new C" }));
 	assert.equal(q.activeLifetime(), `${c.sessionName} $9`);
 	assert.match(q.prompt(), /tmux target: %9\n/);
+});
+
+test("Candidate 112: the page takes Studio's default name from its state, if it's a usable one, and redraws for it", () => {
+	const p = page();
+	p.handle(state({ activeSessionName: b.sessionName, activeRuntime: "python", shown: 1 }));
+	const settled = p.person()[2];
+	p.handle(state({ activeSessionName: b.sessionName, activeRuntime: "python", shown: 1 }));
+	assert.equal(p.person()[2], settled, "nothing new to show");
+	p.handle(state({ activeSessionName: b.sessionName, activeRuntime: "python", shown: 1, personName: " Sam ", personNameSource: "setting" }));
+	assert.deepEqual([...p.person()], ["Sam", "setting", settled + 1], "a new default is shown before the next send (Astra, Sol)");
+	// An unusable name or source leaves what the page had; an older Studio sends neither.
+	p.handle(state({ activeSessionName: b.sessionName, activeRuntime: "python", shown: 1, personName: "Sam\u202eevil", personNameSource: "elsewhere" }));
+	p.handle(state({ activeSessionName: b.sessionName, activeRuntime: "python", shown: 1, personName: "x".repeat(81) }));
+	p.handle(state({ activeSessionName: b.sessionName, activeRuntime: "python", shown: 1 }));
+	assert.deepEqual([...p.person()], ["Sam", "setting", settled + 1]);
+	// Where the name comes from is shown too.
+	p.handle(state({ activeSessionName: b.sessionName, activeRuntime: "python", shown: 1, personName: "Sam", personNameSource: "environment" }));
+	assert.deepEqual([...p.person()], ["Sam", "environment", settled + 2]);
+	// A name chosen on this page hides the default, so a new default changes nothing shown.
+	p.choosePersonName("Ana");
+	p.handle(state({ activeSessionName: b.sessionName, activeRuntime: "python", shown: 1, personName: "Bo", personNameSource: "environment" }));
+	assert.deepEqual([...p.person()], ["Bo", "environment", settled + 2]);
 });

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { buildStudioReplDeadPaneCloseArgs } from "../shared/studio-repl-tmux.js";
 import { acquireReplSessionSendLease } from "../shared/repl-session-record.js";
 import { createServer, get as httpGet } from "node:http";
@@ -25,6 +25,10 @@ const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)
 // Studio's records and the tmux server all live under it.
 const root = mkdtempSync("/tmp/ps74-");
 const env = { ...process.env, PI_CODING_AGENT_DIR: join(root, "agent"), TMUX_TMPDIR: root, TMPDIR: root };
+// pi-repl's saved name (person.json) is read from here, not this account's, and no name is set
+// for Studio (candidate 112).
+env.XDG_CONFIG_HOME = join(root, "config");
+delete env.PI_REPL_USER_NAME;
 // What the scripted model is given, run by run (test/fixtures/scripted-agent-extension.js).
 env.STUDIO_TEST_MODEL_LOG = join(root, "model.log");
 env.STUDIO_TEST_REWRITE_NEXT_RESULT = join(root, "rewrite-next-result");
@@ -226,10 +230,15 @@ function replClient(ws) {
 			return result;
 		},
 		// A note, as More → Add note records one.
-		async note(sessionName, prose) {
+		async note(sessionName, prose, fields = {}) {
 			const id = `pi-studio:c110:note-${++next}`;
-			await request("repl_journal_upsert_request", { sessionName, entry: { id, requestId: `c110-note-${next}`, label: "note", mode: "literate", prose, status: "note" } }, (m) => m.type === "repl_journal_ack");
+			const reply = await request("repl_journal_upsert_request", { sessionName, entry: { id, requestId: `c110-note-${next}`, label: "note", mode: "literate", prose, status: "note", ...fields } }, (m) => m.type === "repl_journal_ack" || m.type === "error");
+			if (reply.type === "error") throw new Error(reply.message);
 			return id;
+		},
+		// Entries a page kept in its browser from before shared records, as it hands them over.
+		async import(sessionName, entries) {
+			return await request("repl_journal_import_request", { sessionName, entries }, (m) => m.type === "repl_journal_ack");
 		},
 		async clear(sessionName) {
 			await request("repl_journal_clear_request", { sessionName }, (m) => m.type === "repl_journal_ack");
@@ -245,7 +254,7 @@ function replClient(ws) {
 		// A send's acknowledgement (after the paste) and its result, separately.
 		sending(sessionName, text, fields = {}) {
 			const journalEntryId = `pi-studio:c74:${++next}`;
-			const requestId = `c74-repl_send_request-${next}`;
+			const requestId = fields.requestId || `c74-repl_send_request-${next}`;
 			const ack = expect((m) => m.type === "repl_send_ack" && m.requestId === requestId);
 			const done = expect((m) => m.requestId === requestId && (m.type === "repl_capture" || m.type === "repl_state") && Array.isArray(m.journalEntries)
 				&& (m.replError || m.journalEntries.some((e) => e.id === journalEntryId && e.status !== "sending")));
@@ -257,6 +266,7 @@ function replClient(ws) {
 					const entry = reply.journalEntries.find((e) => e.id === journalEntryId);
 					return { output: entry?.output, status: entry?.status, error: reply.replError, reply };
 				}),
+				journalEntryId,
 			};
 		},
 	};
@@ -1132,6 +1142,89 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			}
 		} finally {
 			for (const s of Object.values(sessions)) tmux("kill-session", "-t", `=${s}`);
+		}
+	});
+
+	// Candidate 112: a person's send and note are recorded under the name the page shows, as pi-repl's
+	// protocol has it ("People's sends"), and the agent is told who sent them.
+	await t.test("a page's send and note are recorded under its name, and an unusable name isn't", { skip: !has("python3") }, async () => {
+		const p = "pi-studio-repl-python";
+		const told = (run) => run.filter((event) => event.type === "message_end" && event.message?.role === "custom" && event.message.customType === "pi-studio-repl-activity").map((event) => event.message);
+		const inRecord = (text) => readdirSync(recordRoot, { recursive: true }).filter((file) => String(file).endsWith(".json")).some((file) => readFileSync(join(recordRoot, String(file)), "utf8").includes(text));
+		const setting = join(env.XDG_CONFIG_HOME, "pi-repl", "person.json");
+		try {
+			assert.equal((await repl.start("python")).message, "Started Python REPL.");
+			await repl.choose(p, "python");
+
+			// The name the page sends as when it hasn't chosen one: pi-repl's saved name, read each time.
+			let listed = await repl.list();
+			assert.deepEqual([listed.personName, listed.personNameSource], ["User", "default"]);
+			mkdirSync(dirname(setting), { recursive: true });
+			writeFileSync(setting, JSON.stringify({ name: " Sam " }));
+			listed = await repl.list();
+			assert.deepEqual([listed.personName, listed.personNameSource], ["Sam", "setting"]);
+			writeFileSync(setting, JSON.stringify({ name: "Sam\u202e" }));
+			listed = await repl.list();
+			assert.deepEqual([listed.personName, listed.personNameSource], ["User", "default"], "an unusable saved name is ignored");
+
+			// The page's UUID request ID becomes the entry's, under Studio's prefix, and its output reaches it.
+			const id = randomUUID();
+			const named = repl.sending(p, "print('from ' + 'Ana')", { requestId: id, personName: " Ana " });
+			const done = await named.done;
+			assert.equal(done.output, "from Ana");
+			let entry = done.reply.journalEntries.find((candidate) => candidate.id === named.journalEntryId);
+			assert.deepEqual([entry.requestId, entry.label, entry.origin, entry.status], [`studio:send:${id}`, "Ana", "pi-studio", "captured"]);
+			assert.ok(inRecord(`studio:send:${id}`), "in the shared record");
+			// Another request ID gets one of Studio's.
+			const other = repl.sending(p, "print('other ' + 'id')", { personName: "Ana" });
+			entry = (await other.done).reply.journalEntries.find((candidate) => candidate.id === other.journalEntryId);
+			assert.match(entry.requestId, /^studio:send:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+			assert.notEqual(entry.requestId, `studio:send:${other.journalEntryId}`);
+			// A page from before names sends none, and is recorded as before.
+			const older = repl.sending(p, "print('older ' + 'page')");
+			entry = (await older.done).reply.journalEntries.find((candidate) => candidate.id === older.journalEntryId);
+			assert.deepEqual([entry.requestId.startsWith("c74-"), entry.label], [true, "Test"]);
+
+			// A name that can't be used isn't sent or recorded.
+			const count = (await repl.capture(p)).journalEntries.length;
+			// Not cut short first, nor taken for an older page's send when it isn't text (Sol, Astra).
+			for (const [personName, why] of [["Ana\u202eevil", "the name has control characters"], ["  ", "the name is empty"], ["x".repeat(81), "the name is longer than 80 characters"],
+				[`Ana${" ".repeat(997)}\u202e`, "the name is longer than 80 characters"], [null, "a name must be text"], [3, "a name must be text"], [{ name: "Ana" }, "a name must be text"]]) {
+				assert.equal((await repl.send(p, "print('un' + 'named')", { personName })).error, `Nothing was sent: ${why}.`);
+			}
+			await sleep(500);
+			assert.doesNotMatch(scrollback(p), /unnamed/);
+			assert.equal((await repl.capture(p)).journalEntries.length, count);
+
+			// A note under Studio's prefix is recorded under its name, checked the same way.
+			const note = await repl.note(p, "why this cell", { requestId: `studio:note:${randomUUID()}`, label: " Ana " });
+			entry = (await repl.capture(p)).journalEntries.find((candidate) => candidate.id === note);
+			assert.equal(entry.label, "Ana");
+			await assert.rejects(repl.note(p, "a disguised note", { requestId: `studio:note:${randomUUID()}`, label: "Ana\nBo" }), { message: "Not recorded: the name has control characters." });
+			// Nor under a request ID the shared record will clean into the prefix (Sol).
+			for (const requestId of [` studio:note:${randomUUID()}`, `stu\ndio:note:${randomUUID()}`]) {
+				await assert.rejects(repl.note(p, "a disguised note", { requestId, label: "Ana\u061cevil" }), { message: "Not recorded: the name has control characters." });
+			}
+			assert.ok(!(await repl.capture(p)).journalEntries.some((candidate) => candidate.prose === "a disguised note"));
+			// Handed over from a browser, it's kept, but not as a name.
+			const kept = `pi-studio:c112:kept-${randomUUID()}`;
+			const keptToo = `pi-studio:c112:kept-${randomUUID()}`;
+			await repl.import(p, [
+				{ id: kept, requestId: `studio:note:${randomUUID()}`, label: "Ana\u2028Bo", mode: "literate", prose: "kept, not named", status: "note" },
+				{ id: keptToo, requestId: `stu\r\ndio:note:${randomUUID()}`, label: "Ana\u061cevil", mode: "literate", prose: "kept too, not named", status: "note" },
+			]);
+			const entries = (await repl.capture(p)).journalEntries;
+			assert.deepEqual([kept, keptToo].map((id) => entries.find((candidate) => candidate.id === id)?.requestId), ["", ""]);
+
+			// The agent is told who sent each.
+			const [message] = told(await rpc.run("who sent what?"));
+			assert.match(message.content, new RegExp(`\\[entry ${named.journalEntryId} · Ana · via Pi Studio · captured · `));
+			assert.match(message.content, new RegExp(`\\[entry ${older.journalEntryId} · User · via Pi Studio · captured · `));
+			assert.match(message.content, new RegExp(`\\[entry ${note} · Ana · via Pi Studio · note · `));
+			assert.match(message.content, new RegExp(`\\[entry ${kept} · User · via Pi Studio · note · `));
+		} finally {
+			rmSync(setting, { force: true });
+			tmux("kill-session", "-t", `=${p}`);
 		}
 	});
 

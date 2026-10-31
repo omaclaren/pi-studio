@@ -4828,6 +4828,57 @@
       line-height: 1.35;
     }
 
+    .repl-quick-sender {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    .repl-quick-sender strong {
+      min-width: 0;
+      max-width: 28ch;
+      margin-left: 4px;
+      overflow: hidden;
+      color: var(--text);
+      font-weight: 600;
+      text-overflow: ellipsis;
+    }
+
+    .repl-quick-sender-edit {
+      min-height: 0;
+      padding: 0 4px;
+      border-color: transparent;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .repl-quick-sender-edit:not(:disabled):hover,
+    .repl-quick-sender-edit:focus-visible {
+      border-color: transparent;
+      background: var(--studio-header-action-hover-bg, var(--panel-2));
+      color: var(--text);
+    }
+
+    /* As the new layout's other text fields (Quick send's box, Files' path): a border, no ring. */
+    .repl-quick-sender input {
+      width: 18ch;
+      min-height: 0;
+      margin-left: 4px;
+      padding: 2px 6px;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-weight: 600;
+      outline: none;
+    }
+
     .repl-quick-send-btn {
       border-color: color-mix(in srgb, var(--accent) 58%, var(--control-border));
       background: color-mix(in srgb, var(--accent) 14%, var(--panel));
@@ -4952,7 +5003,8 @@
 
     .repl-studio-entry {
       position: relative;
-      padding: 2px 8.5em 6px 0;
+      /* Room for who sent it, such as "Oliver · via Pi Studio" (the meta's 12em at 11px). */
+      padding: 2px calc(12 * 11px + 10px) 6px 0;
       background: transparent;
     }
 
@@ -4968,7 +5020,7 @@
       position: absolute;
       top: 3px;
       right: 0;
-      max-width: 8.1em;
+      max-width: 12em;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -7784,6 +7836,14 @@
       outline: none;
       box-shadow: none;
       border-color: var(--control-border);
+    }
+    /* Start cmd stays plain like the selects beside it, and in use looks like the other text fields: a border, no ring. */
+    body.studio-workspace-layout .repl-command-label input { border: 1px solid transparent; border-radius: 6px; font-family: inherit; font-weight: 400; }
+    body.studio-workspace-layout .repl-command-label input:focus {
+      outline: none;
+      box-shadow: none;
+      border-color: var(--control-border);
+      background: var(--panel);
     }
 
     /* Oliver, 10 Oct: the side thread's model and Thinking sit beside its Ask button. */
