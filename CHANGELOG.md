@@ -4,6 +4,25 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.7] — 2026-11-02
+
+This release brings the REPL pane up to pi-repl 0.11.7.
+
+### Added
+- The agent is told what's new in the REPL record: your sends and notes, other clients' sends, and output that arrived late. Studio adds the entries it hasn't been shown when a run starts and to `studio_repl_send` and `studio_repl_status` results, for the session in the REPL pane and the sessions the agent used. `studio_repl_status` also lists recent entries (`recent`) or one (`entryId`). `PI_REPL_RECORD_ACTIVITY=send` keeps this to results, and `off` stops it; unset, it follows `PI_REPL_PANE_ACTIVITY`. Under **Shared REPL Record** the page says when new entries go to the agent and its model provider, and in Pi's terminal each report is one line until expanded.
+- Your REPL sends and notes are recorded under your name. Quick send shows **Sending as** with ✎ to change the name for this page. The default is `PI_REPL_USER_NAME`, then the name saved with pi-repl's `/repl name` or `agent-repl name`, then "User". The record, the page and the agent show who sent each entry and how, such as "Ana · via Pi Studio" or "Sam · via terminal", as pi-repl and agent-markdown-preview do.
+
+### Changed
+- A send that outlasts its wait keeps the session until its code finishes, then records its output. Before, its entry stayed "timeout" with the output so far. The page's card shows "Running…", and the agent is told not to send it again.
+- A send from the page is recorded or not sent. If the session's shared record can't be used, another client holds the session or the first entry can't be written, Studio says why and sends nothing. The agent's sends still run when the record's details can't be used, as in pi-repl.
+- A session's shared record is used only from the record directory its key names, as in pi-repl 0.11.7. Studio sets the key when it starts a session or first writes to one, and refuses a record in another or replaced temporary directory, such as one an ssh login with a different `TMPDIR` made; the record panel says why. Studio no longer sets record details on every session it lists.
+- Studio doesn't paste into, or send Ctrl+C to, a session where pi-repl takes code through its own helper, such as pi-repl's LFortran session. It says "This session takes code only through pi-repl."
+- A record entry shows who sent it in place of its kind, origin and time, which are in its tooltip.
+- In the new layout, the REPL pane's **Start cmd** field has a plain border while you type in it, like the other text fields, in place of the browser's blue ring.
+
+### Fixed
+- **File → Open file…** is no longer sometimes refused with "Checkpoint the current editor before opening a file." just after a reload, while a background save of an unchanged checkpoint was still finishing.
+
 ## [0.11.6] — 2026-10-30
 
 ### Added

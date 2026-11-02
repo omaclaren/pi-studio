@@ -8,6 +8,7 @@ Compatible clients inspect two tmux session options:
 
 - `@pi_repl_record_id`: 32 lowercase hexadecimal characters
 - `@pi_repl_record_version`: `1`
+- `@pi_repl_record_root_key`: which record directory holds the record (see "One record directory per session")
 
 A client creating metadata uses tmux `set-option -o`, so concurrent first writers cannot replace an ID already chosen by another client. The option contains an opaque ID, never a filesystem path.
 
@@ -52,6 +53,59 @@ The record is a bounded JSON snapshot:
 ```
 
 Each entry has a stable `id`, optional `requestId`, timestamps, session/runtime identity, `origin` (`pi-repl` or `pi-studio`), a presentation `label`, `mode` (`raw`, `literate`, or `agent`), prose, code, cleaned output, status, and skipped/truncation metadata.
+
+## One record directory per session
+
+The record directory is under the operating system's temporary directory, which can differ between terminals of one account: an ssh login and a desktop terminal can have different `TMPDIR` values. Clients in each would otherwise keep separate records and separate send leases for one session. So a session records which directory holds its record, and clients refuse a different one. This adds a tmux option, not a record field, and keeps version 1.
+
+**The key.** `@pi_repl_record_root_key` holds `v1:` and the first 32 lowercase hexadecimal characters of the SHA-256 of `<device>:<inode>` of the record directory, both written as exact decimal integers (from a `bigint` stat), after the directory passes the checks above. It is not a path, and different spellings of one directory give the same key. Any other value is malformed: clients refuse it and never replace it. Test vectors:
+
+| `<device>:<inode>` | Key |
+|---|---|
+| `0:0` | `v1:ac72368a586a18c19088393573ce0307` |
+| `16777232:1234567` | `v1:1e42c564492d3e74e2ef33a98ea2fc21` |
+| `18446744073709551615:9223372036854775813` | `v1:eb75db16e5ba9caa199d69d116a8ac77` |
+
+**Writers,** clients that set a session's metadata, write its record or take its lease:
+
+1. **Fresh metadata.** The key comes first. A writer sets it with `set-option -o` before the record ID, the record or the lease, then reads it back and compares it with its own: a set that succeeds doesn't prove it won. So an upgraded writer never leaves a record ID without a key.
+2. **A record ID without a key** was made by an older client. A writer sets the key, as in 1, only if its own directory already holds a valid record for this exact session (name, tmux session ID and creation time, as stored, not normalised), read without creating, locking or repairing anything, its directory included. Otherwise it refuses, and it never creates a directory or an empty record to claim the session. This doesn't prove that no split happened earlier: if older clients made valid copies in two directories, either qualifies, and the key chooses where upgraded writers go from then on.
+3. **A key** that doesn't name the writer's own directory, or is malformed, is refused. This holds even when the rest of the metadata can't be used (an invalid record ID, an unsupported version), which the writer leaves as it is.
+
+A read of the metadata that fails is never taken for metadata that isn't there: only tmux's answer that an option is unset counts as unset.
+
+Reads of the key are bound to the session's exact lifetime (session ID and creation time). A writer checks the key again where it uses the record or lease, including after waiting for the lease, and recomputes its own key there, so a replaced directory is found. On any failure it refuses before sending, and never falls back to an unsynchronised send.
+
+**Readers,** such as status views, exports, previews and history tools, never set the key, create a directory, record or lock, or change a mode. With a matching key, they read as usual. With a different or malformed key, they refuse, with a notice. With no key, they may show a strictly validated local record, with a "record directory not verified" notice.
+
+**What it guarantees.** It detects a client whose record directory is a different directory from the one the session's record was made in. A replaced directory, for example after temporary-file cleanup, almost always has a new inode, so it is refused too, but reuse of the same device and inode can't be detected. Refusals say "different or replaced record directory" rather than naming one cause. The remedy is the person's: use a terminal with the same temporary directory, or restart the session, which discards its state. Clients never move a session between directories or repair its key.
+
+**Rollout.** Older clients ignore the key, so the check holds only among upgraded clients until every client is updated.
+
+## People's sends
+
+These are conventions within version 1. They add no fields, so older writers keep them.
+
+**The route rule.** An entry with `mode: "agent"` came through an agent's tool. `raw` and `literate` came through a person's command or editor. The rule describes the route, not who was at the keyboard: an agent that runs `agent-repl send` through its shell takes the person's route. A mode that a writer normalised from an unknown value is evidence of neither.
+
+**A person's name and channel.** A person's send records the name the person chose as its `label`, and a `requestId` whose prefix gives the channel:
+
+| `requestId` prefix | `origin` | Written by | Channel |
+|---|---|---|---|
+| `pi:send:<uuid>`, `pi:env:<uuid>` | `pi-repl` | Pi's `/repl send` and `/repl env` | Pi |
+| `cli:send:<uuid>`, `cli:env:<uuid>` | `pi-repl` | `agent-repl send` and `agent-repl env` | terminal |
+| `studio:send:<uuid>` | `pi-studio` | Pi Studio's editor sends | Pi Studio |
+| `studio:note:<uuid>` | `pi-studio` | both of Pi Studio's note routes, assigned when the note is created | Pi Studio |
+
+The label is a chosen name only under one of these prefixes, on its matching origin. The prefix is a hint for display, not identity, authorisation or idempotency, and request IDs stay unique. Names are self-declared, so they suit collaborators who trust each other, not auditing. pi-repl's clients take the name from `PI_REPL_USER_NAME`, then the account's shared setting (`person.json` in `$XDG_CONFIG_HOME/pi-repl/`, else `~/.config/pi-repl/`), then `User`. Names are trimmed, at most 80 characters, with no control characters. Older person entries, with `command:send:` or `command:env:` and labels such as `/repl send`, keep them; records aren't rewritten.
+
+**How a reader shows an entry,** in this order:
+
+1. `mode: "agent"`: its label, the agent's name.
+2. One of the prefixes above, on its matching origin: `<label> · via <channel>`.
+3. Anything else from a person's route: `User`, with "via Pi Studio" when `origin` is `pi-studio`, and no channel otherwise. Older labels such as `/repl send`, `/repl env`, `REPL send` and Studio's descriptions of what was sent aren't names.
+
+Readers escape labels for HTML and for terminals.
 
 ## Concurrency and bounds
 

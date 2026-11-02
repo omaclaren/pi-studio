@@ -136,7 +136,7 @@ Icons in exported PDFs need Mermaid CLI 11.12+ (`npm install -g @mermaid-js/merm
 
 ### REPL
 
-The REPL pane runs code in tmux sessions. It can start its own, and it shares a record of submissions and output with [pi-repl](https://github.com/omaclaren/pi-repl) when both use the same session. Pane echo sets how much submitted code goes into the raw tmux history, as in pi-repl: up to 20 lines with Summary, the default, up to 40 with Full, and none with Off. The record format is in [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md).
+The REPL pane runs code in tmux sessions. It can start its own, and it shares a record of submissions and output with [pi-repl](https://github.com/omaclaren/pi-repl) when both use the same session. Pane echo sets how much submitted code goes into the raw tmux history, as in pi-repl: up to 20 lines with Summary, the default, up to 40 with Full, and none with Off. Your sends and notes are recorded under your name (**Sending as**, under Quick send). The agent is told of record entries it hasn't seen, such as your sends, other clients' sends and late output, when a run starts and with its REPL tools' results. The record format is in [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md).
 
 ### Side questions
 
@@ -157,6 +157,8 @@ For a container, `/studio --no-browser --listen-all --port 4321` listens on all 
 | `BRAVE_API_KEY` | Enables web search in side questions |
 | `PI_STUDIO_FONT_MONO`, `PI_STUDIO_FONT_UI`, `PI_STUDIO_FONT_PROSE` | CSS font stacks for code, interface and previews |
 | `PI_STUDIO_REPL_ECHO_MODE` | Default pane echo for `studio_repl_send`: `summary` (the default), `off` or `full` |
+| `PI_REPL_USER_NAME` | The name your REPL sends and notes are recorded under, ahead of the name saved with pi-repl |
+| `PI_REPL_RECORD_ACTIVITY` | Whether the agent is told of new REPL record entries: `on` (the default: at a run's start and in REPL tool results), `send` (in results only) or `off`; unset, it follows `PI_REPL_PANE_ACTIVITY` |
 | `PI_STUDIO_PANDOC_TIMEOUT_MS`, `PI_STUDIO_LATEX_TIMEOUT_MS`, `PI_STUDIO_MERMAID_TIMEOUT_MS` | Export time limits |
 
 Installing pi-studio also adds `pi-studio-dark` and `pi-studio-light` to Pi's themes, without changing your current theme.
