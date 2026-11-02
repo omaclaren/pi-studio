@@ -700,6 +700,8 @@
       let replSenderEditing = false;
       // What's typed in the name field, kept as it's typed so a redraw by any route keeps it (Sol).
       let replSenderDraft = "";
+      // This page's clear of a session's record, until Studio answers.
+      let replJournalClearRequestId = "";
       // After Enter or Esc in the name field, the cursor goes back to ✎.
       let replSenderReturnFocus = false;
       let replSessions = [];
@@ -1625,6 +1627,8 @@
           source: typeof session.source === "string" ? session.source : "tmux",
           // Why Studio won't use its shared record from here, such as another record directory (pi-repl's P0).
           recordRefusal: typeof session.recordRefusal === "string" ? session.recordRefusal.slice(0, 1000) : "",
+          // It has no record-directory key yet, so its record here may not be the one other clients use.
+          recordUnverified: session.recordUnverified === true,
         };
       }
 
@@ -1907,6 +1911,7 @@
             tmuxSessionId: session.tmuxSessionId,
             tmuxSessionCreatedAt: session.tmuxSessionCreatedAt,
             recordRefusal: session.recordRefusal,
+            recordUnverified: session.recordUnverified,
           })));
       }
 
@@ -2957,6 +2962,11 @@
       }
 
       async function copyReplJournalToClipboard() {
+        const refusal = getActiveReplRecordState().refusal;
+        if (refusal) {
+          setStatus(refusal, "warning");
+          return;
+        }
         const entries = getVisibleReplJournalEntries();
         if (!entries.length) {
           setStatus("No shared REPL record entries to copy for this session yet.", "warning");
@@ -2970,6 +2980,11 @@
       }
 
       function exportReplJournalMarkdown() {
+        const refusal = getActiveReplRecordState().refusal;
+        if (refusal) {
+          setStatus(refusal, "warning");
+          return;
+        }
         const entries = getVisibleReplJournalEntries();
         if (!entries.length) {
           setStatus("No shared REPL record entries to export for this session yet.", "warning");
@@ -2989,23 +3004,33 @@
         setStatus("Exported shared REPL record Markdown.", "success");
       }
 
+      // A session's record is cleared here once Studio has cleared it: Studio can refuse, and then
+      // this page keeps its copy too (pi-repl's P0).
       function clearReplJournal() {
         const sessionName = getActiveReplJournalSessionName();
-        if (sessionName) {
-          replJournalEntries = replJournalEntries.filter((entry) => entry.sessionName !== sessionName);
-        } else {
+        if (!sessionName) {
           replJournalEntries = [];
+          activeReplJournalEntryId = "";
+          persistReplJournalEntries();
+          setStatus("Cleared local REPL record cache.", "success");
+          renderReplViewIfActive({ force: true });
+          return;
         }
-        activeReplJournalEntryId = "";
-        persistReplJournalEntries();
-        if (sessionName) {
-          sendMessage({ type: "repl_journal_clear_request", requestId: makeRequestId(), sessionName });
+        const requestId = makeRequestId();
+        if (!sendMessage({ type: "repl_journal_clear_request", requestId, sessionName })) {
+          setStatus("Nothing was cleared: Studio isn't connected.", "warning");
+          return;
         }
-        setStatus(sessionName ? "Cleared shared REPL record for this session." : "Cleared local REPL record cache.", "success");
-        renderReplViewIfActive({ force: true });
+        replJournalClearRequestId = requestId;
+        setStatus("Clearing the shared REPL record…", "info");
       }
 
       function loadReplJournalIntoEditor() {
+        const refusal = getActiveReplRecordState().refusal;
+        if (refusal) {
+          setStatus(refusal, "warning");
+          return;
+        }
         const entries = getVisibleReplJournalEntries();
         if (!entries.length) {
           setStatus("No shared REPL record entries to load for this session yet.", "warning");
@@ -13948,9 +13973,18 @@
         return String(replActiveSessionName || "").trim();
       }
 
+      // The active session's record as Studio's server reads it (pi-repl's P0): refused, with why, or not verified.
+      function getActiveReplRecordState() {
+        const sessionName = getActiveReplJournalSessionName();
+        const session = sessionName ? replSessions.find((candidate) => candidate.sessionName === sessionName) : null;
+        return { refusal: (session && session.recordRefusal) || "", unverified: Boolean(session && session.recordUnverified) };
+      }
+
       function getVisibleReplJournalEntries() {
         const sessionName = getActiveReplJournalSessionName();
         if (!sessionName) return replJournalEntries;
+        // Entries kept from before aren't a refused record's, to show, copy, export or load.
+        if (getActiveReplRecordState().refusal) return [];
         return replJournalEntries.filter((entry) => entry.sessionName === sessionName);
       }
 
@@ -14400,9 +14434,10 @@
 
       function buildReplJournalHtml(transcript) {
         const sessionName = getActiveReplJournalSessionName();
-        // A record Studio won't use from here says why, and entries kept from before aren't shown as its record (P0).
-        const recordRefusal = (replSessions.find((session) => session.sessionName === sessionName) || {}).recordRefusal || "";
-        const visibleEntries = recordRefusal ? [] : getVisibleReplJournalEntries();
+        // A record Studio won't use from here says why; one with no record-directory key yet says so (P0).
+        const recordState = getActiveReplRecordState();
+        const recordRefusal = recordState.refusal;
+        const visibleEntries = getVisibleReplJournalEntries();
         const hasEntries = visibleEntries.length > 0;
         const entryCount = visibleEntries.length;
         const collapsedClass = replJournalCollapsed ? " is-collapsed" : "";
@@ -14464,6 +14499,7 @@
           + (replRecordActivity === "off" ? "" : " New entries here go to the agent and its model provider.")
           + "</p>"
           + (recordRefusal ? "<p class='repl-journal-omitted'>" + escapeHtml("Not shown: " + recordRefusal) + "</p>" : "")
+          + (!recordRefusal && recordState.unverified ? "<p class='repl-journal-omitted'>Record directory not verified: this session has no record-directory key yet, so the record here may not be the one other clients use.</p>" : "")
           + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
           // The prompt column fits the longest prompt, such as gnuplot>, in the prompt's own font.
           + "<div class='repl-journal-list' style='--repl-studio-prompt-chars: " + Math.max(0, ...visibleEntries.map((entry) => getReplStudioPrompt(entry.runtime).length)) + "'>" + terminalContent + "</div>"
@@ -29564,6 +29600,11 @@
           if (message.cleared && sessionName) {
             replJournalEntries = replJournalEntries.filter((entry) => entry.sessionName !== sessionName);
             persistReplJournalEntries();
+            if (replJournalClearRequestId && message.requestId === replJournalClearRequestId) {
+              replJournalClearRequestId = "";
+              activeReplJournalEntryId = "";
+              setStatus("Cleared shared REPL record for this session.", "success");
+            }
           } else {
             mergeReplJournalEntries(message.journalEntries);
           }
@@ -30126,6 +30167,14 @@
           setBusy(false);
           setWsState("Ready");
           setStatus(typeof message.message === "string" ? message.message : "Studio is busy.", "warning");
+          return;
+        }
+
+        // This page's clear, refused: only its status changes, and its copy stays.
+        if (message.type === "error" && replJournalClearRequestId && message.requestId === replJournalClearRequestId) {
+          replJournalClearRequestId = "";
+          setStatus(typeof message.message === "string" ? message.message : "Nothing was cleared.", "warning");
+          renderReplViewIfActive({ force: true });
           return;
         }
 

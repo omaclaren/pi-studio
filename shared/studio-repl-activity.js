@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
-import { isValidReplSessionRecordId, normalizeReplSessionRecordEntry, REPL_SESSION_RECORD_MAX_BYTES, REPL_SESSION_RECORD_PROTOCOL, REPL_SESSION_RECORD_VERSION } from "./repl-session-record.js";
+import { describeReplSessionRecordRoot, isValidReplSessionRecordId, normalizeReplSessionRecordEntry, REPL_SESSION_RECORD_MAX_BYTES, REPL_SESSION_RECORD_PROTOCOL, REPL_SESSION_RECORD_VERSION } from "./repl-session-record.js";
 
 /*
  * What Studio's agent is told of shared REPL record entries it hasn't been shown: at the start
@@ -261,6 +261,9 @@ function describeObservedSession(state, observed, exclude) {
 		if (known?.considered === version) continue;
 		session.candidates.push({ entry, version, session, updated: Boolean(known?.told) });
 	}
+	// A record from a session with no record-directory key yet says so with its entries, not on
+	// its own: it would otherwise be told at every look (pi-repl's P0).
+	if (observed.unverified && session.candidates.length) notes.push(describeReplSessionRecordRoot("unverified", name));
 	return session;
 }
 
@@ -269,7 +272,7 @@ const sessionBlock = (session) => [session.heading, ...session.notes].join("\n\n
 /**
  * The report for these observations, and what to mark once it reaches the model. Each
  * observation is a session that was checked: `{ sessionName, runtime, runtimeLabel, ok: true,
- * identity, record }`, or `{ sessionName, ok: false, problem? }` when it couldn't be checked in
+ * identity, record, unverified? }`, or `{ sessionName, ok: false, problem? }` when it couldn't be checked in
  * time, or its record couldn't be read. Entries in `exclude` (the agent's own send) aren't
  * reported; `own` marks them as told once the text of their own result reaches the model.
  *

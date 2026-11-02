@@ -60,6 +60,30 @@ test("Candidate 111: Studio neither pastes nor sends Ctrl+C where pi-repl takes 
 	}
 });
 
+test("Candidate 114: the page's record actions and clear follow Studio's refusal; a person's note name is checked as sent", () => {
+	const between = (source, start, end) => {
+		const from = source.indexOf(start);
+		assert.ok(from >= 0, start);
+		return source.slice(from, source.indexOf(end, from));
+	};
+	// Copy, export and load say why for a refused record, before anything else.
+	for (const name of ["async function copyReplJournalToClipboard(", "function exportReplJournalMarkdown(", "function loadReplJournalIntoEditor("]) {
+		const body = between(clientSource, name, "\n      }\n");
+		assert.ok(body.indexOf("getActiveReplRecordState().refusal") >= 0 && body.indexOf("getActiveReplRecordState().refusal") < body.indexOf("getVisibleReplJournalEntries()"), name);
+	}
+	// A session's clear empties this page's copy only on Studio's acknowledgement.
+	const clear = between(clientSource, "function clearReplJournal()", "\n      }\n");
+	assert.doesNotMatch(clear.slice(clear.indexOf("const requestId = makeRequestId();")), /replJournalEntries = /);
+	assert.match(clientSource, /if \(replJournalClearRequestId && message\.requestId === replJournalClearRequestId\) \{/);
+	assert.match(clientSource, /if \(message\.type === "error" && replJournalClearRequestId && message\.requestId === replJournalClearRequestId\) \{/);
+	// The panel and the agent say when a record directory isn't verified.
+	assert.match(clientSource, /recordUnverified: session\.recordUnverified === true,/);
+	assert.match(clientSource, /!recordRefusal && recordState\.unverified \? "<p class='repl-journal-omitted'>Record directory not verified:/);
+	assert.match(serverSource, /unverified: state === "unverified" \};/);
+	// A person's name is cut only after it's checked.
+	assert.match(serverSource, /label: typeof entry\.label === "string" \? \(isStudioReplPersonRequestId\(entry\.requestId\) \? entry\.label : entry\.label\.slice\(0, 240\)\) : undefined,/);
+});
+
 test("Candidate 113: Studio uses a session's record only from the record directory its key names (pi-repl's P0)", () => {
 	// pi-repl v0.11.7's shared/repl-session-record.js, unchanged.
 	assert.equal(createHash("sha256").update(readFileSync(new URL("../shared/repl-session-record.js", import.meta.url))).digest("hex"), "abb9e7c6b831f64495b77a8cd17bb9d833a6b9816116c910611c16962676e089");
@@ -100,7 +124,8 @@ test("Candidate 113: Studio uses a session's record only from the record directo
 	assert.match(clientSource, /recordRefusal: session\.recordRefusal,\n/);
 	assert.match(clientSource, /\(recordRefusal \? "<p class='repl-journal-omitted'>" \+ escapeHtml\("Not shown: " \+ recordRefusal\) \+ "<\/p>" : ""\)/);
 	// Entries kept from before aren't shown as a refused session's record, by Studio or its page.
-	assert.match(clientSource, /const visibleEntries = recordRefusal \? \[\] : getVisibleReplJournalEntries\(\);/);
+	// Candidate 114: in one place, which the panel, copy, export and load all use.
+	assert.match(clientSource, /function getVisibleReplJournalEntries\(\) \{\n[\s\S]{0,400}if \(getActiveReplRecordState\(\)\.refusal\) return \[\];/);
 	assert.match(between("function getStudioReplJournalEntries(", "\n}\n"), /const refused = new Set\(sessions\.filter\(\(session\) => session\.recordRefusal\)/);
 });
 
@@ -117,7 +142,8 @@ test("Candidate 112: a page's sends and notes are recorded under its name, check
 	// The name as sent, so anything but a usable name is refused, not cut or ignored (Sol, Astra).
 	assert.match(serverSource, /\t\t\tpersonName: msg\.personName,\n/);
 	// Both note routes check a name under Studio's prefix, read as the shared record will keep the request ID (Sol).
-	assert.match(serverSource, /String\(entry\.requestId \|\| ""\)\.replace\(\/\[\\r\\n\\0\]\+\/g, ""\)\.trim\(\)\.startsWith\("studio:"\)/);
+	assert.match(serverSource, /String\(requestId \|\| ""\)\.replace\(\/\[\\r\\n\\0\]\+\/g, ""\)\.trim\(\)\.startsWith\("studio:"\)/);
+	assert.match(serverSource, /if \(!isStudioReplPersonRequestId\(entry\.requestId\)\) return \{ entry \};/);
 	assert.match(between('if (msg.type === "repl_journal_upsert_request")', 'if (msg.type === "repl_journal_import_request")'), /checkStudioReplPersonEntry\(msg\.entry\)/);
 	assert.match(between('if (msg.type === "repl_journal_import_request")', 'if (msg.type === "repl_journal_clear_request")'), /checkStudioReplPersonEntry\(entry\)/);
 });

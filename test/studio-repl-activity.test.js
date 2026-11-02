@@ -370,3 +370,18 @@ test("a report forwarded inside another message, as a codemode script can, count
 	confirmReplActivityDelivered(state, ["The script said:\n" + report.text]);
 	assert.equal(buildReplActivityReport(state, [observe([entry("f2")])], { budget: 8_000 }).text, "");
 });
+
+test("Candidate 114: a record from a session with no record-directory key yet says so with its entries, not on its own", () => {
+	const state = createReplActivityState();
+	const one = entry("u1");
+	const unverified = (entries) => ({ ...observe(entries), unverified: true });
+	let report = show(state, [unverified([one])]);
+	assert.match(report.text, /pi-studio-repl-python's record directory is not verified: the session has no record-directory key yet/);
+	assert.match(report.text, /\[entry u1 · /);
+	// Nothing new: no report, so the notice isn't told again at every look.
+	assert.equal(buildReplActivityReport(state, [unverified([one])], { budget: 8_000 }).text, "");
+	// A session with its key says nothing of it.
+	report = show(state, [observe([one, entry("u2")])]);
+	assert.doesNotMatch(report.text, /not verified/);
+	assert.match(report.text, /\[entry u2 · /);
+});

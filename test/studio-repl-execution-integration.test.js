@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { buildStudioReplDeadPaneCloseArgs } from "../shared/studio-repl-tmux.js";
-import { acquireReplSessionSendLease, ensureReplSessionRecord, getReplSessionRecordPath, readReplSessionRecordRootKey, readReplSessionSendLease, replSessionRecordRootKeyFor } from "../shared/repl-session-record.js";
+import { acquireReplSessionSendLease, ensureReplSessionRecord, getReplSessionRecordPath, readReplSessionRecordRootKey, readReplSessionSendLease, replSessionRecordRootKeyFor, upsertReplSessionRecordEntry } from "../shared/repl-session-record.js";
 import { createServer, get as httpGet } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1151,7 +1151,8 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	await t.test("a page's send and note are recorded under its name, and an unusable name isn't", { skip: !has("python3") }, async () => {
 		const p = "pi-studio-repl-python";
 		const told = (run) => run.filter((event) => event.type === "message_end" && event.message?.role === "custom" && event.message.customType === "pi-studio-repl-activity").map((event) => event.message);
-		const inRecord = (text) => readdirSync(recordRoot, { recursive: true }).filter((file) => String(file).endsWith(".json")).some((file) => readFileSync(join(recordRoot, String(file)), "utf8").includes(text));
+		// Records are files at the top of the record directory; a send's lease comes and goes beside them.
+		const inRecord = (text) => readdirSync(recordRoot).filter((file) => file.endsWith(".json")).some((file) => readFileSync(join(recordRoot, file), "utf8").includes(text));
 		const setting = join(env.XDG_CONFIG_HOME, "pi-repl", "person.json");
 		try {
 			assert.equal((await repl.start("python")).message, "Started Python REPL.");
@@ -1207,15 +1208,19 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 				await assert.rejects(repl.note(p, "a disguised note", { requestId, label: "Ana\u061cevil" }), { message: "Not recorded: the name has control characters." });
 			}
 			assert.ok(!(await repl.capture(p)).journalEntries.some((candidate) => candidate.prose === "a disguised note"));
+			// Candidate 114: nor one Studio would cut short to a usable name (Sol, Astra).
+			const padded = `Ana${" ".repeat(237)}\u202e`;
+			await assert.rejects(repl.note(p, "a padded note", { requestId: `studio:note:${randomUUID()}`, label: padded }), { message: "Not recorded: the name is longer than 80 characters." });
 			// Handed over from a browser, it's kept, but not as a name.
 			const kept = `pi-studio:c112:kept-${randomUUID()}`;
 			const keptToo = `pi-studio:c112:kept-${randomUUID()}`;
 			await repl.import(p, [
 				{ id: kept, requestId: `studio:note:${randomUUID()}`, label: "Ana\u2028Bo", mode: "literate", prose: "kept, not named", status: "note" },
 				{ id: keptToo, requestId: `stu\r\ndio:note:${randomUUID()}`, label: "Ana\u061cevil", mode: "literate", prose: "kept too, not named", status: "note" },
+				{ id: `${kept}-padded`, requestId: `studio:note:${randomUUID()}`, label: padded, mode: "literate", prose: "padded, not named", status: "note" },
 			]);
 			const entries = (await repl.capture(p)).journalEntries;
-			assert.deepEqual([kept, keptToo].map((id) => entries.find((candidate) => candidate.id === id)?.requestId), ["", ""]);
+			assert.deepEqual([kept, keptToo, `${kept}-padded`].map((id) => entries.find((candidate) => candidate.id === id)?.requestId), ["", "", ""]);
 
 			// The agent is told who sent each.
 			const [message] = told(await rpc.run("who sent what?"));
@@ -1297,12 +1302,22 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			set(s, "@pi_repl_record_id", recordId);
 			set(s, "@pi_repl_record_version", "1");
 			ensureReplSessionRecord(recordId, session, { root: recordRoot });
+			// An entry an older client made there.
+			upsertReplSessionRecordEntry(recordId, session, { id: "older-client-1", requestId: "older-1", origin: "pi-repl", label: "/repl send", mode: "raw", code: "older = 1", status: "captured" }, { origin: "pi-repl", root: recordRoot });
 			let status = (await rpc.agent("studio_repl_status", { sessionName: s })).content[0].text;
 			assert.match(status, /Record directory not verified: the session has no record-directory key yet\./);
+			// Candidate 114: the agent is told too, with the entries it's told (here at the start of the run
+			// that called the tool), and so is the page.
+			const modelSaw = () => JSON.parse(readFileSync(env.STUDIO_TEST_MODEL_LOG, "utf8").trim().split("\n").at(-1));
+			const report = modelSaw().findLast((seen) => seen.role === "user" && seen.text.startsWith("Recorded REPL activity"))?.text ?? "";
+			assert.match(report, new RegExp(`${s}'s record directory is not verified: the session has no record-directory key yet`));
+			assert.match(report, /\[entry older-client-1 · User · /);
+			assert.equal((await repl.list()).sessions.find((listed) => listed.sessionName === s)?.recordUnverified, true);
 			assert.equal((await repl.send(s, "print('adopted')")).output, "adopted");
 			assert.equal(option(s, "@pi_repl_record_root_key"), own());
 			status = (await rpc.agent("studio_repl_status", { sessionName: s })).content[0].text;
 			assert.doesNotMatch(status, /not verified/);
+			assert.equal((await repl.list()).sessions.find((listed) => listed.sessionName === s)?.recordUnverified, undefined);
 
 			// An older client's metadata with no record here: its record is in another directory, so
 			// Studio neither claims the session nor creates a record to claim it.

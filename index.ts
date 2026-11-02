@@ -10237,7 +10237,8 @@ function parseStudioReplJournalEntryInput(value: unknown): Partial<StudioReplJou
 		completedAt: typeof entry.completedAt === "number" && Number.isFinite(entry.completedAt) ? entry.completedAt : null,
 		runtime: normalizeStudioReplRuntime(entry.runtime) || "unknown",
 		origin: entry.origin === "pi-repl" ? "pi-repl" : "pi-studio",
-		label: typeof entry.label === "string" ? entry.label.slice(0, 240) : undefined,
+		// A person's name is checked as sent (checkStudioReplPersonEntry), so cutting it can't make it usable (Sol, Astra).
+		label: typeof entry.label === "string" ? (isStudioReplPersonRequestId(entry.requestId) ? entry.label : entry.label.slice(0, 240)) : undefined,
 		mode: normalizeStudioReplJournalMode(entry.mode),
 		prose,
 		code,
@@ -10247,12 +10248,16 @@ function parseStudioReplJournalEntryInput(value: unknown): Partial<StudioReplJou
 	};
 }
 
+// Whether a request ID is under Studio's person prefix (studio:send:, studio:note:), read as the
+// shared record will keep it, without line breaks or NULs and trimmed (Sol).
+function isStudioReplPersonRequestId(requestId: unknown): boolean {
+	return String(requestId || "").replace(/[\r\n\0]+/g, "").trim().startsWith("studio:");
+}
+
 // A note under Studio's person prefix (studio:note:) records a name as its label, checked
-// as pi-repl checks names. An unusable one is an error, so it isn't shown as a name. The
-// request ID is read as the shared record will keep it, without line breaks or NULs and
-// trimmed (Sol).
+// as pi-repl checks names. An unusable one is an error, so it isn't shown as a name.
 function checkStudioReplPersonEntry(entry: Partial<StudioReplJournalEntry>): { entry: Partial<StudioReplJournalEntry>; error?: string } {
-	if (!String(entry.requestId || "").replace(/[\r\n\0]+/g, "").trim().startsWith("studio:")) return { entry };
+	if (!isStudioReplPersonRequestId(entry.requestId)) return { entry };
 	const person = validatePersonName(entry.label);
 	return person.error ? { entry, error: person.error } : { entry: { ...entry, label: person.name } };
 }
@@ -12996,6 +13001,8 @@ type StudioReplActivityObservation =
 		record: Awaited<ReturnType<typeof readReplRecordInert>> & {};
 		runtime: string;
 		runtimeLabel: string;
+		// No record-directory key yet: this may not be the record other clients use (P0).
+		unverified: boolean;
 	}
 	| { sessionName: string; ok: false; problem?: string };
 
@@ -13016,9 +13023,10 @@ async function observeStudioReplActivity(sessionNames: string[]): Promise<Studio
 		if (!pane || pane.sessionName !== sessionName || !isValidReplSessionRecordId(pane.recordId)) return null;
 		const identity = { recordId: pane.recordId, tmuxSessionId: pane.sessionId, tmuxSessionCreatedAt: Math.max(0, Math.floor(Number(pane.createdAt) || 0)) };
 		let record: Awaited<ReturnType<typeof readReplRecordInert>>;
+		let state: ReturnType<typeof classifyReplSessionRecordRoot>;
 		try {
 			// Only a record in the directory the session's key names, or one with no key yet (P0).
-			const state = classifyReplSessionRecordRoot(pane.rootKey || undefined);
+			state = classifyReplSessionRecordRoot(pane.rootKey || undefined);
 			if (state === "different" || state === "malformed") return { sessionName, ok: false, problem: studioReplRecordRootRefusal(state, sessionName) };
 			record = await readReplRecordInert(getReplSessionRecordPath(pane.recordId), { ...identity, sessionName });
 		} catch (error) {
@@ -13026,7 +13034,7 @@ async function observeStudioReplActivity(sessionNames: string[]): Promise<Studio
 		}
 		if (!record) return null;
 		const runtime = normalizeStudioReplRuntime(pane.runtime) || inferStudioReplSessionRuntime(sessionName).runtime;
-		return { sessionName, ok: true, identity, record, runtime, runtimeLabel: runtime === "unknown" ? "unknown runtime" : STUDIO_REPL_RUNTIME_LABELS[runtime] };
+		return { sessionName, ok: true, identity, record, runtime, runtimeLabel: runtime === "unknown" ? "unknown runtime" : STUDIO_REPL_RUNTIME_LABELS[runtime], unverified: state === "unverified" };
 	};
 	try {
 		const observed = await Promise.all(sessionNames.map((sessionName) => Promise.race([

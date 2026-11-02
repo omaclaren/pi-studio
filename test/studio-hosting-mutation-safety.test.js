@@ -59,7 +59,7 @@ test('hosted Reset both refuses before consent or mutation, including an unselec
 });
 for(const kind of ['repl','git','history','comments','response','critique'])test(kind+' source replacement consults the gate before mutation',async()=>{
  const c=harness();let gates=0;c.prepareDocumentHostingReplacement=async()=>{gates++;throw Error('pending save');};
- Object.assign(c,{setEditorText:t=>{c.sourceTextEl.value=t;},setEditorLanguage:()=>{},getVisibleReplJournalEntries:()=>[{}],buildReplJournalMarkdown:()=> 'record',
+ Object.assign(c,{setEditorText:t=>{c.sourceTextEl.value=t;},setEditorLanguage:()=>{},getVisibleReplJournalEntries:()=>[{}],getActiveReplRecordState:()=>({refusal:'',unverified:false}),buildReplJournalMarkdown:()=> 'record',
   rightView:'changes',gitChangesState:{content:'diff',label:'diff'},Element:class{},
   captureEditorConsent:()=>({}),editorConsentIsCurrent:()=>true,fileBackedBaselineText:'disk',fileBackedDiskRevision:'hash',
   reviewNotesActionGeneration:0,reviewNotesAssociationGeneration:0,reviewNotesEditGeneration:0,reviewNotesAssociation:{key:'notes'},buildReviewNotesPrompt:()=> 'comments',editorDiffersFromFileBackedBaseline:()=>false,
