@@ -74,13 +74,18 @@ import {
 	REPL_SESSION_RECORD_VERSION,
 	REPL_SESSION_RECORD_VERSION_OPTION,
 	acquireReplSessionSendLease,
+	bindReplSessionRecordRoot,
+	classifyReplSessionRecordRoot,
 	clearReplSessionRecord,
 	createReplSessionRecordId,
+	describeReplSessionRecordRoot,
 	ensureReplSessionRecord,
 	getReplSessionRecordPath,
 	isValidReplSessionRecordId,
-	readReplSessionRecord,
+	readReplSessionRecordStrict,
+	replSessionRecordRootKeyTmux,
 	upsertReplSessionRecordEntry,
+	verifyReplSessionRecordRoot,
 } from "./shared/repl-session-record.js";
 import {
 	REPL_ACTIVITY_RESULT_BUDGET,
@@ -367,6 +372,11 @@ interface StudioReplSessionInfo {
 	recordId?: string;
 	recordPath?: string;
 	recordWarning?: string;
+	// Why the record can't be used from here at all (pi-repl's P0: another or replaced record
+	// directory, or a key this version doesn't know): nothing is sent, not even unrecorded.
+	recordRefusal?: string;
+	// The session has no record-directory key yet; the next send from Studio sets it.
+	recordUnverified?: boolean;
 }
 
 interface StudioReplJournalEntry {
@@ -11524,13 +11534,6 @@ function runStudioTmux(args: string[], options?: { cwd?: string; input?: string;
 	return { ok: true, stdout, stderr };
 }
 
-function readStudioReplTmuxOption(session: string, optionName: string): string | undefined {
-	const result = runStudioTmux(["show-options", "-v", "-t", studioReplSessionTarget(session), optionName], { timeout: 3_000 });
-	if (!result.ok) return undefined;
-	const value = result.stdout.trim();
-	return value || undefined;
-}
-
 // pi-repl's send-path marker, read again before every paste and Interrupt. Read by session
 // ID, from the session's own options: with -q, tmux shows a missing session as an unset
 // option, so a failed read refuses.
@@ -11545,55 +11548,128 @@ function setStudioReplTmuxOptionIfAbsent(session: string, optionName: string, va
 	return runStudioTmux(["set-option", "-qo", "-t", studioReplSessionTarget(session), optionName, value], { timeout: 3_000 }).ok;
 }
 
-function attachStudioReplSessionRecord(
-	session: StudioReplSessionInfo,
-	recordIdHint?: string,
-	versionHint?: string,
-): StudioReplSessionInfo {
-	const tmuxSession = session.tmuxSessionId || session.sessionName;
-	let recordId = recordIdHint || readStudioReplTmuxOption(tmuxSession, REPL_SESSION_RECORD_ID_OPTION);
-	let version = versionHint || readStudioReplTmuxOption(tmuxSession, REPL_SESSION_RECORD_VERSION_OPTION);
-	if (recordId && !isValidReplSessionRecordId(recordId)) {
-		return { ...session, recordWarning: "Invalid shared REPL record metadata; Studio left it untouched." };
+// Why a session's record directory refuses its record; never empty, so a refusal always refuses.
+function studioReplRecordRootRefusal(state: Parameters<typeof describeReplSessionRecordRoot>[0], sessionName: string): string {
+	return describeReplSessionRecordRoot(state, sessionName) ?? `${sessionName}'s record directory can't be used from here.`;
+}
+
+// Metadata this version can't use: left as it is, and the session is sent to unrecorded.
+function unusableStudioReplRecordMetadata(recordId: string | undefined, version: string | undefined): string | undefined {
+	if (recordId !== undefined && !isValidReplSessionRecordId(recordId)) return "Invalid shared REPL record metadata; Studio left it untouched.";
+	if (version && version !== String(REPL_SESSION_RECORD_VERSION)) return `Shared REPL record version ${version} is not supported by this Studio version.`;
+	return undefined;
+}
+
+/**
+ * A session's record as a reader sees it, from what list-panes showed: it sets no option and
+ * creates nothing (pi-repl's P0). A record-directory key that doesn't name this Studio's
+ * record directory, or that this version doesn't know, refuses the record.
+ */
+function readStudioReplSessionRecordState(session: StudioReplSessionInfo, recordIdShown: string, versionShown: string, rootKeyShown: string): StudioReplSessionInfo {
+	const recordId = recordIdShown || undefined;
+	// Refused, the record ID is still the session's, so a send that waited can tell a refusal from a new record.
+	const refuse = (reason: string): StudioReplSessionInfo => ({ ...session, ...(recordId && isValidReplSessionRecordId(recordId) ? { recordId } : {}), recordWarning: reason, recordRefusal: reason });
+	let state: ReturnType<typeof classifyReplSessionRecordRoot>;
+	try {
+		state = classifyReplSessionRecordRoot(rootKeyShown || undefined);
+	} catch (error) {
+		return refuse(error instanceof Error ? error.message : String(error));
 	}
-	if (!recordId) {
-		const candidate = createReplSessionRecordId();
-		if (!setStudioReplTmuxOptionIfAbsent(tmuxSession, REPL_SESSION_RECORD_ID_OPTION, candidate)) {
-			return { ...session, recordWarning: "Studio could not attach shared record metadata to this tmux session." };
+	if (state === "different" || state === "malformed") return refuse(studioReplRecordRootRefusal(state, session.sessionName));
+	if (!recordId) return session;
+	const unusable = unusableStudioReplRecordMetadata(recordId, versionShown || undefined);
+	if (unusable) return { ...session, ...(isValidReplSessionRecordId(recordId) ? { recordId } : {}), recordWarning: unusable };
+	return { ...session, recordId, recordPath: getReplSessionRecordPath(recordId), ...(state === "unverified" ? { recordUnverified: true } : {}) };
+}
+
+// A session's record option, by session ID: undefined only when tmux says it isn't set. Any
+// other failure throws, so a failed read is never taken for an option that isn't there.
+function readStudioReplRecordOption(session: StudioReplSessionInfo, optionName: string): string | undefined {
+	const result = runStudioTmux(["show-options", "-v", "-t", session.tmuxSessionId, optionName], { timeout: 3_000 });
+	if (result.ok) return result.stdout.trim();
+	if (/invalid option|unknown option/i.test(result.stderr)) return undefined;
+	throw new Error(`Could not read ${session.sessionName}'s ${optionName}: ${result.stderr.trim() || result.message}.`);
+}
+
+// tmux access to one session lifetime's record-directory key, by session ID.
+function studioReplRecordRootKeys(session: StudioReplSessionInfo) {
+	return replSessionRecordRootKeyTmux(async (args: string[]) => {
+		const result = runStudioTmux(args, { timeout: 3_000 });
+		return { code: result.ok ? 0 : 1, stdout: result.stdout, stderr: result.ok ? result.stderr : (result.stderr || result.message) };
+	}, getStudioReplSessionRecordIdentity(session));
+}
+
+/**
+ * A session's record for a writer, before a send, a note or a clear, as pi-repl's
+ * ensureTmuxSessionRecord: its record-directory key set or checked first (P0), then its
+ * record ID and version set if absent, then its record created if this directory has none.
+ * A key that doesn't name Studio's record directory refuses; so does any read or set that
+ * fails, since the fallback would send without the lease.
+ */
+async function ensureStudioReplSessionRecord(session: StudioReplSessionInfo): Promise<StudioReplSessionInfo> {
+	const { recordId: _recordId, recordPath: _recordPath, recordWarning: _recordWarning, recordRefusal: _recordRefusal, recordUnverified: _recordUnverified, ...base } = session;
+	const refuse = (reason: string, recordId?: string): StudioReplSessionInfo => ({
+		...base,
+		...(recordId && isValidReplSessionRecordId(recordId) ? { recordId } : {}),
+		recordWarning: reason,
+		recordRefusal: reason,
+	});
+	let recordId: string | undefined;
+	let version: string | undefined;
+	try {
+		recordId = readStudioReplRecordOption(session, REPL_SESSION_RECORD_ID_OPTION);
+		version = readStudioReplRecordOption(session, REPL_SESSION_RECORD_VERSION_OPTION);
+		const keys = studioReplRecordRootKeys(session);
+		const unusable = unusableStudioReplRecordMetadata(recordId, version);
+		if (unusable) {
+			// Left as it is, but a key the session holds still decides whether Studio sends at all.
+			const state = classifyReplSessionRecordRoot(await keys.readKey());
+			if (state === "different" || state === "malformed") return refuse(studioReplRecordRootRefusal(state, session.sessionName));
+			return { ...base, ...(recordId && isValidReplSessionRecordId(recordId) ? { recordId } : {}), recordWarning: unusable };
 		}
-		recordId = readStudioReplTmuxOption(tmuxSession, REPL_SESSION_RECORD_ID_OPTION);
+		// The key comes before the record ID, so an ID without a key was made by an older client.
+		const bound = await bindReplSessionRecordRoot(keys, { sessionName: session.sessionName, recordId, identity: getStudioReplSessionRecordIdentity(session) });
+		if (!bound.ok) return refuse(bound.reason || studioReplRecordRootRefusal("missing", session.sessionName), recordId);
+		if (!recordId) {
+			if (!setStudioReplTmuxOptionIfAbsent(session.tmuxSessionId, REPL_SESSION_RECORD_ID_OPTION, createReplSessionRecordId())) {
+				throw new Error(`Studio could not attach shared record metadata to ${session.sessionName}.`);
+			}
+			recordId = readStudioReplRecordOption(session, REPL_SESSION_RECORD_ID_OPTION);
+		}
+		if (!version) {
+			if (!setStudioReplTmuxOptionIfAbsent(session.tmuxSessionId, REPL_SESSION_RECORD_VERSION_OPTION, String(REPL_SESSION_RECORD_VERSION))) {
+				throw new Error(`Studio could not attach shared record metadata to ${session.sessionName}.`);
+			}
+			version = readStudioReplRecordOption(session, REPL_SESSION_RECORD_VERSION_OPTION);
+		}
+	} catch (error) {
+		return refuse(error instanceof Error ? error.message : String(error), recordId);
 	}
 	if (!recordId || !isValidReplSessionRecordId(recordId)) {
-		return { ...session, recordWarning: "Studio could not read valid shared record metadata from this tmux session." };
-	}
-	if (!version) {
-		setStudioReplTmuxOptionIfAbsent(tmuxSession, REPL_SESSION_RECORD_VERSION_OPTION, String(REPL_SESSION_RECORD_VERSION));
-		version = readStudioReplTmuxOption(tmuxSession, REPL_SESSION_RECORD_VERSION_OPTION);
+		return { ...base, recordWarning: "Studio could not read valid shared record metadata from this tmux session." };
 	}
 	const recordPath = getReplSessionRecordPath(recordId);
 	if (version !== String(REPL_SESSION_RECORD_VERSION)) {
-		return {
-			...session,
-			recordId,
-			recordPath,
-			recordWarning: `Shared REPL record version ${version || "unknown"} is not supported by this Studio version.`,
-		};
+		return { ...base, recordId, recordPath, recordWarning: `Shared REPL record version ${version || "unknown"} is not supported by this Studio version.` };
 	}
 	try {
-		ensureReplSessionRecord(recordId, {
-			sessionName: session.sessionName,
-			tmuxSessionId: session.tmuxSessionId,
-			tmuxSessionCreatedAt: session.tmuxSessionCreatedAt,
-			runtime: session.runtime,
-		});
-		return { ...session, recordId, recordPath };
+		ensureReplSessionRecord(recordId, getStudioReplSessionRecordIdentity(session));
+		return { ...base, recordId, recordPath };
 	} catch (error) {
-		return {
-			...session,
-			recordId,
-			recordPath,
-			recordWarning: error instanceof Error ? error.message : String(error),
-		};
+		return { ...base, recordId, recordPath, recordWarning: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+/**
+ * The record-directory check where a send uses the record or lease, after waiting for the
+ * lease: why the send must stop, or undefined to go ahead. It sets and creates nothing.
+ */
+async function checkStudioReplRecordRootAtUse(session: StudioReplSessionInfo): Promise<string | undefined> {
+	try {
+		const checked = await verifyReplSessionRecordRoot(studioReplRecordRootKeys(session), session.sessionName);
+		return checked.ok ? undefined : (checked.reason || studioReplRecordRootRefusal("missing", session.sessionName));
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
 	}
 }
 
@@ -11603,7 +11679,7 @@ function makeStudioReplSessionInfo(pane: StudioReplPane): StudioReplSessionInfo 
 	const inferred = inferStudioReplSessionRuntime(pane.sessionName);
 	const metadataRuntime = normalizeStudioReplRuntime(pane.runtime);
 	const runtime = metadataRuntime || inferred.runtime;
-	return attachStudioReplSessionRecord({
+	return readStudioReplSessionRecordState({
 		sessionName: pane.sessionName,
 		// The first pane's ID, pinned for a whole send (Sol: not an assumed 0.0).
 		target: pane.paneId,
@@ -11612,7 +11688,7 @@ function makeStudioReplSessionInfo(pane: StudioReplPane): StudioReplSessionInfo 
 		runtime,
 		label: formatStudioReplSessionLabel(pane.sessionName, runtime, inferred.source),
 		source: inferred.source,
-	}, pane.recordId, pane.version);
+	}, pane.recordId, pane.version, pane.rootKey);
 }
 
 // A session by exact name or tmux ID ($N).
@@ -11724,9 +11800,11 @@ async function startStudioReplSession(runtime: StudioReplRuntime, cwd: string, o
 		if (ready || Date.now() >= deadline) break;
 		await sleep(Math.min(STUDIO_REPL_START_POLL_MS, Math.max(0, deadline - Date.now())));
 	}
-	// Inspect once, which also attaches the shared record.
-	const session = inspectStudioReplTmuxSession(sessionId);
-	if (!session) return { ok: false, message: exited };
+	// Inspect once, then set the new session's record-directory key, record ID and record, as
+	// pi-repl's start does (P0); a session whose record can't be set up says why when sent to.
+	const inspected = inspectStudioReplTmuxSession(sessionId);
+	if (!inspected) return { ok: false, message: exited };
+	const session = await ensureStudioReplSessionRecord(inspected);
 	// Studio sends to a session's first pane. If that isn't the pane it watched,
 	// the prompt it saw says nothing about where code would go (Sol).
 	if (session.target !== paneId) return { ok: true, session, message: `${started}, but another pane now comes first in its session. Check it before running code.` };
@@ -12638,8 +12716,9 @@ function recordStudioReplJournalEntry(
 	const localEntryId = entry.id;
 	studioReplUnsyncedJournalEntryIds.add(localEntryId);
 	// A previously validated exact-lifetime identity lets completion/error updates
-	// reach the same sidecar even if that tmux session disappears before capture.
-	const session = knownSession || inspectStudioReplSession(entry.sessionName);
+	// reach the same sidecar even if that tmux session disappears before capture. Only a
+	// writer that has checked the session's record directory passes one (P0).
+	const session = knownSession;
 	if (!session?.recordId || session.recordWarning || session.sessionName !== entry.sessionName) return entry;
 	try {
 		const recorded = upsertReplSessionRecordEntry(
@@ -12668,7 +12747,8 @@ function getStudioReplJournalEntries(sessionName: string | null | undefined): St
 	for (const session of sessions) {
 		if (!session.recordId || session.recordWarning) continue;
 		try {
-			const record = readReplSessionRecord(session.recordId, getStudioReplSessionRecordIdentity(session));
+			// A reader's read: it creates, repairs and claims nothing (P0).
+			const record = readReplSessionRecordStrict(session.recordId, getStudioReplSessionRecordIdentity(session));
 			if (record) {
 				const unsynced = studioReplJournalEntries.filter((entry) => (
 					entry.sessionName === session.sessionName && studioReplUnsyncedJournalEntryIds.has(entry.id)
@@ -12687,9 +12767,11 @@ function getStudioReplJournalEntries(sessionName: string | null | undefined): St
 			// The raw tmux mirror and in-memory Studio record remain independently usable.
 		}
 	}
-	const entries = normalizedSessionName
+	// A session whose record is refused from here has none: entries kept from before aren't shown as its record (P0).
+	const refused = new Set(sessions.filter((session) => session.recordRefusal).map((session) => session.sessionName));
+	const entries = (normalizedSessionName
 		? studioReplJournalEntries.filter((entry) => entry.sessionName === normalizedSessionName)
-		: studioReplJournalEntries;
+		: studioReplJournalEntries).filter((entry) => !refused.has(entry.sessionName));
 	return entries.slice(-STUDIO_REPL_JOURNAL_MAX_ENTRIES).map((entry) => ({
 		...entry,
 		sharedSynced: !studioReplUnsyncedJournalEntryIds.has(entry.id) && entry.sharedSynced === true,
@@ -12719,13 +12801,16 @@ function updateStudioReplJournalEntryOutput(
 	}, knownSession);
 }
 
-function clearStudioReplJournal(sessionName: string): void {
+async function clearStudioReplJournal(sessionName: string): Promise<void> {
 	const normalizedSessionName = String(sessionName || "").trim();
 	if (!normalizedSessionName) return;
+	// Clearing writes the record: its record directory is checked first, and a refusal clears nothing (P0).
+	const inspected = inspectStudioReplSession(normalizedSessionName);
+	const session = inspected?.recordId ? await ensureStudioReplSessionRecord(inspected) : inspected;
+	if (session?.recordRefusal) throw new Error(`Nothing was cleared: ${session.recordRefusal}`);
 	const clearedIds = studioReplJournalEntries.filter((entry) => entry.sessionName === normalizedSessionName).map((entry) => entry.id);
 	studioReplJournalEntries = studioReplJournalEntries.filter((entry) => entry.sessionName !== normalizedSessionName);
 	for (const id of clearedIds) studioReplUnsyncedJournalEntryIds.delete(id);
-	const session = inspectStudioReplSession(normalizedSessionName);
 	if (!session?.recordId || session.recordWarning) return;
 	clearReplSessionRecord(session.recordId, getStudioReplSessionRecordIdentity(session));
 }
@@ -12916,9 +13001,10 @@ type StudioReplActivityObservation =
 
 /**
  * The sessions a report covers, as they are now, read-only: one tmux call each for the
- * session's identity and record ID, then its record file without the lock, all within one
- * deadline. It never creates or changes anything, unlike inspectStudioReplSession. A session
- * that has gone, or has no record yet, has nothing to report.
+ * session's identity, record ID and record-directory key, then its record file without the
+ * lock, all within one deadline. It never creates or changes anything. A session that has
+ * gone, or has no record yet, has nothing to report; one whose key names another record
+ * directory is reported as unreadable.
  */
 async function observeStudioReplActivity(sessionNames: string[]): Promise<StudioReplActivityObservation[]> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -12931,6 +13017,9 @@ async function observeStudioReplActivity(sessionNames: string[]): Promise<Studio
 		const identity = { recordId: pane.recordId, tmuxSessionId: pane.sessionId, tmuxSessionCreatedAt: Math.max(0, Math.floor(Number(pane.createdAt) || 0)) };
 		let record: Awaited<ReturnType<typeof readReplRecordInert>>;
 		try {
+			// Only a record in the directory the session's key names, or one with no key yet (P0).
+			const state = classifyReplSessionRecordRoot(pane.rootKey || undefined);
+			if (state === "different" || state === "malformed") return { sessionName, ok: false, problem: studioReplRecordRootRefusal(state, sessionName) };
 			record = await readReplRecordInert(getReplSessionRecordPath(pane.recordId), { ...identity, sessionName });
 		} catch (error) {
 			return { sessionName, ok: false, problem: error instanceof Error ? error.message : String(error) };
@@ -14226,6 +14315,7 @@ export default function (pi: ExtensionAPI) {
 				lines.push(`Selected: ${selected.session.sessionName} (${selected.session.runtime}, ${selected.session.source})`);
 				if (selected.session.recordId && !selected.session.recordWarning) {
 					lines.push(`Shared clean record: ${recordEntries.length} entries (${selected.session.recordId})`);
+					if (selected.session.recordUnverified) lines.push("Record directory not verified: the session has no record-directory key yet. The next send from Studio sets it to Studio's record directory; upgraded clients then stop using any copy older clients kept elsewhere.");
 				}
 				if (selected.session.recordWarning) lines.push(`Shared record warning: ${selected.session.recordWarning}`);
 			}
@@ -14325,22 +14415,36 @@ export default function (pi: ExtensionAPI) {
 			let journalEntry: StudioReplJournalEntry | null = null;
 			// Code still running when this call stops waiting: the lease and control files are settle's.
 			let settling: StudioReplSettlingSend | null = null;
-			const pendingNotice = () => studioReplPendingNotice(selected.session!.sessionName, settling!.entry, selected.session!.recordId, Boolean(lease));
+			// The session as its record allows writing to it; until it's checked, not at all.
+			let recorded: StudioReplSessionInfo = { ...selected.session, recordWarning: "The session's record directory hasn't been checked." };
+			const pendingNotice = () => studioReplPendingNotice(selected.session!.sessionName, settling!.entry, recorded.recordId, Boolean(lease));
 			try {
-				if (selected.session.recordId && !selected.session.recordWarning) {
-					lease = await acquireReplSessionSendLease(selected.session.recordId, {
+				// The session's record directory is set or checked before anything is recorded (P0). A
+				// record in another directory is never sent to; metadata this version can't use is sent
+				// to unrecorded, as in pi-repl.
+				recorded = await ensureStudioReplSessionRecord(selected.session);
+				if (recorded.recordRefusal) throw new Error(`Nothing was sent: ${recorded.recordRefusal}`);
+				if (recorded.recordId && !recorded.recordWarning) {
+					lease = await acquireReplSessionSendLease(recorded.recordId, {
 						owner: `pi-studio:tool:${toolCallId}`,
 						waitMs: timeoutMs,
 						signal,
 					});
 				}
-				const currentSession = inspectStudioReplSession(selected.session.sessionName);
-				if (!currentSession || !isSameStudioReplSessionLifetime(selected.session, currentSession)) {
+				const inspected = inspectStudioReplSession(selected.session.sessionName);
+				if (!inspected || !isSameStudioReplSessionLifetime(selected.session, inspected)) {
 					throw new Error(`REPL session ${selected.session.sessionName} changed while Studio was waiting to send.`);
 				}
-				if (lease && currentSession.recordId !== selected.session.recordId) {
+				if (lease && inspected.recordId !== recorded.recordId) {
 					throw new Error(`The shared record for ${selected.session.sessionName} changed while Studio was waiting to send.`);
 				}
+				// Checked again where the lease is used: the key, and the directory it names, can change while a send waits.
+				if (lease) {
+					const atUse = await checkStudioReplRecordRootAtUse(inspected);
+					if (atUse) throw new Error(`Nothing was sent: ${atUse}`);
+				}
+				// Without the lease, nothing is written to the record.
+				const currentSession: StudioReplSessionInfo = lease ? inspected : { ...inspected, recordWarning: recorded.recordWarning || "The session has no shared record." };
 				const before = captureStudioReplSession(currentSession.sessionName, currentSession);
 				if (!before.ok) throw new Error(`Could not capture ${currentSession.sessionName} before sending: ${before.message}`);
 				if (!isSameStudioReplSessionLifetime(currentSession, before.session)) {
@@ -14478,7 +14582,7 @@ export default function (pi: ExtensionAPI) {
 						output,
 						pending: Boolean(settling),
 						recordEntryId: journalEntry.id,
-						recordPath: selected.session.recordPath,
+						recordPath: recorded.recordPath,
 					} as Record<string, unknown>,
 				};
 			} catch (error) {
@@ -14494,7 +14598,7 @@ export default function (pi: ExtensionAPI) {
 							output: ended ?? (error instanceof Error ? error.message : String(error)),
 							status: ended === undefined && error instanceof Error && /timed out/i.test(error.message) ? "timeout" : "error",
 							completedAt: Date.now(),
-						}, submittedSession || selected.session);
+						}, submittedSession || recorded);
 					} catch {
 						// Preserve the execution error when record maintenance also fails.
 					}
@@ -17577,6 +17681,8 @@ export default function (pi: ExtensionAPI) {
 				let journalEntry: StudioReplJournalEntry | null = null;
 				let lease: Awaited<ReturnType<typeof acquireReplSessionSendLease>> | null = null;
 				let submittedSession: StudioReplSessionInfo | null = null;
+				// The session as checked once the lease is held: the one its entry is written with.
+				let recordSession: StudioReplSessionInfo | null = null;
 				let submittedControlFiles: StudioReplControlFiles | undefined;
 				let ticket: number | null = null;
 				// Code still running when this send stops waiting: the lease and control files are settle's.
@@ -17593,13 +17699,16 @@ export default function (pi: ExtensionAPI) {
 					// The send is an explicit choice when admitted, before it waits for the
 					// session's lease, even of the session already selected (Sol, Astra).
 					if (isOpenReplClient(client)) ticket = studioReplSelection.choose({ session });
+					// The session's record directory is set or checked before anything is recorded (P0).
+					const recorded = await ensureStudioReplSessionRecord(session);
+					if (recorded.recordRefusal) throw new Error(`Nothing was sent: ${recorded.recordRefusal}`);
 					// A person's send is recorded, or not sent at all, as pi-repl's sendAndSettle (R34).
-					if (!session.recordId || session.recordWarning) {
-						const why = session.recordWarning ? ` (${session.recordWarning.replace(/\.$/, "")})` : "";
+					if (!recorded.recordId || recorded.recordWarning) {
+						const why = recorded.recordWarning ? ` (${recorded.recordWarning.replace(/\.$/, "")})` : "";
 						throw new Error(`Nothing was sent: the session's shared record isn't usable${why}, so the send couldn't be recorded.`);
 					}
 					try {
-						lease = await acquireReplSessionSendLease(session.recordId, {
+						lease = await acquireReplSessionSendLease(recorded.recordId, {
 							owner: `pi-studio:browser:${msg.requestId}`,
 							waitMs: STUDIO_REPL_SEND_DEFAULT_TIMEOUT_MS,
 						});
@@ -17610,9 +17719,13 @@ export default function (pi: ExtensionAPI) {
 					if (!currentSession || !isSameStudioReplSessionLifetime(session, currentSession)) {
 						throw new Error(`REPL session ${msg.sessionName} changed while Studio was waiting to send.`);
 					}
-					if (lease && currentSession.recordId !== session.recordId) {
+					if (lease && currentSession.recordId !== recorded.recordId) {
 						throw new Error(`The shared record for ${msg.sessionName} changed while Studio was waiting to send.`);
 					}
+					// Checked again where the lease is used: the key, and the directory it names, can change while a send waits.
+					const atUse = await checkStudioReplRecordRootAtUse(currentSession);
+					if (atUse) throw new Error(`Nothing was sent: ${atUse}`);
+					recordSession = currentSession;
 					const before = captureStudioReplSession(msg.sessionName, currentSession);
 					if (!before.ok) throw new Error(`Could not capture ${msg.sessionName} before sending: ${before.message}`);
 					if (!isSameStudioReplSessionLifetime(currentSession, before.session)) {
@@ -17706,7 +17819,7 @@ export default function (pi: ExtensionAPI) {
 						msg.sessionName,
 						error instanceof StudioReplSessionEndedError ? error.recordText : message,
 						"error",
-						submittedSession || session,
+						submittedSession || recordSession,
 					);
 					sendToClient(client, { type: "error", requestId: msg.requestId, message });
 					sendReplSendResultToClient(client, ticket, msg.sessionName, { requestId: msg.requestId, replError: message });
@@ -17724,24 +17837,30 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
 			}
-			try {
-				if (!inspectStudioReplSession(msg.sessionName)) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
-				const checked = checkStudioReplPersonEntry(msg.entry);
-				if (checked.error) throw new Error(`Not recorded: ${checked.error}.`);
-				recordStudioReplJournalEntry({
-					...checked.entry,
-					sessionName: msg.sessionName,
-					origin: "pi-studio",
-				});
-				sendToClient(client, {
-					type: "repl_journal_ack",
-					requestId: msg.requestId,
-					sessionName: msg.sessionName,
-					journalEntries: getStudioReplJournalEntries(msg.sessionName),
-				});
-			} catch (error) {
-				sendToClient(client, { type: "error", requestId: msg.requestId, message: error instanceof Error ? error.message : String(error) });
-			}
+			void (async () => {
+				try {
+					const inspected = inspectStudioReplSession(msg.sessionName);
+					if (!inspected) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
+					const checked = checkStudioReplPersonEntry(msg.entry);
+					if (checked.error) throw new Error(`Not recorded: ${checked.error}.`);
+					// A note writes the record: its record directory is checked first (P0).
+					const session = await ensureStudioReplSessionRecord(inspected);
+					if (session.recordRefusal) throw new Error(`Not recorded: ${session.recordRefusal}`);
+					recordStudioReplJournalEntry({
+						...checked.entry,
+						sessionName: msg.sessionName,
+						origin: "pi-studio",
+					}, session);
+					sendToClient(client, {
+						type: "repl_journal_ack",
+						requestId: msg.requestId,
+						sessionName: msg.sessionName,
+						journalEntries: getStudioReplJournalEntries(msg.sessionName),
+					});
+				} catch (error) {
+					sendToClient(client, { type: "error", requestId: msg.requestId, message: error instanceof Error ? error.message : String(error) });
+				}
+			})();
 			return;
 		}
 
@@ -17750,22 +17869,28 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
 			}
-			try {
-				if (!inspectStudioReplSession(msg.sessionName)) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
-				for (const entry of msg.entries) {
-					// Kept, but not under the prefix, if its name can't be used.
-					const checked = checkStudioReplPersonEntry(entry);
-					recordStudioReplJournalEntry({ ...(checked.error ? { ...entry, requestId: "" } : checked.entry), sessionName: msg.sessionName, origin: "pi-studio" });
+			void (async () => {
+				try {
+					const inspected = inspectStudioReplSession(msg.sessionName);
+					if (!inspected) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
+					// Its record directory is checked first (P0); if the record can't be used from here,
+					// the entries stay in Studio's memory, as for any unusable record.
+					const session = await ensureStudioReplSessionRecord(inspected);
+					for (const entry of msg.entries) {
+						// Kept, but not under the prefix, if its name can't be used.
+						const checked = checkStudioReplPersonEntry(entry);
+						recordStudioReplJournalEntry({ ...(checked.error ? { ...entry, requestId: "" } : checked.entry), sessionName: msg.sessionName, origin: "pi-studio" }, session);
+					}
+					sendToClient(client, {
+						type: "repl_journal_ack",
+						requestId: msg.requestId,
+						sessionName: msg.sessionName,
+						journalEntries: getStudioReplJournalEntries(msg.sessionName),
+					});
+				} catch (error) {
+					sendToClient(client, { type: "error", requestId: msg.requestId, message: error instanceof Error ? error.message : String(error) });
 				}
-				sendToClient(client, {
-					type: "repl_journal_ack",
-					requestId: msg.requestId,
-					sessionName: msg.sessionName,
-					journalEntries: getStudioReplJournalEntries(msg.sessionName),
-				});
-			} catch (error) {
-				sendToClient(client, { type: "error", requestId: msg.requestId, message: error instanceof Error ? error.message : String(error) });
-			}
+			})();
 			return;
 		}
 
@@ -17774,19 +17899,21 @@ export default function (pi: ExtensionAPI) {
 				sendToClient(client, { type: "error", requestId: msg.requestId, message: "Invalid request ID." });
 				return;
 			}
-			try {
-				if (!inspectStudioReplSession(msg.sessionName)) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
-				clearStudioReplJournal(msg.sessionName);
-				sendToClient(client, {
-					type: "repl_journal_ack",
-					requestId: msg.requestId,
-					sessionName: msg.sessionName,
-					journalEntries: [],
-					cleared: true,
-				});
-			} catch (error) {
-				sendToClient(client, { type: "error", requestId: msg.requestId, message: error instanceof Error ? error.message : String(error) });
-			}
+			void (async () => {
+				try {
+					if (!inspectStudioReplSession(msg.sessionName)) throw new Error(`No tmux REPL session named ${msg.sessionName}.`);
+					await clearStudioReplJournal(msg.sessionName);
+					sendToClient(client, {
+						type: "repl_journal_ack",
+						requestId: msg.requestId,
+						sessionName: msg.sessionName,
+						journalEntries: [],
+						cleared: true,
+					});
+				} catch (error) {
+					sendToClient(client, { type: "error", requestId: msg.requestId, message: error instanceof Error ? error.message : String(error) });
+				}
+			})();
 			return;
 		}
 

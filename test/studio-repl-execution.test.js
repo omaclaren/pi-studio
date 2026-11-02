@@ -8,6 +8,7 @@ import {
 	cleanStudioReplOutput,
 	firstStudioReplPanes,
 	isStudioGnuplotSession,
+	STUDIO_REPL_PANE_FORMAT,
 	isStudioReplReadyLine,
 	STUDIO_REPL_SESSION_NAME,
 	studioReplSessionTarget,
@@ -52,7 +53,7 @@ test("the browser shows the server's cleaned output as it is", () => {
 	assert.doesNotMatch(serverSource, /"(?:has-session|kill-session|list-panes|show-options)", (?:"-s", )?"-t", sessionName\b/);
 });
 
-const row = (window, pane, id, name = "pi-studio-repl-python", session = "$1") => [window, pane, id, name, session, "1700000000", "python", "a".repeat(32), "1"].join("\t");
+const row = (window, pane, id, name = "pi-studio-repl-python", session = "$1", rootKey = `v1:${"b".repeat(32)}`) => [window, pane, id, name, session, "1700000000", "python", "a".repeat(32), "1", rootKey].join("\t");
 
 test("each session's first pane comes from its real window and pane numbers", () => {
 	const panes = firstStudioReplPanes([
@@ -66,6 +67,10 @@ test("each session's first pane comes from its real window and pane numbers", ()
 	]);
 	assert.equal(panes[0].runtime, "python");
 	assert.equal(panes[0].recordId, "a".repeat(32));
+	// Candidate 113: the session's record-directory key (pi-repl's P0), empty when it has none.
+	assert.equal(panes[0].rootKey, `v1:${"b".repeat(32)}`);
+	assert.equal(firstStudioReplPanes(row(0, 0, "%3", "pi-repl-r", "$3", ""))[0].rootKey, "");
+	assert.match(STUDIO_REPL_PANE_FORMAT, /\t#\{@pi_repl_record_root_key\}$/);
 	assert.deepEqual(firstStudioReplPanes(""), []);
 });
 

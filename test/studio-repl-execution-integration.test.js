@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { buildStudioReplDeadPaneCloseArgs } from "../shared/studio-repl-tmux.js";
-import { acquireReplSessionSendLease } from "../shared/repl-session-record.js";
+import { acquireReplSessionSendLease, ensureReplSessionRecord, getReplSessionRecordPath, readReplSessionRecordRootKey, readReplSessionSendLease, replSessionRecordRootKeyFor } from "../shared/repl-session-record.js";
 import { createServer, get as httpGet } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -241,7 +241,8 @@ function replClient(ws) {
 			return await request("repl_journal_import_request", { sessionName, entries }, (m) => m.type === "repl_journal_ack");
 		},
 		async clear(sessionName) {
-			await request("repl_journal_clear_request", { sessionName }, (m) => m.type === "repl_journal_ack");
+			const reply = await request("repl_journal_clear_request", { sessionName }, (m) => m.type === "repl_journal_ack" || m.type === "error");
+			if (reply.type === "error") throw new Error(reply.message);
 		},
 		// A send that outlasts its wait: Studio's reply that the code is still running.
 		stillRunning(sessionName, text) {
@@ -1225,6 +1226,151 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		} finally {
 			rmSync(setting, { force: true });
 			tmux("kill-session", "-t", `=${p}`);
+		}
+	});
+
+	// Candidate 113: pi-repl's P0. Every client of a session uses one record directory, named by the
+	// session's record-directory key; Studio sets or checks it before it writes, checks it again once
+	// it holds the lease, and refuses a record in another directory. Reading writes nothing.
+	await t.test("a session's record is used only from the record directory its key names", { skip: !has("python3") }, async () => {
+		const p = "pi-studio-repl-python";
+		const s = "pi-repl-python";
+		const told = (run) => run.filter((event) => event.type === "message_end" && event.message?.role === "custom" && event.message.customType === "pi-studio-repl-activity").map((event) => event.message);
+		// Options by session ID: set-option and show-options don't take the =name form.
+		const idOf = (name) => {
+			const id = tmux("display-message", "-p", "-t", `=${name}:`, "#{session_id}").stdout.trim();
+			assert.match(id, /^\$\d+$/, name);
+			return id;
+		};
+		const option = (name, opt) => {
+			const result = tmux("show-options", "-v", "-t", idOf(name), opt);
+			return result.status === 0 ? result.stdout.replace(/\n$/, "") : undefined;
+		};
+		const set = (name, opt, value) => assert.equal(tmux("set-option", "-t", idOf(name), opt, value).status, 0);
+		const shows = (name, pattern) => pattern.test(tmux("capture-pane", "-p", "-t", `=${name}:`).stdout);
+		const own = () => readReplSessionRecordRootKey({ root: recordRoot });
+		const other = replSessionRecordRootKeyFor(1n, 2n);
+		const identity = (name) => {
+			const [id, created] = tmux("display-message", "-p", "-t", `=${name}:`, "#{session_id} #{session_created}").stdout.trim().split(" ");
+			return { sessionName: name, tmuxSessionId: id, tmuxSessionCreatedAt: Number(created), runtime: "python" };
+		};
+		// A session a person started with tmux, or an older client: none of Studio's metadata.
+		const raw = async () => {
+			tmux("kill-session", "-t", `=${s}`);
+			assert.equal(tmux("new-session", "-d", "-s", s, "python3 -q").status, 0);
+			assert.ok(await waitFor(() => shows(s, />>>/)), "Python is ready");
+			await repl.list();
+			return identity(s);
+		};
+		const refusals = async (why, label) => {
+			assert.match((await repl.send(s, "print('not ' + 'sent')")).error, new RegExp(`^Nothing was sent: ${why}`), `page (${label})`);
+			const agent = await rpc.agent("studio_repl_send", { sessionName: s, code: "print('not ' + 'sent')" });
+			assert.match(agent.content[0].text, new RegExp(`Nothing was sent: ${why}`), `agent (${label})`);
+			await assert.rejects(repl.note(s, "not recorded", { requestId: `studio:note:${randomUUID()}`, label: "Ana" }), { message: new RegExp(`^Not recorded: ${why}`) }, `note (${label})`);
+			await assert.rejects(repl.clear(s), { message: new RegExp(`^Nothing was cleared: ${why}`) }, `clear (${label})`);
+			await sleep(300);
+			assert.ok(!shows(s, /not sent/), `nothing reached the pane (${label})`);
+		};
+		try {
+			// A session Studio starts gets the key first, naming Studio's record directory, then its record.
+			assert.equal((await repl.start("python")).message, "Started Python REPL.");
+			assert.match(option(p, "@pi_repl_record_root_key"), /^v1:[0-9a-f]{32}$/);
+			assert.equal(option(p, "@pi_repl_record_root_key"), own());
+			assert.ok(existsSync(getReplSessionRecordPath(option(p, "@pi_repl_record_id"), { root: recordRoot })), "its record");
+			tmux("kill-session", "-t", `=${p}`);
+
+			// Reading writes nothing: listing, choosing and capturing a session set no option and create no record.
+			const bare = await raw();
+			await repl.choose(s, "python");
+			await repl.capture(s);
+			assert.deepEqual([option(s, "@pi_repl_record_id"), option(s, "@pi_repl_record_root_key")], [undefined, undefined]);
+			// The first send sets the key, then the record ID, and records the send.
+			assert.equal((await repl.send(s, "print('first ' + 'send')")).output, "first send");
+			assert.equal(option(s, "@pi_repl_record_root_key"), own());
+			assert.ok(existsSync(getReplSessionRecordPath(option(s, "@pi_repl_record_id"), { root: recordRoot })));
+			void bare;
+
+			// An older client's metadata, its record in Studio's directory: the record directory isn't
+			// verified until a send from Studio adopts it.
+			let session = await raw();
+			let recordId = randomUUID().replace(/-/g, "");
+			set(s, "@pi_repl_record_id", recordId);
+			set(s, "@pi_repl_record_version", "1");
+			ensureReplSessionRecord(recordId, session, { root: recordRoot });
+			let status = (await rpc.agent("studio_repl_status", { sessionName: s })).content[0].text;
+			assert.match(status, /Record directory not verified: the session has no record-directory key yet\./);
+			assert.equal((await repl.send(s, "print('adopted')")).output, "adopted");
+			assert.equal(option(s, "@pi_repl_record_root_key"), own());
+			status = (await rpc.agent("studio_repl_status", { sessionName: s })).content[0].text;
+			assert.doesNotMatch(status, /not verified/);
+
+			// An older client's metadata with no record here: its record is in another directory, so
+			// Studio neither claims the session nor creates a record to claim it.
+			session = await raw();
+			recordId = randomUUID().replace(/-/g, "");
+			set(s, "@pi_repl_record_id", recordId);
+			set(s, "@pi_repl_record_version", "1");
+			await refusals(`${s}'s record isn't in this terminal's record directory`, "elsewhere");
+			assert.equal(option(s, "@pi_repl_record_root_key"), undefined);
+			assert.ok(!existsSync(getReplSessionRecordPath(recordId, { root: recordRoot })), "no record was made to claim it");
+
+			// A key naming another directory, and a key this version doesn't know, which is left as it is.
+			for (const [key, why, label] of [[other, `${s}'s shared record is in a different or replaced record directory`, "different"], ["v2:abc", `${s}'s record-directory key \\(@pi_repl_record_root_key\\) isn't one this version understands`, "malformed"]]) {
+				session = await raw();
+				set(s, "@pi_repl_record_root_key", key);
+				await refusals(why, label);
+				assert.equal(option(s, "@pi_repl_record_root_key"), key);
+				assert.equal(option(s, "@pi_repl_record_id"), undefined, "no metadata was attached");
+				// The page is told why, to show in place of the record.
+				assert.match((await repl.list()).sessions.find((listed) => listed.sessionName === s)?.recordRefusal ?? "", new RegExp(`^${why}`), `listed (${label})`);
+				// Nor entries Studio kept from the session's earlier lifetimes.
+				assert.deepEqual((await repl.capture(s)).journalEntries ?? [], [], `no record shown (${label})`);
+			}
+			// Changed while a send waits for the lease: checked again where the lease is used.
+			session = await raw();
+			assert.equal((await repl.send(s, "print('keyed')")).output, "keyed");
+			const record = option(s, "@pi_repl_record_id");
+			const sends = {
+				page: async () => (await repl.send(s, "print('after ' + 'the change')")).error,
+				agent: async () => (await rpc.agent("studio_repl_send", { sessionName: s, code: "print('after ' + 'the change')" })).content[0].text,
+			};
+			for (const [from, send] of Object.entries(sends)) {
+				set(s, "@pi_repl_record_root_key", own());
+				const lease = await acquireReplSessionSendLease(record, { root: recordRoot, owner: "c113-test", waitMs: 1_000 });
+				const waiting = send();
+				await sleep(1_000);
+				set(s, "@pi_repl_record_root_key", other);
+				await lease.release();
+				assert.match(await waiting, new RegExp(`Nothing was sent: ${s}'s shared record is in a different or replaced record directory`), from);
+				await sleep(300);
+				assert.ok(!shows(s, /after the change/), `nothing was pasted after the change (${from})`);
+			}
+			// Entries recorded before the change aren't shown as its record now.
+			assert.deepEqual((await repl.capture(s)).journalEntries ?? [], []);
+			// The agent is told why it can't see the record.
+			const [message] = told(await rpc.run("what's in the python session?"));
+			assert.match(message.content, new RegExp(`Couldn't read ${s}'s record \\(${s}'s shared record is in a different or replaced record directory`));
+
+			// A replaced record directory, even with the same path, is another directory; and a missing one.
+			set(s, "@pi_repl_record_root_key", own());
+			assert.equal((await repl.send(s, "print('before ' + 'the move')")).output, "before the move");
+			// Studio releases the lease just after its reply; the directory moves only once it has.
+			assert.ok(await waitFor(() => readReplSessionSendLease(record, { root: recordRoot }) === null), "the lease was released");
+			const kept = `${recordRoot}.c113`;
+			renameSync(recordRoot, kept);
+			try {
+				assert.match((await repl.send(s, "print('not ' + 'sent')")).error, new RegExp(`^Nothing was sent: ${s}'s shared record is in a different or replaced record directory`), "missing");
+				assert.ok(!existsSync(recordRoot), "nothing recreated it");
+				mkdirSync(recordRoot, { mode: 0o700 });
+				assert.match((await repl.send(s, "print('not ' + 'sent')")).error, new RegExp(`^Nothing was sent: ${s}'s shared record is in a different or replaced record directory`), "replaced");
+				assert.deepEqual(readdirSync(recordRoot), [], "nothing written to the new one");
+			} finally {
+				rmSync(recordRoot, { recursive: true, force: true });
+				renameSync(kept, recordRoot);
+			}
+			assert.equal((await repl.send(s, "print('back')")).output, "back");
+		} finally {
+			for (const name of [p, s]) tmux("kill-session", "-t", `=${name}`);
 		}
 	});
 

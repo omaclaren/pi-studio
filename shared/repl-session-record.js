@@ -1,8 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	chmodSync,
 	closeSync,
+	constants,
 	existsSync,
+	fstatSync,
 	fsyncSync,
 	lstatSync,
 	mkdirSync,
@@ -20,6 +22,7 @@ export const REPL_SESSION_RECORD_PROTOCOL = "pi-repl-session-record";
 export const REPL_SESSION_RECORD_VERSION = 1;
 export const REPL_SESSION_RECORD_ID_OPTION = "@pi_repl_record_id";
 export const REPL_SESSION_RECORD_VERSION_OPTION = "@pi_repl_record_version";
+export const REPL_SESSION_RECORD_ROOT_KEY_OPTION = "@pi_repl_record_root_key";
 export const REPL_SESSION_RECORD_MAX_ENTRIES = 300;
 export const REPL_SESSION_RECORD_MAX_CODE_CHARS = 200_000;
 export const REPL_SESSION_RECORD_MAX_PROSE_CHARS = 80_000;
@@ -27,6 +30,7 @@ export const REPL_SESSION_RECORD_MAX_OUTPUT_CHARS = 200_000;
 export const REPL_SESSION_RECORD_MAX_BYTES = 16 * 1024 * 1024;
 
 const RECORD_ID_PATTERN = /^[a-f0-9]{32}$/;
+const ROOT_KEY_PATTERN = /^v1:[a-f0-9]{32}$/;
 const RECORD_LOCK_WAIT_MS = 5_000;
 const RECORD_LOCK_STALE_MS = 30_000;
 const SEND_LEASE_STALE_MS = 30_000;
@@ -49,6 +53,23 @@ function getRootSuffix() {
  */
 export function getReplSessionRecordRoot(options = {}) {
 	return resolve(options.root || join(tmpdir(), `pi-repl-session-records-${getRootSuffix()}`));
+}
+
+// Every derived key starts with this, and no request ID is used as it is when it does, so the two kinds never meet.
+const DERIVED_KEY_PREFIX = "hashed:";
+
+/**
+ * A stable entry-ID key for a send's request ID, as `pi-repl:<key>`. A
+ * request ID an entry ID can hold is its own key. Any other, such as a Pi
+ * nested tool call's with its slash, is derived: `hashed:`, its characters made
+ * safe, and a hash of the whole, so that two request IDs never share a key. A
+ * request ID that itself starts with `hashed:` is always derived, so that it
+ * can't be taken for another's derived key.
+ */
+export function recordEntryKey(requestId) {
+	if (/^[A-Za-z0-9_.:-]{1,200}$/.test(requestId) && !requestId.startsWith(DERIVED_KEY_PREFIX)) return requestId;
+	const hash = createHash("sha256").update(requestId).digest("hex").slice(0, 20);
+	return `${DERIVED_KEY_PREFIX}${requestId.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 160)}.${hash}`;
 }
 
 export function createReplSessionRecordId() {
@@ -481,6 +502,249 @@ export function clearReplSessionRecord(recordId, identity, options = {}) {
 	}
 }
 
+/**
+ * The record-directory key for a directory's device and inode: `v1:` and the
+ * first 32 hex characters of the SHA-256 of `<device>:<inode>`, both exact
+ * decimal integers. Take them from a bigint stat; a number must be a safe integer.
+ */
+export function replSessionRecordRootKeyFor(dev, ino) {
+	const decimal = (value) => {
+		if (typeof value === "number" && !Number.isSafeInteger(value)) throw new Error("A record directory's device and inode must be exact integers.");
+		const text = typeof value === "bigint" || typeof value === "number" ? value.toString() : "";
+		if (!/^(?:0|[1-9][0-9]*)$/.test(text)) throw new Error("A record directory's device and inode must be non-negative integers.");
+		return text;
+	};
+	return `v1:${createHash("sha256").update(`${decimal(dev)}:${decimal(ino)}`).digest("hex").slice(0, 32)}`;
+}
+
+export function isValidReplSessionRecordRootKey(value) {
+	return typeof value === "string" && ROOT_KEY_PATTERN.test(value);
+}
+
+// Checks the root as writers leave it, changing nothing: a real directory of
+// the current user's, mode 0700. Throws ENOENT's error when it is missing.
+function checkedRootStat(root) {
+	const info = lstatSync(root, { bigint: true });
+	if (!info.isDirectory() || info.isSymbolicLink()) {
+		throw new Error(`Shared REPL record root is not a real directory: ${root}`);
+	}
+	const uid = currentUid();
+	if (uid != null && Number(info.uid) !== uid) {
+		throw new Error(`Refusing shared REPL state not owned by the current user: ${root}`);
+	}
+	if (process.platform !== "win32" && (Number(info.mode) & 0o777) !== 0o700) {
+		throw new Error(`Shared REPL record root is not private (mode 0700): ${root}`);
+	}
+	return info;
+}
+
+function isMissing(error) {
+	return Boolean(error && typeof error === "object" && error.code === "ENOENT");
+}
+
+/** This client's record-directory key, for a writer: creates the private root if it is missing. */
+export function getReplSessionRecordRootKey(options = {}) {
+	const info = checkedRootStat(ensurePrivateRoot(options));
+	return replSessionRecordRootKeyFor(info.dev, info.ino);
+}
+
+/**
+ * This client's record-directory key, for a reader: never creates the root or
+ * changes its mode. Null when there is no root, so no local record either.
+ */
+export function readReplSessionRecordRootKey(options = {}) {
+	let info;
+	try {
+		info = checkedRootStat(getReplSessionRecordRoot(options));
+	} catch (error) {
+		if (isMissing(error)) return null;
+		throw error;
+	}
+	return replSessionRecordRootKeyFor(info.dev, info.ino);
+}
+
+/**
+ * A session's record as this client's directory holds it, for readers and for
+ * a writer's adoption check. It never creates the root, takes the lock or
+ * changes a mode, and refuses what writers would repair: a file that isn't a
+ * private, single-link regular file, or a record of another session lifetime.
+ * Null when this directory has no record with that ID.
+ */
+export function readReplSessionRecordStrict(recordId, identity, options = {}) {
+	assertRecordId(recordId);
+	const expected = normalizeRecordIdentity(identity);
+	try {
+		checkedRootStat(getReplSessionRecordRoot(options));
+	} catch (error) {
+		if (isMissing(error)) return null;
+		throw error;
+	}
+	const path = getReplSessionRecordPath(recordId, options);
+	let fd;
+	try {
+		// Nonblocking, so a FIFO at the path is refused by the checks below rather than waited on.
+		fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+	} catch (error) {
+		if (isMissing(error)) return null;
+		if (error && typeof error === "object" && error.code === "ELOOP") throw new Error(`Shared REPL record is not a regular file: ${path}`);
+		throw error;
+	}
+	let text;
+	try {
+		const info = fstatSync(fd);
+		if (!info.isFile()) throw new Error(`Shared REPL record is not a regular file: ${path}`);
+		if (info.nlink !== 1) throw new Error(`Shared REPL record has an unsafe hard-link count: ${path}`);
+		assertOwnedByCurrentUser(path, info);
+		if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600) throw new Error(`Shared REPL record is not private (mode 0600): ${path}`);
+		if (info.size > REPL_SESSION_RECORD_MAX_BYTES * 2) throw new Error(`Shared REPL record exceeds the safe read limit: ${path}`);
+		text = readFileSync(fd, "utf8");
+	} finally {
+		closeSync(fd);
+	}
+	let parsed;
+	try {
+		parsed = JSON.parse(text);
+	} catch (error) {
+		throw new Error(`Could not parse shared REPL record ${path}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	// Checked as stored, before normalising: normalising would round, trim or fill in what isn't there.
+	const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+	if (!isObject(parsed) || !Array.isArray(parsed.entries) || !parsed.entries.every(isObject)) {
+		throw new Error(`Shared REPL record ${path} is not a record with a list of entries.`);
+	}
+	const session = parsed.session;
+	if (
+		!isObject(session)
+		|| session.sessionName !== expected.sessionName
+		|| session.tmuxSessionId !== expected.tmuxSessionId
+		|| session.tmuxSessionCreatedAt !== expected.tmuxSessionCreatedAt
+	) {
+		throw new Error(`Shared REPL record ${path} belongs to another tmux session or session lifetime.`);
+	}
+	return normalizeRecord(parsed, recordId);
+}
+
+const ROOT_KEY_REMEDY = "Use it from a terminal with the same temporary directory (TMPDIR) as its other clients. Restarting the session also fixes this, but discards its state, so that is the user's decision.";
+
+/**
+ * What a client says about a session's record directory, as
+ * classifyReplSessionRecordRoot or a writer's check found it: a refusal for
+ * "different", "malformed", "missing", "elsewhere" and "unusable", the
+ * "not verified" notice for "unverified", and nothing for "verified".
+ */
+export function describeReplSessionRecordRoot(state, sessionName, options = {}, detail = "") {
+	const root = getReplSessionRecordRoot(options);
+	switch (state) {
+		case "verified":
+			return undefined;
+		case "unverified":
+			return `${sessionName}'s record directory is not verified: the session has no record-directory key yet, so this terminal's record may not be the one other clients use.`;
+		case "different":
+			return `${sessionName}'s shared record is in a different or replaced record directory, not this terminal's (${root}). ${ROOT_KEY_REMEDY}`;
+		case "malformed":
+			return `${sessionName}'s record-directory key (${REPL_SESSION_RECORD_ROOT_KEY_OPTION}) isn't one this version understands, so it's left as it is and the record isn't used from here.`;
+		case "missing":
+			return `${sessionName}'s record-directory key couldn't be set or has gone, so its record isn't used from here.`;
+		case "elsewhere":
+			return `${sessionName}'s record isn't in this terminal's record directory (${root}), and the session has no record-directory key to say which directory holds it, so this terminal won't claim it; the session may have been started from a terminal with a different temporary directory (TMPDIR). ${ROOT_KEY_REMEDY}`;
+		case "unusable":
+			return `${sessionName}'s record in this terminal's record directory can't be checked (${detail}), and the session has no record-directory key, so this terminal won't claim it. ${ROOT_KEY_REMEDY}`;
+		default:
+			throw new Error(`Unknown record-directory state: ${state}`);
+	}
+}
+
+/**
+ * How a reader may treat a session's record, from the record-directory key the
+ * session holds (undefined when it has none): "verified" when it names this
+ * client's record directory, "unverified" when there is none, "malformed" when
+ * it isn't a key this version knows, and "different" otherwise, including when
+ * this client has no record directory. Readers never set the key or create anything.
+ */
+export function classifyReplSessionRecordRoot(storedKey, options = {}) {
+	if (storedKey === undefined) return "unverified";
+	if (!isValidReplSessionRecordRootKey(storedKey)) return "malformed";
+	return readReplSessionRecordRootKey(options) === storedKey ? "verified" : "different";
+}
+
+/**
+ * A writer's record-directory check, before it creates a session's record
+ * metadata, writes its record or takes its lease. `tmux.readKey()` resolves to
+ * the key the session holds, or undefined when it has none, and rejects when
+ * it can't read that exact session lifetime; `tmux.setKeyIfAbsent(key)` sets
+ * it only if it is unset (tmux `set-option -o`). `recordId` is the record ID the
+ * session already holds, if any. With an ID and no key, an older client made
+ * the metadata, and the key is set only if this directory already holds that
+ * session's record, checked before anything is created or repaired. Only a
+ * fresh session's writer creates its record directory. A set is always read
+ * back: the key that stuck decides.
+ * Resolves to { ok: true, key, adopted } or { ok: false, reason }.
+ */
+export async function bindReplSessionRecordRoot(tmux, { sessionName, recordId, identity }, options = {}) {
+	let stored = await tmux.readKey();
+	// Only a writer setting a fresh session's key may create its record directory.
+	if (stored !== undefined) return checkStoredRootKey(stored, readReplSessionRecordRootKey(options), sessionName, options, false);
+	let own;
+	if (recordId) {
+		// Adoption is checked first, creating and repairing nothing.
+		let local;
+		try {
+			local = readReplSessionRecordStrict(recordId, identity, options);
+		} catch (error) {
+			return { ok: false, reason: describeReplSessionRecordRoot("unusable", sessionName, options, error instanceof Error ? error.message : String(error)) };
+		}
+		own = local ? readReplSessionRecordRootKey(options) : null;
+		if (!own) return { ok: false, reason: describeReplSessionRecordRoot("elsewhere", sessionName, options) };
+	} else {
+		own = getReplSessionRecordRootKey(options);
+	}
+	await tmux.setKeyIfAbsent(own);
+	stored = await tmux.readKey();
+	return checkStoredRootKey(stored, own, sessionName, options, Boolean(recordId));
+}
+
+/**
+ * A writer's check where it uses the record or lease, such as after waiting
+ * for the lease: the session's key must still name this client's record
+ * directory, which must not have been replaced. Never sets or creates anything.
+ */
+export async function verifyReplSessionRecordRoot(tmux, sessionName, options = {}) {
+	const own = readReplSessionRecordRootKey(options);
+	return checkStoredRootKey(await tmux.readKey(), own, sessionName, options, false);
+}
+
+/**
+ * The `tmux` that bindReplSessionRecordRoot and verifyReplSessionRecordRoot
+ * take, for one session lifetime. `run(args)` runs tmux with those arguments
+ * and resolves to { code, stdout, stderr }. An unset key is undefined; a read
+ * that fails, or finds another session lifetime, rejects.
+ */
+export function replSessionRecordRootKeyTmux(run, identity) {
+	return {
+		async readKey() {
+			const result = await run(["show-options", "-v", "-t", identity.tmuxSessionId, REPL_SESSION_RECORD_ROOT_KEY_OPTION]);
+			// A space, not a tab: tmux prints a tab as `_` without -u or a UTF-8 locale.
+			const lifetime = await run(["display-message", "-p", "-t", identity.tmuxSessionId, "#{session_id} #{session_created}"]);
+			if (lifetime.code !== 0 || lifetime.stdout.trim() !== `${identity.tmuxSessionId} ${identity.tmuxSessionCreatedAt}`) {
+				throw new Error(`${identity.sessionName} changed while its record-directory key was read.`);
+			}
+			if (result.code === 0) return result.stdout.replace(/\r?\n$/, "");
+			if (/invalid option|unknown option/i.test(result.stderr)) return undefined;
+			throw new Error(`Could not read ${identity.sessionName}'s record-directory key: ${result.stderr.trim() || `tmux exited with ${result.code}`}.`);
+		},
+		async setKeyIfAbsent(key) {
+			await run(["set-option", "-qo", "-t", identity.tmuxSessionId, REPL_SESSION_RECORD_ROOT_KEY_OPTION, key]);
+		},
+	};
+}
+
+function checkStoredRootKey(stored, own, sessionName, options, adopted) {
+	if (stored === undefined) return { ok: false, reason: describeReplSessionRecordRoot("missing", sessionName, options) };
+	if (!isValidReplSessionRecordRootKey(stored)) return { ok: false, reason: describeReplSessionRecordRoot("malformed", sessionName, options) };
+	if (stored !== own) return { ok: false, reason: describeReplSessionRecordRoot("different", sessionName, options) };
+	return { ok: true, key: own, adopted };
+}
+
 async function removeStaleLease(lockPath, staleMs) {
 	try {
 		const info = await lstat(lockPath);
@@ -578,6 +842,36 @@ export async function acquireReplSessionSendLease(recordId, options = {}) {
 				if (!error || typeof error !== "object" || error.code !== "ENOENT") throw error;
 			}
 		},
+	};
+}
+
+/**
+ * Who holds the session's send lease, read only: the owner it was taken for,
+ * its process, when it was taken and last renewed, and whether the next send
+ * would treat it as abandoned. Null when no send holds it.
+ */
+export function readReplSessionSendLease(recordId, options = {}) {
+	assertRecordId(recordId);
+	const lockPath = getSendLeasePath(recordId, options);
+	let info;
+	try {
+		info = lstatSync(lockPath);
+	} catch (error) {
+		if (error && typeof error === "object" && error.code === "ENOENT") return null;
+		throw error;
+	}
+	let owner = {};
+	try {
+		owner = JSON.parse(readFileSync(join(lockPath, "owner.json"), "utf8"));
+	} catch {
+		// Taken a moment ago, or left unreadable: its holder is unknown.
+	}
+	return {
+		owner: typeof owner.owner === "string" ? owner.owner : "unknown",
+		pid: Number.isSafeInteger(owner.pid) ? owner.pid : undefined,
+		createdAt: Number.isFinite(owner.createdAt) ? owner.createdAt : undefined,
+		renewedAt: info.mtimeMs,
+		stale: Date.now() - info.mtimeMs > SEND_LEASE_STALE_MS,
 	};
 }
 

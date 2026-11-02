@@ -15,7 +15,9 @@ test("Studio discovers and publishes the session-owned shared REPL record", () =
 	assert.match(serverSource, /set-option", "-qo"/);
 	assert.match(tmuxSource, /#\{@pi_repl_record_id\}/);
 	assert.match(serverSource, /tmuxSessionCreatedAt/);
-	assert.match(serverSource, /readReplSessionRecord\(/);
+	// Candidate 113: readers read strictly, creating and repairing nothing (P0).
+	assert.match(serverSource, /readReplSessionRecordStrict\(/);
+	assert.doesNotMatch(serverSource, /readReplSessionRecord\(/);
 	assert.match(serverSource, /upsertReplSessionRecordEntry\(/);
 });
 
@@ -35,9 +37,11 @@ test("Studio serializes browser and tool sends with the cross-client lease", () 
 	assert.match(serverSource, /releaseOrSettleStudioReplSubmission\(lease, submittedControlFiles, settling\)/);
 	assert.match(serverSource, /studio_repl_send was aborted after submission\./);
 	assert.doesNotMatch(serverSource, /retainStudioReplSubmissionUntilSettled/);
-	assert.match(serverSource, /knownSession \|\| inspectStudioReplSession/);
-	assert.match(serverSource, /submittedSession \|\| selected\.session/);
-	assert.match(serverSource, /submittedSession \|\| session/);
+	// Candidate 113: only a writer that has checked the record directory passes the session written with.
+	assert.match(serverSource, /const session = knownSession;\n\tif \(!session\?\.recordId/);
+	// Candidate 113: a failed send's entry is updated with the session its entry was written with.
+	assert.match(serverSource, /submittedSession \|\| recorded\)/);
+	assert.match(serverSource, /submittedSession \|\| recordSession,/);
 });
 
 test("Candidate 111: Studio neither pastes nor sends Ctrl+C where pi-repl takes code through its helper", () => {
@@ -54,6 +58,50 @@ test("Candidate 111: Studio neither pastes nor sends Ctrl+C where pi-repl takes 
 		const path = between(start, choice);
 		assert.match(path, /studioReplSendPathRefusal\((?:selected\.)?session\.tmuxSessionId, "send"\)/, start);
 	}
+});
+
+test("Candidate 113: Studio uses a session's record only from the record directory its key names (pi-repl's P0)", () => {
+	// pi-repl v0.11.7's shared/repl-session-record.js, unchanged.
+	assert.equal(createHash("sha256").update(readFileSync(new URL("../shared/repl-session-record.js", import.meta.url))).digest("hex"), "abb9e7c6b831f64495b77a8cd17bb9d833a6b9816116c910611c16962676e089");
+	const between = (start, end) => {
+		const from = serverSource.indexOf(start);
+		assert.ok(from >= 0, start);
+		return serverSource.slice(from, serverSource.indexOf(end, from));
+	};
+	const order = (text, ...parts) => {
+		let at = -1;
+		for (const part of parts) {
+			const next = text.indexOf(part, at + 1);
+			assert.ok(next > at, `${part} after the one before`);
+			at = next;
+		}
+	};
+	// Listing and inspection only read: no option set, nothing created.
+	const reader = between("function readStudioReplSessionRecordState(", "\n}\n");
+	assert.doesNotMatch(reader, /set-option|setStudioReplTmuxOptionIfAbsent|ensureReplSessionRecord|createReplSessionRecordId|bindReplSessionRecordRoot/);
+	assert.match(between("function makeStudioReplSessionInfo(", "\n}\n"), /readStudioReplSessionRecordState\(/);
+	assert.doesNotMatch(serverSource, /attachStudioReplSessionRecord/);
+	// The writer: the key bound before the record ID is set or the record created.
+	order(between("async function ensureStudioReplSessionRecord(", "\n}\n"), "bindReplSessionRecordRoot(", "REPL_SESSION_RECORD_ID_OPTION, createReplSessionRecordId()", "ensureReplSessionRecord(");
+	// Both sends: bound before the lease, checked again after it, before anything is written or pasted.
+	order(between('if (msg.type === "repl_send_request")', 'if (msg.type === "repl_journal_upsert_request")'),
+		"ensureStudioReplSessionRecord(session)", "acquireReplSessionSendLease(", "checkStudioReplRecordRootAtUse(currentSession)", "recordStudioReplJournalEntry(", "sendTextToStudioReplSession(");
+	order(between("async execute(toolCallId, params, signal) {\n\t\t\tconst selected = selectStudioReplSessionForTool", "pi.registerTool({"),
+		"ensureStudioReplSessionRecord(selected.session)", "acquireReplSessionSendLease(", "checkStudioReplRecordRootAtUse(inspected)", "recordStudioReplJournalEntry(", "sendTextToStudioReplSession(");
+	// Notes, imports and clears bind first too; a start binds its new session.
+	order(between('if (msg.type === "repl_journal_upsert_request")', 'if (msg.type === "repl_journal_import_request")'), "ensureStudioReplSessionRecord(inspected)", "recordStudioReplJournalEntry(");
+	order(between('if (msg.type === "repl_journal_import_request")', 'if (msg.type === "repl_journal_clear_request")'), "ensureStudioReplSessionRecord(inspected)", "recordStudioReplJournalEntry(");
+	order(between("async function clearStudioReplJournal(", "\n}\n"), "ensureStudioReplSessionRecord(inspected)", "clearReplSessionRecord(");
+	assert.match(between("async function startStudioReplSession(", "\n}\n"), /const session = await ensureStudioReplSessionRecord\(inspected\);/);
+	// What the agent is told reads only from the directory a session's key names.
+	order(between("async function observeStudioReplActivity(", "\n}\n"), "classifyReplSessionRecordRoot(pane.rootKey || undefined)", "readReplRecordInert(");
+	// The page keeps a session's refusal and shows it in place of the record.
+	assert.match(clientSource, /recordRefusal: typeof session\.recordRefusal === "string" \? session\.recordRefusal\.slice\(0, 1000\) : "",/);
+	assert.match(clientSource, /recordRefusal: session\.recordRefusal,\n/);
+	assert.match(clientSource, /\(recordRefusal \? "<p class='repl-journal-omitted'>" \+ escapeHtml\("Not shown: " \+ recordRefusal\) \+ "<\/p>" : ""\)/);
+	// Entries kept from before aren't shown as a refused session's record, by Studio or its page.
+	assert.match(clientSource, /const visibleEntries = recordRefusal \? \[\] : getVisibleReplJournalEntries\(\);/);
+	assert.match(between("function getStudioReplJournalEntries(", "\n}\n"), /const refused = new Set\(sessions\.filter\(\(session\) => session\.recordRefusal\)/);
 });
 
 test("Candidate 112: a page's sends and notes are recorded under its name, checked before anything is sent", () => {

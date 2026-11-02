@@ -12,7 +12,7 @@ export const STUDIO_REPL_SESSION_NAME = /^pi-studio-repl-(?:shell|python|ipython
 export const isStudioGnuplotSession = (name) => /^pi-studio-repl-gnuplot(?:-|$)/.test(name);
 
 /** Fields read for each pane, in the order firstStudioReplPanes expects. */
-export const STUDIO_REPL_PANE_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_id}\t#{session_name}\t#{session_id}\t#{session_created}\t#{@pi_repl_runtime}\t#{@pi_repl_record_id}\t#{@pi_repl_record_version}";
+export const STUDIO_REPL_PANE_FORMAT = "#{window_index}\t#{pane_index}\t#{pane_id}\t#{session_name}\t#{session_id}\t#{session_created}\t#{@pi_repl_runtime}\t#{@pi_repl_record_id}\t#{@pi_repl_record_version}\t#{@pi_repl_record_root_key}";
 
 /**
  * pi-repl's marker for a session that takes code only through pi-repl, such as
@@ -99,8 +99,9 @@ export function studioReplSessionTarget(session) {
 }
 
 /**
+ * `rootKey` is the session's record-directory key (pi-repl's P0), empty when it has none.
  * @typedef {{ windowIndex: number, paneIndex: number, paneId: string, sessionName: string, sessionId: string,
- *   createdAt: string, runtime: string, recordId: string, version: string }} StudioReplPane
+ *   createdAt: string, runtime: string, recordId: string, version: string, rootKey: string }} StudioReplPane
  */
 
 /**
@@ -115,9 +116,9 @@ export function firstStudioReplPanes(stdout) {
 	/** @type {Map<string, StudioReplPane>} */
 	const first = new Map();
 	for (const line of String(stdout || "").split(/\r?\n/)) {
-		const [windowIndex = "", paneIndex = "", paneId = "", sessionName = "", sessionId = "", createdAt = "", runtime = "", recordId = "", version = ""] = line.split("\t");
+		const [windowIndex = "", paneIndex = "", paneId = "", sessionName = "", sessionId = "", createdAt = "", runtime = "", recordId = "", version = "", rootKey = ""] = line.split("\t");
 		if (!/^\d+$/.test(windowIndex) || !/^\d+$/.test(paneIndex) || !/^%\d+$/.test(paneId) || !/^\$\d+$/.test(sessionId) || !sessionName) continue;
-		const pane = { windowIndex: Number(windowIndex), paneIndex: Number(paneIndex), paneId, sessionName, sessionId, createdAt, runtime, recordId, version };
+		const pane = { windowIndex: Number(windowIndex), paneIndex: Number(paneIndex), paneId, sessionName, sessionId, createdAt, runtime, recordId, version, rootKey };
 		const known = first.get(sessionId);
 		if (!known || pane.windowIndex < known.windowIndex || (pane.windowIndex === known.windowIndex && pane.paneIndex < known.paneIndex)) {
 			first.set(sessionId, pane);

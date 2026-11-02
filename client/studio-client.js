@@ -1623,6 +1623,8 @@
           runtime: typeof session.runtime === "string" ? session.runtime : "unknown",
           label: typeof session.label === "string" && session.label.trim() ? session.label.trim() : sessionName,
           source: typeof session.source === "string" ? session.source : "tmux",
+          // Why Studio won't use its shared record from here, such as another record directory (pi-repl's P0).
+          recordRefusal: typeof session.recordRefusal === "string" ? session.recordRefusal.slice(0, 1000) : "",
         };
       }
 
@@ -1904,6 +1906,7 @@
             target: session.target,
             tmuxSessionId: session.tmuxSessionId,
             tmuxSessionCreatedAt: session.tmuxSessionCreatedAt,
+            recordRefusal: session.recordRefusal,
           })));
       }
 
@@ -14396,10 +14399,12 @@
       }
 
       function buildReplJournalHtml(transcript) {
-        const visibleEntries = getVisibleReplJournalEntries();
+        const sessionName = getActiveReplJournalSessionName();
+        // A record Studio won't use from here says why, and entries kept from before aren't shown as its record (P0).
+        const recordRefusal = (replSessions.find((session) => session.sessionName === sessionName) || {}).recordRefusal || "";
+        const visibleEntries = recordRefusal ? [] : getVisibleReplJournalEntries();
         const hasEntries = visibleEntries.length > 0;
         const entryCount = visibleEntries.length;
-        const sessionName = getActiveReplJournalSessionName();
         const collapsedClass = replJournalCollapsed ? " is-collapsed" : "";
         const toggleButton = "<button type='button' data-repl-action='journal-toggle' aria-expanded='" + (replJournalCollapsed ? "false" : "true") + "'>" + (replJournalCollapsed ? "Show record" : "Hide record") + "</button>";
         const toggleActions = "<div class='repl-journal-actions'>" + toggleButton + "</div>";
@@ -14452,12 +14457,13 @@
             : "No compatible-client record entries yet. Send code from pi-repl or Studio, or use More → Add note (Literate send) to record prose.")
           : "No compatible-client record entries yet. Send code from pi-repl or Studio, or use More → Add note (Literate send) to record prose.";
         const terminalContent = banner
-          + (hasEntries ? cards : "<div class='repl-studio-empty'>" + escapeHtml(emptyText) + "</div>");
+          + (hasEntries ? cards : (recordRefusal ? "" : "<div class='repl-studio-empty'>" + escapeHtml(emptyText) + "</div>"));
         return "<section class='repl-journal'>"
           + "<div class='repl-journal-header'><h3>Shared REPL Record</h3>" + toggleActions + "</div>"
           + "<p class='repl-journal-description'>What Studio and pi-repl have sent to this session."
           + (replRecordActivity === "off" ? "" : " New entries here go to the agent and its model provider.")
           + "</p>"
+          + (recordRefusal ? "<p class='repl-journal-omitted'>" + escapeHtml("Not shown: " + recordRefusal) + "</p>" : "")
           + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
           // The prompt column fits the longest prompt, such as gnuplot>, in the prompt's own font.
           + "<div class='repl-journal-list' style='--repl-studio-prompt-chars: " + Math.max(0, ...visibleEntries.map((entry) => getReplStudioPrompt(entry.runtime).length)) + "'>" + terminalContent + "</div>"
