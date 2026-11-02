@@ -74,14 +74,17 @@ test("Candidate 114: the page's record actions and clear follow Studio's refusal
 	// A session's clear empties this page's copy only on Studio's acknowledgement.
 	const clear = between(clientSource, "function clearReplJournal()", "\n      }\n");
 	assert.doesNotMatch(clear.slice(clear.indexOf("const requestId = makeRequestId();")), /replJournalEntries = /);
-	assert.match(clientSource, /if \(replJournalClearRequestId && message\.requestId === replJournalClearRequestId\) \{/);
-	assert.match(clientSource, /if \(message\.type === "error" && replJournalClearRequestId && message\.requestId === replJournalClearRequestId\) \{/);
+	// Candidate 115: each clear by its own request (Sol).
+	assert.match(clientSource, /if \(replJournalClearRequests\.delete\(message\.requestId\)\) \{/);
+	assert.match(clientSource, /if \(message\.type === "error" && replJournalClearRequests\.delete\(message\.requestId\)\) \{/);
 	// The panel and the agent say when a record directory isn't verified.
 	assert.match(clientSource, /recordUnverified: session\.recordUnverified === true,/);
 	assert.match(clientSource, /!recordRefusal && recordState\.unverified \? "<p class='repl-journal-omitted'>Record directory not verified:/);
 	assert.match(serverSource, /unverified: state === "unverified" \};/);
 	// A person's name is cut only after it's checked.
-	assert.match(serverSource, /label: typeof entry\.label === "string" \? \(isStudioReplPersonRequestId\(entry\.requestId\) \? entry\.label : entry\.label\.slice\(0, 240\)\) : undefined,/);
+	// Candidate 115: classified as the request ID is kept, and only a string is (Sol).
+	assert.match(serverSource, /label: typeof entry\.label === "string" \? \(isStudioReplPersonRequestId\(requestId\) \? entry\.label : entry\.label\.slice\(0, 240\)\) : undefined,/);
+	assert.match(serverSource, /return typeof requestId === "string" && requestId\.replace\(/);
 });
 
 test("Candidate 113: Studio uses a session's record only from the record directory its key names (pi-repl's P0)", () => {
@@ -125,7 +128,7 @@ test("Candidate 113: Studio uses a session's record only from the record directo
 	assert.match(clientSource, /\(recordRefusal \? "<p class='repl-journal-omitted'>" \+ escapeHtml\("Not shown: " \+ recordRefusal\) \+ "<\/p>" : ""\)/);
 	// Entries kept from before aren't shown as a refused session's record, by Studio or its page.
 	// Candidate 114: in one place, which the panel, copy, export and load all use.
-	assert.match(clientSource, /function getVisibleReplJournalEntries\(\) \{\n[\s\S]{0,400}if \(getActiveReplRecordState\(\)\.refusal\) return \[\];/);
+	assert.match(clientSource, /function getVisibleReplJournalEntries\(\) \{\n[\s\S]{0,800}if \(getActiveReplRecordState\(\)\.refusal\) return \[\];/);
 	assert.match(between("function getStudioReplJournalEntries(", "\n}\n"), /const refused = new Set\(sessions\.filter\(\(session\) => session\.recordRefusal\)/);
 });
 
@@ -142,14 +145,18 @@ test("Candidate 112: a page's sends and notes are recorded under its name, check
 	// The name as sent, so anything but a usable name is refused, not cut or ignored (Sol, Astra).
 	assert.match(serverSource, /\t\t\tpersonName: msg\.personName,\n/);
 	// Both note routes check a name under Studio's prefix, read as the shared record will keep the request ID (Sol).
-	assert.match(serverSource, /String\(requestId \|\| ""\)\.replace\(\/\[\\r\\n\\0\]\+\/g, ""\)\.trim\(\)\.startsWith\("studio:"\)/);
+	assert.match(serverSource, /typeof requestId === "string" && requestId\.replace\(\/\[\\r\\n\\0\]\+\/g, ""\)\.trim\(\)\.startsWith\("studio:"\)/);
 	assert.match(serverSource, /if \(!isStudioReplPersonRequestId\(entry\.requestId\)\) return \{ entry \};/);
 	assert.match(between('if (msg.type === "repl_journal_upsert_request")', 'if (msg.type === "repl_journal_import_request")'), /checkStudioReplPersonEntry\(msg\.entry\)/);
 	assert.match(between('if (msg.type === "repl_journal_import_request")', 'if (msg.type === "repl_journal_clear_request")'), /checkStudioReplPersonEntry\(entry\)/);
 });
 
 test("Studio shell and GHCi sends retain completion after runtime errors", () => {
-	assert.match(serverSource, /runtime === "shell"\) return `\. \$\{shellQuote\(sourceFile\)\}; touch/);
+	// Candidate 115: zsh writes its done file in an always block, which runs even after Ctrl+C; the
+	// shell that reads the line chooses, not the pane's foreground command (Sol).
+	assert.match(serverSource, /case "\\\$\{ZSH_VERSION-\}" in ""\) \. "\$__pi_studio_source"; touch "\$__pi_studio_done";; `/);
+	assert.match(serverSource, /\*\) eval '\{ \. "\$__pi_studio_source"; \} always \{ touch "\$__pi_studio_done"; \}';; esac`/);
+	assert.doesNotMatch(serverSource, /pane_current_command/);
 	assert.match(serverSource, /runtime === "shell"\) return "sh"/);
 	// Candidate 74: GHCi completes from a driver script, never from typed input.
 	assert.match(serverSource, /buildStudioGhciCompletionLine\(controlFiles\.doneFile, display\)/);

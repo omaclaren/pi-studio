@@ -18,7 +18,7 @@ function page({ connected = true } = {}) {
 	const context = { console };
 	vm.runInNewContext([
 		"let replActiveSessionName = 'pi-repl-python'; let replSessions = []; let rightView = 'repl'; let replJournalCollapsed = false;",
-		"let replJournalEntries = []; let activeReplJournalEntryId = ''; let replJournalClearRequestId = ''; const replJournalImportPendingSessions = new Set();",
+		"let replJournalEntries = []; let activeReplJournalEntryId = ''; const replJournalClearRequests = new Map(); const replJournalImportPendingSessions = new Set();",
 		`const connected = ${connected}; const sent = []; const statuses = []; const copied = []; const exported = []; const loaded = []; let nextRequest = 0;`,
 		"function setStatus(message, kind) { statuses.push([message, kind]); } function persistReplJournalEntries() {} function renderReplViewIfActive() {} function mergeReplJournalEntries() { return false; }",
 		"function sendMessage(message) { if (!connected) return false; sent.push(message); return true; } function makeRequestId() { return 'request-' + (++nextRequest); }",
@@ -82,7 +82,7 @@ test("a session's clear empties this page's copy only once Studio has cleared it
 	p.handle({ type: "repl_journal_ack", requestId: request.requestId, sessionName: "pi-repl-python", journalEntries: [], cleared: true });
 	assert.deepEqual([...p.entries], ["b1"]);
 	assert.equal(p.activeEntry, "");
-	assert.deepEqual([...p.status], ["Cleared shared REPL record for this session.", "success"]);
+	assert.deepEqual([...p.status], ["Cleared shared REPL record for pi-repl-python.", "success"]);
 
 	// Refused: the page keeps its copy and says why.
 	p = page();
@@ -112,4 +112,44 @@ test("a clear Studio can't be asked for clears nothing; with no session, the pag
 	assert.deepEqual([...p.entries], []);
 	assert.deepEqual([...p.sent], []);
 	assert.deepEqual([...p.status], ["Cleared local REPL record cache.", "success"]);
+});
+
+test("Candidate 115: overlapping clears are each answered for themselves", () => {
+	const p = page();
+	p.setEntries([...entries, { id: "b2", sessionName: "pi-repl-julia" }]);
+	p.setActiveEntry("a2");
+	p.clear();
+	p.select("pi-repl-julia");
+	p.setActiveEntry("b2");
+	p.clear();
+	const [python, julia] = p.sent;
+	// The earlier one refused after the later succeeded: a warning for it, nothing lost.
+	p.handle({ type: "repl_journal_ack", requestId: julia.requestId, sessionName: "pi-repl-julia", journalEntries: [], cleared: true });
+	assert.deepEqual([...p.entries], ["a1", "a2"]);
+	assert.equal(p.activeEntry, "");
+	p.handle({ type: "error", requestId: python.requestId, message: "Nothing was cleared: refused." });
+	assert.deepEqual([...p.status], ["Nothing was cleared: refused.", "warning"]);
+	assert.deepEqual([...p.entries], ["a1", "a2"]);
+	// A success for a session no longer shown leaves the shown session's active entry alone.
+	const q = page();
+	q.setEntries(entries);
+	q.clear();
+	q.select("pi-repl-julia");
+	q.setActiveEntry("b1");
+	q.handle({ type: "repl_journal_ack", requestId: q.sent[0].requestId, sessionName: "pi-repl-python", journalEntries: [], cleared: true });
+	assert.deepEqual([...q.entries], ["b1"]);
+	assert.equal(q.activeEntry, "b1");
+	assert.deepEqual([...q.status], ["Cleared shared REPL record for pi-repl-python.", "success"]);
+});
+
+test("Candidate 115: with no session selected, a refused record's entries are still left out", async () => {
+	const p = page();
+	p.setEntries(entries);
+	p.setSessions([{ sessionName: "pi-repl-python", recordRefusal: refusal }, { sessionName: "pi-repl-julia", recordRefusal: "" }]);
+	p.select("");
+	assert.deepEqual([...p.visible], ["b1"]);
+	await p.copy();
+	p.exportMd();
+	p.load();
+	assert.deepEqual([[...p.copied], [...p.exported], [...p.loaded]], [["b1"], ["b1"], ["b1"]]);
 });

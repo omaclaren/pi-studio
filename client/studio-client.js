@@ -700,8 +700,8 @@
       let replSenderEditing = false;
       // What's typed in the name field, kept as it's typed so a redraw by any route keeps it (Sol).
       let replSenderDraft = "";
-      // This page's clear of a session's record, until Studio answers.
-      let replJournalClearRequestId = "";
+      // This page's clears of sessions' records, by request ID, until Studio answers each.
+      const replJournalClearRequests = new Map();
       // After Enter or Esc in the name field, the cursor goes back to ✎.
       let replSenderReturnFocus = false;
       let replSessions = [];
@@ -3021,7 +3021,7 @@
           setStatus("Nothing was cleared: Studio isn't connected.", "warning");
           return;
         }
-        replJournalClearRequestId = requestId;
+        replJournalClearRequests.set(requestId, sessionName);
         setStatus("Clearing the shared REPL record…", "info");
       }
 
@@ -12311,6 +12311,32 @@
         }
       }
 
+      // The REPL pane's More menu opens right-aligned under More. Where the controls have wrapped
+      // and More starts a row, that runs off the pane's left edge, so the menu is kept inside the
+      // pane, narrower if the pane is.
+      function placeReplMoreMenu(details) {
+        const menu = details.querySelector(".repl-more-menu");
+        const pane = details.closest("#leftPane, #rightPane");
+        if (!(menu instanceof HTMLElement) || !pane) return;
+        menu.style.left = "";
+        menu.style.right = "";
+        menu.style.minWidth = "";
+        menu.style.maxWidth = "";
+        const bounds = pane.getBoundingClientRect();
+        const minLeft = bounds.left + 8;
+        const available = Math.max(0, bounds.right - 8 - minLeft);
+        // The stylesheet's minimum width would win over a smaller maximum (Sol, Astra).
+        if (menu.getBoundingClientRect().width > available) menu.style.minWidth = menu.style.maxWidth = available + "px";
+        if (menu.getBoundingClientRect().left >= minLeft) return;
+        menu.style.right = "auto";
+        menu.style.left = (minLeft - details.getBoundingClientRect().left) + "px";
+      }
+
+      function handleReplMoreToggle(event) {
+        const details = event && event.target;
+        if (details instanceof HTMLDetailsElement && details.open && details.classList.contains("repl-more-controls")) placeReplMoreMenu(details);
+      }
+
       function handleReplPaneFocusIn(event) {
         if (!replQuickFocusRequested || rightView !== "repl") return;
         const target = event && event.target;
@@ -12449,6 +12475,7 @@
         if (!critiqueViewEl) return;
         critiqueViewEl.addEventListener("scroll", handleTracePaneScroll);
         critiqueViewEl.addEventListener("toggle", handleTraceDetailsToggle, true);
+        critiqueViewEl.addEventListener("toggle", handleReplMoreToggle, true);
         critiqueViewEl.addEventListener("click", handleTracePaneClick);
         critiqueViewEl.addEventListener("click", handleReplPaneClick);
         critiqueViewEl.addEventListener("click", handleFilesPaneClick);
@@ -13982,7 +14009,11 @@
 
       function getVisibleReplJournalEntries() {
         const sessionName = getActiveReplJournalSessionName();
-        if (!sessionName) return replJournalEntries;
+        if (!sessionName) {
+          // With no session selected, every session's entries, but not a refused record's (Sol, Astra).
+          const refused = new Set(replSessions.filter((session) => session.recordRefusal).map((session) => session.sessionName));
+          return refused.size ? replJournalEntries.filter((entry) => !refused.has(entry.sessionName)) : replJournalEntries;
+        }
         // Entries kept from before aren't a refused record's, to show, copy, export or load.
         if (getActiveReplRecordState().refusal) return [];
         return replJournalEntries.filter((entry) => entry.sessionName === sessionName);
@@ -29600,10 +29631,10 @@
           if (message.cleared && sessionName) {
             replJournalEntries = replJournalEntries.filter((entry) => entry.sessionName !== sessionName);
             persistReplJournalEntries();
-            if (replJournalClearRequestId && message.requestId === replJournalClearRequestId) {
-              replJournalClearRequestId = "";
-              activeReplJournalEntryId = "";
-              setStatus("Cleared shared REPL record for this session.", "success");
+            if (replJournalClearRequests.delete(message.requestId)) {
+              // The active entry was this session's only if this session is still the one shown.
+              if (sessionName === getActiveReplJournalSessionName()) activeReplJournalEntryId = "";
+              setStatus("Cleared shared REPL record for " + sessionName + ".", "success");
             }
           } else {
             mergeReplJournalEntries(message.journalEntries);
@@ -30171,8 +30202,7 @@
         }
 
         // This page's clear, refused: only its status changes, and its copy stays.
-        if (message.type === "error" && replJournalClearRequestId && message.requestId === replJournalClearRequestId) {
-          replJournalClearRequestId = "";
+        if (message.type === "error" && replJournalClearRequests.delete(message.requestId)) {
           setStatus(typeof message.message === "string" ? message.message : "Nothing was cleared.", "warning");
           renderReplViewIfActive({ force: true });
           return;

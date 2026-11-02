@@ -10229,16 +10229,18 @@ function parseStudioReplJournalEntryInput(value: unknown): Partial<StudioReplJou
 	const prose = typeof entry.prose === "string" ? entry.prose.slice(0, 80_000) : "";
 	const output = typeof entry.output === "string" ? entry.output.slice(0, 200_000) : "";
 	if (!code.trim() && !prose.trim() && !output.trim()) return null;
+	// The request ID as it's kept, which decides whether the label is a person's name (Sol).
+	const requestId = typeof entry.requestId === "string" ? entry.requestId.slice(0, 300) : undefined;
 	return {
 		id: typeof entry.id === "string" ? entry.id.slice(0, 240) : undefined,
-		requestId: typeof entry.requestId === "string" ? entry.requestId.slice(0, 300) : undefined,
+		requestId,
 		createdAt: typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt) ? entry.createdAt : undefined,
 		updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : undefined,
 		completedAt: typeof entry.completedAt === "number" && Number.isFinite(entry.completedAt) ? entry.completedAt : null,
 		runtime: normalizeStudioReplRuntime(entry.runtime) || "unknown",
 		origin: entry.origin === "pi-repl" ? "pi-repl" : "pi-studio",
 		// A person's name is checked as sent (checkStudioReplPersonEntry), so cutting it can't make it usable (Sol, Astra).
-		label: typeof entry.label === "string" ? (isStudioReplPersonRequestId(entry.requestId) ? entry.label : entry.label.slice(0, 240)) : undefined,
+		label: typeof entry.label === "string" ? (isStudioReplPersonRequestId(requestId) ? entry.label : entry.label.slice(0, 240)) : undefined,
 		mode: normalizeStudioReplJournalMode(entry.mode),
 		prose,
 		code,
@@ -10251,7 +10253,7 @@ function parseStudioReplJournalEntryInput(value: unknown): Partial<StudioReplJou
 // Whether a request ID is under Studio's person prefix (studio:send:, studio:note:), read as the
 // shared record will keep it, without line breaks or NULs and trimmed (Sol).
 function isStudioReplPersonRequestId(requestId: unknown): boolean {
-	return String(requestId || "").replace(/[\r\n\0]+/g, "").trim().startsWith("studio:");
+	return typeof requestId === "string" && requestId.replace(/[\r\n\0]+/g, "").trim().startsWith("studio:");
 }
 
 // A note under Studio's person prefix (studio:note:) records a name as its label, checked
@@ -12385,7 +12387,16 @@ function buildStudioReplSubmissionLine(runtime: StudioReplRuntime, sourceFile: s
 	if (runtime === "octave" || runtime === "matlab") return `eval(fileread(${mStringLiteral(sourceFile)}));`;
 	if (runtime === "gnuplot") return buildGnuplotSubmissionLine(sourceFile);
 	if (runtime === "cpp") return cppInclude(sourceFile);
-	if (runtime === "shell") return `. ${shellQuote(sourceFile)}; touch ${shellQuote(doneFile)}`;
+	// zsh ends the whole command line when Ctrl+C stops a command in the code, so there the done
+	// file is written in an always block, which runs however the code ends; bash goes on to the
+	// end of the file and to the touch. The shell that reads the line chooses, since a pane's
+	// foreground command can be a child that won't read it (Sol). zsh's form is in eval, which
+	// other shells don't parse, and keeps its separators for sh emulation (Sol).
+	if (runtime === "shell") {
+		return `__pi_studio_source=${shellQuote(sourceFile)}; __pi_studio_done=${shellQuote(doneFile)}; `
+			+ `case "\${ZSH_VERSION-}" in "") . "$__pi_studio_source"; touch "$__pi_studio_done";; `
+			+ `*) eval '{ . "$__pi_studio_source"; } always { touch "$__pi_studio_done"; }';; esac`;
+	}
 	return `exec(open(${quotedPath}, encoding="utf-8").read(), globals())`;
 }
 

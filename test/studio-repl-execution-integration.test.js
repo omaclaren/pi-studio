@@ -362,6 +362,33 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 		}
 		assert.equal((await repl.send(name, fast)).status, "captured", "and the session takes the next send");
 	}
+	// Candidate 115: Ctrl+C while the code itself runs, not the footer. zsh ends the whole command
+	// line then, so before, the done file was never written and the session was kept for code
+	// that had stopped; the next send waited for good.
+	async function interruptsCode(name) {
+		const sending = repl.sending(name, "echo BEFORE-ctrl-c; sleep 30; echo AFTER-ctrl-c");
+		await sending.ack;
+		assert.ok(await waitFor(() => scrollback(name).includes("BEFORE-ctrl-c"), 10_000), "the code has started");
+		await sleep(700);
+		tmux("send-keys", "-t", `=${name}:`, "C-c");
+		const result = await sending.done;
+		assert.equal(result.status, "captured", `${name}: Ctrl+C in the code still completes the send`);
+		assert.match(result.output, /BEFORE-ctrl-c/);
+		assert.equal((await repl.send(name, "echo next")).output, "next", `${name}: the session takes the next send`);
+	}
+	// Candidate 115, round 2: a send typed while a short-lived child of another shell holds the
+	// pane. The child doesn't read the line; the shell that does, once the child ends, chooses its
+	// form. Before, Studio went by the pane's foreground command and sent bash zsh's (Sol).
+	async function sendsBehindChild(name, child) {
+		tmux("send-keys", "-t", `=${name}:`, "-l", child);
+		tmux("send-keys", "-t", `=${name}:`, "Enter");
+		await sleep(500);
+		const result = await repl.send(name, "echo behind-child-ok");
+		assert.equal(result.status, "captured", `${name}: behind ${child}`);
+		assert.match(result.output, /behind-child-ok/);
+		// bash can add a job-control warning about the child here (Sol saw "child setpgid …" on newmac).
+		assert.match((await repl.send(name, "echo next")).output, /(^|\n)next$/, `${name}: the session takes the next send`);
+	}
 	// The Shell footer runs in the user's shell, which may have set -u, with NODE_OPTIONS
 	// unset as usual (Astra, candidate90).
 	async function keepsNounset(name) {
@@ -1211,6 +1238,15 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			// Candidate 114: nor one Studio would cut short to a usable name (Sol, Astra).
 			const padded = `Ana${" ".repeat(237)}\u202e`;
 			await assert.rejects(repl.note(p, "a padded note", { requestId: `studio:note:${randomUUID()}`, label: padded }), { message: "Not recorded: the name is longer than 80 characters." });
+			// Candidate 115: the request ID is classified as it's kept, cut to 300, and only a string
+			// is (Sol). Neither of these is a person's, so its label is cut as any other.
+			const spaced = await repl.note(p, "spaced, not named", { requestId: `${" ".repeat(301)}studio:note:x`, label: "x".repeat(1_000) });
+			const objectId = await repl.note(p, "object id, not named", { requestId: { toString: null } });
+			for (const id of [spaced, objectId]) {
+				const recorded = (await repl.capture(p)).journalEntries.find((candidate) => candidate.id === id);
+				assert.equal(recorded?.requestId, "", id);
+				assert.ok([...recorded.label].length <= 240, id);
+			}
 			// Handed over from a browser, it's kept, but not as a name.
 			const kept = `pi-studio:c112:kept-${randomUUID()}`;
 			const keptToo = `pi-studio:c112:kept-${randomUUID()}`;
@@ -1717,6 +1753,9 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			assert.equal((await repl.start("shell", command)).message, `Started Shell REPL with custom command: ${command}.`);
 			await repl.send(name, "true");
 			await interruptsFooter(name, `export NODE_OPTIONS=${JSON.stringify(`--require ${slowQuery}`)}`, (tag) => `printf BO; printf DY-${tag}`, "unset NODE_OPTIONS");
+			await interruptsCode(name);
+			const other = shell === "bash" ? "zsh -f" : "bash --norc --noprofile";
+			if (has(other.split(" ")[0])) await sendsBehindChild(name, `${other} -c 'sleep 3; echo child-end'`);
 			await keepsNounset(name);
 			assert.deepEqual(await repl.stop(name), { message: `Closed ${name}.`, error: undefined });
 		}

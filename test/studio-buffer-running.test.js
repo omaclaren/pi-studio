@@ -214,7 +214,7 @@ test("a late response for an older request cannot settle a newer Run after switc
 function failureHarness(switching = true) {
   const discarded = [], restored = [];
   const c = vm.createContext({ ...runFollowingDefaults(), bufferSwitchingEnabled: switching, pendingKind: "direct", pendingRequestId: "new-run", uiBusy: true,
-    stickyStudioKind: "direct", wsState: "Submitting", status: "Running", replPendingRequestId: "", replJournalClearRequestId: "", pendingEditorRefresh: null,
+    stickyStudioKind: "direct", wsState: "Submitting", status: "Running", replPendingRequestId: "", replJournalClearRequests: new Map(), pendingEditorRefresh: null,
     pendingSaveOperations: new Map(), clearPiEditorOperations() {}, clearArmedTitleAttention() {}, failPendingCompanionLaunch() {},
     submittedEditorDrafts: { discard: id => { discarded.push(id); return id === "pending-steer"; } },
     restoreReservedPiEditorDraftSnapshot: id => restored.push(id), finishTrackedStudioActivity() {}, syncActionButtons() {},
