@@ -4,6 +4,18 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.8] — 2026-11-03
+
+### Changed
+- The REPL pane's record says when a session's record directory isn't verified, because the session has no record-directory key yet, so the record shown may not be the one other clients use. When the agent is told of entries from such a session, it's told this too.
+
+### Fixed
+- In a Shell session under zsh, Ctrl+C while your code runs no longer leaves Studio waiting for that send. Before, the session took no further sends until it was closed. bash was already unaffected.
+- When the REPL pane's controls wrap and **More** starts a row, its menu opens inside the pane, not off its left edge.
+- For a session whose shared record Studio won't use from here, **Copy Markdown**, **Export .md** and **Load record into editor** say why, instead of using the page's earlier copy of its entries. With no session selected, the page leaves that session's entries out.
+- **Clear** empties the page's copy of a session's record once Studio has cleared it. If Studio refuses, the page keeps its copy and says why. Before, the page emptied its copy and reported success first.
+- A note's name is checked before Studio shortens a long label, so a name that isn't usable can't be cut into one that is.
+
 ## [0.11.7] — 2026-11-02
 
 This release brings the REPL pane up to pi-repl 0.11.7.
