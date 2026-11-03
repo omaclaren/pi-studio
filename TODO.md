@@ -19,7 +19,7 @@ Known limits at `0.11.10`, none of them a hold:
 ## After the freeze
 
 - [ ] Re-vendor pi-repl's `shared/repl-record-activity.js` and `REPL_SESSION_RECORD_PROTOCOL.md` from `v0.12.1` (with its fix for the own-send mark when no report fits), and confirm delivery in `before_provider_request` rather than `context_with_system`. Studio's side of the channel is in `0.11.10`.
-- [ ] Declare the Pi version Studio needs (`context_with_system`, used since `0.11.7`) in `package.json`, whose peer dependency on Pi is `*`.
+- [ ] Say which Pi version Studio needs, in the README's requirements or as a warning at load on an older Pi. `context_with_system`, used since `0.11.7`, came in Pi 0.87.0; Studio is tested against 1.2.0. Not as a range in `package.json`: Pi installs extensions with peer dependencies ignored (`--legacy-peer-deps` or `--omit=peer`), and its loader asks for Pi's own packages as peer dependencies with a `*` range.
 - [ ] A GitHub page for pi-studio, like agent-repl's and agent-markdown-preview's.
 - [ ] LFortran sends through pi-repl's helper, if wanted. Studio refuses to paste into that session now.
 - [ ] Take pi-repl's generalised `repl-session-stop.js` and `repl-gnuplot-processes.js` with LFortran, if it comes.
