@@ -9696,7 +9696,6 @@
           event.preventDefault();
           event.stopPropagation();
         });
-        actions.appendChild(openLink);
 
         const systemViewerBtn = document.createElement("button");
         systemViewerBtn.type = "button";
@@ -9706,7 +9705,6 @@
         systemViewerBtn.addEventListener("click", () => {
           void runStudioPdfLocalAction("system-viewer", studioPdfFocusResourceQuery, systemViewerBtn, { isCurrent: studioPdfFocusIsCurrent });
         });
-        actions.appendChild(systemViewerBtn);
 
         const revealBtn = document.createElement("button");
         revealBtn.type = "button";
@@ -9716,7 +9714,6 @@
         revealBtn.addEventListener("click", () => {
           void runStudioPdfLocalAction("reveal", studioPdfFocusResourceQuery, revealBtn, { isCurrent: studioPdfFocusIsCurrent });
         });
-        actions.appendChild(revealBtn);
 
         const copyPathBtn = document.createElement("button");
         copyPathBtn.type = "button";
@@ -9726,16 +9723,14 @@
         copyPathBtn.addEventListener("click", () => {
           void copyStudioPdfResourcePath(studioPdfFocusResourceQuery, copyPathBtn, { isCurrent: studioPdfFocusIsCurrent });
         });
-        actions.appendChild(copyPathBtn);
 
         const refreshBtn = document.createElement("button");
         refreshBtn.type = "button";
         refreshBtn.className = "studio-pdf-focus-btn studio-pdf-focus-refresh";
-        refreshBtn.textContent = "Refresh";
+        refreshBtn.textContent = "Refresh now";
         refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Option/Alt+Shift+R.";
         refreshBtn.setAttribute("aria-label", "Refresh PDF preview from disk");
         refreshBtn.addEventListener("click", () => refreshStudioPdfFocusViewer());
-        actions.appendChild(refreshBtn);
 
         const autoRefreshBtn = document.createElement("button");
         autoRefreshBtn.type = "button";
@@ -9746,6 +9741,7 @@
         autoRefreshBtn.setAttribute("aria-pressed", "false");
         autoRefreshBtn.addEventListener("click", () => toggleStudioPdfFocusAutoRefresh());
         actions.appendChild(autoRefreshBtn);
+        actions.appendChild(createStudioPdfMoreMenu("focus", [refreshBtn, openLink, systemViewerBtn, revealBtn, copyPathBtn]));
 
         const fullscreenBtn = document.createElement("button");
         fullscreenBtn.type = "button";
@@ -9828,6 +9824,7 @@
         if (studioPdfFocusOpenLinkEl) studioPdfFocusOpenLinkEl.href = src;
         setStudioPdfFocusFrameSource(src, title, sourceFrame);
         if (document.body) document.body.classList.add("studio-pdf-focus-open");
+        closeStudioPdfFocusMoreMenus();
         if (studioPdfFocusOverlayEl) studioPdfFocusOverlayEl.hidden = false;
         syncStudioBufferOpenOperation();
         syncStudioPdfFocusFullscreenButton();
@@ -9849,6 +9846,7 @@
             if (exitResult && typeof exitResult.catch === "function") exitResult.catch(() => {});
           } catch {}
         }
+        closeStudioPdfFocusMoreMenus();
         if (studioPdfFocusOverlayEl) studioPdfFocusOverlayEl.hidden = true;
         restoreStudioPdfFocusMovedFrame();
         if (studioPdfFocusFrameEl) studioPdfFocusFrameEl.src = "about:blank";
@@ -9897,6 +9895,64 @@
         if (typeof value.resourceDir === "string" && value.resourceDir.trim()) query.resourceDir = value.resourceDir.trim();
         return query;
       }
+
+      // A PDF's less frequent actions, under More as in the REPL pane: a manual refresh beside
+      // Auto-refresh, and the one-off ways to take the PDF elsewhere (Oliver, candidate 117).
+      function createStudioPdfMoreMenu(kind, items) {
+        const details = document.createElement("details");
+        details.className = "studio-pdf-more studio-pdf-" + kind + "-more";
+        const summary = document.createElement("summary");
+        summary.textContent = "More";
+        summary.title = "More ways to refresh or open this PDF.";
+        details.appendChild(summary);
+        const menu = document.createElement("div");
+        menu.className = "studio-pdf-more-menu";
+        items.forEach((item) => {
+          item.classList.add("studio-pdf-more-item");
+          menu.appendChild(item);
+        });
+        // A chosen item closes the menu once its own click has run. The items stop their clicks
+        // from bubbling, so this listens on the way down; the card's items are handled first, on
+        // the document, by handleStudioPreviewMediaActivation, which closes their menu itself.
+        menu.addEventListener("click", (event) => {
+          if (event.target instanceof Element) dismissStudioPdfMoreMenuAfterChoice(event.target);
+        }, true);
+        // Keyboard focus leaving the menu, such as Tab past its last item, closes it, so an open
+        // menu never sits behind a focused control whose Escape belongs to the view (Sol, c117).
+        details.addEventListener("focusout", (event) => {
+          if (details.open && event.relatedTarget instanceof Node && !details.contains(event.relatedTarget)) details.open = false;
+        });
+        // Escape closes the menu, not the view it's in.
+        details.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape" || !details.open) return;
+          event.preventDefault();
+          event.stopPropagation();
+          details.open = false;
+          summary.focus();
+        });
+        details.appendChild(menu);
+        return details;
+      }
+
+      // A chosen item's menu closes once its click has been handled.
+      function dismissStudioPdfMoreMenuAfterChoice(element) {
+        const item = element && typeof element.closest === "function" ? element.closest(".studio-pdf-more-item") : null;
+        const details = item ? item.closest("details.studio-pdf-more") : null;
+        if (details) window.setTimeout(() => { details.open = false; }, 0);
+      }
+
+      // The enlarged view starts and ends with its menu closed.
+      function closeStudioPdfFocusMoreMenus() {
+        if (!studioPdfFocusOverlayEl) return;
+        studioPdfFocusOverlayEl.querySelectorAll("details.studio-pdf-more[open]").forEach((details) => { details.open = false; });
+      }
+
+      // A press outside an open PDF menu closes it.
+      document.addEventListener("pointerdown", (event) => {
+        document.querySelectorAll("details.studio-pdf-more[open]").forEach((details) => {
+          if (!(event.target instanceof Node) || !details.contains(event.target)) details.open = false;
+        });
+      }, true);
 
       function syncStudioPdfAutoRefreshButton(button, enabled, available) {
         if (!button) return;
@@ -10487,6 +10543,8 @@
         const card = actionBtn.closest(".studio-pdf-card");
         if (!card) return;
         consumeStudioPreviewMediaEvent(event);
+        // The card's More menu would never see this click, which ends here (Sol, Astra, c117).
+        dismissStudioPdfMoreMenuAfterChoice(actionBtn);
         if (!studioPreviewNodeOwnerIsCurrent(actionBtn)) return;
         const interactionContext = buildStudioPreviewInteractionContext(actionBtn);
         if (!studioPreviewInteractionIsCurrent(interactionContext)) return;
@@ -11046,14 +11104,13 @@
           const focusBtn = document.createElement("button");
           focusBtn.type = "button";
           focusBtn.className = "studio-pdf-card-action studio-pdf-card-focus";
-          focusBtn.title = "Open this PDF in a larger Studio overlay.";
+          focusBtn.title = "Enlarge";
           focusBtn.setAttribute("aria-label", "Enlarge PDF");
           if (focusBtn.dataset) {
             focusBtn.dataset.studioPdfViewerUrl = viewerUrl;
             focusBtn.dataset.studioPdfTitle = title;
           }
           focusBtn.appendChild(makeStudioUiRefreshIcon("focus"));
-          focusBtn.appendChild(document.createTextNode("Enlarge"));
           focusBtn.addEventListener("click", handleStudioPdfFocusButtonClick);
           titleGroup.appendChild(focusBtn);
         }
@@ -11079,7 +11136,6 @@
             event.preventDefault();
             event.stopPropagation();
           });
-          actions.appendChild(openLink);
 
           const systemViewerBtn = document.createElement("button");
           systemViewerBtn.type = "button";
@@ -11091,7 +11147,6 @@
             event.stopPropagation();
             void runStudioPdfLocalAction("system-viewer", resourceQuery, systemViewerBtn, { isCurrent });
           });
-          actions.appendChild(systemViewerBtn);
 
           const revealBtn = document.createElement("button");
           revealBtn.type = "button";
@@ -11103,7 +11158,6 @@
             event.stopPropagation();
             void runStudioPdfLocalAction("reveal", resourceQuery, revealBtn, { isCurrent });
           });
-          actions.appendChild(revealBtn);
 
           const copyPathBtn = document.createElement("button");
           copyPathBtn.type = "button";
@@ -11115,12 +11169,11 @@
             event.stopPropagation();
             void copyStudioPdfResourcePath(resourceQuery, copyPathBtn, { isCurrent });
           });
-          actions.appendChild(copyPathBtn);
 
           const refreshBtn = document.createElement("button");
           refreshBtn.type = "button";
           refreshBtn.className = "studio-pdf-card-action studio-pdf-card-refresh";
-          refreshBtn.textContent = "Refresh";
+          refreshBtn.textContent = "Refresh now";
           refreshBtn.title = "Reload this PDF preview from disk. Shortcut: Cmd/Ctrl+Option/Alt+Shift+R.";
           refreshBtn.addEventListener("click", (event) => {
             event.preventDefault();
@@ -11128,7 +11181,6 @@
             if (!isCurrent()) return;
             if (!refreshStudioPdfCard(card)) setStatus("Could not refresh this PDF preview.", "warning");
           });
-          actions.appendChild(refreshBtn);
 
           const autoRefreshBtn = document.createElement("button");
           autoRefreshBtn.type = "button";
@@ -11149,6 +11201,7 @@
             setStudioPdfCardAutoRefresh(card, !state.enabled);
           });
           actions.appendChild(autoRefreshBtn);
+          actions.appendChild(createStudioPdfMoreMenu("card", [refreshBtn, openLink, systemViewerBtn, revealBtn, copyPathBtn]));
 
           header.appendChild(actions);
         }

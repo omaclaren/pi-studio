@@ -9,6 +9,7 @@ All notable changes to `pi-studio` are documented here.
 
 ### Changed
 - The REPL pane's record has no description line under its heading.
+- A PDF's header, on its card and in its enlarged view, shows **Auto-refresh** and **More**. More holds **Refresh now**, **Browser tab**, **System viewer**, **Show in folder** and **Copy path**, so the header fits on one line. The card's Enlarge is its icon alone, with Enlarge as its tooltip.
 
 ## [0.11.8] — 2026-11-03
 

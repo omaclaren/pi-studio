@@ -12,7 +12,17 @@ test("PDF cards and the focus viewer expose browser, system, and folder actions"
   assert.ok((clientSource.match(/textContent = "Show in folder"/g) || []).length >= 2);
   assert.ok((clientSource.match(/textContent = "Copy path"/g) || []).length >= 2);
   assert.match(clientSource, /setAttribute\("aria-label", "Enlarge PDF"\)/);
-  assert.match(clientSource, /createTextNode\("Enlarge"\)/);
+  // Candidate 117: the card's Enlarge is its icon, with Enlarge as its tooltip.
+  assert.doesNotMatch(clientSource, /createTextNode\("Enlarge"\)/);
+  assert.match(clientSource, /focusBtn\.title = "Enlarge";/);
+  // Auto-refresh stays in view; the rest are under More, card and enlarged view alike.
+  const moreItems = /actions\.appendChild\(autoRefreshBtn\);\n\s+actions\.appendChild\(createStudioPdfMoreMenu\("(card|focus)", \[refreshBtn, openLink, systemViewerBtn, revealBtn, copyPathBtn\]\)\);/g;
+  assert.deepEqual([...clientSource.matchAll(moreItems)].map((match) => match[1]).sort(), ["card", "focus"]);
+  assert.equal((clientSource.match(/refreshBtn\.textContent = "Refresh now";/g) || []).length, 2);
+  for (const [from, to] of [['actions.className = "studio-pdf-focus-actions";', "const fullscreenBtn"], ['actions.className = "studio-pdf-card-actions";', "header.appendChild(actions);"]]) {
+    const at = clientSource.indexOf(from);
+    assert.doesNotMatch(clientSource.slice(at, clientSource.indexOf(to, at)), /actions\.appendChild\((?:openLink|systemViewerBtn|revealBtn|copyPathBtn|refreshBtn)\);/, from);
+  }
   assert.match(clientSource, /runStudioPdfLocalAction\("system-viewer", resourceQuery, (?:systemViewerBtn, \{ isCurrent \}|actionBtn, actionOptions)\)/);
   assert.match(clientSource, /runStudioPdfLocalAction\("reveal", resourceQuery, (?:revealBtn, \{ isCurrent \}|actionBtn, actionOptions)\)/);
   assert.match(clientSource, /copyStudioPdfResourcePath\(resourceQuery, (?:copyPathBtn, \{ isCurrent \}|actionBtn, actionOptions)\)/);
