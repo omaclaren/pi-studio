@@ -1,8 +1,30 @@
 # TODO
 
-See [ROADMAP.md](ROADMAP.md) for the active release plan: `0.9.60` is shipped; the opt-in two-buffer workflow is locally checkpointed through `40d4462` (2026-09-21). [PRERELEASE-CHECKLIST.md](PRERELEASE-CHECKLIST.md) scopes its first alpha; [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the wider architecture. The installed version and defaults remain unchanged.
+See [ROADMAP.md](ROADMAP.md) for the current status: `0.11.8` is released, and Studio is in a feature freeze from it, for use in normal work. [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the wider buffer architecture.
 
-## Next: opt-in prerelease
+## During the freeze (from 0.11.8, 3 Nov 2026)
+
+Fix only failures in normal use, lost data, effects on other people's processes or files, and security problems. Note anything else here for after the freeze.
+
+Known limits at `0.11.8`, none of them a hold:
+
+- [ ] Homebrew bash 5.3: Ctrl+C while code runs leaves Studio waiting for that send. Earlier releases did the same; `/bin/bash` 3.2 and zsh complete. Catching SIGINT in the shell would fix it; decide whether Studio should set a trap in a person's shell.
+- [ ] zsh in a narrow pane (about 40 columns or less): the record keeps Studio's loader line before the output. The output cleaner compares at most eight rows; match this send's loader whatever its length, and add a real narrow-zsh test.
+- [ ] If Clear's acknowledgement is lost, the page keeps its request and its copy of the record until reload.
+- [ ] Exported Markdown doesn't say when a session's record directory wasn't verified.
+- [ ] The REPL pane's **More** menu is placed when it opens, not when the pane resizes while it's open.
+- [ ] With Studio and pi-repl both loaded, decide which reports REPL activity to the agent (pi-repl's session brings this to Studio first).
+
+## After the freeze
+
+- [ ] Show the image and PDF files a REPL entry names, such as a saved plot, as the preview packages' REPL page does (`shared/repl-files.js` there).
+- [ ] A GitHub page for pi-studio, like agent-repl's and agent-markdown-preview's.
+- [ ] LFortran sends through pi-repl's helper, if wanted. Studio refuses to paste into that session now.
+- [ ] Take pi-repl's generalised `repl-session-stop.js` and `repl-gnuplot-processes.js` with LFortran, if it comes.
+
+## Earlier: opt-in prerelease
+
+`0.10.0` (14 Oct) shipped the workspace by default and overtook the unchecked items in this section; they're kept as history.
 
 The separately approved three-flag hosting scope supersedes the older toolbar-only boundary below: one editing owner per Document, registered new/text-file hosts, move/copy/reuse, atomic replacement and retained save/metadata decisions. Prompt remains anchored; linked views and role migration stay deferred. Validate a new exact package/private installation; old toolbar artifacts do not cover hosting.
 

@@ -2,9 +2,18 @@
 
 This is the current planning source of truth for Studio work. `NEXT-STAGE.md` is historical; `TODO.md` tracks smaller backlog items that are not yet assigned to a release.
 
-## Current status (14 Oct 2026)
+## Current status (3 Nov 2026)
 
-`0.10.0` ships the buffer-first workspace as **dual editor mode** (Prompt and Document), on by default, with **single editor mode** one switch away (footer button, `/studio --single`). It went through real course use as private alpha candidates 49–69. The `PI_STUDIO_*` flags described further down are now development overrides only: when any is set it decides, and the mode switch is hidden. Fixes follow in `0.10.x`. The sections below are the history up to this point.
+`0.11.8` is the current release, and Studio is in a feature freeze from it, for use in normal work. During the freeze, changes are limited to fixes for failures in normal use, lost data, effects on other people's processes or files, and security. [TODO.md](TODO.md) lists the known limits and what comes after the freeze.
+
+`0.10.0` (14 Oct) made the buffer-first workspace the default, as **dual editor mode** (Prompt and Document), with **single editor mode** one switch away (footer button, `/studio --single`). It went through real course use as private alpha candidates 49–69. The `PI_STUDIO_*` flags described further down are development overrides only: when any is set it decides, and the mode switch is hidden.
+
+The `0.11` releases brought the REPL pane up to pi-repl `0.11.7`: Ruby, Java, Octave, MATLAB, gnuplot and C++; sends and notes recorded under the sender's name; the record-directory key; and telling the agent what's new in the record. They also brought Working closer to agent-markdown-preview's. The [changelog](CHANGELOG.md) has each release. The sections below are the history up to `0.10.0`.
+
+### Parity at the freeze
+
+- **pi-repl `0.11.7` and agent-repl `0.5.0`.** Studio's copies of the shared record, names, protocol, control-file, display, C++, gnuplot and M-language helpers are byte-identical to pi-repl's, and agent-repl carries the same record, names and protocol files. Two helpers differ: pi-repl generalised `repl-session-stop.js` and `repl-gnuplot-processes.js` for LFortran. Studio doesn't run LFortran, and won't paste into pi-repl's LFortran session ("This session takes code only through pi-repl").
+- **pi-markdown-preview `0.26.2` and agent-markdown-preview `0.13.2`.** Their REPL page reads the same records with the same record-directory check. Studio already says when a session's record directory isn't verified; their matching change is on an unreleased branch. Their REPL page shows the image and PDF files an entry names, such as a saved plot, and Studio's REPL pane doesn't yet.
 
 ## Release approach
 
