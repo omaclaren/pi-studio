@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en" data-product="studio">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pi-studio — a browser workspace for Pi</title>
+  <meta name="description" content="Write and run Pi prompts, read responses with rendered math and diagrams, edit and annotate documents, and follow what Pi is doing, in a browser beside the terminal.">
+  <link rel="canonical" href="https://omaclaren.github.io/pi-studio/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="pi-studio — a browser workspace for Pi">
+  <meta property="og:description" content="Write and run Pi prompts, read responses with rendered math and diagrams, edit and annotate documents, and follow what Pi is doing, in a browser beside the terminal.">
+  <meta property="og:url" content="https://omaclaren.github.io/pi-studio/">
+  <meta property="og:image" content="https://omaclaren.github.io/pi-studio/assets/prompt.png">
+  <meta property="og:image:alt" content="The Prompt beside a rendered response in Pi Studio">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="color-scheme" content="light">
+  <link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="wrap">
+    <header>
+      <a class="brand" href="./">pi-studio</a>
+      <nav aria-label="Main navigation">
+        <a href="#examples">Examples</a>
+        <a href="#setup">Install</a>
+        <a href="#repl">REPL</a>
+        <a href="https://github.com/omaclaren/pi-studio#readme">Documentation</a>
+      </nav>
+    </header>
+    <main id="main">
+      <section class="intro" aria-labelledby="title">
+        <h1 id="title">A browser workspace for Pi</h1>
+        <p>pi-studio opens a workspace for <a href="https://pi.dev">Pi</a> in your browser, beside the terminal. Write and run prompts, read responses with rendered math and diagrams, edit and annotate documents, and follow what Pi is doing as it works.</p>
+      </section>
+      <section id="examples" class="examples" aria-label="Screenshots and a recorded demo">
+        <h2>Prompt and Document</h2>
+        <p>Studio has two editors. The Prompt holds what you send to Pi, and the Document holds the file you’re working on. Each keeps its own edits, preview and place, and Add to Prompt copies the Document’s selection into the Prompt.</p>
+        <figure>
+          <a class="illustration" href="assets/prompt.png">
+            <img src="assets/prompt.png" width="1900" height="1180" alt="The Prompt, holding a section copied from the Document, beside a rendered response.">
+          </a>
+          <figcaption>
+            <p>The Prompt, with a section added from the Document.</p>
+          </figcaption>
+        </figure>
+        <figure>
+          <a class="illustration" href="assets/document.png">
+            <img src="assets/document.png" width="1900" height="1180" loading="lazy" alt="A Markdown document with equations and a contour plot, beside its rendered preview.">
+          </a>
+          <figcaption>
+            <p>The Document, with its preview.</p>
+          </figcaption>
+        </figure>
+        <figure>
+          <video controls playsinline preload="metadata" width="1920" height="1080" poster="assets/prompt-document-poster.jpg" aria-label="Browsing linked documents and adding a Document selection to the Prompt" aria-describedby="demo-caption">
+            <source src="assets/prompt-document-demo.mp4" type="video/mp4">
+            <p><a href="assets/prompt-document-demo.mp4">Watch or download the demo.</a></p>
+          </video>
+          <figcaption id="demo-caption">
+            <p>Browsing linked documents, opening a file in the Document, and adding a selection to the Prompt.</p>
+            <p class="recording-note">1m36s, 2× speed, no audio.</p>
+          </figcaption>
+        </figure>
+        <h2>Themes and Zen mode</h2>
+        <p>Studio follows Pi’s theme. Zen mode hides the header and secondary controls.</p>
+        <figure>
+          <a class="illustration" href="assets/zen.png">
+            <img src="assets/zen.png" width="1900" height="1180" loading="lazy" alt="Zen mode in the rose-pine-dawn theme, with Python code in the Document and its preview.">
+          </a>
+          <figcaption>
+            <p>Zen mode, in rose-pine-dawn.</p>
+          </figcaption>
+        </figure>
+        <p>Studio also keeps a history of responses and the prompts behind them, shows Pi’s thinking and tool use in Working, browses folders you allow and the current git diff, and exports to PDF or HTML. See the <a href="https://github.com/omaclaren/pi-studio#features">full list of features</a>.</p>
+      </section>
+      <section id="setup" class="guide" aria-labelledby="install-title">
+        <h2 id="install-title">Installation</h2>
+        <p>You need <a href="https://pi.dev">Pi</a>. <a href="https://pandoc.org/installing.html">Pandoc</a> gives full previews and exports, LaTeX gives PDF export, and the REPL needs <a href="https://github.com/tmux/tmux">tmux</a>.</p>
+        <pre><code>pi install npm:pi-studio</code></pre>
+        <p>Then, in Pi:</p>
+        <pre><code>/studio</code></pre>
+        <p>Studio listens on <code>127.0.0.1</code> only, and its URL carries a token. Anyone with the full URL can run prompts and read or write files, so keep it private. See the <a href="https://github.com/omaclaren/pi-studio#usage">commands</a> and the <a href="https://github.com/omaclaren/pi-studio#network-and-ssh">notes on SSH</a>.</p>
+      </section>
+      <section id="repl" class="repl-demo" aria-labelledby="repl-title">
+        <h2 id="repl-title">REPL pane</h2>
+        <p>The REPL pane runs code in tmux sessions shared with <a href="https://github.com/omaclaren/pi-repl">pi-repl</a> and <a href="https://omaclaren.github.io/agent-repl/">agent-repl</a>. Quick send runs your own cells, and plots your code saves show under the code that made them.</p>
+        <figure>
+          <video controls playsinline preload="metadata" width="1600" height="900" poster="assets/repl-demo-poster.png" aria-label="Pi, an operator and Claude Code sharing a Python session in Studio’s REPL pane" aria-describedby="repl-caption">
+            <source src="assets/repl-demo.mp4" type="video/mp4">
+            <p><a href="assets/repl-demo.mp4">Watch or download the REPL demo.</a></p>
+          </video>
+          <figcaption id="repl-caption">
+            <p>Pi plots a Lorenz orbit in the pane’s Python session, and the operator adds a nearby orbit with Quick send. Claude Code, in a terminal through agent-repl, then plots how far apart they get.</p>
+            <p class="recording-note">50s, real time, no audio, with automated typing. The view menu’s list is drawn for the recording, since headless Chrome doesn’t draw it.</p>
+          </figcaption>
+        </figure>
+        <p class="demo-links">
+          <a href="assets/repl-demo.mp4">Open video</a>
+          <a href="https://omaclaren.github.io/agent-repl/">Shared REPL setup</a>
+          <a href="https://github.com/omaclaren/pi-studio#repl">REPL notes</a>
+        </p>
+      </section>
+    </main>
+    <footer>
+      <p>pi-studio · MIT licence</p>
+      <nav aria-label="Project links">
+        <a href="https://github.com/omaclaren/pi-studio">GitHub</a>
+        <a href="https://www.npmjs.com/package/pi-studio">npm</a>
+        <a href="https://github.com/omaclaren/pi-studio/issues">Issues</a>
+      </nav>
+    </footer>
+  </div>
+</body>
+</html>

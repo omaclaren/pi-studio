@@ -18,6 +18,8 @@ Zen mode, in rose-pine-dawn:
 
 Watch the [demo](https://github.com/omaclaren/pi-studio/releases/download/demo-prompt-document/pi-studio-2-demo.mp4) (1m36s, 2× speed, no audio). It shows browsing linked documents and bringing a Document selection into the Prompt.
 
+The screenshots and both demos are also on the [project page](https://omaclaren.github.io/pi-studio/).
+
 ## Features
 
 - **Prompt and Document** — the default, dual editor mode. The Prompt holds what you send to Pi; the Document holds the file you're working on. Each keeps its own edits, preview and place. See [Single and dual editor mode](#single-and-dual-editor-mode).
