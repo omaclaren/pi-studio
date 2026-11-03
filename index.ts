@@ -94,8 +94,10 @@ import {
 	REPL_ACTIVITY_RUN_START_BUDGET,
 	buildReplActivityReport,
 	confirmReplActivityDelivered,
+	createPiReplRecordActivityLink,
 	createReplActivityState,
 	holdReplActivityCommit,
+	isPiReplSessionName,
 	listReplRecordEntries,
 	readReplRecordInert,
 	recordActivityMode,
@@ -14278,38 +14280,60 @@ export default function (pi: ExtensionAPI) {
 		percent: null,
 	};
 	// The selected REPL session, the count of explicit actions and `shown`.
-	const studioReplSelection = createReplSelection<StudioReplSessionInfo>();
+	// pi-repl's view of its own sessions, when it's loaded too and reports (studio-repl-activity.js,
+	// D5): told what Studio's pane shows whenever that changes.
+	const piReplActivity = createPiReplRecordActivityLink(pi.events);
+	const studioReplSelection = createReplSelection<StudioReplSessionInfo>({ onChange: (session) => piReplActivity.pane(session?.sessionName ?? null) });
 	// What Studio's agent has been told of its REPL sessions' records (PANE-AWARENESS-DESIGN.md,
 	// draft 3, after D5 of the shared design for people's sends). Read when Studio loads.
 	const replActivityMode = recordActivityMode();
 	const replActivity = createReplActivityState();
 	// The session showing in Studio's REPL pane, where the person's Quick sends go, and those
 	// this conversation has sent to or named.
-	const replActivitySessionNames = (): string[] => [...new Set(
-		[studioReplSelection.session?.sessionName, ...replActivity.used].filter((name): name is string => Boolean(name)),
+	// While pi-repl reports, its own sessions are its to report.
+	const replActivitySessionNames = (leaveToPiRepl = false): string[] => [...new Set(
+		[studioReplSelection.session?.sessionName, ...replActivity.used].filter((name): name is string => Boolean(name) && !(leaveToPiRepl && isPiReplSessionName(name))),
 	)];
+	// A session this conversation sent to or named, for Studio's reports and pi-repl's.
+	const useReplActivitySession = (sessionName: string) => {
+		replActivity.used.add(sessionName);
+		piReplActivity.used(sessionName);
+	};
 	// The report a tool result carries, held until its text is seen in what the model is given.
 	// The agent's own send isn't reported back to it, but is marked as told in the version its
-	// result shows, once that result's text (`own.text`) is seen too.
-	const prepareReplActivityForResult = async (toolCallId: string, own?: { sessionName: string; id: string; text: string }, budget = REPL_ACTIVITY_RESULT_BUDGET): Promise<string> => {
+	// result shows, once that result's text (`own.text`) is seen too. While pi-repl reports, its
+	// report of its own sessions comes first, in the room Studio's report of the rest leaves.
+	const prepareReplActivityForResult = async (toolCallId: string, ownSend?: { sessionName: string; id: string; text: string; status: string }, budget = REPL_ACTIVITY_RESULT_BUDGET): Promise<string> => {
 		if (replActivityMode === "off") return "";
+		const leaveToPiRepl = piReplActivity.reports();
+		const toPiRepl = Boolean(ownSend && leaveToPiRepl && isPiReplSessionName(ownSend.sessionName));
+		const own = toPiRepl ? undefined : ownSend;
+		let studioReport = "";
 		try {
-			const names = replActivitySessionNames();
-			if (!names.length) return "";
-			const observations = await observeStudioReplActivity(names);
-			const observedOwn = own ? observations.find((observed) => observed.ok && observed.sessionName === own.sessionName) : undefined;
-			const ownEntry = observedOwn?.ok ? observedOwn.record.entries.find((entry) => entry.id === own?.id) : undefined;
-			const report = buildReplActivityReport(replActivity, observations, {
-				budget,
-				exclude: new Set(own ? [own.id] : []),
-				own: own && ownEntry ? [{ sessionName: own.sessionName, id: own.id, version: replEntryVersion(ownEntry), text: own.text }] : [],
-			});
-			holdReplActivityCommit(replActivity, `tool:${toolCallId}`, report.commit);
-			return report.text;
+			const names = replActivitySessionNames(leaveToPiRepl);
+			if (names.length) {
+				const observations = await observeStudioReplActivity(names);
+				const observedOwn = own ? observations.find((observed) => observed.ok && observed.sessionName === own.sessionName) : undefined;
+				const ownEntry = observedOwn?.ok ? observedOwn.record.entries.find((entry) => entry.id === own?.id) : undefined;
+				const report = buildReplActivityReport(replActivity, observations, {
+					budget,
+					exclude: new Set(own ? [own.id] : []),
+					own: own && ownEntry ? [{ sessionName: own.sessionName, id: own.id, version: replEntryVersion(ownEntry), text: own.text }] : [],
+				});
+				holdReplActivityCommit(replActivity, `tool:${toolCallId}`, report.commit);
+				studioReport = report.text;
+			}
 		} catch {
 			// The tool's own result stands without it.
-			return "";
 		}
+		const piReplReport = leaveToPiRepl
+			? await piReplActivity.report({
+				budget: budget - (studioReport ? studioReport.length + 2 : 0),
+				cwd: process.cwd(),
+				own: toPiRepl && ownSend ? { sessionName: ownSend.sessionName, id: ownSend.id, text: ownSend.text, shown: [ownSend.status] } : undefined,
+			})
+			: "";
+		return [piReplReport, studioReport].filter(Boolean).join("\n\n");
 	};
 	const REPL_ACTIVITY_GUIDELINES = replActivityMode === "off" ? [] : [
 		"Studio tells you about new entries in its REPL sessions' shared records (the user's sends and notes, other agents', pi-repl's)"
@@ -14431,7 +14455,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: STUDIO_REPL_STATUS_TOOL_PARAMS,
 		async execute(toolCallId, params) {
 			const selected = selectStudioReplSessionForTool({ sessionName: params.sessionName, target: params.target });
-			if (params.sessionName && selected.session?.sessionName === params.sessionName) replActivity.used.add(params.sessionName);
+			if (params.sessionName && selected.session?.sessionName === params.sessionName) useReplActivitySession(params.sessionName);
 			const recordEntries = selected.session ? getStudioReplJournalEntries(selected.session.sessionName) : [];
 			const lines = [
 				`Active Studio REPL: ${studioReplSelection.session?.sessionName || "none"}`,
@@ -14531,7 +14555,7 @@ export default function (pi: ExtensionAPI) {
 			// The agent's send is an explicit choice when admitted, before it waits for the
 			// session's lease; only a ticket still current lets its result select (Sol, Astra).
 			const ticket = studioReplSelection.choose({ session: selected.session });
-			replActivity.used.add(selected.session.sessionName);
+			useReplActivitySession(selected.session.sessionName);
 			// Every exit after admission tells the pages Studio's selection: the result when
 			// it selects, otherwise a repl_state, so a failure can't leave them behind (Sol).
 			let published = false;
@@ -14690,7 +14714,7 @@ export default function (pi: ExtensionAPI) {
 					} : {}),
 				});
 				// What else the session's record holds that the agent hasn't been told, before its own result.
-				const activity = await prepareReplActivityForResult(toolCallId, { sessionName: currentSession.sessionName, id: journalEntry.id, text });
+				const activity = await prepareReplActivityForResult(toolCallId, { sessionName: currentSession.sessionName, id: journalEntry.id, text, status: journalEntry.status });
 				return {
 					content: [{ type: "text", text: activity ? `${activity}\n\n${text}` : text }],
 					details: {
@@ -21069,7 +21093,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", async () => {
 		if (replActivityMode !== "on") return undefined;
 		try {
-			const names = replActivitySessionNames();
+			const names = replActivitySessionNames(piReplActivity.reports());
 			if (!names.length) return undefined;
 			const report = buildReplActivityReport(replActivity, await observeStudioReplActivity(names), { budget: REPL_ACTIVITY_RUN_START_BUDGET });
 			if (!report.text) return undefined;

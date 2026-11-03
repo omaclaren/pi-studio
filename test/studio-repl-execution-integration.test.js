@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { buildStudioReplDeadPaneCloseArgs } from "../shared/studio-repl-tmux.js";
 import { acquireReplSessionSendLease, ensureReplSessionRecord, getReplSessionRecordPath, readReplSessionRecordRootKey, readReplSessionSendLease, replSessionRecordRootKeyFor, upsertReplSessionRecordEntry } from "../shared/repl-session-record.js";
 import { createServer, get as httpGet } from "node:http";
+import { PI_REPL_STAND_IN_REPORT } from "./fixtures/pi-repl-activity-listener.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
@@ -19,6 +20,8 @@ const extensionPath = fileURLToPath(new URL("../index.ts", import.meta.url));
 const scriptedAgentPath = fileURLToPath(new URL("./fixtures/scripted-agent-extension.js", import.meta.url));
 // Another extension that can rewrite the next tool result (candidate 110).
 const resultRewritePath = fileURLToPath(new URL("./fixtures/result-rewrite-extension.js", import.meta.url));
+// A stand-in for pi-repl on its record-activity channel, answering only when switched on (candidate 118).
+const piReplListenerPath = fileURLToPath(new URL("./fixtures/pi-repl-activity-listener.js", import.meta.url));
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 
 // A short root keeps tmux's socket path within the Unix limit. Pi's settings,
@@ -32,6 +35,8 @@ delete env.PI_REPL_USER_NAME;
 // What the scripted model is given, run by run (test/fixtures/scripted-agent-extension.js).
 env.STUDIO_TEST_MODEL_LOG = join(root, "model.log");
 env.STUDIO_TEST_REWRITE_NEXT_RESULT = join(root, "rewrite-next-result");
+env.STUDIO_TEST_PI_REPL_LISTEN = join(root, "pi-repl-listening");
+env.STUDIO_TEST_PI_REPL_LOG = join(root, "pi-repl-activity.log");
 // The agent is told of record entries as by default, whatever this machine sets.
 delete env.PI_REPL_RECORD_ACTIVITY;
 delete env.PI_REPL_PANE_ACTIVITY;
@@ -77,7 +82,7 @@ function fetchText(url) {
 }
 
 function startPi() {
-	const child = spawn(process.execPath, [piCliPath, "--no-session", "--no-extensions", "-e", extensionPath, "-e", scriptedAgentPath, "-e", resultRewritePath, "--mode", "rpc"], {
+	const child = spawn(process.execPath, [piCliPath, "--no-session", "--no-extensions", "-e", extensionPath, "-e", scriptedAgentPath, "-e", resultRewritePath, "-e", piReplListenerPath, "--mode", "rpc"], {
 		cwd: repositoryRoot, env, stdio: ["pipe", "pipe", "pipe"],
 	});
 	let buffer = "", stderr = "", next = 0;
@@ -1103,6 +1108,112 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			assert.match(message.content, /after the clear/);
 		} finally {
 			tmux("kill-session", "-t", `=${p}`);
+		}
+	});
+
+	// Candidate 118: with pi-repl loaded in the same Pi and reporting on its channel (protocol 2,
+	// pi-repl 0.12.1), Studio leaves the pi-repl-* sessions to pi-repl's view: it tells pi-repl
+	// what Studio's pane shows and which of them Studio's agent used, and each of Studio's REPL
+	// results carries pi-repl's report, the agent's own send aside. pi-repl 0.12.0 (protocol 1)
+	// can't report into Studio's results, so Studio tells it nothing and reports every session
+	// itself, as without pi-repl.
+	await t.test("with pi-repl reporting, Studio leaves pi-repl's sessions to it and carries its reports", { skip: !has("python3") }, async () => {
+		const s = "pi-repl-python";
+		const told = (run) => run.filter((event) => event.type === "message_end" && event.message?.role === "custom" && event.message.customType === "pi-studio-repl-activity").map((event) => event.message);
+		const heard = () => existsSync(env.STUDIO_TEST_PI_REPL_LOG) ? readFileSync(env.STUDIO_TEST_PI_REPL_LOG, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+		const listen = (on, protocol = "") => (on ? writeFileSync(env.STUDIO_TEST_PI_REPL_LISTEN, protocol) : rmSync(env.STUDIO_TEST_PI_REPL_LISTEN, { force: true }));
+		const studioSession = "pi-studio-repl-python";
+		const hadStudioSession = tmux("has-session", "-t", `=${studioSession}`).status === 0;
+		try {
+			// A new conversation, so Studio starts with no pane selection and nothing told.
+			await rpc.newSession();
+			ws.close();
+			repl = await openStudio();
+			tmux("kill-session", "-t", `=${s}`);
+			assert.equal(tmux("new-session", "-d", "-s", s, "python3 -q").status, 0);
+			assert.ok(await waitFor(() => tmux("capture-pane", "-p", "-t", `=${s}:`).stdout.includes(">>>"), 10_000), "python is ready");
+			rmSync(env.STUDIO_TEST_PI_REPL_LOG, { force: true });
+			listen(true);
+
+			// The pane's session, told as it changes.
+			await repl.choose(s, "python");
+			assert.deepEqual(heard().filter((message) => message.kind === "pane"), [{ kind: "pane", sessionName: s }]);
+			assert.equal((await repl.send(s, "print('from the page')")).output, "from the page");
+
+			// At a run's start Studio asks, pi-repl answers, and Studio's report leaves its session out.
+			let run = await rpc.run("what did I just run?");
+			assert.equal(told(run).length, 0, "not told by Studio");
+			assert.ok(heard().some((message) => message.kind === "probe"));
+
+			// A status naming the session: pi-repl hears it was used, then is asked for its report,
+			// which the result carries in place of Studio's (Astra).
+			let mark = heard().length;
+			const status = (await rpc.agent("studio_repl_status", { sessionName: s })).content[0].text;
+			assert.match(status, new RegExp(`\\n\\n${PI_REPL_STAND_IN_REPORT}(?:\\n\\n|$)`));
+			assert.doesNotMatch(status, /Recorded REPL activity/);
+			const asked = heard().slice(mark).filter((message) => message.kind !== "probe");
+			assert.deepEqual(asked.map((message) => message.kind), ["used", "report"]);
+			assert.equal(asked[0].sessionName, s);
+			assert.ok(asked[1].budget > 0 && asked[1].budget < 8_000, "the room the status leaves");
+			assert.equal(asked[1].own, undefined);
+
+			// The agent's send to it: pi-repl's report heads the result, and pi-repl is given the
+			// agent's own entry with the status its result showed and that result's text.
+			mark = heard().length;
+			const result = await rpc.agent("studio_repl_send", { sessionName: s, code: "print('agent here')" });
+			const text = result.content[0].text;
+			assert.ok(text.startsWith(`${PI_REPL_STAND_IN_REPORT}\n\nCompleted. `), text);
+			assert.doesNotMatch(text, /Recorded REPL activity/);
+			const own = text.slice(PI_REPL_STAND_IN_REPORT.length + 2);
+			assert.match(own, /^Completed\. [\s\S]*agent here\nRecorded as entry (pi-studio:tool:[^\n]+)\.$/);
+			const entryId = own.match(/Recorded as entry (pi-studio:tool:[^\n]+)\.$/)[1];
+			const [report] = heard().slice(mark).filter((message) => message.kind === "report");
+			assert.deepEqual(report, { kind: "report", budget: 8_000, cwd: repositoryRoot, own: { sessionName: s, id: entryId, text: own, shown: ["captured"] } });
+			assert.equal(heard().filter((message) => message.kind === "own").length, 0, "no separate own message");
+
+			// The pane showing no session is told too.
+			await repl.choose(null, "python");
+			assert.deepEqual(heard().filter((message) => message.kind === "pane").at(-1), { kind: "pane", sessionName: null });
+
+			// With an entry in a Studio session the agent named, sent from the page while the agent's
+			// send runs, Studio's report has the budget, as before, and pi-repl's the room it leaves;
+			// pi-repl's comes first in the result.
+			if (!hadStudioSession) assert.equal((await repl.start("python")).message, "Started Python REPL.");
+			await rpc.agent("studio_repl_status", { sessionName: studioSession });
+			mark = heard().length;
+			const sending = rpc.agent("studio_repl_send", { sessionName: s, code: "import time; time.sleep(2); print('agent again')" });
+			await sleep(800);
+			assert.equal((await repl.send(studioSession, "print('STUDIO' + '_SIDE')")).output, "STUDIO_SIDE");
+			const both = (await sending).content[0].text;
+			assert.ok(both.startsWith(`${PI_REPL_STAND_IN_REPORT}\n\nRecorded REPL activity`), both);
+			const studioPart = both.slice(PI_REPL_STAND_IN_REPORT.length + 2).split("\n\nCompleted. ")[0];
+			assert.match(studioPart, new RegExp(`${studioSession} \\(Python\\)[^\\n]*:[\\s\\S]*STUDIO_SIDE`));
+			const [shared] = heard().slice(mark).filter((message) => message.kind === "report");
+			assert.equal(shared.budget, 8_000 - studioPart.length - 2);
+
+			// pi-repl 0.12.0 answers with protocol 1: Studio tells it nothing but probes, and reports
+			// the session itself again, what it left to pi-repl.
+			listen(true, "1");
+			mark = heard().length;
+			await repl.choose(s, "python");
+			run = await rpc.run("anything new?");
+			const [message] = told(run);
+			assert.ok(message, "Studio's own report");
+			assert.match(message.content, new RegExp(`${s} \\(Python\\), recent entries:`));
+			assert.match(message.content, /from the page/);
+			const again = (await rpc.agent("studio_repl_send", { sessionName: s, code: "print('and again')" })).content[0].text;
+			assert.match(again, /^Completed\. /);
+			assert.deepEqual([...new Set(heard().slice(mark).map((item) => item.kind))], ["probe"], "only probes to a pi-repl that can't report");
+
+			// Without an answer at all, the same.
+			listen(false);
+			mark = heard().length;
+			assert.match((await rpc.agent("studio_repl_send", { sessionName: s, code: "print('alone')" })).content[0].text, /^Completed\. /);
+			assert.equal(heard().length, mark, "nothing said to a pi-repl that doesn't answer");
+		} finally {
+			listen(false);
+			tmux("kill-session", "-t", `=${s}`);
+			if (!hadStudioSession) tmux("kill-session", "-t", `=${studioSession}`);
 		}
 	});
 

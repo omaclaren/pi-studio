@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- With pi-repl 0.12.1 or later loaded in the same Pi, the agent is told of each REPL record entry once. pi-repl keeps track of what the agent has been told about its own `pi-repl-*` sessions, including the one Studio's REPL pane shows and those the agent used through Studio's REPL tools. Its reports come at the start of a run, as before, and now also in Studio's REPL tool results. Studio tells the agent about the rest. Before, both told it about the `pi-repl-*` sessions. Without pi-repl, or with pi-repl 0.12.0 or older, Studio tells it about every session, as before.
+
 ## [0.11.9] — 2026-11-03
 
 ### Added

@@ -32,8 +32,13 @@ const sameSelection = (left, right) => (left.session || right.session
 	? sameReplSessionLifetime(left.session, right.session)
 	: left.runtime === right.runtime);
 
-/** @template {ReplSessionLifetime} S */
-export function createReplSelection() {
+/**
+ * `onChange`, when given, is called with the selected session (or null) whenever the selection
+ * changes, such as to tell pi-repl what Studio's pane shows (candidate 118).
+ * @template {ReplSessionLifetime} S
+ * @param {{ onChange?: (session: S | null) => void }} [options]
+ */
+export function createReplSelection({ onChange } = {}) {
 	/** @type {{ session?: S, runtime?: string | null }} */
 	let selected = { runtime: null };
 	let shown = 0;
@@ -44,8 +49,10 @@ export function createReplSelection() {
 	/** @param {{ session?: S | null, runtime?: string | null }} target */
 	const show = (target) => {
 		const next = toSelection(target);
-		if (!sameSelection(selected, next)) shown += 1;
+		const changed = !sameSelection(selected, next);
+		if (changed) shown += 1;
 		selected = next;
+		if (changed) onChange?.(selected.session ?? null);
 	};
 
 	return {

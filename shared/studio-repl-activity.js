@@ -63,6 +63,86 @@ const PERSON_CHANNELS = [
 	{ prefix: /^studio:(?:send|note):/, origin: "pi-studio", channel: "Pi Studio" },
 ];
 
+/*
+ * pi-repl's view of its own sessions, when it's loaded in the same Pi (D5 of the shared design,
+ * agreed with pi-repl's session on 3 Nov; REPL_SESSION_RECORD_PROTOCOL.md, "One view per agent").
+ * Studio asks on Pi's event bus whether pi-repl is there, at each run's start and each REPL tool
+ * result. If it answers with protocol 2 or later, Studio leaves the `pi-repl-*` sessions to it:
+ * it tells pi-repl what Studio's pane shows and which of them Studio's agent used, and each of
+ * Studio's REPL results carries pi-repl's report of them, the agent's own send aside. Without
+ * that answer (no pi-repl, or 0.12.0's protocol 1, which can't report into Studio's results),
+ * Studio tells it nothing and tells its agent of every session itself, as before.
+ */
+export const PI_REPL_RECORD_ACTIVITY_CHANNEL = "pi-repl:record-activity:v1";
+// The first protocol whose pi-repl reports into Studio's results.
+export const PI_REPL_REPORT_PROTOCOL = 2;
+// How long a result waits for pi-repl's report; pi-repl gives its own reads 2 seconds.
+export const PI_REPL_REPORT_DEADLINE_MS = 3_000;
+// The sessions pi-repl's view takes: its own tools' sessions, as pi-repl names them.
+export const PI_REPL_SESSION_NAME = /^pi-repl-[a-z0-9][a-z0-9-]{0,80}$/;
+
+/** Whether pi-repl, when it reports, keeps this session's view. */
+export function isPiReplSessionName(name) {
+	return typeof name === "string" && PI_REPL_SESSION_NAME.test(name);
+}
+
+/**
+ * Studio's side of the channel, on Pi's event bus (`pi.events`). pi-repl answers a probe at once,
+ * while the emit runs, and a report when it has read the records. A missing or failing bus is no
+ * answer.
+ */
+export function createPiReplRecordActivityLink(events, { deadlineMs = PI_REPL_REPORT_DEADLINE_MS } = {}) {
+	let paneTold;
+	const emit = (message) => {
+		try {
+			events?.emit?.(PI_REPL_RECORD_ACTIVITY_CHANNEL, message);
+			return true;
+		} catch {
+			// Studio goes on as if pi-repl weren't there.
+			return false;
+		}
+	};
+	const reports = () => {
+		let protocol = 0;
+		emit({ kind: "probe", reply: (answer) => { protocol = Number(answer?.protocol) || 0; } });
+		return protocol >= PI_REPL_REPORT_PROTOCOL;
+	};
+	return {
+		/** Whether pi-repl answers now with a protocol that reports into Studio's results. */
+		reports,
+		/** A `pi-repl-*` session Studio's agent sent to or named. */
+		used(sessionName) {
+			if (isPiReplSessionName(sessionName) && reports()) emit({ kind: "used", sessionName });
+		},
+		/** The session Studio's pane shows, told when it changes: null for none, or one that isn't pi-repl's. */
+		pane(sessionName) {
+			const name = isPiReplSessionName(sessionName) ? sessionName : null;
+			if (name === paneTold || !reports()) return;
+			paneTold = name;
+			emit({ kind: "pane", sessionName: name });
+		},
+		/**
+		 * pi-repl's report for one of Studio's results, within `budget`: of the sessions Studio's
+		 * agent used and its pane, what the agent hasn't been told, its own send (`own`) aside.
+		 * pi-repl holds it until its text is seen in what the model is given. Empty when there is
+		 * nothing to tell or no reply in time; a late one is dropped, so its entries come round again.
+		 * @param {{ budget: number, cwd?: string, own?: { sessionName: string, id: string, text: string, shown: string[] } }} request
+		 * @returns {Promise<string>}
+		 */
+		report({ budget, cwd, own }) {
+			return new Promise((resolve) => {
+				const timer = setTimeout(() => resolve(""), deadlineMs);
+				const reply = (text) => {
+					clearTimeout(timer);
+					resolve(typeof text === "string" ? text : "");
+				};
+				const ownSend = own && isPiReplSessionName(own.sessionName) ? { sessionName: own.sessionName, id: own.id, text: own.text, shown: [...own.shown] } : undefined;
+				if (!emit({ kind: "report", budget, ...(cwd ? { cwd } : {}), ...(ownSend ? { own: ownSend } : {}), reply })) reply("");
+			});
+		},
+	};
+}
+
 /**
  * Who sent an entry and how, as D5 reads the record (P3): an agent's label; a person's name
  * under a person's request-ID prefix on its matching origin; otherwise "User", "via Pi Studio"
