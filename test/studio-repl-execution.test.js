@@ -8,6 +8,8 @@ import {
 	cleanStudioReplOutput,
 	firstStudioReplPanes,
 	isStudioGnuplotSession,
+	parseStudioReplPaneCwd,
+	STUDIO_REPL_PANE_CWD_FORMAT,
 	STUDIO_REPL_PANE_FORMAT,
 	isStudioReplReadyLine,
 	STUDIO_REPL_SESSION_NAME,
@@ -72,6 +74,17 @@ test("each session's first pane comes from its real window and pane numbers", ()
 	assert.equal(firstStudioReplPanes(row(0, 0, "%3", "pi-repl-r", "$3", ""))[0].rootKey, "");
 	assert.match(STUDIO_REPL_PANE_FORMAT, /\t#\{@pi_repl_record_root_key\}$/);
 	assert.deepEqual(firstStudioReplPanes(""), []);
+});
+
+test("Candidate 116: a pane's directory is read on its own, never in the pane listing (Sol's H1)", () => {
+	assert.doesNotMatch(STUDIO_REPL_PANE_FORMAT, /pane_current_path/, "A newline in a directory's name could forge a row there.");
+	assert.match(STUDIO_REPL_PANE_FORMAT, /\t#\{@pi_repl_record_root_key\}$/);
+	assert.equal(STUDIO_REPL_PANE_CWD_FORMAT, "#{pane_current_path}");
+	assert.equal(parseStudioReplPaneCwd("/Users/ana/fits\n"), "/Users/ana/fits");
+	assert.equal(parseStudioReplPaneCwd("/Users/ana/a\tb Ω\n"), "/Users/ana/a\tb Ω");
+	for (const bad of ["/a\nb\n", "/a\n\n", "/a\rb\n", "/a\0b\n", "relative/dir\n", "\n", "", `/${"x".repeat(4096)}\n`, undefined]) {
+		assert.equal(parseStudioReplPaneCwd(bad), "", JSON.stringify(bad));
+	}
 });
 
 test("Start waits for each runtime's normal prompt, seen on the cursor row", () => {

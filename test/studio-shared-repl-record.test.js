@@ -129,7 +129,9 @@ test("Candidate 113: Studio uses a session's record only from the record directo
 	// Entries kept from before aren't shown as a refused session's record, by Studio or its page.
 	// Candidate 114: in one place, which the panel, copy, export and load all use.
 	assert.match(clientSource, /function getVisibleReplJournalEntries\(\) \{\n[\s\S]{0,800}if \(getActiveReplRecordState\(\)\.refusal\) return \[\];/);
-	assert.match(between("function getStudioReplJournalEntries(", "\n}\n"), /const refused = new Set\(sessions\.filter\(\(session\) => session\.recordRefusal\)/);
+	// Candidate 116: read in one place, for the agent's entries and the page's.
+	assert.match(between("function getStudioReplJournalEntries(", "\n}\n"), /return readStudioReplJournal\(sessionName\)\.entries;/);
+	assert.match(between("function readStudioReplJournal(", "\n}\n"), /const refused = new Set\(sessions\.filter\(\(session\) => session\.recordRefusal\)/);
 });
 
 test("Candidate 112: a page's sends and notes are recorded under its name, checked before anything is sent", () => {
@@ -416,7 +418,8 @@ test("Candidate 110: the agent is told of record entries, read-only, and the pag
 	// Shown means its text is in what the model is given, not that a result with its ID ended (Astra).
 	assert.match(serverSource, /pi\.on\("context_with_system", async \(event\) => \{[\s\S]{0,600}confirmReplActivityDelivered\(replActivity, texts\);[\s\S]{0,80}return undefined;/);
 	assert.doesNotMatch(serverSource, /releaseReplActivityCommit/);
-	assert.match(clientSource, /replRecordActivity === "off" \? "" : " New entries here go to the agent and its model provider\."/);
+	// The record's heading has no description line under it (Oliver, candidate 116).
+	assert.doesNotMatch(clientSource, /repl-journal-description|New entries here go to the agent/);
 	// The collector reads; it never takes the inspection path, which can create record metadata.
 	const start = serverSource.indexOf("async function observeStudioReplActivity");
 	const body = serverSource.slice(start, serverSource.indexOf("\n}\n", start));

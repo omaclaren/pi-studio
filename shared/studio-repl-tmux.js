@@ -127,6 +127,25 @@ export function firstStudioReplPanes(stdout) {
 	return [...first.values()];
 }
 
+/**
+ * A pane's current directory, read on its own by pane ID with display-message, for the relative
+ * paths of files a record entry names. It isn't in STUDIO_REPL_PANE_FORMAT: a directory's name
+ * can hold a newline, which there could forge another pane's row (Sol, candidate 116).
+ */
+export const STUDIO_REPL_PANE_CWD_FORMAT = "#{pane_current_path}";
+
+/**
+ * The directory from display-message's output, or "" unless it's one absolute path of at most
+ * 4,096 characters with no line break or NUL.
+ *
+ * @param {string} stdout
+ * @returns {string}
+ */
+export function parseStudioReplPaneCwd(stdout) {
+	const path = String(stdout ?? "").replace(/\n$/, "");
+	return path.startsWith("/") && path.length <= 4096 && !/[\r\n\0]/.test(path) ? path : "";
+}
+
 const STUDIO_REPL_READY_PROMPTS = {
 	python: /^>>>[ \t]*$/,
 	ipython: /^In \[\d+\]:[ \t]*$/,

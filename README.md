@@ -136,7 +136,7 @@ Icons in exported PDFs need Mermaid CLI 11.12+ (`npm install -g @mermaid-js/merm
 
 ### REPL
 
-The REPL pane runs code in tmux sessions. It can start its own, and it shares a record of submissions and output with [pi-repl](https://github.com/omaclaren/pi-repl) when both use the same session. Pane echo sets how much submitted code goes into the raw tmux history, as in pi-repl: up to 20 lines with Summary, the default, up to 40 with Full, and none with Off. Your sends and notes are recorded under your name (**Sending as**, under Quick send). The agent is told of record entries it hasn't seen, such as your sends, other clients' sends and late output, when a run starts and with its REPL tools' results. The record format is in [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md).
+The REPL pane runs code in tmux sessions. It can start its own, and it shares a record of submissions and output with [pi-repl](https://github.com/omaclaren/pi-repl) when both use the same session. Pane echo sets how much submitted code goes into the raw tmux history, as in pi-repl: up to 20 lines with Summary, the default, up to 40 with Full, and none with Off. Your sends and notes are recorded under your name (**Sending as**, under Quick send). An image or PDF an entry's code saved while it ran, such as a plot, shows under it when the code or output names it. The agent is told of record entries it hasn't seen, such as your sends, other clients' sends and late output, when a run starts and with its REPL tools' results. The record format is in [`shared/REPL_SESSION_RECORD_PROTOCOL.md`](./shared/REPL_SESSION_RECORD_PROTOCOL.md).
 
 ### Side questions
 

@@ -688,8 +688,6 @@
         error: "",
       };
       let replTmuxAvailable = null;
-      // Whether the agent is told of new record entries ("on", "send" or "off"), from Studio's server.
-      let replRecordActivity = "off";
       // The name this page's sends and notes are recorded under: chosen here and kept in this
       // browser, else the default from Studio's server (PI_REPL_USER_NAME, then pi-repl's saved
       // name, then "User"). Read once, so another tab choosing a name later leaves this page alone.
@@ -807,8 +805,18 @@
           beforeTranscript: "",
           status: typeof entry.status === "string" ? entry.status : "sent",
           skippedChunks: Math.max(0, Math.floor(Number(entry.skippedChunks) || 0)),
+          // Image and PDF files the entry names, as Studio found them when it sent it; not kept.
+          files: normalizeReplEntryFiles(entry.files),
         };
         return (normalized.code.trim() || normalized.prose.trim() || normalized.output.trim()) ? normalized : null;
+      }
+
+      function normalizeReplEntryFiles(files) {
+        if (!Array.isArray(files)) return [];
+        return files.filter((file) => file && typeof file === "object" && typeof file.id === "string" && /^[0-9a-f]{64}$/.test(file.id)
+          && typeof file.written === "string" && file.written && typeof file.v === "string" && /^[0-9a-f]{16}$/.test(file.v))
+          .slice(0, 6)
+          .map((file) => ({ id: file.id, written: file.written.slice(0, 1024), image: file.image === true, v: file.v }));
       }
 
       function loadPersistedReplJournalEntries() {
@@ -896,6 +904,8 @@
       let replJournalEntries = loadPersistedReplJournalEntries();
       let activeReplJournalEntryId = "";
       const replJournalImportPendingSessions = new Set();
+      // Whether the REPL view is kept at its bottom, as of its last draw or scroll, for thumbnails that load later.
+      let replViewStuckToBottom = false;
       let replJournalCollapsed = (() => {
         try {
           const stored = window.localStorage ? window.localStorage.getItem("piStudio.replStudioCollapsed") : null;
@@ -12167,6 +12177,21 @@
         if (!actionBtn) return;
         event.preventDefault();
         const action = actionBtn.getAttribute("data-repl-action") || "";
+        // Looking at a file changes nothing, whichever session the pane was drawn for.
+        if (action === "file-view" || action === "file-open") {
+          const url = actionBtn.getAttribute("data-repl-file-url") || "";
+          if (!/^\/repl-file\?/.test(url)) return;
+          if (action === "file-view") {
+            openStudioImageFocusViewer(url, actionBtn.getAttribute("data-repl-file-name") || "Image");
+            return;
+          }
+          try {
+            openStudioTabDirect(url);
+          } catch (error) {
+            setStatus(error instanceof Error ? error.message : String(error), "warning");
+          }
+          return;
+        }
         // The name isn't the session's, so a pane drawn for another session can still change it.
         if (action === "sender-edit") {
           replSenderEditing = true;
@@ -12478,6 +12503,8 @@
         critiqueViewEl.addEventListener("toggle", handleReplMoreToggle, true);
         critiqueViewEl.addEventListener("click", handleTracePaneClick);
         critiqueViewEl.addEventListener("click", handleReplPaneClick);
+        critiqueViewEl.addEventListener("load", handleReplFileImageLoad, true);
+        critiqueViewEl.addEventListener("scroll", handleReplViewScroll, { passive: true });
         critiqueViewEl.addEventListener("click", handleFilesPaneClick);
         critiqueViewEl.addEventListener("click", handleGitChangesPaneClick);
         critiqueViewEl.addEventListener("click", handleStudioQuartoPreviewClick);
@@ -14514,6 +14541,7 @@
             + prose
             + code
             + output
+            + buildReplEntryFilesHtml(entry)
             + pending
             + "</article>";
         }).join("");
@@ -14526,15 +14554,75 @@
           + (hasEntries ? cards : (recordRefusal ? "" : "<div class='repl-studio-empty'>" + escapeHtml(emptyText) + "</div>"));
         return "<section class='repl-journal'>"
           + "<div class='repl-journal-header'><h3>Shared REPL Record</h3>" + toggleActions + "</div>"
-          + "<p class='repl-journal-description'>What Studio and pi-repl have sent to this session."
-          + (replRecordActivity === "off" ? "" : " New entries here go to the agent and its model provider.")
-          + "</p>"
           + (recordRefusal ? "<p class='repl-journal-omitted'>" + escapeHtml("Not shown: " + recordRefusal) + "</p>" : "")
           + (!recordRefusal && recordState.unverified ? "<p class='repl-journal-omitted'>Record directory not verified: this session has no record-directory key yet, so the record here may not be the one other clients use.</p>" : "")
           + (omitted ? "<div class='repl-journal-omitted'>Showing latest 12 entries for this session; " + escapeHtml(String(omitted)) + " older entries remain in export.</div>" : "")
           // The prompt column fits the longest prompt, such as gnuplot>, in the prompt's own font.
           + "<div class='repl-journal-list' style='--repl-studio-prompt-chars: " + Math.max(0, ...visibleEntries.map((entry) => getReplStudioPrompt(entry.runtime).length)) + "'>" + terminalContent + "</div>"
           + "</section>";
+      }
+
+      function getReplFileUrl(file) {
+        return "/repl-file?" + new URLSearchParams({ token: getToken(), id: file.id, v: file.v }).toString();
+      }
+
+      // Image and PDF files an entry names, such as a saved plot, as pi-markdown-preview's REPL
+      // page shows them: one tile each, images first, named inside the tile, the path as written
+      // in its tooltip. An image opens in Studio's image viewer, a PDF in a new tab.
+      function buildReplEntryFilesHtml(entry) {
+        const files = Array.isArray(entry.files) ? entry.files : [];
+        if (!files.length) return "";
+        const name = (written) => written.split(/[\\/]/).pop() || written;
+        const tiles = [...files.filter((file) => file.image), ...files.filter((file) => !file.image)].map((file) => {
+          const url = getReplFileUrl(file);
+          const attrs = " data-repl-file-url='" + escapeHtml(url) + "' data-repl-file-name='" + escapeHtml(name(file.written)) + "' title='" + escapeHtml(file.written) + "'";
+          if (file.image) {
+            return "<button type='button' class='repl-studio-file' data-repl-action='file-view'" + attrs + ">"
+              + "<img class='repl-studio-file-img' src='" + escapeHtml(url) + "' alt='" + escapeHtml(file.written) + "' data-repl-file-key='" + escapeHtml(url) + "'>"
+              + "<span class='repl-studio-file-name'>" + escapeHtml(name(file.written)) + "</span></button>";
+          }
+          const format = (/\.([^.]+)$/.exec(name(file.written)) || ["", ""])[1].toUpperCase();
+          return "<button type='button' class='repl-studio-file repl-studio-file-other' data-repl-action='file-open'" + attrs + ">"
+            + "<span class='repl-studio-file-format'>" + escapeHtml(format) + "</span>"
+            + "<span class='repl-studio-file-name'>" + escapeHtml(name(file.written)) + "</span></button>";
+        }).join("");
+        return "<div class='repl-studio-files'>" + tiles + "</div>";
+      }
+
+      // A redraw keeps the images already loaded, so a thumbnail doesn't flicker or change
+      // the pane's height each time the record is drawn again.
+      function captureReplFileImages() {
+        const loaded = new Map();
+        if (!critiqueViewEl) return loaded;
+        critiqueViewEl.querySelectorAll("img[data-repl-file-key]").forEach((img) => {
+          const key = img.getAttribute("data-repl-file-key") || "";
+          if (key && img.complete && img.naturalWidth > 0 && !loaded.has(key)) loaded.set(key, img);
+        });
+        return loaded;
+      }
+
+      function restoreReplFileImages(loaded) {
+        if (!critiqueViewEl || !loaded.size) return;
+        critiqueViewEl.querySelectorAll("img[data-repl-file-key]").forEach((img) => {
+          const key = img.getAttribute("data-repl-file-key") || "";
+          const kept = loaded.get(key);
+          if (!kept) return;
+          loaded.delete(key);
+          img.replaceWith(kept);
+        });
+      }
+
+      // A thumbnail that loads while the pane is kept at its bottom keeps it there. Scrolling
+      // decides that as a redraw does, so a load after the person scrolled up leaves them be (Sol).
+      function handleReplViewScroll() {
+        if (rightView === "repl") replViewStuckToBottom = shouldAutoStickReplView();
+      }
+
+      function handleReplFileImageLoad(event) {
+        if (rightView !== "repl" || !replViewStuckToBottom || !critiqueViewEl) return;
+        const target = event.target;
+        if (!(target instanceof Element) || !target.matches("img[data-repl-file-key]")) return;
+        critiqueViewEl.scrollTop = critiqueViewEl.scrollHeight;
       }
 
       function buildReplMirrorHtml(body, transcript) {
@@ -14965,10 +15053,13 @@
       function renderReplView() {
         if (!critiqueViewEl) return;
         const shouldStick = shouldAutoStickReplView();
+        replViewStuckToBottom = shouldStick;
         const previousScrollTop = critiqueViewEl.scrollTop;
         const senderCursor = captureReplSenderCursor();
+        const loadedFiles = captureReplFileImages();
         finishPreviewRender(critiqueViewEl);
         critiqueViewEl.innerHTML = buildReplPanelHtml();
+        restoreReplFileImages(loadedFiles);
         restoreReplSenderCursor(senderCursor);
         critiqueViewEl.classList.remove("response-scroll-resetting");
         if (shouldStick) {
@@ -21143,7 +21234,7 @@
         if (!raw || raw.charAt(0) === "#") return false;
         if (/^\/\//.test(raw)) return false;
         if (/^(?:https?|mailto|tel|data|blob|javascript|about):/i.test(raw)) return false;
-        if (/^\/(?:pdf-resource|html-preview-resource|export-pdf|export-html|render-preview|render-math|import-file-copy|resource-grants|local-preview-link|reveal-local-resource|open-local-resource)(?:[?#/]|$)/i.test(raw)) return false;
+        if (/^\/(?:repl-file|pdf-resource|html-preview-resource|export-pdf|export-html|render-preview|render-math|import-file-copy|resource-grants|local-preview-link|reveal-local-resource|open-local-resource)(?:[?#/]|$)/i.test(raw)) return false;
         return true;
       }
 
@@ -29491,7 +29582,6 @@
           noteReplChoiceAnswer(message);
           const present = !isReplChoicePending();
           replTmuxAvailable = typeof message.tmuxAvailable === "boolean" ? message.tmuxAvailable : replTmuxAvailable;
-          if (message.recordActivity === "on" || message.recordActivity === "send" || message.recordActivity === "off") replRecordActivity = message.recordActivity;
           const defaultName = validateReplPersonName(message.personName);
           if (!defaultName.error) replPersonNameDefault = defaultName.name;
           if (message.personNameSource === "environment" || message.personNameSource === "setting" || message.personNameSource === "default") replPersonNameSource = message.personNameSource;

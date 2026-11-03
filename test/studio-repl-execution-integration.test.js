@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, createHmac, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { buildStudioReplDeadPaneCloseArgs } from "../shared/studio-repl-tmux.js";
 import { acquireReplSessionSendLease, ensureReplSessionRecord, getReplSessionRecordPath, readReplSessionRecordRootKey, readReplSessionSendLease, replSessionRecordRootKeyFor, upsertReplSessionRecordEntry } from "../shared/repl-session-record.js";
 import { createServer, get as httpGet } from "node:http";
@@ -304,12 +304,15 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 	rpc = startPi();
 	await rpc.useScriptedModel();
 
+	// The page's address and token, for the routes it's given (candidate 116).
+	let studioUrl;
 	async function openStudio() {
 		const port = await reserveFreePort();
 		const urls = (await rpc.command(`/studio --no-browser --port ${port}`))
 			.filter((event) => event?.type === "extension_ui_request" && event.method === "notify")
 			.flatMap((event) => String(event.message ?? "").match(/http:\/\/127\.0\.0\.1:\d+\/\?[^\s]+/g) ?? []);
 		const url = new URL(urls.at(-1));
+		studioUrl = url;
 		const page = await fetchText(url);
 		const capability = page.match(/data-buffer-capability="([^"]*)"/)?.[1] ?? "";
 		ws = new WebSocket(`ws://127.0.0.1:${port}/ws?${new URLSearchParams({ token: url.searchParams.get("token"), ...(capability ? { bufferCapability: capability } : {}) })}`);
@@ -1422,6 +1425,200 @@ test("Studio REPL runs real runtimes on the session it means, and stops what it 
 			assert.equal((await repl.send(s, "print('back')")).output, "back");
 		} finally {
 			for (const name of [p, s]) tmux("kill-session", "-t", `=${name}`);
+		}
+	});
+
+	// Candidate 116: the image and PDF files an entry names, such as a saved plot, as
+	// pi-markdown-preview's REPL page shows them, through routes only Studio made for them.
+	await t.test("the files an entry names are shown through routes Studio made for them", { skip: !has("python3") }, async () => {
+		const p = "pi-studio-repl-python";
+		const token = studioUrl.searchParams.get("token");
+		const get = (search) => fetch(new URL(`/repl-file?${new URLSearchParams(search)}`, studioUrl));
+		let here = "";
+		try {
+			assert.equal((await repl.start("python")).message, "Started Python REPL.");
+			await repl.choose(p, "python");
+			// Round 6 (Sol's R5-Q1), exactly: another client's record holds three entries in the order
+			// they were recorded (an external send, a page send that then waited, an agent send recorded
+			// once it had the lease), which ran external, agent, page. Each named file was written in
+			// its own entry's run, so each shows under its own entry.
+			{
+				const listed = (await repl.list()).sessions.find((session) => session.sessionName === p);
+				const identity = { sessionName: p, tmuxSessionId: listed.tmuxSessionId, tmuxSessionCreatedAt: listed.tmuxSessionCreatedAt, runtime: "python" };
+				const orderDir = join(root, "c116-order");
+				mkdirSync(orderDir, { recursive: true });
+				const t = Date.now() - 20_000;
+				const ran = [
+					["external", t, t + 2_000, t + 1_000],
+					["page", t + 100, t + 5_000, t + 4_000],
+					["agent", t + 2_100, t + 3_000, t + 2_500],
+				];
+				for (const [who, createdAt, completedAt, written] of ran) {
+					const file = join(orderDir, `c116-order-${who}.svg`);
+					writeFileSync(file, `<svg xmlns='http://www.w3.org/2000/svg'><text>${who}</text></svg>`);
+					utimesSync(file, written / 1000, written / 1000);
+					upsertReplSessionRecordEntry(listed.recordId, identity, { id: `c116-order-${who}`, requestId: `c116-order-${who}`, origin: "pi-repl", label: who, mode: "raw",
+						code: `_ = open(${JSON.stringify(file)}, "w")`, output: "", status: "captured", createdAt, updatedAt: completedAt, completedAt }, { origin: "pi-repl", root: recordRoot });
+				}
+				const ordered = (await repl.capture(p)).journalEntries;
+				assert.deepEqual(["external", "page", "agent"].map((who) => ordered.find((candidate) => candidate.id === `c116-order-${who}`)?.files?.map(({ written }) => written.split("/").pop())),
+					[["c116-order-external.svg"], ["c116-order-page.svg"], ["c116-order-agent.svg"]]);
+			}
+			// A relative path resolves against the session's current directory, as tmux reports it:
+			// where the REPL is now, not where it started.
+			const dir = join(root, "c116-files");
+			mkdirSync(dir, { recursive: true });
+			here = (await repl.send(p, `import os; os.chdir(${JSON.stringify(dir)}); print(os.getcwd())`)).output.trim();
+			assert.equal(realpathSync(here), realpathSync(dir));
+			const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+			const code = [
+				`_ = open("c116-fit.png", "wb").write(bytes.fromhex("${png.toString("hex")}"))`,
+				'_ = open("c116-report.pdf", "wb").write(b"%PDF-1.4\\n%%EOF\\n")',
+				'print("saved c116-fit.png and c116-report.pdf; not c116-missing.png")',
+			].join("\n");
+			const { reply } = await repl.sending(p, code).done;
+			const entry = reply.journalEntries.find((candidate) => candidate.code === code);
+			assert.deepEqual(entry.files.map(({ written, image }) => [written, image]), [["c116-fit.png", true], ["c116-report.pdf", false]]);
+			const [fit, report] = entry.files;
+			assert.match(fit.id, /^[0-9a-f]{64}$/);
+			assert.match(fit.v, /^[0-9a-f]{16}$/);
+
+			const image = await get({ token, id: fit.id, v: fit.v });
+			assert.equal(image.status, 200);
+			assert.equal(image.headers.get("content-type"), "image/png");
+			assert.match(image.headers.get("content-security-policy"), /^sandbox; default-src 'none'/, "an SVG opened on its own can't run scripts");
+			assert.equal(image.headers.get("x-content-type-options"), "nosniff");
+			assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
+			const pdf = await get({ token, id: report.id });
+			assert.equal(pdf.status, 200);
+			assert.equal(pdf.headers.get("content-type"), "application/pdf");
+			assert.equal(await pdf.text(), "%PDF-1.4\n%%EOF\n");
+			assert.equal((await get({ token: "wrong", id: fit.id })).status, 403);
+			assert.equal((await get({ token, id: "0".repeat(64) })).status, 404);
+			// Only a file an entry named has a route, even for a page that could work out an ID.
+			const guessed = (path) => createHmac("sha256", token).update("repl-file\0").update(path).digest("hex");
+			writeFileSync(join(here, "c116-unnamed.png"), png);
+			for (const folder of new Set([here, realpathSync(here)])) assert.equal((await get({ token, id: guessed(join(folder, "c116-unnamed.png")) })).status, 404);
+
+			// Round 2. A quoted name with a space is taken whole, so another file named by its tail
+			// isn't shown (Sol's H2); a PDF with a non-Latin name is served (Sol's and Astra's H4).
+			writeFileSync(join(here, "2.png"), png);
+			const named = '_ = open("c116 fit 2.png", "wb").write(open("c116-fit.png", "rb").read())\n_ = open("測定 Ω.pdf", "wb").write(open("c116-report.pdf", "rb").read())';
+			const { reply: namedReply } = await repl.sending(p, named).done;
+			const namedEntry = namedReply.journalEntries.find((candidate) => candidate.code === named);
+			// The files it only read were written by the earlier entry, so they aren't this one's (round 4).
+			assert.deepEqual(namedEntry.files.map(({ written }) => written), ["c116 fit 2.png", "測定 Ω.pdf"], "in the order the code names them");
+			for (const folder of new Set([here, realpathSync(here)])) assert.equal((await get({ token, id: guessed(join(folder, "2.png")) })).status, 404);
+			// Round 3 (Sol's and Astra's H2): a quoted name holding the other quote is still one name.
+			writeFileSync(join(here, "private-tail.png"), png);
+			const quoted = [
+				`_ = open("O'Brien fit 2.png", "wb").write(bytes.fromhex("${png.toString("hex")}"))`,
+				`_ = open('say"hi private-tail.png', "wb").write(bytes.fromhex("${png.toString("hex")}"))`,
+			].join("\n");
+			const { reply: quotedReply } = await repl.sending(p, quoted).done;
+			assert.deepEqual(quotedReply.journalEntries.find((candidate) => candidate.code === quoted).files.map(({ written }) => written), ["O'Brien fit 2.png", 'say"hi private-tail.png']);
+			for (const folder of new Set([here, realpathSync(here)])) {
+				for (const unnamed of ["2.png", "private-tail.png"]) assert.equal((await get({ token, id: guessed(join(folder, unnamed)) })).status, 404, unnamed);
+			}
+			// Round 4 (Sol's and Astra's H2): prose and other quoting can still mislead the reading, so
+			// a file shows only if it was written while its entry ran. Here an apostrophe in the output
+			// exposes `contraction.png`, and adjacent literals name `joined.png` in this directory, while
+			// Python writes `O'Brien contraction.png` and `c116-out/joined.png`. The unrelated files
+			// were there before the send.
+			writeFileSync(join(here, "contraction.png"), png);
+			writeFileSync(join(here, "joined.png"), png);
+			mkdirSync(join(here, "c116-out"), { recursive: true });
+			const misread = [
+				`_ = open("O'Brien contraction.png", "wb").write(bytes.fromhex("${png.toString("hex")}"))`,
+				`_ = open("c116-out/" "joined.png", "wb").write(bytes.fromhex("${png.toString("hex")}"))`,
+				`print("It's saved as \\"O'Brien contraction.png\\"")`,
+			].join("\n");
+			const { reply: misreadReply } = await repl.sending(p, misread).done;
+			const misreadEntry = misreadReply.journalEntries.find((candidate) => candidate.code === misread);
+			assert.equal(misreadEntry.output, `It's saved as "O'Brien contraction.png"`);
+			assert.deepEqual(misreadEntry.files.map(({ written }) => written), ["O'Brien contraction.png"]);
+			for (const folder of new Set([here, realpathSync(here)])) {
+				for (const unnamed of ["contraction.png", "joined.png"]) assert.equal((await get({ token, id: guessed(join(folder, unnamed)) })).status, 404, unnamed);
+			}
+			const unicode = namedEntry.files.find(({ written }) => written === "測定 Ω.pdf");
+			for (const method of ["GET", "HEAD"]) {
+				const response = await fetch(new URL(`/repl-file?${new URLSearchParams({ token, id: unicode.id })}`, studioUrl), { method });
+				assert.equal(response.status, 200, method);
+				assert.equal(response.headers.get("content-disposition"), `inline; filename="__ _.pdf"; filename*=UTF-8''${encodeURIComponent("測定 Ω.pdf")}`);
+			}
+
+			// A file that goes is no longer served or shown.
+			rmSync(join(here, "c116-fit.png"));
+			const gone = await get({ token, id: fit.id });
+			assert.deepEqual([gone.status, await gone.text()], [404, "This file no longer exists."]);
+			const after = (await repl.capture(p)).journalEntries.find((candidate) => candidate.code === code);
+			assert.deepEqual(after.files.map(({ written }) => written), ["c116-report.pdf"]);
+
+			// Round 5 (Astra's R4-1, Sol): saving again straight away moves the tile to the new entry;
+			// an entry that only read a file doesn't take it when the next writes it in its grace; and
+			// a file swapped in afterwards, which no entry wrote, is neither shown nor served.
+			const save = (text) => `_ = open("c116-plot.svg", "w").write("<svg xmlns='http://www.w3.org/2000/svg'><text>${text}</text></svg>")`;
+			const one = save("ONE");
+			const two = save("TWO");
+			const reader = 'print(len(open("c116-plot.svg").read()))';
+			const three = save("THREE");
+			for (const code of [one, two, reader, three]) await repl.sending(p, code).done;
+			await sleep(2_300);
+			const turns = (await repl.capture(p)).journalEntries;
+			const filesOf = (code) => turns.find((candidate) => candidate.code === code).files?.map(({ written }) => written);
+			assert.deepEqual([one, two, reader, three].map(filesOf), [undefined, undefined, undefined, ["c116-plot.svg"]]);
+			const plot = turns.find((candidate) => candidate.code === three).files[0];
+			const served = await get({ token, id: plot.id });
+			assert.match(await served.text(), /THREE/);
+			writeFileSync(join(here, "c116-swap.svg"), "<svg xmlns='http://www.w3.org/2000/svg'><text>SWAP</text></svg>");
+			utimesSync(join(here, "c116-swap.svg"), 1_700_000_000, 1_700_000_000);
+			renameSync(join(here, "c116-swap.svg"), join(here, "c116-plot.svg"));
+			const swapped = await get({ token, id: plot.id });
+			assert.deepEqual([swapped.status, await swapped.text()], [404, "This file is no longer the file that was shown."]);
+			assert.equal((await repl.capture(p)).journalEntries.find((candidate) => candidate.code === three).files, undefined);
+
+			// Round 6 (Sol's R5-Q1): sends waiting for the lease don't always run in the order they were
+			// recorded. Whichever of a queued page send and agent send runs first, each one's saved file
+			// is its own.
+			const saveAs = (name, text) => `_ = open("${name}", "w").write("<svg xmlns='http://www.w3.org/2000/svg'><text>${text}</text></svg>")`;
+			const pageSave = saveAs("c116-queued-page.svg", "PAGE");
+			const agentSave = saveAs("c116-queued-agent.svg", "AGENT");
+			const recordId = (await repl.list()).sessions.find((session) => session.sessionName === p).recordId;
+			const held = await acquireReplSessionSendLease(recordId, { root: recordRoot, owner: "c116-test", waitMs: 1_000 });
+			const pageSending = repl.sending(p, pageSave);
+			await sleep(300);
+			const agentRunning = rpc.agent("studio_repl_send", { sessionName: p, code: agentSave });
+			await sleep(800);
+			await held.release();
+			await pageSending.done;
+			const agentResult = await agentRunning;
+			assert.equal(agentResult.details.ok, true, agentResult.content[0].text);
+			const queued = (await repl.capture(p)).journalEntries;
+			assert.deepEqual([pageSave, agentSave].map((code) => queued.find((candidate) => candidate.code === code)?.files?.map(({ written }) => written)),
+				[["c116-queued-page.svg"], ["c116-queued-agent.svg"]]);
+
+			// Round 2 (Sol's H1): a directory whose name holds a newline and a forged pane row,
+			// naming this session and another session's pane, changes nothing Studio lists.
+			assert.equal(tmux("new-session", "-d", "-s", "c116-decoy", "sleep 600").status, 0);
+			const paneOf = (name) => tmux("display-message", "-p", "-t", `=${name}:`, "#{pane_id}").stdout.trim();
+			const sessionId = tmux("display-message", "-p", "-t", `=${p}:`, "#{session_id}").stdout.trim();
+			const realPane = paneOf(p);
+			const decoyPane = paneOf("c116-decoy");
+			assert.match(realPane, /^%\d+$/);
+			assert.notEqual(decoyPane, realPane);
+			const forged = join(here, `x\n0\t0\t${decoyPane}\t${p}\t${sessionId}\t1700000000\tpython\t\t\t`);
+			const moved = `import os; os.makedirs(${JSON.stringify(forged)}, exist_ok=True); os.chdir(${JSON.stringify(forged)})\n_ = open("c116-inside.png", "wb").write(bytes.fromhex("${png.toString("hex")}"))\nprint("saved c116-inside.png")`;
+			const { reply: movedReply } = await repl.sending(p, moved).done;
+			assert.equal(movedReply.journalEntries.find((candidate) => candidate.code === moved)?.status, "captured");
+			const listed = (await repl.list()).sessions.find((candidate) => candidate.sessionName === p);
+			assert.equal(listed.target, realPane, "Still the session's own pane, not the forged row's");
+			// That directory can't be used for relative paths, so the file inside it isn't shown.
+			const inside = (await repl.capture(p)).journalEntries.find((candidate) => candidate.code === moved);
+			assert.equal(inside.files, undefined);
+		} finally {
+			if (here) for (const name of ["c116-fit.png", "c116-report.pdf", "c116-unnamed.png", "2.png", "c116 fit 2.png", "測定 Ω.pdf", "private-tail.png", "O'Brien fit 2.png", 'say"hi private-tail.png', "contraction.png", "joined.png", "O'Brien contraction.png", "c116-out/joined.png", "c116-plot.svg", "c116-swap.svg", "c116-queued-page.svg", "c116-queued-agent.svg"]) rmSync(join(here, name), { force: true });
+			tmux("kill-session", "-t", "=c116-decoy");
+			tmux("kill-session", "-t", `=${p}`);
 		}
 	});
 

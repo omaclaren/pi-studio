@@ -159,6 +159,8 @@ function editorPage({ name = "", fallback = "User" } = {}) {
 		"    if (active instanceof Element && !active.isConnected) document.activeElement = body; },",
 		"  querySelector(selector) { return { '[data-repl-sender-name]': field, \"[data-repl-action='sender-edit']\": edit, '[data-repl-sender-shown]': row }[selector] || null; } };",
 		"function shouldAutoStickReplView() { return false; } function finishPreviewRender() {} function scheduleResponsePaneRepaintNudge() {} function buildReplPanelHtml() { return buildReplSenderHtml(); }",
+		// Candidate 116: a redraw keeps loaded thumbnails; this pane has none.
+		"let replViewStuckToBottom = false; function captureReplFileImages() { return new Map(); } function restoreReplFileImages() {}",
 		slice("      function renderReplView() {", "      function getFileBrowserContextKey"),
 		// Every redraw of the response pane, waited for or not, ends in renderReplView (refreshResponseUi → renderActiveResult).
 		"function refreshResponseUi() { redraws += 1; renderReplView(); }",

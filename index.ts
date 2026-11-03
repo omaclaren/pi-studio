@@ -62,6 +62,8 @@ import {
 	buildStudioReplDeadPaneCloseArgs,
 	isStudioGnuplotSession,
 	isStudioReplReadyLine,
+	parseStudioReplPaneCwd,
+	STUDIO_REPL_PANE_CWD_FORMAT,
 	STUDIO_REPL_PANE_FORMAT,
 	STUDIO_REPL_SESSION_NAME,
 	studioReplSessionTarget,
@@ -100,6 +102,13 @@ import {
 	replEntryVersion,
 	resetReplActivityState,
 } from "./shared/studio-repl-activity.js";
+import {
+	createStudioReplFileRoutes,
+	openStudioReplFileRoute,
+	resolveStudioReplFiles,
+	STUDIO_REPL_FILE_ENTRIES,
+	studioReplSessionRunBounds,
+} from "./shared/studio-repl-files.js";
 import {
 	createReplSubmissionDisplay,
 	normalizeReplSubmissionEchoMode,
@@ -8246,6 +8255,19 @@ function respondStudioDirectoryGrantRequiredJson(res: ServerResponse, error: Stu
 	});
 }
 
+// An inline Content-Disposition for any file name: an ASCII fallback, and the name itself as
+// UTF-8 (RFC 6266), since Node refuses a header with characters such as Δ or 測 (Sol, Astra, c116).
+function studioInlineContentDisposition(name: string, fallback: string): string {
+	const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/[;"\\]/g, "_").trim() || fallback;
+	let encoded = "";
+	try {
+		encoded = encodeURIComponent(name).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+	} catch {
+		// A name that isn't well-formed Unicode keeps only its fallback.
+	}
+	return encoded && encoded !== ascii ? `inline; filename="${ascii}"; filename*=UTF-8''${encoded}` : `inline; filename="${ascii}"`;
+}
+
 function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: string): void {
 	const method = (req.method ?? "GET").toUpperCase();
 	if (method !== "GET" && method !== "HEAD") {
@@ -8263,7 +8285,7 @@ function respondPdfFile(req: IncomingMessage, res: ServerResponse, filePath: str
 	].map((value) => Number(value).toString(16)).join("-")}"`;
 	const commonHeaders = {
 		"Content-Type": "application/pdf",
-		"Content-Disposition": `inline; filename="${basename(filePath).replace(/["\\]/g, "") || "document.pdf"}"`,
+		"Content-Disposition": studioInlineContentDisposition(basename(filePath), "document.pdf"),
 		"Referrer-Policy": "no-referrer",
 		"Cache-Control": "no-store",
 		"X-Content-Type-Options": "nosniff",
@@ -8297,6 +8319,24 @@ function respondHtmlPreviewResourceJson(req: IncomingMessage, res: ServerRespons
 		filename: basename(filePath),
 		dataUrl: method === "HEAD" ? "" : `data:${mimeType};base64,${data}`,
 	});
+}
+
+// An image a REPL record entry names, as itself, for the pane's thumbnail and the image viewer.
+// Opened on its own, an SVG can't run scripts or load other files: the page is sandboxed.
+function respondStudioReplFileImage(req: IncomingMessage, res: ServerResponse, filePath: string, mimeType: string): void {
+	const method = (req.method ?? "GET").toUpperCase();
+	if (method !== "GET" && method !== "HEAD") { res.setHeader("Allow", "GET, HEAD"); respondText(res, 405, "Use GET or HEAD."); return; }
+	const image = method === "HEAD" ? undefined : readFileSync(filePath);
+	res.writeHead(200, {
+		"Content-Type": mimeType,
+		"Content-Length": String(image ? image.length : statSync(filePath).size),
+		"Cache-Control": "no-store",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy": "no-referrer",
+		"Cross-Origin-Resource-Policy": "same-origin",
+		"Content-Security-Policy": "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+	});
+	res.end(image);
 }
 
 function respondStudioReadOnlyImage(req: IncomingMessage, res: ServerResponse, filePath: string, mimeType: string): void {
@@ -12756,6 +12796,11 @@ function recordStudioReplJournalEntry(
 }
 
 function getStudioReplJournalEntries(sessionName: string | null | undefined): StudioReplJournalEntry[] {
+	return readStudioReplJournal(sessionName).entries;
+}
+
+/** A session's record entries, or every session's, with the sessions they were read from. */
+function readStudioReplJournal(sessionName: string | null | undefined): { entries: StudioReplJournalEntry[]; sessions: StudioReplSessionInfo[] } {
 	const normalizedSessionName = String(sessionName || "").trim();
 	const sessions = normalizedSessionName
 		? [inspectStudioReplSession(normalizedSessionName)].filter((session): session is StudioReplSessionInfo => Boolean(session))
@@ -12788,10 +12833,60 @@ function getStudioReplJournalEntries(sessionName: string | null | undefined): St
 	const entries = (normalizedSessionName
 		? studioReplJournalEntries.filter((entry) => entry.sessionName === normalizedSessionName)
 		: studioReplJournalEntries).filter((entry) => !refused.has(entry.sessionName));
-	return entries.slice(-STUDIO_REPL_JOURNAL_MAX_ENTRIES).map((entry) => ({
-		...entry,
-		sharedSynced: !studioReplUnsyncedJournalEntryIds.has(entry.id) && entry.sharedSynced === true,
-	}));
+	return {
+		entries: entries.slice(-STUDIO_REPL_JOURNAL_MAX_ENTRIES).map((entry) => ({
+			...entry,
+			sharedSynced: !studioReplUnsyncedJournalEntryIds.has(entry.id) && entry.sharedSynced === true,
+		})),
+		sessions,
+	};
+}
+
+type StudioReplFileRoutes = ReturnType<typeof createStudioReplFileRoutes>;
+
+// A pane's current directory, asked of tmux by pane ID (studio-repl-tmux.js says why not in the listing).
+function readStudioReplPaneCwd(paneId: string): string | undefined {
+	if (!/^%\d+$/.test(paneId)) return undefined;
+	const result = runStudioTmux(["display-message", "-p", "-t", paneId, STUDIO_REPL_PANE_CWD_FORMAT], { timeout: 3_000 });
+	return result.ok ? parseStudioReplPaneCwd(result.stdout) || undefined : undefined;
+}
+
+/**
+ * Entries for the page, each of a session's latest STUDIO_REPL_FILE_ENTRIES with the image and
+ * PDF files it names (studio-repl-files.js): `{ id, written, image, v }`, `id` naming its route
+ * and `v` the file's version. A relative path resolves against the session's first pane's
+ * current directory, asked of tmux once a session and only when an entry needs it.
+ */
+function attachStudioReplEntryFiles(entries: StudioReplJournalEntry[], sessions: StudioReplSessionInfo[], routes: StudioReplFileRoutes | undefined) {
+	if (!routes) return entries;
+	const panes = new Map(sessions.map((session) => [session.sessionName, session.target]));
+	const cwds = new Map<string, string | undefined>();
+	const cwdOf = (sessionName: string) => () => {
+		if (!cwds.has(sessionName)) {
+			const paneId = panes.get(sessionName);
+			cwds.set(sessionName, paneId ? readStudioReplPaneCwd(paneId) : undefined);
+		}
+		return cwds.get(sessionName);
+	};
+	// Each entry's own turn in its session, so a file the next one wrote isn't this one's.
+	const bounds = studioReplSessionRunBounds(entries);
+	const looked = new Set<string>();
+	const counts = new Map<string, number>();
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const sessionName = entries[index].sessionName;
+		const count = counts.get(sessionName) ?? 0;
+		if (count >= STUDIO_REPL_FILE_ENTRIES) continue;
+		counts.set(sessionName, count + 1);
+		looked.add(entries[index].id);
+	}
+	return entries.map((entry) => {
+		if (!looked.has(entry.id)) return entry;
+		const files = resolveStudioReplFiles(entry, cwdOf(entry.sessionName), { bounds: bounds.get(entry.id) });
+		return files.length ? {
+			...entry,
+			files: files.map((file) => ({ id: routes.add(file), written: file.written, image: file.contentType !== "application/pdf", v: file.version })),
+		} : entry;
+	});
 }
 
 function updateStudioReplJournalEntryOutput(
@@ -14096,6 +14191,19 @@ ${cssVarsBlock}
 
 export default function (pi: ExtensionAPI) {
 	let serverState: StudioServerState | null = null;
+	// Routes for the files the REPL pane shows, made anew for each server's token.
+	let studioReplFiles: { token: string; routes: StudioReplFileRoutes } | null = null;
+	const getStudioReplFileRoutes = (): StudioReplFileRoutes | undefined => {
+		const token = serverState?.token;
+		if (!token) return undefined;
+		if (studioReplFiles?.token !== token) studioReplFiles = { token, routes: createStudioReplFileRoutes(token) };
+		return studioReplFiles.routes;
+	};
+	// Record entries as the page gets them, with the files they name.
+	const getStudioReplPageEntries = (sessionName: string | null | undefined): StudioReplJournalEntry[] => {
+		const { entries, sessions } = readStudioReplJournal(sessionName);
+		return attachStudioReplEntryFiles(entries, sessions, getStudioReplFileRoutes());
+	};
 	const studioWorkspaceStateStore = createStudioWorkspaceStateStore();
 	// Hosting-capable unless the env flags turned hosting off; single editor mode doesn't use it.
 	const studioBufferStateStore = createStudioBufferServerStore({ legacyState: (id: string) => studioWorkspaceStateStore.get(id),
@@ -14570,7 +14678,7 @@ export default function (pi: ExtensionAPI) {
 					sharedSynced: journalEntry.sharedSynced === true,
 					completed,
 					timedOut: Boolean(sent.controlFiles?.doneFile && !completed),
-					journalEntries: getStudioReplJournalEntries(selected.session.sessionName),
+					journalEntries: getStudioReplPageEntries(selected.session.sessionName),
 					select,
 					...(select ? {
 						session: currentSession,
@@ -15448,7 +15556,7 @@ export default function (pi: ExtensionAPI) {
 			activeSessionName: active?.sessionName ?? null,
 			activeRuntime: studioReplSelection.runtime,
 			shown: studioReplSelection.shown,
-			journalEntries: getStudioReplJournalEntries(active?.sessionName ?? null),
+			journalEntries: getStudioReplPageEntries(active?.sessionName ?? null),
 			recordActivity: replActivityMode,
 			// What the page sends as when it hasn't chosen a name.
 			personName: person.name,
@@ -15484,7 +15592,7 @@ export default function (pi: ExtensionAPI) {
 			shown: studioReplSelection.shown,
 			transcript: captured.transcript,
 			capturedAt: Date.now(),
-			journalEntries: getStudioReplJournalEntries(captured.session.sessionName),
+			journalEntries: getStudioReplPageEntries(captured.session.sessionName),
 			...extra,
 		});
 	};
@@ -15499,13 +15607,13 @@ export default function (pi: ExtensionAPI) {
 			session: captured.session,
 			transcript: captured.transcript,
 			capturedAt: Date.now(),
-			journalEntries: getStudioReplJournalEntries(captured.session.sessionName),
+			journalEntries: getStudioReplPageEntries(captured.session.sessionName),
 		} : {
 			type: "repl_capture",
 			observation: true,
 			sessionName,
 			captureError: captured.message,
-			journalEntries: getStudioReplJournalEntries(sessionName),
+			journalEntries: getStudioReplPageEntries(sessionName),
 		});
 	};
 
@@ -15521,7 +15629,7 @@ export default function (pi: ExtensionAPI) {
 			sendReplSelectionToClient(client, extra);
 			return;
 		}
-		sendReplStateToClient(client, { journalEntries: getStudioReplJournalEntries(sessionName), ...extra });
+		sendReplStateToClient(client, { journalEntries: getStudioReplPageEntries(sessionName), ...extra });
 	};
 
 	const emitDebugEvent = (event: string, details?: Record<string, unknown>) => {
@@ -17787,7 +17895,7 @@ export default function (pi: ExtensionAPI) {
 						requestId: msg.requestId,
 						sessionName: msg.sessionName,
 						message: sent.message,
-						journalEntries: getStudioReplJournalEntries(msg.sessionName),
+						journalEntries: getStudioReplPageEntries(msg.sessionName),
 					});
 					const timeoutMs = STUDIO_REPL_SEND_DEFAULT_TIMEOUT_MS;
 					let completed = false;
@@ -17874,7 +17982,7 @@ export default function (pi: ExtensionAPI) {
 						type: "repl_journal_ack",
 						requestId: msg.requestId,
 						sessionName: msg.sessionName,
-						journalEntries: getStudioReplJournalEntries(msg.sessionName),
+						journalEntries: getStudioReplPageEntries(msg.sessionName),
 					});
 				} catch (error) {
 					sendToClient(client, { type: "error", requestId: msg.requestId, message: error instanceof Error ? error.message : String(error) });
@@ -17904,7 +18012,7 @@ export default function (pi: ExtensionAPI) {
 						type: "repl_journal_ack",
 						requestId: msg.requestId,
 						sessionName: msg.sessionName,
-						journalEntries: getStudioReplJournalEntries(msg.sessionName),
+						journalEntries: getStudioReplPageEntries(msg.sessionName),
 					});
 				} catch (error) {
 					sendToClient(client, { type: "error", requestId: msg.requestId, message: error instanceof Error ? error.message : String(error) });
@@ -19927,6 +20035,27 @@ export default function (pi: ExtensionAPI) {
 			void handleOpenLocalPreviewResourceRequest(req, res, studioCwd, studioResourceGrantRegistry).catch((error) => {
 				respondJson(res, 500, { ok: false, error: `Open in system viewer failed: ${error instanceof Error ? error.message : String(error)}` });
 			});
+			return;
+		}
+
+		// A file a REPL record entry names, by the route the page was given for it.
+		if (requestUrl.pathname === "/repl-file") {
+			const token = requestUrl.searchParams.get("token") ?? "";
+			if (token !== serverState.token) {
+				respondText(res, 403, "Invalid or expired studio token. Re-run /studio.");
+				return;
+			}
+			const opened = openStudioReplFileRoute(getStudioReplFileRoutes()?.get(requestUrl.searchParams.get("id") ?? ""));
+			if (!opened.ok) {
+				respondText(res, opened.status, opened.message);
+				return;
+			}
+			try {
+				if (opened.contentType === "application/pdf") respondPdfFile(req, res, opened.filePath);
+				else respondStudioReplFileImage(req, res, opened.filePath, opened.contentType);
+			} catch {
+				if (!res.headersSent) respondText(res, 404, "Studio couldn't read this file.");
+			}
 			return;
 		}
 

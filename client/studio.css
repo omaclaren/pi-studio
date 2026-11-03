@@ -4950,7 +4950,6 @@
     }
 
     .repl-journal-header p,
-    .repl-journal-description,
     .repl-journal-omitted {
       margin: 1px 0 0;
       color: var(--muted);
@@ -5120,6 +5119,68 @@
       color: var(--muted);
       font-size: 12px;
       font-style: italic;
+    }
+
+    /* Image and PDF files an entry names, such as a saved plot, as pi-markdown-preview's REPL
+       page shows them: one tile a row, up to 640 by 420 px, named inside the tile. */
+    .repl-studio-files {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 6px 0 2px calc(var(--repl-studio-prompt-width) + var(--repl-studio-column-gap));
+    }
+
+    .repl-journal-list .repl-studio-file {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: min(100%, 640px);
+      padding: 8px;
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: var(--panel);
+      color: inherit;
+      font-size: 12px;
+      text-align: left;
+    }
+
+    .repl-journal-list .repl-studio-file:not(:disabled):hover {
+      background: var(--panel-2);
+    }
+
+    .repl-studio-file-img {
+      display: block;
+      max-width: 100%;
+      max-height: 420px;
+      object-fit: contain;
+      border-radius: 4px;
+      background: #fff;
+    }
+
+    .repl-studio-file-name {
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+
+    .repl-journal-list .repl-studio-file-other {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+    }
+
+    .repl-studio-file-other .repl-studio-file-name {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+
+    .repl-studio-file-format {
+      padding: 1px 5px;
+      border: 1px solid var(--panel-border);
+      border-radius: 4px;
+      color: var(--muted);
+      font: 600 11px/1.4 var(--font-ui);
     }
 
     .repl-journal-card-header,
