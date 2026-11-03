@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.9] — 2026-11-03
+
 ### Added
 - The REPL pane shows the images and PDFs a record entry's code saved, such as a plot, as agent-markdown-preview's REPL page does. An image shows under the entry's output; click it to open Studio's image viewer. A PDF is a link that opens it in a new tab. A file shows when the entry's code or output names it (a path ending in `.png`, `.jpg`, `.gif`, `.webp`, `.svg` or `.pdf`, relative paths taken from the REPL's current directory) and it was written while the entry ran. A file saved again by a later entry shows under that entry instead. Up to six files show for each of a session's latest 12 entries. Studio serves only those files.
 
