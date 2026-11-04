@@ -67,6 +67,7 @@ Or from GitHub, `pi install https://github.com/omaclaren/pi-studio`, or once wit
 | `/studio --port <port>` | Use a fixed port |
 | `/studio --listen-all` | Listen on all interfaces, for containers ([see below](#network-and-ssh)) |
 | `/studio --status`, `--stop` | Show the server's status, or stop it |
+| `/studio --copy-url` | Copy the running Studio's URL, for a terminal too narrow to show it whole. Over SSH, Pi also sends it to your terminal's clipboard (OSC 52), which works if the terminal allows it; set `PI_CLIPBOARD_OSC52=1` where Pi can't tell it's remote, as in some tmux sessions |
 | `/studio-replace` | Replace the open Studio view. In dual editor mode, move it to a new tab here |
 | `/studio-editor-only [file]` | Open an extra editor tab (single editor mode) |
 | `/studio-current <file>` | Load a file into the open Studio tab (single editor mode) |
@@ -152,6 +153,8 @@ Studio listens on `127.0.0.1` only, and every URL carries a token. Over SSH, for
 
 For a container, `/studio --no-browser --listen-all --port 4321` listens on all interfaces. Anyone with the full URL can control Studio, including running prompts and reading or writing files, and there's no TLS. Treat the URL like a password, never expose the port to the internet, and bind the host side to loopback (`-p 127.0.0.1:4321:4321`). Quarto previews use a second port, which must be forwarded too.
 
+For a script, an editor or a container that opens Studio itself, set `PI_STUDIO_URL_FILE` to an absolute path when you start Pi. Studio writes the last URL it printed for its main view to that file, creating it readable only by you, and removes it when Studio stops; `/studio --status` writes it again and names the file. Studio replaces a file already at that path (though not a link or a folder), so use a file of its own, in a private folder that isn't synced, and give each Pi process its own path. The file holds the same credential as the printed URL. If Pi crashes, or Studio can't remove the file, it's left behind, but its token no longer works. On Windows, who can read it follows its folder's permissions.
+
 ### Environment variables
 
 | Variable | Effect |
@@ -163,6 +166,7 @@ For a container, `/studio --no-browser --listen-all --port 4321` listens on all 
 | `PI_STUDIO_REPL_ECHO_MODE` | Default pane echo for `studio_repl_send`: `summary` (the default), `off` or `full` |
 | `PI_REPL_USER_NAME` | The name your REPL sends and notes are recorded under, ahead of the name saved with pi-repl |
 | `PI_REPL_RECORD_ACTIVITY` | Whether the agent is told of new REPL record entries: `on` (the default: at a run's start and in REPL tool results), `send` (in results only) or `off`; unset, it follows `PI_REPL_PANE_ACTIVITY` |
+| `PI_STUDIO_URL_FILE` | An absolute path where Studio writes the last URL it printed for its main view, for a program to read ([see above](#network-and-ssh)); a file of its own for each Pi process |
 | `PI_STUDIO_PANDOC_TIMEOUT_MS`, `PI_STUDIO_LATEX_TIMEOUT_MS`, `PI_STUDIO_MERMAID_TIMEOUT_MS` | Export time limits |
 
 Installing pi-studio also adds `pi-studio-dark` and `pi-studio-light` to Pi's themes, without changing your current theme.

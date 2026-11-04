@@ -1,5 +1,5 @@
 import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, CreateAgentSessionRuntimeFactory, ExtensionAPI, ExtensionCommandContext, ExtensionContext, ResourceLoader, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
-import { buildSessionContext, createAgentSession, createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, createExtensionRuntime, defineTool, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, copyToClipboard, createAgentSession, createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, createExtensionRuntime, defineTool, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import { type ModelThinkingLevel, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { Type } from "@sinclair/typebox";
@@ -133,6 +133,8 @@ import {
 } from "./shared/studio-tab-launcher.js";
 import { buildStudioHostingBootstrapState, createStudioBufferServerStore, STUDIO_BUFFER_REQUEST_MAX_BYTES } from "./shared/studio-buffer-server.js";
 import { createStudioTurns, readStudioEditorMode, resolveStudioEditorFlags, writeStudioEditorMode } from "./shared/studio-editor-mode.js";
+import { createStudioUrlFile, STUDIO_URL_FILE_ENV } from "./shared/studio-url-file.js";
+import { copyStudioUrl } from "./shared/studio-copy-url.js";
 import { canonicalStudioDocumentPath, studioDocumentPathsReferToSameFile } from "./shared/studio-document-paths.js";
 import { resolveStudioHostingPage, studioHostingCommandError, studioHostingLocalLinkError } from "./shared/studio-document-entrypoints.js";
 import { systemThemeLacksTrueColor } from "./shared/studio-system-theme.js";
@@ -14248,6 +14250,18 @@ export default function (pi: ExtensionAPI) {
 	let lastHostedFullWorkspaceId: string | null = null;
 	const currentFullStudioUrl = (state: StudioServerState) => buildStudioUrl(state.port, state.token, "full", undefined, undefined,
 		STUDIO_DOCUMENT_HOSTING_ENABLED ? { hostedWorkspaceId: studioBufferStateStore.activeHostingWorkspaces("full")[0] || lastHostedFullWorkspaceId || undefined } : undefined);
+	// Issue #7: with PI_STUDIO_URL_FILE set, that file holds the URL Studio last printed for its main
+	// view, written as it's printed, and goes when Studio stops. In dual editor mode a URL without its
+	// workspace doesn't open Studio, so none is written until there is one. A launch that waited for the
+	// browser while Studio was stopped and started again writes nothing: its URL is the old server's (Astra, candidate 119).
+	const studioUrlFile = createStudioUrlFile(process.env);
+	const studioMainUrlReady = () => !STUDIO_DOCUMENT_HOSTING_ENABLED || Boolean(studioBufferStateStore.activeHostingWorkspaces("full")[0] || lastHostedFullWorkspaceId);
+	const publishStudioUrlFile = (url: string, state: StudioServerState, ctx: ExtensionCommandContext | null): boolean => {
+		if (!studioUrlFile || serverState !== state || !studioMainUrlReady()) return false;
+		const result = studioUrlFile.publish(url);
+		if (!result.ok) ctx?.ui.notify(`Studio couldn't write its URL to ${STUDIO_URL_FILE_ENV} (${result.path}): ${result.message}.`, "warning");
+		return result.ok;
+	};
 	let studioCwd = process.cwd();
 	let lastCommandCtx: ExtensionCommandContext | null = null;
 	let latestModelRequestCtx: StudioModelRequestContext | null = null;
@@ -20502,7 +20516,11 @@ export default function (pi: ExtensionAPI) {
 			const state = await startServerNow(port, listenAll, token);
 			if (state.token !== token) throw new Error("another Studio server started first");
 			lastCommandCtx?.ui.notify(`Studio switched to ${label}.`, "info");
-			if (pendingEditorModeLanding) lastCommandCtx?.ui.notify(`Studio URL: http://${STUDIO_ADVERTISED_HOST}:${state.port}${pendingEditorModeLanding.path}`, "info");
+			if (pendingEditorModeLanding) {
+				const url = `http://${STUDIO_ADVERTISED_HOST}:${state.port}${pendingEditorModeLanding.path}`;
+				publishStudioUrlFile(url, state, lastCommandCtx);
+				lastCommandCtx?.ui.notify(`Studio URL: ${url}`, "info");
+			}
 			return state;
 		} catch (error) {
 			lastCommandCtx?.ui.notify(`Studio is now in ${label}, but it couldn't restart${port ? ` on port ${port}` : ""}: ${error instanceof Error ? error.message : String(error)}. Run /studio to open it.`, "error");
@@ -20566,6 +20584,7 @@ export default function (pi: ExtensionAPI) {
 		} catch (error) {
 			ctx.ui.notify(`Browser opening failed; the workspace is kept: ${error instanceof Error ? error.message : String(error)}`, "warning");
 		} finally {
+			publishStudioUrlFile(url, state, ctx);
 			ctx.ui.notify(`Studio URL: ${url}`, "info");
 			const hint = state.listenAll ? null : buildStudioSshTunnelHint(state.port, url)
 				?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
@@ -20601,6 +20620,8 @@ export default function (pi: ExtensionAPI) {
 
 		const state = serverState;
 		serverState = null;
+		const urlFile = studioUrlFile?.clear();
+		if (urlFile && !urlFile.ok) lastCommandCtx?.ui.notify(`Studio couldn't remove its URL file (${urlFile.path}): ${urlFile.message}.`, "warning");
 
 		await new Promise<void>((resolve) => {
 			state.wsServer.close(() => resolve());
@@ -21551,7 +21572,9 @@ export default function (pi: ExtensionAPI) {
 	) => {
 		if (hasConnectedFullStudioView() && serverState) {
 			ctx.ui.notify("The existing full Studio was kept. Use its opening controls, or /studio-replace to move it here if you can't find it.", "warning");
-			ctx.ui.notify(`Studio URL: ${currentFullStudioUrl(serverState)}`, "info");
+			const kept = currentFullStudioUrl(serverState);
+			publishStudioUrlFile(kept, serverState, ctx);
+			ctx.ui.notify(`Studio URL: ${kept}`, "info");
 			return;
 		}
 		// Oliver, 14 Oct: plain /studio reopens the last workspace when its tab is gone, asking to
@@ -21567,6 +21590,7 @@ export default function (pi: ExtensionAPI) {
 			} catch (error) {
 				ctx.ui.notify(`Browser opening failed; the workspace is kept: ${error instanceof Error ? error.message : String(error)}`, "warning");
 			} finally {
+				publishStudioUrlFile(url, state, ctx);
 				ctx.ui.notify(`Studio URL: ${url}`, "info");
 				const hint = state.listenAll ? null : buildStudioSshTunnelHint(state.port, url)
 					?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
@@ -21614,6 +21638,7 @@ export default function (pi: ExtensionAPI) {
 			} catch (error) {
 				ctx.ui.notify(`Browser opening failed; the same workspace is retained: ${error instanceof Error ? error.message : String(error)}`, "warning");
 			} finally {
+				if (owner.mode === "full") publishStudioUrlFile(url, state, ctx);
 				ctx.ui.notify(`Studio URL: ${url}`, "info");
 				const hint = state.listenAll ? null : buildStudioSshTunnelHint(state.port, url)
 					?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
@@ -21749,6 +21774,7 @@ export default function (pi: ExtensionAPI) {
 					: "A full pi Studio view is already open for this session. Close it first, use /studio-replace for a fresh full Studio view, or use /studio-editor-only for a concurrent editor-only Studio view.", "warning");
 				if (serverState) {
 					const url = currentFullStudioUrl(serverState);
+					publishStudioUrlFile(url, serverState, ctx);
 					ctx.ui.notify(`Studio URL: ${url}`, "info");
 					const tunnelHint = serverState.listenAll
 						? null
@@ -21846,6 +21872,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`Failed to open browser: ${message}`, "error");
 			}
 		} finally {
+			if (launchMode === "full") publishStudioUrlFile(url, state, ctx);
 			ctx.ui.notify(`Studio URL: ${url}`, "info");
 			if (tunnelHint) ctx.ui.notify(tunnelHint, "info");
 			if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
@@ -21870,13 +21897,23 @@ export default function (pi: ExtensionAPI) {
 				}
 				const counts = getStudioClientCounts();
 				const url = currentFullStudioUrl(serverState);
+				const filed = publishStudioUrlFile(url, serverState, ctx);
 				ctx.ui.notify(
 					`Studio running at ${url} (listening on ${serverState.bindHost}:${serverState.port}; busy: ${isStudioBusy() ? "yes" : "no"}; full views: ${counts.full}; editor-only views: ${counts.editorOnly})`,
 					"info",
 				);
+				if (filed && studioUrlFile) ctx.ui.notify(`Studio URL file: ${studioUrlFile.path}`, "info");
 				const sshTunnelHint = serverState.listenAll ? null : buildStudioSshTunnelHint(serverState.port, url);
 				if (sshTunnelHint) ctx.ui.notify(sshTunnelHint, "info");
 				if (serverState.listenAll) ctx.ui.notify(buildStudioListenAllWarning(serverState.port, url), "warning");
+				return;
+			}
+
+			// The URL --status prints, on the clipboard: for a terminal too narrow to show it whole.
+			if (trimmed === "copy-url" || trimmed === "--copy-url") {
+				const state = serverState;
+				const result = await copyStudioUrl({ mode: ctx.mode, running: Boolean(state), url: state && studioMainUrlReady() ? currentFullStudioUrl(state) : null, copy: copyToClipboard });
+				ctx.ui.notify(result.message, result.ok ? "info" : "warning");
 				return;
 			}
 
@@ -21893,6 +21930,7 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio --listen-all  Explicitly bind to 0.0.0.0 instead of localhost (security-sensitive)\n"
 						+ "  /studio --open-remote  Over SSH, open the remote browser anyway\n"
 						+ "  /studio --status  Show studio status\n"
+						+ "  /studio --copy-url  Copy the running Studio's URL to the clipboard\n"
 						+ "  /studio --stop    Stop studio server\n"
 						+ "  /studio --single  Use single editor mode (one editor), and remember it\n"
 						+ "  /studio --dual    Use dual editor mode (Prompt and Document), the default\n"

@@ -6,6 +6,8 @@ See [ROADMAP.md](ROADMAP.md) for the current status: `0.11.10` is released, and 
 
 Fix only failures in normal use, lost data, effects on other people's processes or files, and security problems. Note anything else here for after the freeze.
 
+Exception (4 Nov, Oliver): candidate 119, an opt-in `PI_STUDIO_URL_FILE` for programs that open Studio ([#7](https://github.com/omaclaren/pi-studio/issues/7)), and `/studio --copy-url` for people.
+
 Known limits at `0.11.10`, none of them a hold:
 
 - [ ] Homebrew bash 5.3: Ctrl+C while code runs leaves Studio waiting for that send. Earlier releases did the same; `/bin/bash` 3.2 and zsh complete. Catching SIGINT in the shell would fix it; decide whether Studio should set a trap in a person's shell.
@@ -20,7 +22,8 @@ Known limits at `0.11.10`, none of them a hold:
 
 - [ ] Re-vendor pi-repl's `shared/repl-record-activity.js` and `REPL_SESSION_RECORD_PROTOCOL.md` from `v0.12.1` (with its fix for the own-send mark when no report fits), and confirm delivery in `before_provider_request` rather than `context_with_system`. Studio's side of the channel is in `0.11.10`.
 - [ ] Say which Pi version Studio needs, in the README's requirements or as a warning at load on an older Pi. `context_with_system`, used since `0.11.7`, came in Pi 0.87.0; Studio is tested against 1.2.0. Not as a range in `package.json`: Pi installs extensions with peer dependencies ignored (`--legacy-peer-deps` or `--omit=peer`), and its loader asks for Pi's own packages as peer dependencies with a `*` range.
-- [ ] A GitHub page for pi-studio, like agent-repl's and agent-markdown-preview's.
+- [x] A GitHub page for pi-studio, like agent-repl's and agent-markdown-preview's: https://omaclaren.github.io/pi-studio/ (4 Nov).
+- [ ] If wanted, a `/studio --url-file <path>` beside `PI_STUDIO_URL_FILE` (#7), for people who'd rather not set a variable.
 - [ ] LFortran sends through pi-repl's helper, if wanted. Studio refuses to paste into that session now.
 - [ ] Take pi-repl's generalised `repl-session-stop.js` and `repl-gnuplot-processes.js` with LFortran, if it comes.
 
@@ -108,7 +111,7 @@ Do not pull unrelated backlog items below into the opt-in prerelease merely to f
 - [x] Add a Studio **Send + Run** action (submit directly to model from Studio, not only send to pi editor).
 - [x] Add explicit `[an: ...]` annotation syntax support with send-mode toggle (send vs strip) and `.annotated.md` helper save action.
 - [x] Add startup npm update notification when installed extension version is behind npm latest.
-- [ ] Add a "copy Studio URL" action and avoid line-wrap confusion in terminal notifications.
+- [x] Add a "copy Studio URL" action and avoid line-wrap confusion in terminal notifications: `/studio --copy-url` (candidate 119).
 - [ ] Tighten structured-critique detection and document exact accepted format.
 - [ ] Improve fallback behavior when response sections are partial/malformed.
 
