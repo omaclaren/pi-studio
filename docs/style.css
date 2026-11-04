@@ -46,7 +46,7 @@ header {
   text-decoration: none;
 }
 nav { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 14px; }
-.intro { max-width: 760px; padding: 36px 0 26px; }
+.intro { max-width: 860px; padding: 36px 0 26px; }
 h1 {
   margin: 0 0 16px;
   font-size: clamp(1.6rem, 3vw, 2rem);
@@ -58,17 +58,17 @@ h1 {
 
 figure { margin: 0; }
 .examples figure { margin-bottom: 28px; }
-.examples > p { max-width: 760px; margin: 0 0 18px; }
-.examples > pre { max-width: 760px; }
+.examples > p { max-width: 860px; margin: 0 0 18px; }
+.examples > pre { max-width: 860px; }
 .examples > h2:first-child { margin-top: 0; }
 .illustration { display: block; }
 .illustration img { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
-.activity-example { max-width: 760px; }
+.activity-example { max-width: 860px; }
 .theme-examples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .theme-examples figure { margin-bottom: 12px; }
 .repl-demo { padding-bottom: 36px; }
 .repl-demo > h2 { margin-top: 0; }
-.repl-demo > p, .repl-demo > pre { max-width: 760px; }
+.repl-demo > p, .repl-demo > pre { max-width: 860px; }
 video {
   display: block;
   width: 100%;
@@ -77,7 +77,7 @@ video {
   background: #151515;
   border: 1px solid var(--line);
 }
-figcaption { max-width: 760px; padding-top: 14px; font-size: 16px; }
+figcaption { max-width: 860px; padding-top: 14px; font-size: 16px; }
 figcaption p { margin: 0 0 10px; }
 .recording-note { color: var(--muted); font-size: 14px; }
 .demo-links { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 16px 0; font-size: 14px; }
@@ -88,11 +88,11 @@ details {
   font-size: 15px;
 }
 summary { cursor: pointer; }
-details p, details ol { max-width: 760px; margin: 14px 0 0; }
+details p, details ol { max-width: 860px; margin: 14px 0 0; }
 details ol { padding-left: 24px; }
 details li { padding: 3px 0; }
 
-.guide { max-width: 760px; padding: 36px 0 32px; }
+.guide { max-width: 860px; padding: 36px 0 32px; }
 h2 { margin: 30px 0 14px; font-size: 22px; font-weight: 600; line-height: 1.35; }
 .guide h2:first-child { margin-top: 0; }
 .guide p { margin: 0 0 16px; }
@@ -134,3 +134,6 @@ footer p { margin: 0; }
   .theme-examples { grid-template-columns: 1fr; gap: 8px; }
 }
 #demo { padding-bottom: 28px; }
+
+/* No paragraph ends on a single word where the browser supports it (Oliver, 5 Nov). */
+p, figcaption { text-wrap: pretty; }
