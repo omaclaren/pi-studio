@@ -16,7 +16,7 @@ Zen mode, in rose-pine-dawn:
 
 ![Zen mode on the code](./assets/screenshots/theme-zen-code.png)
 
-Watch the [demo](https://github.com/omaclaren/pi-studio/releases/download/demo-prompt-document/pi-studio-2-demo.mp4) (1m36s, 2× speed, no audio). It shows browsing linked documents and bringing a Document selection into the Prompt.
+Watch the [demo](https://github.com/omaclaren/pi-studio/releases/download/demo-studio/pi-studio-demo.mp4) (68s, real time, no audio, automated typing). It shows a prompt and its rendered answer, a linked note and a PDF figure in the Document, and a selection brought into the Prompt for a follow-up.
 
 The screenshots and both demos are also on the [project page](https://omaclaren.github.io/pi-studio/).
 

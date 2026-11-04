@@ -133,3 +133,4 @@ footer p { margin: 0; }
   .guide { padding-top: 28px; }
   .theme-examples { grid-template-columns: 1fr; gap: 8px; }
 }
+#demo { padding-bottom: 28px; }

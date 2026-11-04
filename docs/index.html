@@ -14,7 +14,7 @@
   <meta property="og:image:alt" content="The Prompt beside a rendered response in Pi Studio">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="color-scheme" content="light">
-  <link rel="stylesheet" href="style.css?v=1">
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -33,7 +33,19 @@
         <h1 id="title">A browser workspace for Pi</h1>
         <p>pi-studio opens a workspace for <a href="https://pi.dev">Pi</a> in your browser, beside the terminal. Write and run prompts, read responses with rendered math and diagrams, edit and annotate documents, and follow what Pi is doing as it works.</p>
       </section>
-      <section id="examples" class="examples" aria-label="Screenshots and a recorded demo">
+      <section id="demo" aria-label="Recorded demo">
+        <figure>
+          <video controls playsinline preload="metadata" width="1600" height="900" poster="assets/studio-demo-poster.jpg" aria-label="A prompt and its answer, then a linked note, a PDF figure and a follow-up in Pi Studio" aria-describedby="demo-caption">
+            <source src="assets/studio-demo.mp4" type="video/mp4">
+            <p><a href="assets/studio-demo.mp4">Watch or download the demo.</a></p>
+          </video>
+          <figcaption id="demo-caption">
+            <p>Pi estimates a cooling rate from a prompt. A new Prompt then brings in a paragraph from a note, after reading a linked note and a PDF figure in the Document, and Pi answers the follow-up from the conversation.</p>
+            <p class="recording-note">68s, real time, no audio, with automated typing.</p>
+          </figcaption>
+        </figure>
+      </section>
+      <section id="examples" class="examples" aria-label="Screenshots">
         <h2>Prompt and Document</h2>
         <p>Studio has two editors. The Prompt holds what you send to Pi, and the Document holds the file you’re working on. Each keeps its own edits, preview and place, and Add to Prompt copies the Document’s selection into the Prompt.</p>
         <figure>
@@ -50,16 +62,6 @@
           </a>
           <figcaption>
             <p>The Document, with its preview.</p>
-          </figcaption>
-        </figure>
-        <figure>
-          <video controls playsinline preload="metadata" width="1920" height="1080" poster="assets/prompt-document-poster.jpg" aria-label="Browsing linked documents and adding a Document selection to the Prompt" aria-describedby="demo-caption">
-            <source src="assets/prompt-document-demo.mp4" type="video/mp4">
-            <p><a href="assets/prompt-document-demo.mp4">Watch or download the demo.</a></p>
-          </video>
-          <figcaption id="demo-caption">
-            <p>Browsing linked documents, opening a file in the Document, and adding a selection to the Prompt.</p>
-            <p class="recording-note">1m36s, 2× speed, no audio.</p>
           </figcaption>
         </figure>
         <h2>Themes and Zen mode</h2>
