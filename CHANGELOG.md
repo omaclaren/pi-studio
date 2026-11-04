@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.11] — 2026-11-04
+
 ### Added
 - `/studio --copy-url` copies the running Studio's URL, the one `/studio --status` prints, for a terminal too narrow to show it whole. It uses Pi's own clipboard: the system clipboard and, over SSH, your terminal's too (OSC 52), which works if the terminal allows it. Pi can't confirm the terminal took it, so paste to check. It copies only in Pi's terminal interface; in RPC mode the URL is in Studio's notifications.
 - With `PI_STUDIO_URL_FILE` set to an absolute path, Studio writes the last URL it printed for its main view to that file, so a script, an editor or a container can open Studio without anyone copying the URL out of the terminal ([#7](https://github.com/omaclaren/pi-studio/issues/7)). The file is created readable only by you (on Windows, its folder's permissions apply) and replaced whole. When Studio stops, it tries to remove the file, if it still holds Studio's URL. `/studio --status` names it. Nothing is written unless the variable is set; give each Pi process a file of its own. A file Studio can't write, such as one in a missing folder, gives a warning, and Studio starts as usual.

@@ -1,6 +1,6 @@
 # TODO
 
-See [ROADMAP.md](ROADMAP.md) for the current status: `0.11.10` is released, and Studio is in a feature freeze from `0.11.9`, for use in normal work. [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the wider buffer architecture.
+See [ROADMAP.md](ROADMAP.md) for the current status: `0.11.11` is released, and Studio is in a feature freeze from `0.11.9`, for use in normal work. [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the wider buffer architecture.
 
 ## During the freeze (from 0.11.9, 3 Nov 2026)
 
@@ -8,7 +8,7 @@ Fix only failures in normal use, lost data, effects on other people's processes 
 
 Exception (4 Nov, Oliver): candidate 119, an opt-in `PI_STUDIO_URL_FILE` for programs that open Studio ([#7](https://github.com/omaclaren/pi-studio/issues/7)), and `/studio --copy-url` for people.
 
-Known limits at `0.11.10`, none of them a hold:
+Known limits at `0.11.11`, none of them a hold:
 
 - [ ] Homebrew bash 5.3: Ctrl+C while code runs leaves Studio waiting for that send. Earlier releases did the same; `/bin/bash` 3.2 and zsh complete. Catching SIGINT in the shell would fix it; decide whether Studio should set a trap in a person's shell.
 - [ ] zsh in a narrow pane (about 40 columns or less): the record keeps Studio's loader line before the output. The output cleaner compares at most eight rows; match this send's loader whatever its length, and add a real narrow-zsh test.
@@ -17,6 +17,7 @@ Known limits at `0.11.10`, none of them a hold:
 - [ ] The REPL pane's **More** menu is placed when it opens, not when the pane resizes while it's open.
 - [ ] Saved files in the REPL pane (candidate 116's notes): a copy that keeps an earlier file's time stays with the entry whose time it carries; a link serves any recently shown version of its file; two entries still running can both show a file they both name until they finish; relative paths resolve against the REPL's current directory; and the file checks are synchronous, so an unresponsive volume would stall Studio.
 - [ ] With pi-repl loaded too (candidate 118's notes): with mixed versions (Studio `0.11.10` with pi-repl `0.12.0`, or `0.11.9` with `0.12.1`) an entry can still be told twice, as before; a pi-repl report that takes over 3 seconds waits for the next result or run; an entry Studio told before pi-repl first answered (pi-repl loaded mid-conversation) may be told once more; and Studio's own report builder still drops the agent's own-send mark when even its smallest report is over the budget, which pi-repl fixed in `0.12.1`.
+- [ ] The URL file and `--copy-url` (candidate 119's notes): on stop, the file is removed only if its contents are still this process's URL, which is a comparison, not file ownership; a crash or a failed removal leaves it, with a dead token, and a removal that fails at shutdown has no one to warn; a launch that waited for the browser across a restart still prints the old URL, though it no longer writes it; over SSH, Pi can't confirm the terminal took the copy (OSC 52); untested on native Windows.
 
 ## After the freeze
 
