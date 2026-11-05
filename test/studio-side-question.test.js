@@ -372,7 +372,7 @@ test("Studio wires an independent read-only side thread with progressive local a
 	assert.match(clientSource, /function saveSideQuestionTranscriptMarkdown/);
 	assert.match(clientSource, /function copySideQuestionTranscriptMarkdown/);
 	assert.match(clientSource, /function openSideQuestionTranscriptInEditor/);
-	assert.match(clientSource, /exportPdfBtn\.textContent = previewExportInProgress[\s\S]*?"Export thread"/);
+	assert.match(clientSource, /setTextIfChanged\(exportPdfBtn, previewExportInProgress[\s\S]*?"Export thread"/);
 	assert.match(clientSource, /exportPreviewControlsEl\.hidden = readerActive \|\| rightView === "editor-quarto-preview"/);
 	assert.match(clientSource, /startsWith\("side-markdown-"\) && rightView !== "side-questions"/);
 	assert.match(cssSource, /\.export-preview-menu button\[hidden\]\s*\{[\s\S]*?display:\s*none !important;/);

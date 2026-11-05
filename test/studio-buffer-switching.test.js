@@ -212,3 +212,25 @@ test("recovery Keep current and Use copy retain the complete live pair in a fres
   const used = await owner.use(copy); assert(used.ok); assert.deepEqual(used.state.buffers, state.buffers);
   assert.equal(f.browser.getItem(key), oldRaw);
 });
+
+// Oliver, Muxy, 5 Nov: WebKit reports a negative scroll position while a pane bounces past its top.
+// The background save of the live page keeps that as the top, rather than failing as "Invalid scroll position".
+test("a save taken while a pane bounces past its top keeps the top, and gives no warning", async () => {
+  const f = setup(); await f.client.initialize(editor(), null); await f.client.settled();
+  f.issues.length = 0;
+  const result = f.client.persist(editor("Prompt draft, edited", { scrollTop: -12 }), null, { view: { previewScrollTop: -30.5, rightScrollTop: -4 } });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  await f.client.settled();
+  const views = state => state.buffers.find(b => b.id === state.selectedBufferId).view;
+  for (const [where, view] of [["memory", views(f.client.snapshot())], ["browser", views(JSON.parse(f.browser.getItem(key)))], ["server", views(f.server.read(f.capability).state)]]) {
+    assert.deepEqual([view.scrollTop, view.previewScrollTop, view.rightScrollTop], [0, 0, 0], where);
+  }
+  assert.equal(selected(f.client).text, "Prompt draft, edited");
+  assert.equal(f.issues.some(value => String(value).includes("Invalid scroll position")), false, JSON.stringify(f.issues));
+  assert.equal(f.client.needsUnloadConfirmation(), false);
+  // Positions in range are kept as they are, and a negative one given to replace explicitly is still refused.
+  assert.equal(f.client.capture(editor("Prompt draft, edited", { scrollTop: 40.5 }), null, { view: { rightScrollTop: 12 } }).ok, true);
+  assert.deepEqual([selected(f.client).view.scrollTop, selected(f.client).view.rightScrollTop], [40.5, 12]);
+  const doc = documentBuffer(f.client);
+  assert.equal(f.client.replace(doc.id, doc.revision, file(), "baseline", { view: { rightScrollTop: -1 } }).ok, false);
+});

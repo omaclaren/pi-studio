@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 
 const clientSource = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 const helperSource = readFileSync(new URL("../client/studio-editor-draft-helpers.js", import.meta.url), "utf8");
@@ -39,7 +41,7 @@ function harness(overrides = {}) {
     loadHistoryPromptBtn: { addEventListener: (_type, fn) => { click = fn; } },
     ...overrides,
   };
-  vm.createContext(c);
+  vm.createContext(Object.assign(c, { setTextIfChanged }));
   vm.runInContext(helperSource, c);
   c.editorDraftHelpers = c.PiStudioEditorDraftHelpers;
   c.submittedEditorDrafts = c.editorDraftHelpers.createSubmittedEditorDraftTracker();

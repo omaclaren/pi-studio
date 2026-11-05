@@ -14107,7 +14107,7 @@ ${cssVarsBlock}
             <div><dt>Option/Alt+=</dt><dd>Increase the active pane's text size when not editing text</dd></div>
             <div><dt>Option/Alt+-</dt><dd>Decrease the active pane's text size when not editing text</dd></div>
             <div><dt>Option/Alt+0</dt><dd>Reset the active pane's text size when not editing text</dd></div>
-            <div class="shortcuts-full-only"><dt>Cmd/Ctrl+Option/Alt+A</dt><dd>Toggle Follow activity in the main editable Studio workspace</dd></div>
+            <div class="shortcuts-full-only"><dt>Cmd/Ctrl+Option/Alt+A</dt><dd>Turn Follow on or off in the main editable Studio workspace</dd></div>
             <div><dt>Cmd/Ctrl+Option/Alt+Shift+R</dt><dd>Refresh the focused or visible PDF preview from disk</dd></div>
           </dl>
         </section>

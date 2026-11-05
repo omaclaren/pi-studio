@@ -6,7 +6,7 @@ See [ROADMAP.md](ROADMAP.md) for the current status: `0.11.11` is released, and 
 
 Fix only failures in normal use, lost data, effects on other people's processes or files, and security problems. Note anything else here for after the freeze.
 
-Exception (4 Nov, Oliver): candidate 119, an opt-in `PI_STUDIO_URL_FILE` for programs that open Studio ([#7](https://github.com/omaclaren/pi-studio/issues/7)), and `/studio --copy-url` for people.
+Exception (4 Nov, Oliver): candidate 119, an opt-in `PI_STUDIO_URL_FILE` for programs that open Studio ([#7](https://github.com/omaclaren/pi-studio/issues/7)), and `/studio --copy-url` for people. Then candidate 120 (5 Nov, Oliver): Follow as one switch, and a WebKit scroll fix.
 
 Known limits at `0.11.11`, none of them a hold:
 
@@ -18,6 +18,7 @@ Known limits at `0.11.11`, none of them a hold:
 - [ ] Saved files in the REPL pane (candidate 116's notes): a copy that keeps an earlier file's time stays with the entry whose time it carries; a link serves any recently shown version of its file; two entries still running can both show a file they both name until they finish; relative paths resolve against the REPL's current directory; and the file checks are synchronous, so an unresponsive volume would stall Studio.
 - [ ] With pi-repl loaded too (candidate 118's notes): with mixed versions (Studio `0.11.10` with pi-repl `0.12.0`, or `0.11.9` with `0.12.1`) an entry can still be told twice, as before; a pi-repl report that takes over 3 seconds waits for the next result or run; an entry Studio told before pi-repl first answered (pi-repl loaded mid-conversation) may be told once more; and Studio's own report builder still drops the agent's own-send mark when even its smallest report is over the budget, which pi-repl fixed in `0.12.1`.
 - [ ] The URL file and `--copy-url` (candidate 119's notes): on stop, the file is removed only if its contents are still this process's URL, which is a comparison, not file ownership; a crash or a failed removal leaves it, with a dead token, and a removal that fails at shutdown has no one to warn; a launch that waited for the browser across a restart still prints the old URL, though it no longer writes it; over SSH, Pi can't confirm the terminal took the copy (OSC 52); untested on native Windows.
+- [ ] Negative scroll positions (candidate 120's notes): the background save keeps a WebKit bounce past a pane's top as the top, but a fresh workspace's first load and recovery's Keep current without a live client still pass a live position straight to the store, which refuses a negative one. Neither is the path Oliver hit; normalize those live inputs at their callers if it shows up.
 
 ## After the freeze
 

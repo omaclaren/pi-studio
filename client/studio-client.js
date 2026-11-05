@@ -514,11 +514,11 @@
           if (!option) return;
           if (option.dataset?.linkedReaderOption === "1") { option.disabled = true; return; }
           const isQuartoOption = option.value === "editor-quarto-preview";
-          if (isWatchedFilePreview && option.value === "editor-preview") option.textContent = "Watched preview";
+          if (isWatchedFilePreview && option.value === "editor-preview") setTextIfChanged(option, "Watched preview");
           else if (option.value === "editor-preview" || isQuartoOption) {
             const name = bufferSwitchingEnabled ? (isStudioDocumentBufferView() ? "Document" : "Prompt") : (isEditorOnlyMode ? "Document" : "Editor");
             // New layout: "(Quarto)" keeps the picker as wide as "Response (Preview)" (Oliver, 10 Oct).
-            option.textContent = name + (isQuartoOption ? (bufferSwitchingEnabled ? " (Quarto)" : " (Quarto Preview)") : " (Preview)");
+            setTextIfChanged(option, name + (isQuartoOption ? (bufferSwitchingEnabled ? " (Quarto)" : " (Quarto Preview)") : " (Preview)"));
           }
           if (isQuartoOption) option.hidden = !quartoRelevant;
           option.disabled = (isWatchedFilePreview && option.value !== "editor-preview")
@@ -1011,20 +1011,20 @@
         const ui = studioUiRefreshUi;
         if (!ui?.runStatus) return;
         const text = getStudioRuntimeStatusText(), rightFocused = paneFocusTarget === "right";
-        ui.runStatus.textContent = text; ui.runStatus.hidden = !text || rightFocused;
-        ui.headerRunStatus.textContent = text; ui.headerRunStatus.hidden = !text || !rightFocused;
+        setTextIfChanged(ui.runStatus, text); ui.runStatus.hidden = !text || rightFocused;
+        setTextIfChanged(ui.headerRunStatus, text); ui.headerRunStatus.hidden = !text || !rightFocused;
         if (typeof syncPromptRunIndicator === "function") syncPromptRunIndicator();
         const run = studioRuntimeActivity?.run, activeKind = getAbortablePendingKind();
         const stopping = run && (run.stopping || studioStopRequestedRunId === run.id);
         const ownedRun = run?.origin === "studio" && Boolean(run.requestId && run.kind);
         ui.headerStop.hidden = isEditorOnlyMode || !rightFocused || (!activeKind && !stopping && !ownedRun);
-        ui.headerStop.textContent = stopping ? "Stopping…" : "Stop";
+        setTextIfChanged(ui.headerStop, stopping ? "Stopping…" : "Stop");
         ui.headerStop.disabled = Boolean(stopping) || !activeKind;
         if (run && sendRunBtn) sendRunBtn.classList.toggle("request-pending", false);
         if (run && !isEditorOnlyMode && sendRunBtn) {
           const owned = run.origin === "studio" && Boolean(run.requestId && run.kind);
           if (owned) {
-            sendRunBtn.textContent = stopping ? "Stopping…" : "Stop";
+            setTextIfChanged(sendRunBtn, stopping ? "Stopping…" : "Stop");
             sendRunBtn.disabled = Boolean(stopping) || !activeKind;
             sendRunBtn.classList.toggle("request-stop-active", !stopping);
           } else sendRunBtn.disabled = true;
@@ -3698,9 +3698,16 @@
         return label.trim();
       }
 
+      // Write a label only when its text changes. Rewriting the same text can make WebKit lay out
+      // again, the likely reason a response scrolled to its very bottom moved up a little as the
+      // footer and the response's controls were redrawn while typing (Muxy; Astra's investigation, 5 Nov).
+      function setTextIfChanged(element, text) {
+        if (element && element.textContent !== text) element.textContent = text;
+      }
+
       function setStudioUiRefreshButtonText(buttonEl, text) {
         if (!buttonEl) return;
-        buttonEl.textContent = text;
+        setTextIfChanged(buttonEl, text);
       }
 
       function formatStudioFontSizeLabel(size) {
@@ -3900,7 +3907,7 @@
         if (!studioUiRefreshUi || !studioUiRefreshUi.reviewButton) return;
         const critiqueIsStop = getAbortablePendingKind() === "critique";
         const reviewButton = studioUiRefreshUi.reviewButton;
-        reviewButton.textContent = critiqueIsStop ? "Stop critique" : "Review";
+        setTextIfChanged(reviewButton, critiqueIsStop ? "Stop critique" : "Review");
         reviewButton.classList.toggle("request-stop-active", critiqueIsStop);
         reviewButton.disabled = critiqueIsStop ? Boolean(critiqueBtn && critiqueBtn.disabled) : false;
         reviewButton.title = critiqueIsStop
@@ -3986,16 +3993,15 @@
         const dirty = Boolean(path && editorDiffersFromFileBackedBaseline());
         // Unsaved text is *Untitled* (italic): a placeholder name, not a file (Oliver, 8 Oct).
         const name = path ? basenameForStudioPath(path) : "Untitled";
-        button.textContent = name + (dirty ? " •" : "");
+        setTextIfChanged(button, name + (dirty ? " •" : ""));
         if (path) button.classList?.remove("is-untitled"); else button.classList?.add("is-untitled");
         button.title = path ? path + (dirty ? " · unsaved file edits" : "") + " · File details" : "Not saved to a file · Save As…";
         if (studioUiRefreshUi.pathDetails) {
-          studioUiRefreshUi.pathDetails.textContent = path
-            ? path + (fileBackedBaselineText === null ? " · File baseline unavailable; disk not rechecked." : (dirty ? " · Unsaved file edits." : " · No edits since loading or saving; disk not rechecked."))
-            : "Not saved to a file.";
           const provenance = editorDraftHelpers.normalizeSourceProvenance(sourceState?.provenance);
           const summary = editorDraftHelpers.describeSourceProvenance(provenance);
-          if (summary) studioUiRefreshUi.pathDetails.textContent += " · " + summary;
+          setTextIfChanged(studioUiRefreshUi.pathDetails, (path
+            ? path + (fileBackedBaselineText === null ? " · File baseline unavailable; disk not rechecked." : (dirty ? " · Unsaved file edits." : " · No edits since loading or saving; disk not rechecked."))
+            : "Not saved to a file.") + (summary ? " · " + summary : ""));
           studioUiRefreshUi.pathDetails.title = provenance
             ? ("Response position when loaded: " + (provenance.responseNumber ?? "unavailable") + "\nResponse identity: " + (provenance.responseId ?? "unavailable") + "\nSource information only; not a saved-file receipt.") : "";
         }
@@ -4203,13 +4209,17 @@
           rightViewMenu = makeStudioUiRefreshMenu(makeStudioUiRefreshElement("button", "", "View"), "right-view", "studio-refresh-right-view-anchor");
           appendStudioUiRefreshMenuSection(rightViewMenu.menu, "Display", [responseHighlightSelect, responseFontSizeSelect]);
           if (bufferSwitchingEnabled && !isEditorOnlyMode && !isWatchedFilePreview) {
-            followMenu = makeStudioUiRefreshMenu(makeStudioUiRefreshElement("button", "studio-follow-button", "Follow: on"), "follow", "studio-refresh-follow-anchor");
-            for (const [control, label] of [[activityTrackingSelect, "Working, while Pi runs"], [followSelect, "The latest response, when it arrives"],
-              [documentPreviewFollowSelect, "The Document preview, while in Document"]]) {
-              control?.setAttribute("aria-label", label);
-              for (const option of Array.from(control?.options || [])) option.textContent = label + ": " + (option.value === "off" ? "Off" : "On");
-            }
-            appendStudioUiRefreshMenuSection(followMenu.menu, "Switch this pane automatically to:", [activityTrackingSelect, followSelect, documentPreviewFollowSelect]);
+            // One Follow switch (Oliver, 5 Nov). It sets Working and the latest response together; their
+            // selects stay, hidden, for their state. The Document preview's own switch is under View.
+            followMenu = makeStudioUiRefreshElement("button", "studio-refresh-chip studio-follow-button", "Follow: on");
+            followMenu.type = "button";
+            followMenu.setAttribute("aria-keyshortcuts", "Meta+Alt+A Control+Alt+A");
+            followMenu.addEventListener("click", () => setStudioFollowEnabled(!isStudioFollowEnabled()));
+            const followSettingsEl = makeStudioUiRefreshElement("span", "studio-follow-settings");
+            followSettingsEl.hidden = true;
+            for (const control of [activityTrackingSelect, followSelect]) if (control) followSettingsEl.appendChild(control);
+            followMenu = { button: followMenu, anchor: makeStudioUiRefreshElement("span", "studio-refresh-menu-anchor studio-refresh-follow-anchor") };
+            followMenu.anchor.append(followMenu.button, followSettingsEl);
           } else if (!isEditorOnlyMode && !isWatchedFilePreview) appendStudioUiRefreshMenuSection(rightViewMenu.menu, "Response updates", [followSelect]);
           rightToolsEl.append(headerRunStatus, headerStop);
           if (followMenu) rightToolsEl.appendChild(followMenu.anchor);
@@ -4267,7 +4277,7 @@
         if (activityTrackingSelect) activityTrackingSelect.hidden = isEditorOnlyMode || isWatchedFilePreview;
         appendStudioUiRefreshMenuSection(viewMenu.menu, "Workspace", [studioPaneLayoutSelect,
           (isEditorOnlyMode || isWatchedFilePreview || followMenu) ? null : activityTrackingSelect,
-          (bufferSwitchingEnabled && !followMenu) ? documentPreviewFollowSelect : null]);
+          bufferSwitchingEnabled ? documentPreviewFollowSelect : null]);
         appendStudioUiRefreshMenuSection(viewMenu.menu, "Annotations", [annotationModeSelect, insertHeaderBtn, stripAnnotationsBtn, saveAnnotatedBtn]);
         // View sits after File in row 1, as the right pane's View sits in its header, so row 2 fits narrower panes (Oliver, 27 Oct).
         headerToolsEl.appendChild(viewMenu.anchor);
@@ -4292,7 +4302,6 @@
           reviewButton: reviewMenu ? reviewMenu.button : null,
           menus: [viewMenu, openMenu]
             .concat(rightViewMenu ? [rightViewMenu] : [])
-            .concat(followMenu ? [followMenu] : [])
             .concat(responseMenu ? [responseMenu] : [])
             .concat(contextMenu ? [contextMenu] : [])
             .concat(reviewMenu ? [reviewMenu] : []),
@@ -5115,9 +5124,9 @@
         const text = modelText + " · " + terminalText + " · " + contextDisplayText;
         const titleText = "Model: " + modelText + " · " + terminalDetailText + " · " + contextTitleText;
         if (footerMetaModelEl && footerMetaTerminalEl && footerMetaContextEl) {
-          footerMetaModelEl.textContent = modelText;
-          footerMetaTerminalEl.textContent = terminalText;
-          footerMetaContextEl.textContent = contextDisplayText;
+          setTextIfChanged(footerMetaModelEl, modelText);
+          setTextIfChanged(footerMetaTerminalEl, terminalText);
+          setTextIfChanged(footerMetaContextEl, contextDisplayText);
           footerMetaModelEl.title = "Pi model and thinking: " + modelText;
           footerMetaModelEl.setAttribute("aria-haspopup", "menu");
           footerMetaModelEl.setAttribute("aria-expanded", footerModelMenuOpen ? "true" : "false");
@@ -5126,10 +5135,10 @@
           if (footerMetaTextEl) footerMetaTextEl.title = titleText;
           if (footerMetaEl) footerMetaEl.title = titleText;
         } else if (footerMetaTextEl) {
-          footerMetaTextEl.textContent = text;
+          setTextIfChanged(footerMetaTextEl, text);
           footerMetaTextEl.title = titleText;
         } else if (footerMetaEl) {
-          footerMetaEl.textContent = text;
+          setTextIfChanged(footerMetaEl, text);
           footerMetaEl.title = titleText;
         }
         updateDocumentTitle();
@@ -5330,10 +5339,11 @@
         // confirmation; retain a fallback if notice rendering is unavailable.
         const operationInNotice = operation && studioOperationNoticesEl?.isConnected && !studioOperationNoticesEl.hidden;
         const recoveryIssue = getStudioShownRecoveryIssue();
-        statusEl.textContent = recoveryIssue
+        setTextIfChanged(statusEl, recoveryIssue
           ? "Recovery: " + recoveryIssue + (bufferRecoveryKeptClosed ? "" : " Save or copy your text before reloading. " + (operationInNotice ? "" : (operation?.message || statusMessage)))
-          : operationInNotice ? "" : operation?.message || statusMessage;
-        statusEl.className = recoveryIssue ? "warning" : operationInNotice ? "" : operation?.severity || (statusLevel || "");
+          : operationInNotice ? "" : operation?.message || statusMessage);
+        const statusClass = recoveryIssue ? "warning" : operationInNotice ? "" : operation?.severity || (statusLevel || "");
+        if (statusEl.className !== statusClass) statusEl.className = statusClass;
         statusEl.title = recoveryIssue || (!operationInNotice && operation?.message) || "";
         if (typeof syncStudioPromptAddUndo === "function") syncStudioPromptAddUndo();
 
@@ -5342,9 +5352,9 @@
           statusLineEl.classList.toggle("with-spinner", spinnerActive);
         }
         if (statusSpinnerEl) {
-          statusSpinnerEl.textContent = spinnerActive
+          setTextIfChanged(statusSpinnerEl, spinnerActive
             ? (BRAILLE_SPINNER_FRAMES[spinnerFrameIndex % BRAILLE_SPINNER_FRAMES.length] || "")
-            : "";
+            : "");
         }
 
         updateFooterMeta();
@@ -5948,14 +5958,30 @@
         return false;
       }
 
+      // Changing the Prompt's right-pane view yourself during a run turns Follow off, and it stays off
+      // until you turn it on again (Oliver, 5 Nov). The view you chose stays. The classic layout has no
+      // Follow switch, so there the run is paused, as before, and the next run follows again (Astra, candidate 120).
       function pauseStudioRunFollowing() {
         if (!studioRunFollowingAvailable() || !studioRunFollowing?.active) return;
-        studioRunFollowing.paused = true;
         // Hidden Prompt must also lose its temporary Working override. Never
         // navigate the currently visible Document on the way out.
         const target = getStudioPromptRunView();
         relinquishStudioRunWorking(!target?.selected);
+        if (!studioUiRefreshUi?.followButton) studioRunFollowing.paused = true;
+        else if (isStudioFollowEnabled()) setStudioFollowEnabled(false);
         syncStudioFollowMenu();
+      }
+
+      // One Follow switch in the full workspace (Oliver, 5 Nov): on, a run shows Working and then its
+      // response; off, Studio leaves the Prompt's right pane alone. Turned on during a run, it goes
+      // back to Working. Working is set first, so it takes the pane before the latest response could.
+      function isStudioFollowEnabled() {
+        return activityTrackingEnabled || latestResponseFollowingEnabled !== false;
+      }
+
+      function setStudioFollowEnabled(enabled) {
+        setActivityTrackingEnabled(enabled);
+        setLatestResponseFollowingEnabled(enabled);
       }
 
       function acquireStudioRunWorking() {
@@ -6025,9 +6051,12 @@
 
       function syncStudioFollowMenu() {
         if (!studioUiRefreshUi?.followButton) return;
-        const enabled = activityTrackingEnabled || latestResponseFollowingEnabled !== false || documentPreviewFollowingEnabled;
-        setStudioUiRefreshButtonText(studioUiRefreshUi.followButton, "Follow: " + (enabled ? "on" : "off")
-          + (enabled && studioRunFollowing?.paused ? " · run paused" : ""));
+        const enabled = isStudioFollowEnabled(), button = studioUiRefreshUi.followButton;
+        setStudioUiRefreshButtonText(button, "Follow: " + (enabled ? "on" : "off"));
+        button.setAttribute?.("aria-pressed", enabled ? "true" : "false");
+        button.title = enabled
+          ? "While Pi runs, this pane shows Working, then the new response. Changing the view yourself turns this off. Click to turn off (Cmd/Ctrl+Option/Alt+A)."
+          : "Studio leaves this pane alone. Click to turn on; during a run, it goes back to Working (Cmd/Ctrl+Option/Alt+A).";
         if (activityTrackingSelect) activityTrackingSelect.value = activityTrackingEnabled ? "on" : "off";
         if (followSelect) followSelect.value = latestResponseFollowingEnabled === false ? "off" : "on";
         if (documentPreviewFollowSelect) documentPreviewFollowSelect.value = documentPreviewFollowingEnabled ? "on" : "off";
@@ -6652,7 +6681,8 @@
           setStatus("Follow activity is available only in the main editable Studio workspace.", "warning");
           return false;
         }
-        setActivityTrackingEnabled(!activityTrackingEnabled);
+        if (studioUiRefreshUi?.followButton) setStudioFollowEnabled(!isStudioFollowEnabled());
+        else setActivityTrackingEnabled(!activityTrackingEnabled);
         return true;
       }
 
@@ -7473,7 +7503,7 @@
           ? responseHistoryIndex + 1
           : 0;
         if (historyIndexBadgeEl) {
-          historyIndexBadgeEl.textContent = "Branch history: " + selected + "/" + total;
+          setTextIfChanged(historyIndexBadgeEl, "Branch history: " + selected + "/" + total);
         }
         if (historyPrevBtn) {
           historyPrevBtn.disabled = total <= 1 || responseHistoryIndex <= 0;
@@ -7489,12 +7519,12 @@
         const hasPrompt = Boolean(selectedItem && typeof selectedItem.prompt === "string" && selectedItem.prompt.trim());
         if (loadHistoryPromptBtn) {
           loadHistoryPromptBtn.disabled = uiBusy || responseReplacementPending || !hasPrompt || (bufferSwitchingEnabled && isStudioDocumentBufferView());
-          loadHistoryPromptBtn.textContent = getHistoryPromptButtonLabel(selectedItem);
+          setTextIfChanged(loadHistoryPromptBtn, getHistoryPromptButtonLabel(selectedItem));
           loadHistoryPromptBtn.title = getHistoryPromptButtonTitle(selectedItem);
         }
         if (copyResponsePromptBtn) {
           copyResponsePromptBtn.disabled = uiBusy || !hasPrompt;
-          copyResponsePromptBtn.textContent = hasPrompt ? "Copy response prompt" : "Copy response prompt (unavailable)";
+          setTextIfChanged(copyResponsePromptBtn, hasPrompt ? "Copy response prompt" : "Copy response prompt (unavailable)");
           copyResponsePromptBtn.title = getHistoryPromptCopyTitle(selectedItem);
         }
         syncShowMeButton();
@@ -17183,23 +17213,23 @@
         loadCritiqueFullBtn.hidden = !isCritiqueResponse;
 
         loadResponseBtn.disabled = uiBusy || !hasResponse || responseLoaded || isCritiqueResponse || (bufferSwitchingEnabled && isStudioDocumentBufferView());
-        loadResponseBtn.textContent = responseLoaded ? "Response already in editor" : "Load response";
+        setTextIfChanged(loadResponseBtn, responseLoaded ? "Response already in editor" : "Load response");
 
         const annotationWorkspaceReady = responseLoaded
           && editorView === "markdown"
           && rightView === "editor-preview"
           && paneFocusTarget === "off";
         annotateResponseBtn.disabled = uiBusy || !hasResponse || isCritiqueResponse || annotationWorkspaceReady || (bufferSwitchingEnabled && isStudioDocumentBufferView());
-        annotateResponseBtn.textContent = annotationWorkspaceReady ? "Response ready to annotate" : "Annotate response";
+        setTextIfChanged(annotateResponseBtn, annotationWorkspaceReady ? "Response ready to annotate" : "Annotate response");
         annotateResponseBtn.title = annotationWorkspaceReady
           ? "The selected response is exactly in the raw editor with Editor Preview open."
           : "Load the selected response into the raw editor and show Editor Preview. Ask before replacing unsubmitted or unsaved work. Shortcut: Cmd/Ctrl+Option/Alt+Enter.";
 
         loadCritiqueNotesBtn.disabled = uiBusy || !isCritiqueResponse || !critiqueNotes || critiqueNotesLoaded || (bufferSwitchingEnabled && isStudioDocumentBufferView());
-        loadCritiqueNotesBtn.textContent = critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor";
+        setTextIfChanged(loadCritiqueNotesBtn, critiqueNotesLoaded ? "Critique notes already in editor" : "Load critique notes into editor");
 
         loadCritiqueFullBtn.disabled = uiBusy || !isCritiqueResponse || responseLoaded || (bufferSwitchingEnabled && isStudioDocumentBufferView());
-        loadCritiqueFullBtn.textContent = responseLoaded ? "Full critique already in editor" : "Load full critique into editor";
+        setTextIfChanged(loadCritiqueFullBtn, responseLoaded ? "Full critique already in editor" : "Load full critique into editor");
 
         // The Document can show responses, but they load or annotate into the Prompt only (Sol, 8 Oct).
         const documentView = bufferSwitchingEnabled && isStudioDocumentBufferView();
@@ -17210,7 +17240,7 @@
         if (documentView) annotateResponseBtn.title = "Return to Prompt to load or annotate this response.";
 
         copyResponseBtn.disabled = uiBusy || !hasResponse;
-        copyResponseBtn.textContent = "Copy response";
+        setTextIfChanged(copyResponseBtn, "Copy response");
 
         const rightPaneShowsPreview = rightView === "preview" || rightView === "editor-preview";
         const exportingReplJournal = rightView === "repl";
@@ -17249,11 +17279,11 @@
         }
         if (exportPdfBtn) {
           exportPdfBtn.disabled = exportBusy || !canExportPreview;
-          exportPdfBtn.textContent = previewExportInProgress
+          setTextIfChanged(exportPdfBtn, previewExportInProgress
             ? "Exporting…"
             : (sideQuestionMarkdownExportRequest
               ? "Saving…"
-              : (exportingSideThread ? "Export thread" : (exportingReplJournal ? "Export record" : "Export right preview")));
+              : (exportingSideThread ? "Export thread" : (exportingReplJournal ? "Export record" : "Export right preview"))));
           if (rightView === "trace") {
             exportPdfBtn.title = "Working view does not support preview export.";
           } else if (rightView === "files") {
@@ -17283,7 +17313,7 @@
         if (exportSideThreadRenderSeparatorEl) exportSideThreadRenderSeparatorEl.hidden = !exportingSideThread;
         if (exportPreviewPdfStudioBtn) {
           exportPreviewPdfStudioBtn.disabled = exportBusy || !canExportPreview || isHtmlArtifactPreview || sideThreadRenderTooLarge;
-          exportPreviewPdfStudioBtn.textContent = documentHostingEnabled ? "Export PDF and open in browser" : "Export PDF and Open in Studio";
+          setTextIfChanged(exportPreviewPdfStudioBtn, documentHostingEnabled ? "Export PDF and open in browser" : "Export PDF and Open in Studio");
           exportPreviewPdfStudioBtn.title = documentHostingEnabled && canExportPreview && !isHtmlArtifactPreview && !sideThreadRenderTooLarge
             ? "Export as PDF and open it in the browser's PDF viewer."
             : sideThreadRenderTooLarge
@@ -17295,8 +17325,8 @@
         if (exportPreviewPdfBtn) {
           exportPreviewPdfBtn.disabled = exportBusy || !canExportPreview || isHtmlArtifactPreview || sideThreadRenderTooLarge;
           // Trial48 finding 7: the same choices, in the same words, for PDF and HTML.
-          if (documentHostingEnabled) exportPreviewPdfBtn.textContent = "Export PDF and open in system viewer";
-          if (documentHostingEnabled && exportPreviewHtmlBtn) exportPreviewHtmlBtn.textContent = "Export HTML and open in browser";
+          if (documentHostingEnabled) setTextIfChanged(exportPreviewPdfBtn, "Export PDF and open in system viewer");
+          if (documentHostingEnabled && exportPreviewHtmlBtn) setTextIfChanged(exportPreviewHtmlBtn, "Export HTML and open in browser");
           exportPreviewPdfBtn.title = sideThreadRenderTooLarge
             ? "This transcript is too large for rendered export; save or copy the Markdown instead."
             : (isHtmlArtifactPreview
@@ -17305,7 +17335,7 @@
         }
         if (exportPreviewHtmlStudioBtn) {
           exportPreviewHtmlStudioBtn.disabled = exportBusy || !canExportPreview || sideThreadRenderTooLarge;
-          exportPreviewHtmlStudioBtn.textContent = documentHostingEnabled ? "Export HTML and open in Document" : "Export HTML and Open in Studio";
+          setTextIfChanged(exportPreviewHtmlStudioBtn, documentHostingEnabled ? "Export HTML and open in Document" : "Export HTML and Open in Studio");
           exportPreviewHtmlStudioBtn.title = documentHostingEnabled
             ? "Export as HTML and open it as a Document. Existing files are never overwritten."
             : sideThreadRenderTooLarge
@@ -17339,7 +17369,7 @@
         }
 
         pullLatestBtn.disabled = uiBusy || followLatest;
-        pullLatestBtn.textContent = queuedLatestResponse ? "Fetch latest response *" : "Fetch latest response";
+        setTextIfChanged(pullLatestBtn, queuedLatestResponse ? "Fetch latest response *" : "Fetch latest response");
 
         updateSyncBadge(normalizedEditor);
         syncStudioQuartoDirtyUi();
@@ -17583,7 +17613,7 @@
           const hasSuggestionForCurrentText = Boolean(completionSuggestionState && sourceTextEl && sourceTextEl.value === completionSuggestionState.baseText);
           const editorEmpty = !String(sourceTextEl.value || "").trim();
           suggestCompletionBtn.disabled = isWatchedFilePreview || wsState !== "Ready" || (!completionSuggestionInFlight && (uiBusy || (editorEmpty && !isNextPromptEditor())));
-          suggestCompletionBtn.textContent = completionSuggestionInFlight ? "Stop" : (hasSuggestionForCurrentText ? "Try another" : "Suggest");
+          setTextIfChanged(suggestCompletionBtn, completionSuggestionInFlight ? "Stop" : (hasSuggestionForCurrentText ? "Try another" : "Suggest"));
           suggestCompletionBtn.title = completionSuggestionInFlight
             ? "Stop the current suggestion request."
             : (hasSuggestionForCurrentText
@@ -17593,7 +17623,7 @@
                 : "Ask for a short completion at the editor cursor. Shortcut: Option/Alt+Tab where available, or Cmd/Ctrl+Shift+Space from the editor."));
           if (footerSuggestBtn) {
             footerSuggestBtn.disabled = suggestCompletionBtn.disabled;
-            footerSuggestBtn.textContent = suggestCompletionBtn.textContent;
+            setTextIfChanged(footerSuggestBtn, suggestCompletionBtn.textContent);
             footerSuggestBtn.title = suggestCompletionBtn.title;
           }
         }
@@ -19947,7 +19977,7 @@
       function syncCompletionSuggestionContextUi() {
         syncCompletionSuggestionModelUi();
         if (suggestCompletionOptionsBtn) {
-          suggestCompletionOptionsBtn.textContent = studioUiRefreshUi?.fileButton ? "File" : "Source & context";
+          setTextIfChanged(suggestCompletionOptionsBtn, studioUiRefreshUi?.fileButton ? "File" : "Source & context");
           suggestCompletionOptionsBtn.title = studioUiRefreshUi?.fileButton ? (studioUiRefreshUi.reviewButton ? "File actions, details and workspace recovery. Suggestion settings are under Review." : "File actions, details, workspace recovery and suggestion settings.") : "Document source, working directory, status, and suggestion settings.";
           suggestCompletionOptionsBtn.setAttribute("aria-label", studioUiRefreshUi?.fileButton ? "File" : suggestCompletionOptionsBtn.title);
         }
@@ -28802,7 +28832,7 @@
 
         if (isEditorOnlyMode) {
           if (sendRunBtn) {
-            sendRunBtn.textContent = "Run editor text";
+            setTextIfChanged(sendRunBtn, "Run editor text");
             sendRunBtn.classList.remove("request-stop-active", "repl-secondary-action");
             sendRunBtn.disabled = true;
             sendRunBtn.title = "Run is unavailable in editor-only mode.";
@@ -28818,7 +28848,7 @@
             sendReplBtn.hidden = !showReplSend;
             sendReplBtn.disabled = !showReplSend || wsState === "Disconnected" || uiBusy || replBusy || !hasReplSession;
             sendReplBtn.classList.toggle("repl-primary-action", showReplSend);
-            sendReplBtn.textContent = showReplSend ? withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send") : "Send to REPL";
+            setTextIfChanged(sendReplBtn, showReplSend ? withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send") : "Send to REPL");
             sendReplBtn.title = hasReplSession
               ? (replSendMode === "literate"
                 ? "Literate send: selection, current fenced code chunk, or all matching chunks if the cursor is outside a chunk. Shortcut: " + replSendShortcut + "."
@@ -28837,7 +28867,7 @@
           }
           syncReplEchoModeSelect(showReplSend);
           if (critiqueBtn) {
-            critiqueBtn.textContent = "Critique text";
+            setTextIfChanged(critiqueBtn, "Critique text");
             critiqueBtn.classList.remove("request-stop-active");
             critiqueBtn.disabled = true;
             critiqueBtn.title = "Critique is unavailable in editor-only mode.";
@@ -28852,7 +28882,7 @@
         }
 
         if (sendRunBtn) {
-          sendRunBtn.textContent = directIsStop ? "Stop" : (documentView ? "Return to Prompt" : (bufferSwitchingEnabled ? "Run Prompt" : (rightView === "repl" ? withStudioShortcutLabel("Run editor text", "run") : "Run editor text")));
+          setTextIfChanged(sendRunBtn, directIsStop ? "Stop" : (documentView ? "Return to Prompt" : (bufferSwitchingEnabled ? "Run Prompt" : (rightView === "repl" ? withStudioShortcutLabel("Run editor text", "run") : "Run editor text"))));
           // The new-layout Document has the Prompt tab just above, so no Return to Prompt here (Oliver, 10 Oct).
           sendRunBtn.hidden = workspaceLayout && documentView && !directIsStop;
           sendRunBtn.classList.toggle("request-stop-active", directIsStop);
@@ -28891,7 +28921,7 @@
           sendReplBtn.hidden = !showReplSend;
           sendReplBtn.disabled = !showReplSend || wsState === "Disconnected" || uiBusy || replBusy || !hasReplSession;
           sendReplBtn.classList.toggle("repl-primary-action", showReplSend && !workspaceLayout);
-          sendReplBtn.textContent = showReplSend ? (workspaceLayout ? studioReplSendLabel() : withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send")) : "Send to REPL";
+          setTextIfChanged(sendReplBtn, showReplSend ? (workspaceLayout ? studioReplSendLabel() : withStudioShortcutLabel(replSendMode === "literate" ? "Send selection/chunks" : "Send to REPL", "repl-send")) : "Send to REPL");
           sendReplBtn.title = hasReplSession
             ? (workspaceLayout
               ? (replSendMode === "literate"
@@ -28915,7 +28945,7 @@
         syncReplEchoModeSelect(rightView === "repl");
 
         if (critiqueBtn) {
-          critiqueBtn.textContent = critiqueIsStop ? "Stop" : "Critique text";
+          setTextIfChanged(critiqueBtn, critiqueIsStop ? "Stop" : "Critique text");
           critiqueBtn.classList.toggle("request-stop-active", critiqueIsStop);
           critiqueBtn.disabled = critiqueIsStop ? wsState === "Disconnected" : (uiBusy || canQueueSteering);
           critiqueBtn.title = critiqueIsStop
@@ -28927,7 +28957,7 @@
                 : "Critique text with [an: ...] markers stripped."));
         }
         if (quizBtn) {
-          quizBtn.textContent = hasResumableQuiz() ? "Resume quiz" : "Quiz me";
+          setTextIfChanged(quizBtn, hasResumableQuiz() ? "Resume quiz" : "Quiz me");
           quizBtn.disabled = wsState === "Disconnected" || uiBusy || canQueueSteering;
           quizBtn.title = canQueueSteering
             ? "Quiz is unavailable while Run editor text is active."
@@ -30985,7 +31015,7 @@
         if (!editorModeBtn) return;
         editorModeBtn.hidden = !studioEditorModeSwitchable;
         if (!studioEditorModeSwitchable) return;
-        editorModeBtn.textContent = studioEditorMode === "dual" ? "Switch to single editor" : "Switch to dual editor";
+        setTextIfChanged(editorModeBtn, studioEditorMode === "dual" ? "Switch to single editor" : "Switch to dual editor");
         const wait = studioEditorModeAttempt ? "Switching…" : studioEditorModeSwitchWaitReason();
         editorModeBtn.disabled = Boolean(wait);
         editorModeBtn.title = wait || (studioEditorMode === "dual" ? "Use one editor, as in earlier Studio. Studio restarts and reopens here."
@@ -33421,6 +33451,12 @@
       if (getDocumentPreviewFollowOwner()) restoreDocumentFollowScroll(documentPreviewFollowScrolls.get(restoredFollowBuffer.id) ?? 0);
       renderSourcePreview();
       workspacePersistenceReady = true;
+      // Follow is one switch now (Oliver, 5 Nov): a saved setting from the three-switch menu with only
+      // Working or only the latest response on counts as on.
+      if (studioUiRefreshUi?.followButton) {
+        ensureLatestResponseFollowingPreference();
+        if (activityTrackingEnabled !== (latestResponseFollowingEnabled !== false)) setStudioFollowEnabled(true);
+      }
       initializePromptRunIndicator();
       syncStudioRunFollowingFromMessage({ type: "initialization" });
       // Hosting connects before recovery initialization; no later socket-ready

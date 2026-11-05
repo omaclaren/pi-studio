@@ -8,6 +8,8 @@ import { createStudioTurns, resolveStudioEditorFlags, readStudioEditorMode, writ
 import { buildStudioHostingBootstrapState, createStudioBufferServerStore } from "../shared/studio-buffer-server.js";
 import { createStudioBuffer, validateStudioBufferWorkspace } from "../shared/studio-buffer-store.js";
 import { createStudioDiskRevision } from "../shared/studio-disk-revisions.js";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 
 // Oliver, 13 Oct: dual editor mode (Prompt and Document) by default, single editor mode on
 // request, from the footer or /studio --single and --dual. Switching restarts Studio.
@@ -79,7 +81,7 @@ test("a carried Prompt must fit a dual workspace before the switch is accepted",
 function harness({ mode = "dual", buffers, busy = false, confirm = true, fetchAnswer } = {}) {
   const sent = [], status = [], fetches = [], replaced = [], decisions = [], main = { inert: false };
   const state = { activePromptId: "p", selectedBufferId: "p", buffers: buffers || [{ id: "p", role: "prompt", text: "Ask about this.", baselineText: "" }, { id: "d", role: "document", text: "", baselineText: "" }] };
-  const c = vm.createContext({
+  const c = vm.createContext({ setTextIfChanged,
     studioEditorMode: mode, studioEditorModeSwitchable: true, studioEditorModeSwitchRequestId: null, studioEditorModeLanding: null, studioEditorModeLanded: false, studioEditorModeAttempt: null,
     WebSocket: { OPEN: 1 }, ws: { readyState: 1, send: data => sent.push(JSON.parse(data)) }, wsState: "Ready", uiBusy: busy,
     sideQuestionState: null, sideQuestionUi: { draft: "" },

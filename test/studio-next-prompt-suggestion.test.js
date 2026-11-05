@@ -8,6 +8,8 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 
 const index = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
@@ -23,7 +25,7 @@ function server(respond) {
 		calls, resolveStudioModelRequestAuth: async () => ({ apiKey: "test-key", headers: {} }),
 		completeSimple: async (model, request, options) => { calls.push({ model, request, options }); return respond(request, options); },
 	};
-	vm.createContext(s);
+	vm.createContext(Object.assign(s, { setTextIfChanged }));
 	for (const name of ["STUDIO_NEXT_PROMPT_MAX_CONTEXT_CHARS", "STUDIO_NEXT_PROMPT_MAX_CHARS"])
 		vm.runInContext(index.match(new RegExp("^const " + name + " = [\\d_]+;", "m"))[0].replace("const ", "var "), s);
 	run(between(index, "function extractAssistantText(", "\nfunction "), s);
@@ -182,7 +184,7 @@ function client({ text = "", role = "prompt", editorOnly = false, watched = fals
 		makeRequestId: () => "r" + (sent.length + 1), sendMessage: message => { sent.push(message); return true; },
 		syncActionButtons() {}, setStatus(text) { c.status = text; }, focusSourceEditorForCompletion() {}, applySourceTextEdit(value) { c.sourceTextEl.value = value; },
 	};
-	vm.createContext(c);
+	vm.createContext(Object.assign(c, { setTextIfChanged }));
 	vm.runInContext(between(source, "function isStudioDocumentBufferView()", "function studioBuffersCanSwitch("), c);
 	vm.runInContext(between(source, "function hideCompletionSuggestion()", "function getSourceTextLineEditBounds("), c);
 	return { c, sent };
@@ -322,7 +324,7 @@ async function realHistoryBuilder() {
 	const { isStudioShowMePrompt } = await import("../shared/studio-show-me.js");
 	const { createHash } = await import("node:crypto");
 	const s = { createHash, isStudioShowMePrompt };
-	vm.createContext(s);
+	vm.createContext(Object.assign(s, { setTextIfChanged }));
 	vm.runInContext(index.match(/^const RESPONSE_HISTORY_LIMIT = [\d_]+;/m)[0].replace("const ", "var "), s);
 	for (const name of ["extractAssistantText", "normalizePromptText", "extractUserText", "extractAssistantThinking", "extractPersistedStudioPromptMetadata", "buildStudioPromptDescriptor", "inferStudioResponseKind"])
 		run(between(index, "function " + name + "(", "\nfunction "), s);
@@ -372,7 +374,7 @@ test("Suggest beside Compact does what the menu's Suggest does, and says the sam
 	// The actual button sync, for an empty Prompt, an empty Document, text, a ready suggestion and a running request.
 	const sync = between(source, "        if (suggestCompletionBtn) {\n          const hasSuggestionForCurrentText", "        if (suggestCompletionOptionsBtn)");
 	const state = (fields) => {
-		const c = vm.createContext({ suggestCompletionBtn: {}, footerSuggestBtn: {}, isWatchedFilePreview: false, wsState: "Ready", uiBusy: false, completionSuggestionInFlight: false,
+		const c = vm.createContext({ setTextIfChanged, suggestCompletionBtn: {}, footerSuggestBtn: {}, isWatchedFilePreview: false, wsState: "Ready", uiBusy: false, completionSuggestionInFlight: false,
 			completionSuggestionState: null, sourceTextEl: { value: "" }, isNextPromptEditor: () => true, ...fields });
 		vm.runInContext(sync, c);
 		assert.deepEqual([c.footerSuggestBtn.disabled, c.footerSuggestBtn.textContent, c.footerSuggestBtn.title], [c.suggestCompletionBtn.disabled, c.suggestCompletionBtn.textContent, c.suggestCompletionBtn.title]);

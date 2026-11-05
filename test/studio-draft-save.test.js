@@ -5,6 +5,8 @@ import {readFileSync} from 'node:fs';
 import {createStudioBuffer,validateStudioBufferWorkspace} from '../shared/studio-buffer-store.js';
 import {encodeStudioBufferRecovery,decodeStudioBufferRecovery} from '../shared/studio-buffer-recovery.js';
 import {createStudioDocumentCopy} from '../shared/studio-document-hosting.js';
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 const client=readFileSync(new URL('../client/studio-client.js',import.meta.url),'utf8'),helper=readFileSync(new URL('../client/studio-editor-draft-helpers.js',import.meta.url),'utf8');
 function section(start,end){const a=client.indexOf(start),b=client.indexOf(end,a);assert(a>=0&&b>a,start);return client.slice(a,b);}
 function helpers(){const c=vm.createContext({});vm.runInContext(helper,c);return c.PiStudioEditorDraftHelpers;}
@@ -88,5 +90,5 @@ test('source normalization and setter explicitly preserve provenance; reset/impo
  assert.match(section('        if (message.type === "saved")','        if (message.type === "pi_editor_draft_result")'),/provenance/);
 });
 test('File details describe persisted source while draft filename remains plain and undotted',()=>{
- const c=vm.createContext({studioUiRefreshUi:{filenameButton:{},pathDetails:{}},sourceState:{path:null,provenance:origin({annotated:true})},editorDraftHelpers:helpers(),editorDiffersFromFileBackedBaseline:()=>true});vm.runInContext(section('      function syncStudioWorkspaceFilename()','      function setupStudioUiRefreshPrototype()'),c);c.syncStudioWorkspaceFilename();assert.equal(c.studioUiRefreshUi.filenameButton.textContent,'Untitled');assert.match(c.studioUiRefreshUi.pathDetails.textContent,/Not saved to a file/);assert.match(c.studioUiRefreshUi.pathDetails.textContent,/Loaded from response 3 for annotation/);assert.match(c.studioUiRefreshUi.pathDetails.title,/response-id-3/);
+ const c=vm.createContext({setTextIfChanged,studioUiRefreshUi:{filenameButton:{},pathDetails:{}},sourceState:{path:null,provenance:origin({annotated:true})},editorDraftHelpers:helpers(),editorDiffersFromFileBackedBaseline:()=>true});vm.runInContext(section('      function syncStudioWorkspaceFilename()','      function setupStudioUiRefreshPrototype()'),c);c.syncStudioWorkspaceFilename();assert.equal(c.studioUiRefreshUi.filenameButton.textContent,'Untitled');assert.match(c.studioUiRefreshUi.pathDetails.textContent,/Not saved to a file/);assert.match(c.studioUiRefreshUi.pathDetails.textContent,/Loaded from response 3 for annotation/);assert.match(c.studioUiRefreshUi.pathDetails.title,/response-id-3/);
 });

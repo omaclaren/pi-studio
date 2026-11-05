@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { createStudioDocumentHostController } from "../shared/studio-document-host-client.js";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 function section(start, end) { const a = source.indexOf(start), b = source.indexOf(end, a); assert(a >= 0 && b > a); return source.slice(a, b); }
 function harness() {
   const clicks = [], controls = new Map(); let copy = {}, move = {}, opening = {}, backup = {}, saves = [];
-  const c = vm.createContext({ documentHostingEnabled: true, documentHostingGeneration: 1, wsState: "Ready",
+  const c = vm.createContext({ setTextIfChanged, documentHostingEnabled: true, documentHostingGeneration: 1, wsState: "Ready",
     documentHostingController: { copyState: () => copy, moveState: () => move }, documentOpenController: { state: () => opening },
     bufferRecoveryClient: { handoffBackup: () => backup, pendingHostingSaves: () => saves }, basenameForStudioPath: value => value?.split("/").at(-1),
     selected: "doc", getStudioSelectedBuffer: () => ({ id: c.selected }), studioOperationNotices: new Map(), studioOperationNoticesEl: null,

@@ -73,7 +73,7 @@ test("the choose-a-file strip stays pinned while Files scrolls", () => {
 // keeps its fixed native width; the shorter Quarto label lets that be "Response (Preview)".
 test("the right view picker has no width code; the Quarto label is the short one in the new layout", () => {
   assert.doesNotMatch(source, /syncRightViewSelectWidth|rightViewSelectMeasure/);
-  assert.match(source, /option\.textContent = name \+ \(isQuartoOption \? \(bufferSwitchingEnabled \? " \(Quarto\)" : " \(Quarto Preview\)"\) : " \(Preview\)"\);/);
+  assert.match(source, /setTextIfChanged\(option, name \+ \(isQuartoOption \? \(bufferSwitchingEnabled \? " \(Quarto\)" : " \(Quarto Preview\)"\) : " \(Preview\)"\)\);/);
   assert.ok("Document (Quarto)".length < "Response (Preview)".length && "Prompt (Quarto)".length < "Response (Preview)".length);
 });
 

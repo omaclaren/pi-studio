@@ -15,7 +15,7 @@ function savedHandler(){
  return {c,calls,statuses,message:{type:'saved',requestId:'request',path:'/saved.md',hosting:{operationId:'save-op'}}};
 }
 test('hosting bootstrap refreshes action availability after workspace persistence becomes ready',()=>{
- const calls=[],c=vm.createContext({workspacePersistenceReady:false,documentHostingEnabled:true,initializePromptRunIndicator(){},syncStudioRunFollowingFromMessage(){},syncActionButtons:()=>calls.push(c.workspacePersistenceReady)});
+ const calls=[],c=vm.createContext({workspacePersistenceReady:false,documentHostingEnabled:true,studioUiRefreshUi:null,initializePromptRunIndicator(){},syncStudioRunFollowingFromMessage(){},syncActionButtons:()=>calls.push(c.workspacePersistenceReady)});
  vm.runInContext(section('      workspacePersistenceReady = true;','      persistWorkspaceStateNow({ skipServer:'),c);
  assert.deepEqual(calls,[true]);
  c.documentHostingEnabled=false;c.workspacePersistenceReady=false;calls.length=0;

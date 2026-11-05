@@ -8,6 +8,15 @@ import { createStudioDocumentOpenStorage } from "./studio-document-open-storage.
 
 const fail = (reason, message) => ({ ok: false, reason, message });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// A page's live scroll positions. WebKit reports a negative one while a pane bounces past its top,
+// which is the top; saving it failed as "Invalid scroll position" and flashed a recovery warning
+// (Oliver, Muxy, 5 Nov). The store still refuses a negative position given to it explicitly.
+const LIVE_SCROLL_FIELDS = ["scrollTop", "previewScrollTop", "rightScrollTop"];
+function liveView(view) {
+	const next = { ...view };
+	for (const field of LIVE_SCROLL_FIELDS) if (typeof next[field] === "number" && Number.isFinite(next[field]) && next[field] < 0) next[field] = 0;
+	return next;
+}
 
 function literalStudioBufferLabel(source) {
 	// Provenance is not a link or a resource/terminal grant. Separate boundary
@@ -149,10 +158,10 @@ export function createStudioBufferClient(options) {
 			next = createStudioBuffer({ ...current, text: editor.text, sourceState: editor.sourceState,
 				baselineText: editor.sourceState.path ? baselineText : (current.sourceState.path ? null : current.baselineText),
 				diskRevision: editor.diskRevision, resourceDir: editor.resourceDir,
-				view: { ...current.view, editorView: editor.editorView, rightView: editor.rightView, editorLanguage: editor.editorLanguage,
+				view: liveView({ ...current.view, editorView: editor.editorView, rightView: editor.rightView, editorLanguage: editor.editorLanguage,
 					followLatest: editor.followLatest, responseHistoryIndex: editor.responseHistoryIndex,
 					selectionStart: editor.selectionStart, selectionEnd: editor.selectionEnd, scrollTop: editor.scrollTop,
-					...extra.view }, metadata: { ...current.metadata, ...extra.metadata } });
+					...extra.view }), metadata: { ...current.metadata, ...extra.metadata } });
 		} catch (error) { return fail(error.reason || "invalid-state", error.message); }
 		if (current.text === next.text && current.baselineText === next.baselineText && current.diskRevision === next.diskRevision
 			&& current.resourceDir === next.resourceDir && same(current.sourceState, next.sourceState)

@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 const css = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
 const bufferClient = readFileSync(new URL("../shared/studio-buffer-client.js", import.meta.url), "utf8");
@@ -23,7 +25,7 @@ function menuHarness({ workspace = true, kind = "text" } = {}) {
     studioPreviewInteractionIsCurrent: () => true, getPreviewLocalLinkKind: () => kind, getEffectivePreviewLinkContext: () => ({ sourcePath: "/n/a.md", resourceDir: "/n" }),
     fetchPreviewLocalLink: async () => ({}), ensurePreviewLinkMenu: () => menu, positionPreviewLinkMenu() {}, closePreviewLinkMenu() {},
     studioLinkedReaderAvailable: () => true, setStatus() {} };
-  vm.createContext(c);
+  vm.createContext(Object.assign(c, { setTextIfChanged }));
   vm.runInContext(declaration("appendPreviewLinkMenuButton") + declaration("showPreviewLinkMenu"), c);
   return { c, labels: () => items.map(b => b.textContent), actions: () => items.map(b => b.dataset.previewLinkAction) };
 }
@@ -51,7 +53,7 @@ test("Open in Prompt from a link opens it as the Prompt", async () => {
   const calls = [];
   const c = { bufferSwitchingEnabled: true, studioPreviewInteractionIsCurrent: () => true, setStatus() {},
     openStudioBufferDocument: async (...args) => { calls.push(args); return true; } };
-  vm.createContext(c); vm.runInContext(declaration("runPreviewLinkAction"), c);
+  vm.createContext(Object.assign(c, { setTextIfChanged })); vm.runInContext(declaration("runPreviewLinkAction"), c);
   const context = { href: "../notes.md", isCurrent: () => true };
   await c.runPreviewLinkAction("open-prompt", context);
   assert.deepEqual(calls, [["../notes.md", context, "prompt"]]);
@@ -60,7 +62,7 @@ test("Open in Prompt from a link opens it as the Prompt", async () => {
 test("a web link in rendered text opens a new tab without a referrer; other links are left alone", () => {
   class Element { constructor(href, inRendered = true) { this.href = href; this.inRendered = inRendered; this.target = ""; this.rel = ""; }
     getAttribute() { return this.href; } closest(selector) { return this.inRendered && /#critiqueView a\[href\]/.test(selector) ? this : null; } }
-  const c = { Element }; vm.createContext(c); vm.runInContext(declaration("openRenderedWebLinkInNewTab"), c);
+  const c = { Element }; vm.createContext(Object.assign(c, { setTextIfChanged })); vm.runInContext(declaration("openRenderedWebLinkInNewTab"), c);
   for (const href of ["https://example.org/x", "http://a.b", "//example.org/protocol-relative", " HTTPS://EXAMPLE.ORG "]) {
     const a = new Element(href); assert.equal(c.openRenderedWebLinkInNewTab({ target: a }), true, href);
     assert.equal(a.target, "_blank"); assert.equal(a.rel, "noopener noreferrer");
@@ -81,7 +83,7 @@ test("Files ⋯ and the filename menu have no Follow changes or new-window items
 function replHarness({ start = 0, end = 0, mode = "raw", workspace = true, hidden = false } = {}) {
   const c = { sourceTextEl: { selectionStart: start, selectionEnd: end }, replSendMode: mode, bufferSwitchingEnabled: workspace,
     studioUiRefreshUi: workspace ? {} : null, sendReplBtn: { hidden, textContent: "Send to REPL" }, getStudioShortcutLabel: () => "⌃⇧↵" };
-  vm.createContext(c); vm.runInContext(declaration("withStudioShortcutLabel") + declaration("studioReplSendLabel") + declaration("syncStudioReplSendLabel"), c);
+  vm.createContext(Object.assign(c, { setTextIfChanged })); vm.runInContext(declaration("withStudioShortcutLabel") + declaration("studioReplSendLabel") + declaration("syncStudioReplSendLabel"), c);
   return c;
 }
 
@@ -113,7 +115,7 @@ test("in the new layout the REPL never takes the accent from Run Prompt; classic
 test("the connection notice says it once", () => {
   assert.match(bufferClient, /"Connection closed\. New edits aren't being checkpointed to the server\."/);
   // Oliver, 27 Oct: the footer shows the issue less a save this tab is still finishing (studio-operation-notices.test.js).
-  assert.match(declaration("renderStatus"), /const recoveryIssue = getStudioShownRecoveryIssue\(\);\n\s+statusEl\.textContent = recoveryIssue\n\s+\? "Recovery: " \+ recoveryIssue \+ \(bufferRecoveryKeptClosed \? "" : " Save or copy your text before reloading\. " \+/);
+  assert.match(declaration("renderStatus"), /const recoveryIssue = getStudioShownRecoveryIssue\(\);\n\s+setTextIfChanged\(statusEl, recoveryIssue\n\s+\? "Recovery: " \+ recoveryIssue \+ \(bufferRecoveryKeptClosed \? "" : " Save or copy your text before reloading\. " \+/);
   assert.doesNotMatch(source + bufferClient, /Save\/copy current text before refreshing|Server recovery is paused/);
 });
 
@@ -123,7 +125,7 @@ test("Keep closed is a choice, not a failure to start", () => {
   const c = { bufferRecoveryIssue: "Workspace kept closed. Retained recovery wasn't discarded. Reload and choose “Resume here” to reopen it.", bufferRecoveryKeptClosed: true,
     statusEl: {}, statusLineEl: null, statusSpinnerEl: null, studioOperationNoticesEl: null, statusMessage: "Disconnected (code 1005). Reconnecting in 600ms…", statusLevel: "",
     getStudioPriorityOperationNotice: () => null, getStudioShownRecoveryIssue: () => c.bufferRecoveryIssue, shouldAnimateFooterSpinner: () => false, updateFooterMeta() {} };
-  vm.createContext(c); vm.runInContext(declaration("renderStatus"), c); c.renderStatus();
+  vm.createContext(Object.assign(c, { setTextIfChanged })); vm.runInContext(declaration("renderStatus"), c); c.renderStatus();
   assert.equal(c.statusEl.textContent.trim(), "Recovery: Workspace kept closed. Retained recovery wasn't discarded. Reload and choose “Resume here” to reopen it.");
   c.bufferRecoveryKeptClosed = false; c.statusMessage = ""; c.bufferRecoveryIssue = "Connection closed. New edits aren't being checkpointed to the server."; c.renderStatus();
   assert.equal(c.statusEl.textContent.trim(), "Recovery: Connection closed. New edits aren't being checkpointed to the server. Save or copy your text before reloading.");
@@ -134,7 +136,7 @@ test("after Keep closed, nothing reconnects: bootstrap, scheduled reconnects and
   const c = { bufferRecoveryKeptClosed: true, reconnectTimer: null, reconnectAttempt: 0, ws: null,
     WebSocket: class { constructor() { sockets.push(this); } }, window: { setTimeout: (fn, ms) => { timers.push(ms); return 1; }, clearTimeout() {} },
     setWsState: state => states.push(state), setBusy() {}, setStatus() {}, getToken: () => "t" };
-  vm.createContext(c);
+  vm.createContext(Object.assign(c, { setTextIfChanged }));
   vm.runInContext("let reconnectTimer = null, reconnectAttempt = 0, ws = null;" + declaration("clearScheduledReconnect") + declaration("formatReconnectDelay") + declaration("scheduleReconnect") + declaration("connect"), c);
   c.connect(); c.scheduleReconnect("Connection lost.");
   assert.deepEqual(sockets, []); assert.deepEqual(timers, []); assert.deepEqual(states, ["Disconnected", "Disconnected"]);

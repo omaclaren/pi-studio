@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { createStudioRunLifecycle } from "../shared/studio-run-lifecycle.js";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 
 const index = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
 const client = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
@@ -68,7 +70,7 @@ test("snapshot callers cannot mutate retained authority", () => {
 });
 
 function clientHarness() {
-  const sent = [], c = vm.createContext({ studioRuntimeActivity: null, studioStopRequestedRunId: null, studioRuntimeClock: null,
+  const sent = [], c = vm.createContext({ setTextIfChanged, studioRuntimeActivity: null, studioStopRequestedRunId: null, studioRuntimeClock: null,
     studioUiRefreshUi: null, wsState: "Ready", uiBusy: false, pendingRequestId: null, pendingKind: null,
     isEditorOnlyMode: false, isWatchedFilePreview: false, syncStudioRunFollowingFromMessage() {}, pauseStudioRunFollowing() {},
     syncActionButtons() {}, clearArmedTitleAttention() {}, setStatus() {}, sendMessage: message => { sent.push(message); return true; },
@@ -135,7 +137,7 @@ test("production client refuses malformed authority and does not erase a known t
 
 test("actual SDK registration settles only at agent_settled, not agent_end", async () => {
   const handlers = new Map(), actor = ledger();
-  const c = vm.createContext({ pi: { on: (name, fn) => handlers.set(name, fn) }, studioRunLifecycle: actor,
+  const c = vm.createContext({ setTextIfChanged, pi: { on: (name, fn) => handlers.set(name, fn) }, studioRunLifecycle: actor,
     studioRunLastStopReason: null, studioRunInputRequestIds: new Set(),
     activeRequest: { id: "owned", kind: "direct" }, agentBusy: false, suppressedStudioResponse: null,
     pendingTurnPrompt: null, pendingStudioPromptMetadata: null, pendingStudioCompletionKind: null,
@@ -182,7 +184,7 @@ test("production presentation keeps a disabled Stop in right focus on disconnect
 
 test("actual backend canceller retains runtime ownership after response and fences stale delivery", () => {
   const actor = ledger(); actor.start({ id: "owned", kind: "direct" }); let aborts = 0, clears = 0;
-  const c = vm.createContext({ studioRunLifecycle: actor, activeRequest: null,
+  const c = vm.createContext({ setTextIfChanged, studioRunLifecycle: actor, activeRequest: null,
     lastCommandCtx: { abort() { aborts++; } }, clearStudioDirectRunState() { clears++; }, clearPendingStudioCompletion() {},
     suppressedStudioResponse: null, broadcastState() {}, broadcast() {} });
   const body = section(index, "\tconst cancelActiveRequest =", "\tconst activateRequest =");
@@ -209,7 +211,7 @@ test("actual client dispatcher does not infer settlement from response or cancel
 
 test("actual parser retains the optional run fence rather than silently degrading to a request-only abort", () => {
   const body = section(index, '\tif (msg.type === "cancel_request" &&', '\n\treturn null;\n}');
-  const c = vm.createContext({}); vm.runInContext("function parse(msg) {" + body + " return null; }", c);
+  const c = vm.createContext({ setTextIfChanged,}); vm.runInContext("function parse(msg) {" + body + " return null; }", c);
   assert.equal(c.parse({ type: "cancel_request", requestId: "owned", runId: "run-1" }).runId, "run-1");
   assert.equal(c.parse({ type: "cancel_request", requestId: "owned", runId: 42 }), null);
   assert.equal(c.parse({ type: "cancel_request", requestId: "owned" }).requestId, "owned", "legacy exact-request compatibility retained");

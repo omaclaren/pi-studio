@@ -7755,6 +7755,8 @@
     body.studio-ui-refresh #rightSectionHeader .studio-follow-button:focus-visible {
       outline: none; text-decoration: underline; text-underline-offset: 3px;
     }
+    /* Follow is a switch, not a menu (Oliver, 5 Nov): no menu caret. */
+    body.studio-ui-refresh #rightSectionHeader .studio-follow-button::after { content: none; }
     .studio-operation-notices { padding: 4px 12px; font-size: 12px; color: var(--warn); }
     .studio-operation-notice { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 3px 0; overflow-wrap: anywhere; }
     .studio-operation-notice button { font-size: 12px; padding: 1px 4px; }
@@ -7906,6 +7908,9 @@
     body.studio-workspace-layout details.trace-step { border-color: var(--panel-border); background: var(--panel); box-shadow: none; }
     body.studio-workspace-layout details.trace-step > summary.trace-card-header { padding: 9px 14px; }
     body.studio-workspace-layout details.trace-step > .trace-step-body { gap: 4px; border-top: 1px solid var(--panel-border); padding: 8px 14px 10px; }
+    /* Oliver, 5 Nov: a step's sections line up under its number, not its triangle, so they read as the step's:
+       the line's padding, then the triangle (1em at 9px) and the line's gap. */
+    body.studio-workspace-layout details.trace-step > .trace-step-body { padding-left: calc(14px + 9px + 7px); }
     body.studio-workspace-layout .trace-step .trace-output-wrap,
     body.studio-workspace-layout .trace-step .trace-output,
     body.studio-workspace-layout .trace-step .trace-tool-fields,

@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 function section(start, end) { const a = source.indexOf(start), b = source.indexOf(end, a); assert(a >= 0 && b > a, start); return source.slice(a, b); }
-function harness({ view = "editor-preview", working = true, latest = true, role = "prompt", history = true } = {}) {
+function harness({ view = "editor-preview", working = true, latest = true, role = "prompt", history = true, classic = false } = {}) {
   const buffers = [{ id: "prompt", role: "prompt", view: { rightView: view, rightScrollTop: 480, followLatest: true, responseHistoryIndex: history ? 0 : -1 } },
     { id: "document", role: "document", view: { rightView: "editor-preview", rightScrollTop: 72, followLatest: false, responseHistoryIndex: 0 } }];
   const transitions = [], writes = [], sent = [];
@@ -14,7 +14,7 @@ function harness({ view = "editor-preview", working = true, latest = true, role 
     activityTrackingEnabled: working, activityTrackingOwnsWorkingView: false, activityTrackingRequestId: "",
     documentPreviewFollowingEnabled: true, documentPreviewFollowOwner: null, documentPreviewFollowScrolls: new Map(),
     followLatest: latest, queuedLatestResponse: null, responseHistory: history ? [{ id: "old", markdown: "old" }] : [], responseHistoryIndex: history ? 0 : -1,
-    studioUiRefreshUi: { followButton: {} }, followSelect: {}, activityTrackingSelect: {}, documentPreviewFollowSelect: {},
+    studioUiRefreshUi: classic ? null : { followButton: {} }, followSelect: {}, activityTrackingSelect: {}, documentPreviewFollowSelect: {},
     rightView: role === "prompt" ? view : "editor-preview", critiqueViewEl: { scrollTop: role === "prompt" ? 480 : 72, querySelector: () => null },
     selected: role, bufferRecoveryClient: { snapshot: () => ({ activePromptId: "prompt", selectedBufferId: c.selected, buffers }) },
     getStudioSelectedBuffer: () => buffers.find(b => b.id === c.selected), getSelectedHistoryItem: () => c.responseHistory[c.responseHistoryIndex] || null,
@@ -28,10 +28,11 @@ function harness({ view = "editor-preview", working = true, latest = true, role 
     normalizeRightViewValue: value => value, syncRightViewModeOptions() {}, refreshResponseUi() {}, syncActionButtons() {},
     startReplPolling() {}, stopReplPolling() {}, focusReplQuickComposer() {}, requestStudioQuartoPreviewCheck() {},
     clearPreviewJumpHighlight() {}, requestGitChangesSnapshot() {}, captureEditorAsyncConsent: () => ({}), editorAsyncConsentIsCurrent: () => true,
-    HTMLTextAreaElement: class {}, sendMessage: message => sent.push(message), relinquishDocumentPreviewFollowing() {},
+    HTMLTextAreaElement: class {}, sendMessage: message => sent.push(message), relinquishDocumentPreviewFollowing() {}, syncStudioUiRefreshSummaries() {},
   };
   vm.createContext(c);
   vm.runInContext(section("function readActivityTrackingEnabled()", "function readDocumentPreviewFollowingEnabled()"), c);
+  vm.runInContext(section("function setActivityTrackingEnabled(enabled, options)", "function beginTrackedStudioActivity(requestId)"), c);
   vm.runInContext(section("function selectHistoryIndex(index, options)", "function setResponseHistory(items, options)"), c);
   vm.runInContext(section("function setRightView(nextView, options)", "function lineNumbersShouldBeVisible()"), c);
   vm.runInContext(section("function retireStudioBufferSourceView(bufferId)", "function relinquishDocumentPreviewFollowing()"), c);
@@ -117,19 +118,24 @@ for (const response of [false, true]) test("hidden Prompt settles independently 
   assert.equal(h.c.rightView, response ? "preview" : "editor-preview"); assert.equal(h.c.critiqueViewEl.scrollTop, response ? 0 : 480);
 });
 
-test("manual view navigation pauses run options until the next distinct SDK run; Document following remains independent", () => {
+// Oliver, 5 Nov: Follow is one switch. Changing the Prompt's view yourself during a run turns it off,
+// and it stays off; turning it on during a run goes back to Working.
+test("changing the view yourself during a run turns Follow off, and it stays off; Document following is untouched", () => {
   const h = harness(); h.start(); h.c.setRightView("repl"); h.arrive(); h.observe(null);
   assert.equal(h.c.rightView, "repl"); assert.equal(h.c.responseHistoryIndex, 0);
-  assert.equal(h.c.studioRunFollowing.paused, true); assert.match(h.c.studioUiRefreshUi.followButton.textContent, /run paused/);
+  assert.equal(h.c.activityTrackingEnabled, false); assert.equal(h.c.latestResponseFollowingEnabled, false);
+  assert.equal(h.c.studioUiRefreshUi.followButton.textContent, "Follow: off");
+  assert.deepEqual(h.writes.filter(([key]) => key === "working" || key === "latest"), [["working", "off"], ["latest", "off"]], "remembered");
   assert.equal(h.c.documentPreviewFollowingEnabled, true);
-  h.start("run-2"); assert.equal(h.c.rightView, "repl"); assert.equal(h.c.studioRunFollowing.paused, false); // the REPL stays (Oliver, 10 Oct)
-  h.observe(null); h.c.setRightView("markdown"); h.start("run-3"); assert.equal(h.c.rightView, "trace"); assert.equal(h.c.studioRunFollowing.paused, false);
+  h.start("run-2"); assert.equal(h.c.rightView, "repl", "the next run leaves the pane alone too");
+  h.arrive("newer", "run-2"); h.observe(null); assert.equal(h.c.rightView, "repl"); assert.equal(h.c.responseHistoryIndex, 0);
 });
 
-test("manual history selection pauses even without a view transition", () => {
+test("choosing an older response yourself during a run turns Follow off too", () => {
   const h = harness(); h.c.responseHistory.push({ id: "older", markdown: "older" }); h.start();
   h.c.selectHistoryIndex(1, { silent: true }); h.arrive(); h.observe(null);
-  assert.equal(h.c.getSelectedHistoryItem().id, "older"); assert.equal(h.c.rightView, "trace"); assert.equal(h.c.studioRunFollowing.paused, true);
+  assert.equal(h.c.getSelectedHistoryItem().id, "older"); assert.equal(h.c.rightView, "trace");
+  assert.equal(h.c.studioUiRefreshUi.followButton.textContent, "Follow: off");
 });
 
 test("manual Document navigation leaves the Prompt's Run to hand back on its own, and keeps the Document's view", () => {
@@ -148,10 +154,14 @@ test("Off restores a still-owned Working override immediately, including hidden 
   }
 });
 
-test("re-enabling a preference never unpauses a manually navigated run", () => {
-  const h = harness(); h.start(); h.c.setRightView("editor-preview"); h.c.setLatestResponseFollowingEnabled(true);
-  h.c.activityTrackingEnabled = true; h.c.acquireStudioRunWorking(); h.arrive();
-  assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.studioRunFollowing.paused, true);
+test("turning Follow on during a run goes back to Working, then to the response", () => {
+  const h = harness(); h.start(); h.c.setRightView("editor-preview");
+  assert.equal(h.c.studioUiRefreshUi.followButton.textContent, "Follow: off");
+  h.c.setStudioFollowEnabled(true);
+  assert.equal(h.c.rightView, "trace", "back to Working"); assert.equal(h.c.studioUiRefreshUi.followButton.textContent, "Follow: on");
+  h.arrive(); h.observe(null); assert.equal(h.c.rightView, "preview"); assert.equal(h.c.getSelectedHistoryItem().id, "new");
+  // Off outside a run changes nothing on screen.
+  h.c.setStudioFollowEnabled(false); assert.equal(h.c.rightView, "preview"); assert.equal(h.c.studioUiRefreshUi.followButton.textContent, "Follow: off");
 });
 
 test("reconnect does not mistake existing history for a fresh response", () => {
@@ -254,4 +264,66 @@ test("Working persistence stores own view and scroll, not the automatic view; la
   vm.runInContext(section("function bufferRecoveryExtra()", "function getStudioSelectedBuffer()"), h.c);
   assert.equal(h.c.buildWorkspacePersistencePayload().rightView, "editor-preview"); assert.equal(h.c.bufferRecoveryExtra().view.rightScrollTop, 480);
   assert.equal(h.c.rightView, "trace"); assert.equal(h.c.buildWorkspacePersistencePayload().text, "kept");
+});
+
+test("the Follow button is one switch, the Document preview's switch is under View, and nothing says run paused", () => {
+  assert.match(source, /followMenu = makeStudioUiRefreshElement\("button", "studio-refresh-chip studio-follow-button", "Follow: on"\);/);
+  assert.match(source, /followMenu\.addEventListener\("click", \(\) => setStudioFollowEnabled\(!isStudioFollowEnabled\(\)\)\);/);
+  assert.doesNotMatch(source, /Switch this pane automatically to:/);
+  assert.doesNotMatch(source, /run paused/);
+  assert.match(source, /appendStudioUiRefreshMenuSection\(viewMenu\.menu, "Workspace", \[studioPaneLayoutSelect,[\s\S]{0,200}bufferSwitchingEnabled \? documentPreviewFollowSelect : null\]\);/);
+  assert.match(source, /if \(studioUiRefreshUi\?\.followButton\) setStudioFollowEnabled\(!isStudioFollowEnabled\(\)\);\n\s+else setActivityTrackingEnabled\(!activityTrackingEnabled\);/, "the shortcut");
+  assert.match(source, /workspacePersistenceReady = true;\n[\s\S]{0,300}if \(activityTrackingEnabled !== \(latestResponseFollowingEnabled !== false\)\) setStudioFollowEnabled\(true\);/, "a half-on saved setting counts as on");
+});
+
+// Astra, candidate 120: the classic layout (?uiRefresh=0) has the two editors but no Follow switch, so a
+// manual change there pauses only this run, as before, and leaves both preferences on.
+test("in the classic layout a manual view change pauses only this run; the next one follows", () => {
+  const h = harness({ classic: true }); h.start(); h.c.setRightView("markdown"); h.arrive(); h.observe(null);
+  assert.equal(h.c.rightView, "markdown"); assert.equal(h.c.responseHistoryIndex, 0);
+  assert.equal(h.c.studioRunFollowing.paused, true);
+  assert.equal(h.c.activityTrackingEnabled, true); assert.equal(h.c.latestResponseFollowingEnabled, true);
+  assert.deepEqual(h.writes.filter(([key]) => key === "working" || key === "latest"), [], "nothing saved off");
+  h.start("run-2"); assert.equal(h.c.studioRunFollowing.paused, false); assert.equal(h.c.rightView, "trace", "the next run shows Working");
+});
+
+test("in the classic layout a manual history selection pauses only this run too", () => {
+  const h = harness({ classic: true }); h.c.responseHistory.push({ id: "older", markdown: "older" }); h.start();
+  h.c.selectHistoryIndex(1, { silent: true }); h.arrive(); h.observe(null);
+  assert.equal(h.c.getSelectedHistoryItem().id, "older"); assert.equal(h.c.studioRunFollowing.paused, true);
+  assert.equal(h.c.activityTrackingEnabled, true); assert.equal(h.c.latestResponseFollowingEnabled, true);
+  assert.deepEqual(h.writes.filter(([key]) => key === "working" || key === "latest"), [], "nothing saved off");
+  h.start("run-2"); assert.equal(h.c.studioRunFollowing.paused, false); assert.equal(h.c.rightView, "trace", "the next run shows Working");
+});
+
+test("turning Follow off during a run hands Working back to the Prompt's own view, and nothing follows after", () => {
+  const h = harness(); h.start(); assert.equal(h.c.rightView, "trace");
+  h.c.setStudioFollowEnabled(false);
+  assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.critiqueViewEl.scrollTop, 480);
+  h.arrive(); h.observe(null); assert.equal(h.c.rightView, "editor-preview"); assert.equal(h.c.responseHistoryIndex, 0);
+  assert.equal(h.c.studioUiRefreshUi.followButton.textContent, "Follow: off");
+  // With the Document shown, the hidden Prompt gets its own view back and the Document isn't moved.
+  const hidden = harness({ role: "document" }); hidden.start();
+  assert.equal(hidden.c.bufferTransientStates.get("prompt").runFollowingView.rightView, "trace");
+  hidden.c.setStudioFollowEnabled(false); hidden.arrive(); hidden.observe(null);
+  assert.equal(hidden.c.rightView, "editor-preview"); assert.equal(hidden.c.critiqueViewEl.scrollTop, 72, "the Document's own view and scroll");
+  hidden.select("prompt"); assert.equal(hidden.c.rightView, "editor-preview"); assert.equal(hidden.c.critiqueViewEl.scrollTop, 480, "its own scroll");
+  assert.equal(hidden.c.responseHistoryIndex, 0);
+});
+
+test("when the workspace is ready, a saved setting with only one of the two on becomes Follow on", () => {
+  for (const [working, latest] of [[true, false], [false, true], [false, null]]) {
+    const h = harness({ working, latest });
+    h.c.initializePromptRunIndicator = () => {}; h.c.workspacePersistenceReady = false;
+    vm.runInContext(section("      workspacePersistenceReady = true;", "      initializePromptRunIndicator();"), h.c);
+    assert.equal(h.c.activityTrackingEnabled, true, JSON.stringify([working, latest]));
+    assert.equal(h.c.latestResponseFollowingEnabled, true, JSON.stringify([working, latest]));
+    assert.deepEqual(h.writes.filter(([key]) => key === "working" || key === "latest"), [["working", "on"], ["latest", "on"]], "and saved");
+  }
+  const off = harness({ working: false, latest: false }); off.c.workspacePersistenceReady = false;
+  vm.runInContext(section("      workspacePersistenceReady = true;", "      initializePromptRunIndicator();"), off.c);
+  assert.equal(off.c.activityTrackingEnabled, false); assert.equal(off.c.latestResponseFollowingEnabled, false, "both off stays off");
+  const classic = harness({ working: true, latest: false, classic: true }); classic.c.workspacePersistenceReady = false;
+  vm.runInContext(section("      workspacePersistenceReady = true;", "      initializePromptRunIndicator();"), classic.c);
+  assert.equal(classic.c.latestResponseFollowingEnabled, false, "the classic layout keeps its two settings");
 });

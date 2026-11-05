@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 const source = readFileSync(new URL("../client/studio-client.js", import.meta.url), "utf8");
 function fn(name, optional = false) {
   const markers = ["      function " + name + "(", "      async function " + name + "("];
@@ -10,7 +12,7 @@ function fn(name, optional = false) {
   const ends = [source.indexOf("\n      function ", start + 8), source.indexOf("\n      async function ", start + 8)].filter(i => i >= 0);
   return source.slice(start, Math.min(...ends));
 }
-function load(c, names) { vm.createContext(c); vm.runInContext(names.map(n => fn(n, n.startsWith("readerReturn") || n.startsWith("applyStudioReader") || n.startsWith("clearStudioReader") || n.startsWith("refuseStudioReader"))).join("\n"), c); }
+function load(c, names) { vm.createContext(Object.assign(c, { setTextIfChanged })); vm.runInContext(names.map(n => fn(n, n.startsWith("readerReturn") || n.startsWith("applyStudioReader") || n.startsWith("clearStudioReader") || n.startsWith("refuseStudioReader"))).join("\n"), c); }
 function returnHarness(selected = 1) {
   const frames = [], buffer = { id: "prompt", role: "prompt" };
   const pane = { scrollTop: 0, scrollLeft: 0, isConnected: true, classList: { add() {}, remove() {} }, querySelectorAll: () => [] };

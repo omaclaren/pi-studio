@@ -243,7 +243,7 @@ test("Studio exposes a global mnemonic shortcut for toggling activity following"
   const selectTag = indexSource.match(/<select id="activityTrackingSelect"[^>]*>/)?.[0] || "";
   assert.match(selectTag, /aria-keyshortcuts="Meta\+Alt\+A Control\+Alt\+A"/);
   assert.match(selectTag, /Shortcut: Cmd\/Ctrl\+Option\/Alt\+A\./);
-  assert.match(indexSource, /<dt>Cmd\/Ctrl\+Option\/Alt\+A<\/dt><dd>Toggle Follow activity in the main editable Studio workspace<\/dd>/);
+  assert.match(indexSource, /<dt>Cmd\/Ctrl\+Option\/Alt\+A<\/dt><dd>Turn Follow on or off in the main editable Studio workspace<\/dd>/);
 
   const shortcutStart = clientSource.indexOf("const isActivityTrackingShortcut");
   const shortcutEnd = clientSource.indexOf("const isContentFocusShortcut", shortcutStart);
@@ -262,7 +262,8 @@ test("Studio exposes a global mnemonic shortcut for toggling activity following"
   assert.ok(triggerStart >= 0 && triggerEnd > triggerStart, "expected Follow activity shortcut action");
   const triggerSource = clientSource.slice(triggerStart, triggerEnd);
 
-  function runTrigger({ editorOnly = false, watched = false, enabled = false, modal = false } = {}) {
+  // workspace: the full workspace's one Follow switch (Oliver, 5 Nov), which the shortcut turns on or off.
+  function runTrigger({ editorOnly = false, watched = false, enabled = false, modal = false, workspace = false } = {}) {
     const context = {};
     vm.runInNewContext(`
       const isEditorOnlyMode = ${JSON.stringify(editorOnly)};
@@ -270,6 +271,9 @@ test("Studio exposes a global mnemonic shortcut for toggling activity following"
       let activityTrackingEnabled = ${JSON.stringify(enabled)};
       const updates = [];
       const statuses = [];
+      const studioUiRefreshUi = ${JSON.stringify(workspace ? { followButton: {} } : null)};
+      function isStudioFollowEnabled() { return activityTrackingEnabled; }
+      function setStudioFollowEnabled(value) { activityTrackingEnabled = Boolean(value); updates.push(["follow", activityTrackingEnabled]); }
       function studioModalBlocksDraftAction() { return ${JSON.stringify(modal)}; }
       function setActivityTrackingEnabled(value) {
         activityTrackingEnabled = Boolean(value);
@@ -293,6 +297,8 @@ test("Studio exposes a global mnemonic shortcut for toggling activity following"
     updates: [true],
     statuses: [],
   });
+  assert.deepEqual(runTrigger({ workspace: true, enabled: true }), { returned: true, enabled: false, updates: [["follow", false]], statuses: [] });
+  assert.deepEqual(runTrigger({ workspace: true }), { returned: true, enabled: true, updates: [["follow", true]], statuses: [] });
   assert.deepEqual(runTrigger({ enabled: true }), {
     returned: true,
     enabled: false,
@@ -336,4 +342,13 @@ test("Studio editor controls use pane-local component breakpoints", () => {
   assert.doesNotMatch(rightHeaderBlock, /#leftSectionHeader|\.studio-refresh-toolbar-main/);
 
   assert.doesNotMatch(css, /@container \(max-width: 840px\)|@media \(max-width: 1280px\)/);
+});
+
+test("a Working step's sections line up under its number, not its triangle", () => {
+  const css = readFileSync(new URL("../client/studio.css", import.meta.url), "utf8");
+  // The step line's 14px padding, its 9px triangle and its 7px gap.
+  assert.match(css, /details\.trace-step > summary\.trace-card-header \{ padding: 9px 14px; \}/);
+  assert.match(css, /details\.trace-step > summary\.trace-card-header::before \{ content: "▶"; flex: none; width: 1em; color: var\(--muted\); font-size: 9px; \}/);
+  assert.match(css, /body\.studio-ui-refresh \.trace-card-header \{\n\s+gap: 7px;/);
+  assert.match(css, /details\.trace-step > \.trace-step-body \{ padding-left: calc\(14px \+ 9px \+ 7px\); \}/);
 });

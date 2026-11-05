@@ -4,6 +4,8 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import puppeteer from "puppeteer-core";
 import { dedicatedTestBrowser } from "./dedicated-test-browser.js";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 
 // Oliver, 14 Oct (Astra's report): between clicking Run and Stop, Run flashed hollow, and the long
 // inline status "Studio: running editor text…" let Queue steering push the tools to a second row
@@ -18,7 +20,7 @@ const extract = name => {
 };
 
 test("a Run waiting for Pi says Starting… beside Run; critique and other busy work keep their wording", () => {
-  const c = vm.createContext({ studioRuntimeActivity: null, wsState: "Submitting", uiBusy: true, pendingKind: "direct", studioStopRequestedRunId: null,
+  const c = vm.createContext({ setTextIfChanged, studioRuntimeActivity: null, wsState: "Submitting", uiBusy: true, pendingKind: "direct", studioStopRequestedRunId: null,
     getStudioBusyStatus: kind => "Studio: " + kind + "…", Date });
   vm.runInContext(extract("getStudioRuntimeStatusText"), c);
   const text = (values) => { Object.assign(c, values); return c.getStudioRuntimeStatusText(); };
@@ -45,7 +47,7 @@ test("click → request started → running: no extra toolbar row comes and goes
   const testBrowser = dedicatedTestBrowser(), executablePath = testBrowser.path;
   assert(executablePath, testBrowser.message);
   const names = ["getAbortablePendingKind", "syncRunAndCritiqueButtons", "getStudioRuntimeStatusText", "syncStudioRuntimePresentation", "applyStudioRuntimeActivity",
-    "getStudioActionLabel", "formatQueuedSteeringSuffix", "getStudioBusyStatus", "syncPromptRunIndicator", "beginUiAction", "setBusy"];
+    "getStudioActionLabel", "formatQueuedSteeringSuffix", "getStudioBusyStatus", "syncPromptRunIndicator", "beginUiAction", "setBusy", "setTextIfChanged"];
   const clickStart = source.indexOf('      sendRunBtn.addEventListener("click", (event) => {'), clickEnd = source.indexOf("\n      if (queueSteerBtn)", clickStart);
   const startedStart = source.indexOf('        if (message.type === "request_started") {'), startedEnd = source.indexOf('        if (message.type === "request_queued")', startedStart);
   assert(clickStart > 0 && clickEnd > clickStart && startedStart > 0 && startedEnd > startedStart);

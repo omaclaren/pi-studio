@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+// Studio's setTextIfChanged (client/studio-client.js), which the sections run here call.
+const setTextIfChanged = (element, text) => { if (element && element.textContent !== text) element.textContent = text; };
 
 // Actual production constructors/state helpers, using a small DOM/API seam.
 // This verifies wiring/ownership, NOT native browser geometry or rendered colour.
@@ -57,7 +59,7 @@ function harness({ only = false, watched = false } = {}) {
   }
   doc = { body: new Node("body"), createElement: tag => new Node(tag), createElementNS: (_, tag) => new Node(tag), getElementById: id => ids.get(id), activeElement: null,
     addEventListener: (type, fn) => (docEvents[type] ||= []).push(fn), querySelectorAll: selector => doc.body.querySelectorAll(selector) };
-  const c = vm.createContext({ document: doc, Element: Node, HTMLElement: Node,
+  const c = vm.createContext({ setTextIfChanged, document: doc, Element: Node, HTMLElement: Node,
     window: { innerWidth: 1300, innerHeight: 900, addEventListener() {}, setTimeout() {} }, Event: class { constructor(type, values) { this.type = type; Object.assign(this, values); } },
     studioUiRefreshEnabled: true, studioUiRefreshUi: null, bufferSwitcherUi: null, bufferBindingInProgress: false,
     bufferSwitchingEnabled: !only && !watched, isEditorOnlyMode: only, isWatchedFilePreview: watched, documentHostingEnabled: true,
@@ -120,7 +122,7 @@ test("terminal label drops only the visible terminal-brand component, keeping fo
   const start = index.indexOf("function buildTerminalSessionLabel("), end = index.indexOf("function buildTerminalSessionDetail(", start);
   const body = index.slice(start, end).replace("cwd: string, sessionName?: string): string", "cwd, sessionName)").replace("const parts: string[]", "const parts");
   assert.doesNotMatch(body, /TERM_PROGRAM/);
-  const c = vm.createContext({ basename: path => path.split("/").at(-1), process: { cwd: () => "/folder", env: { TERM_PROGRAM: "Ghostty" } } });
+  const c = vm.createContext({ setTextIfChanged, basename: path => path.split("/").at(-1), process: { cwd: () => "/folder", env: { TERM_PROGRAM: "Ghostty" } } });
   vm.runInContext(body, c);
   assert.equal(c.buildTerminalSessionLabel("/repo/folder", "Named session"), "Named session · folder");
   assert.equal(c.buildTerminalSessionLabel("/repo/folder"), "folder");
@@ -421,7 +423,7 @@ for (const mode of [{ only: true }, { only: true, watched: true }]) test("actual
 });
 
 function sideHarness() {
-  const c = vm.createContext({ sideQuestionUi: { draft: "Question", thinking: "off", focusMode: "auto", includeConversation: false, gitContext: true, customPath: "/pending", webSearch: false, toolIds: [] },
+  const c = vm.createContext({ setTextIfChanged, sideQuestionUi: { draft: "Question", thinking: "off", focusMode: "auto", includeConversation: false, gitContext: true, customPath: "/pending", webSearch: false, toolIds: [] },
     sideQuestionState: null, sideQuestionNextSettings: null, sideQuestionNextOptionsOpen: false, sideQuestionPreferredThinking: "off", sideQuestionWebSearchAvailable: false, sideQuestionContextGrantPending: false,
     sideQuestionHelpers: { getDefaultStudioSideQuestionGatherScope: () => "repo" }, getEffectiveSavePath: () => "", sourceState: {}, getCurrentResourceDirValue: () => "",
     getSideQuestionContextSummary: () => ({ scope: "repo", attachmentText: "LIVE document", relatedFilesText: "LIVE repository", gitContextText: "LIVE Git" }),

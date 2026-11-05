@@ -4,6 +4,14 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- **Follow** is one switch. On, a run shows Working while Pi works, then the new response; off, Studio leaves the Prompt's right pane alone. Changing that pane's view yourself during a run turns Follow off, and it stays off until you turn it on again, with the button or Cmd/Ctrl+Option/Alt+A. Turned on during a run, it goes back to Working. "Run paused" is gone. **Document preview**, which shows the Document's preview when you select the Document, is now under View. A saved setting with only Working or only the latest response on counts as on.
+- In Working, a step's sections, such as Input and Output, line up under the step's number rather than its triangle, so they read as the step's.
+
+### Fixed
+- In Muxy and other WebKit browsers, a response scrolled to its very bottom no longer moves up a little as you type in the Prompt. Studio kept rewriting the footer, the response's buttons and other labels with the same text, which can make WebKit lay the page out again; it now writes a label only when its text changes.
+- In Muxy and other WebKit browsers, flicking a pane to its top no longer flashes a recovery warning ("Invalid scroll position") in the footer and nudges the panes. WebKit reports a negative position while the pane bounces past its top, and saving it failed; Studio now saves it as the top.
+
 ## [0.11.11] — 2026-11-04
 
 ### Added
