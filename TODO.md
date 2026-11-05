@@ -1,6 +1,6 @@
 # TODO
 
-See [ROADMAP.md](ROADMAP.md) for the current status: `0.11.12` is released, and Studio is in a feature freeze from `0.11.9`, for use in normal work. [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the wider buffer architecture.
+See [ROADMAP.md](ROADMAP.md) for the current status: `0.11.13` is released, and Studio is in a feature freeze from `0.11.9`, for use in normal work. [BUFFER-DESIGN.md](BUFFER-DESIGN.md) records the wider buffer architecture.
 
 ## During the freeze (from 0.11.9, 3 Nov 2026)
 
@@ -8,7 +8,7 @@ Fix only failures in normal use, lost data, effects on other people's processes 
 
 Exception (4 Nov, Oliver): candidate 119, an opt-in `PI_STUDIO_URL_FILE` for programs that open Studio ([#7](https://github.com/omaclaren/pi-studio/issues/7)), and `/studio --copy-url` for people. Then candidate 120 (5 Nov, Oliver): Follow as one switch, and a WebKit scroll fix.
 
-Known limits at `0.11.12`, none of them a hold:
+Known limits at `0.11.13`, none of them a hold:
 
 - [ ] Homebrew bash 5.3: Ctrl+C while code runs leaves Studio waiting for that send. Earlier releases did the same; `/bin/bash` 3.2 and zsh complete. Catching SIGINT in the shell would fix it; decide whether Studio should set a trap in a person's shell.
 - [ ] zsh in a narrow pane (about 40 columns or less): the record keeps Studio's loader line before the output. The output cleaner compares at most eight rows; match this send's loader whatever its length, and add a real narrow-zsh test.

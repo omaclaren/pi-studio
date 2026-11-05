@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.13] — 2026-11-06
+
 ### Fixed
 - A workaround for a crash in Muxy 2.3.0's browser on Studio's tab title. Muxy can crash on some non-ASCII characters in a title, and Studio's title had them, such as the ellipsis in "Running…". Studio's tab titles are now plain ASCII, with " | " between their parts: "…" becomes "...", "·" and "—" within a part become "-", "●" becomes "*", "π" becomes "pi", accents are dropped, and each remaining run of other characters becomes "?". This applies to Studio's pages, the tab that waits for a new Studio tab, and the image viewer. Only titles change; page content keeps its characters. Files that open as themselves in a tab, such as a PDF, keep the title the browser gives them.
 
