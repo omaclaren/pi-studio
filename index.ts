@@ -135,6 +135,7 @@ import { buildStudioHostingBootstrapState, createStudioBufferServerStore, STUDIO
 import { createStudioTurns, readStudioEditorMode, resolveStudioEditorFlags, writeStudioEditorMode } from "./shared/studio-editor-mode.js";
 import { createStudioUrlFile, STUDIO_URL_FILE_ENV } from "./shared/studio-url-file.js";
 import { copyStudioUrl } from "./shared/studio-copy-url.js";
+import { toStudioAsciiTitle } from "./shared/studio-title.js";
 import { canonicalStudioDocumentPath, studioDocumentPathsReferToSameFile } from "./shared/studio-document-paths.js";
 import { resolveStudioHostingPage, studioHostingCommandError, studioHostingLocalLinkError } from "./shared/studio-document-entrypoints.js";
 import { systemThemeLacksTrueColor } from "./shared/studio-system-theme.js";
@@ -13716,7 +13717,7 @@ function buildStudioHtml(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>${appTitle}</title>
+  <title>${toStudioAsciiTitle(appTitle)}</title>
   <link rel="icon" href="${faviconHref}" type="image/svg+xml" />
   <style>
     :root {

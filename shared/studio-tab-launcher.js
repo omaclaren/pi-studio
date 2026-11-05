@@ -55,12 +55,13 @@ export function buildStudioPendingPage(options) {
 
   const kindLabel = kind === "document" ? "document" : (kind === "export" ? "export" : "preview");
   const helperQuery = new URLSearchParams({ token }).toString();
+  // The title stays ASCII (shared/studio-title.js); the heading keeps its ellipsis.
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Preparing Studio tab…</title>
+  <title>Preparing Studio tab...</title>
   <style nonce="${escapeHtmlAttribute(nonce)}">
     :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: Canvas; color: CanvasText; }

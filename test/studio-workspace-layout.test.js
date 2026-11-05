@@ -111,10 +111,10 @@ function harness({ only = false, watched = false } = {}) {
 test("Document window titles are filename-first, preserve authoritative prefixes and session identity, and add no draft marker", () => {
   const f = harness({ only: true });
   Object.assign(f.c, { modelLabel: "Model", terminalSessionLabel: "Session · folder", getDynamicTitlePrefix: () => "Disconnected", faviconLinkEl: null });
-  load(f.c, "updateDocumentTitle"); f.c.updateDocumentTitle();
-  assert.equal(f.doc.title, "Disconnected · NOTES.md — π Studio · Session · folder · Model");
+  load(f.c, "toStudioAsciiTitle", "updateDocumentTitle"); f.c.updateDocumentTitle();
+  assert.equal(f.doc.title, "Disconnected | NOTES.md - pi Studio | Session - folder | Model");
   f.c.sourceState = { source: "response" }; f.c.updateDocumentTitle();
-  assert.equal(f.doc.title, "Disconnected · Draft — π Studio · Session · folder · Model");
+  assert.equal(f.doc.title, "Disconnected | Draft - pi Studio | Session - folder | Model");
 });
 
 test("terminal label drops only the visible terminal-brand component, keeping folder and session", () => {

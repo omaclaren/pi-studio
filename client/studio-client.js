@@ -4896,6 +4896,23 @@
         return "data:image/svg+xml," + encodeURIComponent(svg);
       }
 
+      // shared/studio-title.js explains: Muxy 2.3.0's browser can crash on a non-ASCII tab title.
+      // test/studio-title.test.js checks this copy against that one.
+      function toStudioAsciiTitle(value) {
+        return String(value ?? "")
+          .replace(/…/g, "...")
+          .replace(/[·•–—−]/g, "-")
+          .replace(/●/g, "*")
+          .replace(/[‘’]/g, "'")
+          .replace(/[“”]/g, "\"")
+          .replace(/π/g, "pi")
+          .normalize("NFKD")
+          .replace(/[̀-ͯ]/g, "")
+          .replace(/\s+/g, " ")
+          .replace(/[^\x20-\x7e]+/g, "?")
+          .trim();
+      }
+
       function updateDocumentTitle() {
         const modelText = modelLabel && modelLabel.trim() ? modelLabel.trim() : "none";
         const terminalText = terminalSessionLabel && terminalSessionLabel.trim() ? terminalSessionLabel.trim() : "unknown";
@@ -4907,7 +4924,7 @@
         const titlePrefix = getDynamicTitlePrefix();
         if (titlePrefix) titleParts.unshift(titlePrefix);
 
-        const nextTitle = titleParts.join(" · ");
+        const nextTitle = toStudioAsciiTitle(titleParts.join(" | "));
         if (document.title !== nextTitle) {
           document.title = nextTitle;
         }
