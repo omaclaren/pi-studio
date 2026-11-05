@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.12] — 2026-11-05
+
 ### Changed
 - **Follow** is one switch. On, a run shows Working while Pi works, then the new response; off, Studio leaves the Prompt's right pane alone. Changing that pane's view yourself during a run turns Follow off, and it stays off until you turn it on again, with the button or Cmd/Ctrl+Option/Alt+A. Turned on during a run, it goes back to Working. "Run paused" is gone. **Document preview**, which shows the Document's preview when you select the Document, is now under View. A saved setting with only Working or only the latest response on counts as on.
 - In Working, a step's sections, such as Input and Output, line up under the step's number rather than its triangle, so they read as the step's.
