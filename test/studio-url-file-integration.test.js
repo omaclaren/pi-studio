@@ -283,7 +283,9 @@ test("switching mode from the page writes the URL it lands on", { timeout: 120_0
 				const result = new Promise((resolveResult) => socket.on("message", (raw) => { const message = JSON.parse(String(raw)); if (message.type === "editor_mode_switch_result") resolveResult(message); }));
 				socket.send(JSON.stringify({ type: "editor_mode_switch_request", requestId: `switch-${mode}`, mode, text: "", sideQuestions: true }));
 				assert.equal((await result).ok, true);
-				assert.ok(await waitFor(() => existsSync(urlFile(root)) && stored(root) !== before), `switching to ${mode} wrote a new URL`);
+				// The switch stops Studio, which removes the file, then writes the new URL: the file
+				// can go between an exists check and the read, so a missing file is "not yet".
+				assert.ok(await waitFor(() => { try { return stored(root) !== before; } catch { return false; } }), `switching to ${mode} wrote a new URL`);
 				const after = stored(root);
 				assert.equal(await fetchStatus(after), 200);
 				assert.equal(new URL(after).searchParams.has("hostedWorkspace"), mode === "dual");
