@@ -50,7 +50,7 @@ test("the payload is the latest finished reply and up to three prompts before it
 	assert.deepEqual(JSON.parse(s.buildStudioNextPromptPayload(project(entries), "Show me an example").payload).previousSuggestion, "Show me an example");
 });
 
-test("no suggestion without a finished reply, after an approval ask, or when the latest prompt is remote", () => {
+test("no suggestion without a finished reply or when the latest prompt is remote", () => {
 	const s = server(), skip = entries => s.buildStudioNextPromptPayload(project(entries)).skip;
 	assert.equal(skip([]), "no-reply");
 	assert.equal(skip([user("hi")]), "no-reply", "no reply yet");
@@ -58,11 +58,45 @@ test("no suggestion without a finished reply, after an approval ask, or when the
 	assert.equal(skip([user("hi"), reply("calling", "stop", [{ type: "toolCall", id: "1", name: "bash", arguments: {} }])]), "no-reply");
 	assert.equal(skip([user("hi"), reply("   ")]), "no-reply");
 	assert.equal(skip([reply("orphan")]), "no-reply", "no prompt before it");
-	assert.equal(skip([user("tidy up"), reply("I found two stale branches. Would you like me to delete them?")]), "approval");
-	assert.equal(skip([user("tidy up"), reply("Shall I push the fix to main?")]), "approval");
 	assert.equal(skip([user("[telegram] status?"), reply("All good.")]), "no-reply", "a Telegram exchange");
 	const local = s.buildStudioNextPromptPayload(project([user("[telegram] status?"), reply("ok"), user("now the docs"), reply("Docs updated.")]));
 	assert.deepEqual(JSON.parse(local.payload).userMessages, ["now the docs"], "an earlier remote prompt is left out");
+});
+
+// The reply Oliver got "the last reply asks for your approval" for (10 Nov): two questions, the first "Should I … or …?".
+const RESEARCH_REPLY = `## Next
+
+The cheapest informative step is to run the existing probe on the first group. Two-state-rad likely needs a different idea, and I'd keep it as a held-out case. Two questions for you:
+- Should I change the 1b reference point or keep the special point as a documented case?
+- Should the two sampled maps move to non-uniform times?
+
+Everything is in \`notes/2026-11-05-iir-baseline.md\`, with outputs and checks in \`experiments/iir-baseline/\`.`;
+const APPROVAL_ASKS = [RESEARCH_REPLY, "I found two stale branches. Would you like me to delete them?", "Shall I push the fix to main?",
+	"May I push the commit to origin?", "Can I publish version 0.3.1?", "Do you want me to send the draft?", "Please confirm: delete the temporary directory?",
+	"Can I have your approval to send this draft?"];
+
+test("a reply that asks for approval goes to the model like any other, as in pi-next 3787e97 (Oliver, 10 Nov)", async () => {
+	for (const ask of APPROVAL_ASKS) {
+		const entries = project([user("Let's decide the next step."), reply(ask)]);
+		let s = server(() => answer("Yes, run the existing probe on the first group."));
+		assert.deepEqual(JSON.parse(s.buildStudioNextPromptPayload(entries).payload), { userMessages: ["Let's decide the next step."], assistantReply: ask });
+		assert.deepEqual({ ...(await s.runStudioNextPromptSuggestion({ model: { provider: "test", id: "m" } }, entries, {})) }, { suggestion: "Yes, run the existing probe on the first group." }, ask);
+		assert.equal(s.calls.length, 1, "the model is asked");
+		// The model may still decline, and Studio then says so.
+		s = server(() => answer("NO_SUGGESTION"));
+		assert.match((await s.runStudioNextPromptSuggestion({ model: { provider: "test", id: "m" } }, entries, {})).message, /nothing specific follows/);
+	}
+	// A const in the script isn't a property of its context, so it is read by name.
+	assert.equal(vm.runInContext('Object.hasOwn(STUDIO_NEXT_PROMPT_SKIP_MESSAGES, "approval")', server()), false);
+	assert.doesNotMatch(index, /asks for your approval|manufacture consent|If the assistant is asking for permission/);
+});
+
+test("the system prompt is pi-next's, with Studio's line for another suggestion", () => {
+	const prompt = vm.runInContext("STUDIO_NEXT_PROMPT_SYSTEM_PROMPT", server()).split("\n");
+	assert.equal(prompt.length, 6);
+	assert.equal(prompt[2], "Replies to approval questions are allowed: the user might agree, decline, add a condition, or choose among the offered options. Predict their likely response from the exchange without defaulting to agreement or refusal. Name the action or option when a bare yes or no would be ambiguous.");
+	assert.equal(prompt[3], "Do not invent unrelated goals, facts or preferences, or give unsolicited advice. Do not suggest retrying or continuing failed or deliberately interrupted work. If no specific useful continuation is supported, return exactly NO_SUGGESTION rather than a generic 'continue' or a new topic.");
+	assert.match(prompt[4], /^If the JSON includes previousSuggestion/);
 });
 
 test("long or escape-heavy text is clipped to the context limit and stays valid JSON", () => {

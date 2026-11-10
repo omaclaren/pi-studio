@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Changed
+- With the Prompt empty, **Suggest** now offers a next prompt when Pi's last reply asks you a question, such as "Should I change X or keep Y?" or "Shall I push it?". Before, Studio answered "No suggestion: the last reply asks for your approval". The suggestion can agree, decline, add a condition or choose one of the options, and it names the action where a bare yes or no would be unclear. **Insert** still puts it in the Prompt without running it. pi-next makes the same change.
+
 ## [0.11.13] — 2026-11-06
 
 ### Fixed
