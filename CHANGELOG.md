@@ -4,6 +4,11 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.15] — 2026-11-11
+
+### Fixed
+- A Python cell's record and result no longer start with the `exec(open(…))` line Studio types to run it when IPython 9 or Python's own REPL wraps that line across rows, as they do in a pane narrower than the line. IPython 9 starts each further row with `⋮`, and Python 3.13 and later end each full row with `\`. Studio recognised only IPython 8's `...:`. pi-repl 0.12.2 makes the same fix.
+
 ## [0.11.14] — 2026-11-11
 
 ### Changed
