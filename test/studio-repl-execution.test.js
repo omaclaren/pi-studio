@@ -153,6 +153,24 @@ test("output cleanup removes this submission's loader echo once, including IPyth
 	assert.ok(Date.now() - started < 1_000, "a long output row doesn't stall cleanup");
 });
 
+test("output cleanup removes an echo wrapped by IPython 9 or Python 3.13's REPL", () => {
+	// A record from IPython 9.18 in an 80-column pane: the prompt was in the pane before the send.
+	const recorded = 'exec(open("/tmp/pi-rc-jta4ib/26f519350530-766a4ad3d44cecff.py", encoding="utf-8").read(), globals())';
+	assert.equal(cleanStudioReplOutput('exec(open("/tmp/pi-rc-jta4ib/26f519350530-766a4ad3d44cecff.py", encoding\n      ⋮ ="utf-8").read(), globals())\nPython: 3.12\nIn [3]:', { submissionLine: recorded }), "Python: 3.12");
+	// Captured from 80-column tmux panes with capture-pane -J.
+	const loader = 'exec(open("pi-rc-x/0b42110025e9-269441756caca499.py", encoding="utf-8").read(), globals())';
+	const echoes = {
+		"IPython 9": ['In [2]: exec(open("pi-rc-x/0b42110025e9-269441756caca499.py", encoding="utf-8").', "      ⋮ read(), globals())"],
+		"IPython 8": ['In [2]: exec(open("pi-rc-x/0b42110025e9-269441756caca499.py", encoding="utf-8").', "   ...: read(), globals())"],
+		"Python 3.14": ['>>> exec(open("pi-rc-x/0b42110025e9-269441756caca499.py", encoding="utf-8").rea\\', `d(), globals())${" ".repeat(65)}`],
+	};
+	for (const [frontEnd, echo] of Object.entries(echoes)) {
+		assert.equal(cleanStudioReplOutput([...echo, "hello", ">>>"].join("\n"), { submissionLine: loader }), "hello", frontEnd);
+		const other = loader.replace("0b42110025e9", "1c53221136fa");
+		assert.equal(cleanStudioReplOutput([...echo, "hello"].join("\n"), { submissionLine: other }), [...echo, "hello"].join("\n").replace(/[\t ]+$/gm, ""), `${frontEnd}: another submission's echo is output`);
+	}
+});
+
 test("output cleanup keeps prompt-looking output and removes one trailing prompt once finished", () => {
 	assert.equal(cleanStudioReplOutput(`${py}\n>>>\n>>>`, { submissionLine: py, completed: true }), ">>>");
 	assert.equal(cleanStudioReplOutput(`${py}\na>\nx>\n>>>`, { submissionLine: py }), "a>\nx>");

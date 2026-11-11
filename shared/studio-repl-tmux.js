@@ -211,7 +211,9 @@ const compact = (text) => text.replace(/\s+/g, "");
 /**
  * Remove this submission's loader echo from the start of the lines, once. The
  * loader names a private file with a random token, so only this submission's
- * echo matches. IPython can wrap a long echo onto "...:" continuation rows.
+ * echo matches. A runtime's line editor can wrap a long echo itself, so tmux's
+ * -J can't rejoin the rows: IPython 8 starts each further row with "...:",
+ * IPython 9 with "⋮", and Python 3.13's REPL ends each full row with "\".
  *
  * @param {string[]} lines
  * @param {string} submissionLine
@@ -237,21 +239,28 @@ function removeLoaderEcho(lines, submissionLine, anyPrefix, scoped = null) {
 	if (first.length > 2048) return false;
 	const want = compact(submissionLine);
 	const head = compact(submissionLine.slice(0, 12));
+	// Add a row's text, without a "\" wrap mark where the loader has none.
+	const extend = (/** @type {string} */ joined, /** @type {string} */ row) => {
+		const piece = compact(row);
+		if (want.startsWith(joined + piece)) return joined + piece;
+		if (piece.endsWith("\\") && want.startsWith(joined + piece.slice(0, -1))) return joined + piece.slice(0, -1);
+		return undefined;
+	};
 	for (let start = 0; start < first.length; start += 1) {
-		const piece = compact(first.slice(start));
-		if (!piece.startsWith(head) || !want.startsWith(piece) || !prefixOk(start)) continue;
-		if (piece === want) {
+		if (!compact(first.slice(start)).startsWith(head) || !prefixOk(start)) continue;
+		let joined = extend("", first.slice(start));
+		if (joined === undefined) continue;
+		if (joined === want) {
 			lines.shift();
 			return true;
 		}
-		let joined = piece;
 		for (let row = 1; row < Math.min(lines.length, 8); row += 1) {
-			joined += compact((lines[row] ?? "").replace(/^\s*\.\.\.:?/, ""));
+			joined = extend(joined, (lines[row] ?? "").replace(/^\s*(?:\.\.\.:?|⋮)/, ""));
+			if (joined === undefined) return false;
 			if (joined === want) {
 				lines.splice(0, row + 1);
 				return true;
 			}
-			if (!want.startsWith(joined)) return false;
 		}
 		return false;
 	}
