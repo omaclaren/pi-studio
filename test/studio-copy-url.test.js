@@ -46,3 +46,28 @@ test("/studio --copy-url copies the URL --status prints, with Pi's own clipboard
 	assert.match(server, /if \(trimmed === "copy-url" \|\| trimmed === "--copy-url"\) \{\n\t+const state = serverState;\n\t+const result = await copyStudioUrl\(\{ mode: ctx\.mode, running: Boolean\(state\), url: state && studioMainUrlReady\(\) \? currentFullStudioUrl\(state\) : null, copy: copyToClipboard \}\);/);
 	assert.match(server, /\/studio --copy-url  Copy the running Studio's URL to the clipboard/, "the help names it");
 });
+
+// /studio --no-browser --copy-url (Oliver, 12 Nov): start Studio without a browser and copy the URL
+// it prints, to paste into a browser pane that's already open. --copy-url never opens a browser.
+test("a launch with --no-browser --copy-url copies the URL it prints, under the same limits", () => {
+	const server = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+	const parser = server.slice(server.indexOf("function parseStudioLaunchOpenFlags("), server.indexOf("function shouldAutoOpenStudioBrowser("));
+	assert.match(parser, /if \(token === "--copy-url"\) \{\n\t+copyUrl = true;/);
+	assert.match(parser, /if \(copyUrl && !noBrowser\) \{\n\t+return \{[^}]*error: "Add --no-browser to --copy-url, or run \/studio --copy-url for the running Studio's URL\." \};/);
+	assert.match(parser, /\.\.\.\(copyUrl \? \{ copyUrl \} : \{\}\) \};\n\}/);
+	assert.match(server, /const copyLaunchedStudioUrl = async \(url: string, flags: StudioLaunchFlags, ctx: ExtensionCommandContext\) => \{\n\t+if \(!flags\.copyUrl\) return;\n\t+const result = await copyStudioUrl\(\{ mode: ctx\.mode, running: true, url, copy: copyToClipboard \}\);\n\t+ctx\.ui\.notify\(result\.message, result\.ok \? "info" : "warning"\);/);
+	assert.match(server, /\/studio --no-browser --copy-url  Start Studio without a browser and copy its URL/, "the help names it");
+});
+
+test("every launch that prints a URL to the command's terminal offers it to --copy-url", () => {
+	const server = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+	const printed = [...server.matchAll(/\bctx\.ui\.notify\(`Studio URL: \$\{(\w+)\}`, "info"\);/g)];
+	assert.equal(printed.length, 6, "the launches that print Studio URL");
+	for (const match of printed) {
+		const after = server.slice(match.index, match.index + 1200);
+		assert.match(after, new RegExp(`await copyLaunchedStudioUrl\\(${match[1]}, (?:flags|launchOpenFlags), ctx\\);`), `after the URL printed at ${match.index}`);
+	}
+	// The read-only PDF preview prints its URL in its own line.
+	assert.match(server, /ctx\.ui\.notify\(`Read-only PDF preview[^\n]*\n[^\n]*\n\t+if \(hint\) ctx\.ui\.notify\(hint, "info"\);\n\t+await copyLaunchedStudioUrl\(url, launchOpenFlags, ctx\);/);
+	assert.equal(server.split("await copyLaunchedStudioUrl(").length - 1, 7);
+});

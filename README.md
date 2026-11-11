@@ -68,6 +68,7 @@ Or from GitHub, `pi install https://github.com/omaclaren/pi-studio`, or once wit
 | `/studio --listen-all` | Listen on all interfaces, for containers ([see below](#network-and-ssh)) |
 | `/studio --status`, `--stop` | Show the server's status, or stop it |
 | `/studio --copy-url` | Copy the running Studio's URL, for a terminal too narrow to show it whole. Over SSH, Pi also sends it to your terminal's clipboard (OSC 52), which works if the terminal allows it; set `PI_CLIPBOARD_OSC52=1` where Pi can't tell it's remote, as in some tmux sessions |
+| `/studio --no-browser --copy-url` | Start Studio without a browser and copy its URL, to paste into a browser that's already open, such as a Muxy browser pane |
 | `/studio-replace` | Replace the open Studio view. In dual editor mode, move it to a new tab here |
 | `/studio-editor-only [file]` | Open an extra editor tab (single editor mode) |
 | `/studio-current <file>` | Load a file into the open Studio tab (single editor mode) |

@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Added
+- `/studio --no-browser --copy-url` starts Studio without opening a browser and copies its URL, so you can paste it into a browser you already have open, such as a Muxy browser pane beside Pi. It works with a file too: `/studio notes.md --no-browser --copy-url`. `/studio --copy-url` on its own still copies the running Studio's URL without starting one. Copying needs Pi's terminal interface, as before.
+
 ## [0.11.15] — 2026-11-11
 
 ### Fixed

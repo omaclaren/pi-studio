@@ -13255,6 +13255,8 @@ interface StudioLaunchFlags {
 	listenAll: boolean;
 	port?: number;
 	editorMode?: "single" | "dual";
+	/** With --no-browser: copy the URL this launch prints (Oliver, 12 Nov). */
+	copyUrl?: boolean;
 	error?: string;
 }
 
@@ -13264,6 +13266,7 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 	const remaining: string[] = [];
 	let openRemoteBrowser = false;
 	let noBrowser = false;
+	let copyUrl = false;
 	let watchPdf = false;
 	let listenAll = false;
 	let port: number | undefined;
@@ -13281,6 +13284,10 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 		}
 		if (token === "--no-browser" || token === "--no-open" || token === "--no-open-browser") {
 			noBrowser = true;
+			continue;
+		}
+		if (token === "--copy-url") {
+			copyUrl = true;
 			continue;
 		}
 		if (token === "--watch" || token === "--auto-refresh") {
@@ -13308,7 +13315,12 @@ function parseStudioLaunchOpenFlags(rawArgs: string): StudioLaunchFlags {
 	if (openRemoteBrowser && noBrowser) {
 		return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, listenAll, port, error: "Use either --no-browser or --open-browser, not both." };
 	}
-	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, watchPdf, listenAll, port, ...(editorMode ? { editorMode } : {}) };
+	// --copy-url never opens a browser: alone it copies the running Studio's URL (handled by
+	// /studio before this parser), and in a launch it goes with --no-browser.
+	if (copyUrl && !noBrowser) {
+		return { args: rawArgs, openRemoteBrowser, noBrowser, watchPdf, listenAll, port, error: "Add --no-browser to --copy-url, or run /studio --copy-url for the running Studio's URL." };
+	}
+	return { args: remaining.join(" "), openRemoteBrowser, noBrowser, watchPdf, listenAll, port, ...(editorMode ? { editorMode } : {}), ...(copyUrl ? { copyUrl } : {}) };
 }
 
 function shouldAutoOpenStudioBrowser(options?: { openRemoteBrowser?: boolean; noBrowser?: boolean }): boolean {
@@ -20563,6 +20575,14 @@ export default function (pi: ExtensionAPI) {
 		})));
 		return { ok: true, workspaceId: workspaceId ?? null, clean: Boolean(workspaceId && studioBufferStateStore.hasCleanLeave(workspaceId)) };
 	});
+	// --no-browser --copy-url: the URL a launch just printed, on the clipboard, to paste into a
+	// browser pane that's already open (Oliver, 12 Nov). The same limits as /studio --copy-url.
+	const copyLaunchedStudioUrl = async (url: string, flags: StudioLaunchFlags, ctx: ExtensionCommandContext) => {
+		if (!flags.copyUrl) return;
+		const result = await copyStudioUrl({ mode: ctx.mode, running: true, url, copy: copyToClipboard });
+		ctx.ui.notify(result.message, result.ok ? "info" : "warning");
+	};
+
 	// /studio-replace in dual editor mode: move the open Studio (or the last one) here.
 	const moveHostedStudioHere = async (trimmed: string, ctx: ExtensionCommandContext) => {
 		const flags = parseStudioLaunchOpenFlags(trimmed);
@@ -20590,6 +20610,7 @@ export default function (pi: ExtensionAPI) {
 				?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
 			if (hint) ctx.ui.notify(hint, "info");
 			if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
+			await copyLaunchedStudioUrl(url, flags, ctx);
 		}
 	};
 
@@ -21575,6 +21596,7 @@ export default function (pi: ExtensionAPI) {
 			const kept = currentFullStudioUrl(serverState);
 			publishStudioUrlFile(kept, serverState, ctx);
 			ctx.ui.notify(`Studio URL: ${kept}`, "info");
+			await copyLaunchedStudioUrl(kept, flags, ctx);
 			return;
 		}
 		// Oliver, 14 Oct: plain /studio reopens the last workspace when its tab is gone, asking to
@@ -21596,6 +21618,7 @@ export default function (pi: ExtensionAPI) {
 					?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
 				if (hint) ctx.ui.notify(hint, "info");
 				if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
+				await copyLaunchedStudioUrl(url, flags, ctx);
 			}
 			return;
 		}
@@ -21644,6 +21667,7 @@ export default function (pi: ExtensionAPI) {
 					?? (flags.noBrowser ? buildStudioForwardingHint(state.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
 				if (hint) ctx.ui.notify(hint, "info");
 				if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
+				await copyLaunchedStudioUrl(url, flags, ctx);
 			}
 		} catch (error) { ctx.ui.notify(`Studio launch failed; existing work was kept: ${error instanceof Error ? error.message : String(error)}`, "error"); }
 	};
@@ -21759,6 +21783,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`Read-only PDF preview${automatic ? " requested" : " ready; browser auto-open skipped"}: ${url}`, "info");
 				const hint = state.listenAll ? null : buildStudioSshTunnelHint(state.port, url) ?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(state.port, url) : null);
 				if (hint) ctx.ui.notify(hint, "info");
+				await copyLaunchedStudioUrl(url, launchOpenFlags, ctx);
 			} catch (error) { ctx.ui.notify(`PDF preview failed: ${error instanceof Error ? error.message : String(error)}`, "error"); }
 			return;
 		}
@@ -21782,6 +21807,7 @@ export default function (pi: ExtensionAPI) {
 							?? (launchOpenFlags.noBrowser ? buildStudioForwardingHint(serverState.port, url, { prefix: "Browser auto-open was skipped because --no-browser was used." }) : null);
 					if (tunnelHint) ctx.ui.notify(tunnelHint, "info");
 					if (serverState.listenAll) ctx.ui.notify(buildStudioListenAllWarning(serverState.port, url), "warning");
+					await copyLaunchedStudioUrl(url, launchOpenFlags, ctx);
 				}
 				return;
 			}
@@ -21876,6 +21902,7 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(`Studio URL: ${url}`, "info");
 			if (tunnelHint) ctx.ui.notify(tunnelHint, "info");
 			if (state.listenAll) ctx.ui.notify(buildStudioListenAllWarning(state.port, url), "warning");
+			await copyLaunchedStudioUrl(url, launchOpenFlags, ctx);
 		}
 	};
 
@@ -21931,6 +21958,7 @@ export default function (pi: ExtensionAPI) {
 						+ "  /studio --open-remote  Over SSH, open the remote browser anyway\n"
 						+ "  /studio --status  Show studio status\n"
 						+ "  /studio --copy-url  Copy the running Studio's URL to the clipboard\n"
+						+ "  /studio --no-browser --copy-url  Start Studio without a browser and copy its URL\n"
 						+ "  /studio --stop    Stop studio server\n"
 						+ "  /studio --single  Use single editor mode (one editor), and remember it\n"
 						+ "  /studio --dual    Use dual editor mode (Prompt and Document), the default\n"

@@ -322,3 +322,29 @@ test("in RPC mode /studio --copy-url copies nothing and leaves the stream intact
 		await command("/studio --stop");
 	});
 });
+
+// /studio --no-browser --copy-url (Oliver, 12 Nov): one command starts Studio without a browser
+// and copies the URL it prints. Here, in RPC mode, it starts and prints, and copies nothing.
+test("in RPC mode /studio --no-browser --copy-url starts Studio and prints its URL, copying nothing", { timeout: 120_000 }, async (t) => {
+	await withStudioPi(t, {}, async ({ command }) => {
+		const refusal = "Copying the URL needs Pi's terminal interface. /studio --status prints it.";
+		const alone = await command("/studio --blank --copy-url");
+		assert.ok(alone.some((note) => note.message === "Add --no-browser to --copy-url, or run /studio --copy-url for the running Studio's URL. Use /studio --help"), JSON.stringify(alone));
+		assert.equal(printedUrl(alone), undefined, "nothing started");
+		assert.ok((await command("/studio --status")).some((note) => note.message === "Studio server is not running."));
+
+		const notes = await command(`/studio --no-browser --copy-url --port ${await freePort()}`);
+		const url = printedUrl(notes);
+		assert.ok(url, JSON.stringify(notes));
+		assert.equal(await fetchStatus(url), 200);
+		const messages = notes.map((note) => note.message);
+		assert.ok(messages.indexOf(refusal) > messages.indexOf(`Studio URL: ${url}`), "the copy is tried after the URL is printed");
+
+		// The flags in either order, with Studio already running.
+		const again = await command("/studio --copy-url --no-browser");
+		assert.ok(printedUrl(again), JSON.stringify(again));
+		assert.equal(again.filter((note) => note.message === refusal).length, 1);
+		assert.ok((await command("/studio --status")).some((note) => note.message.startsWith("Studio running at ")), "Pi still answers");
+		await command("/studio --stop");
+	});
+});
