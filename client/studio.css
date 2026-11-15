@@ -1259,97 +1259,105 @@
       display: none !important;
     }
 
-    .hl-heading {
+    .hljs-section {
       color: var(--md-heading);
       font-weight: 700;
-    }
-
-    .hl-fence {
-      color: var(--studio-markdown-marker-text, var(--studio-info-text, var(--muted)));
-      font-weight: 600;
     }
 
     .hl-code {
       color: var(--text);
     }
 
-    .hl-md-code {
+    .hljs-code {
       color: var(--md-code);
     }
 
-    .hl-code-kw {
+    .hl-code-kw,
+    .hljs-keyword,
+    .hljs-literal,
+    .hljs-meta {
       color: var(--syntax-keyword);
       font-weight: 600;
     }
 
-    .hl-code-str {
+    .hljs-string,
+    .hljs-regexp {
       color: var(--syntax-string);
     }
 
-    .hl-code-num {
+    .hljs-number {
       color: var(--syntax-number);
     }
 
-    .hl-code-com {
+    .hl-code-com,
+    .hljs-comment {
       color: var(--syntax-comment);
       font-style: normal;
     }
 
-    .hl-code-var,
-    .hl-code-key {
+    .hljs-variable,
+    .hljs-template-variable,
+    .hljs-attr,
+    .hljs-property {
       color: var(--syntax-variable);
     }
 
-    .hl-code-fn {
+    .hl-code-fn,
+    .hljs-title.function_,
+    .hljs-built_in {
       color: var(--syntax-function);
     }
 
-    .hl-code-type {
+    .hljs-type,
+    .hljs-title.class_ {
       color: var(--syntax-type);
     }
 
-    .hl-code-op {
+    .hljs-operator {
       color: var(--syntax-operator);
     }
 
-    .hl-diff-add {
+    .hl-diff-add,
+    .hljs-addition {
       color: var(--ok);
       background: var(--diff-added-bg);
       display: inline-block;
       width: 100%;
     }
 
-    .hl-diff-del {
+    .hl-diff-del,
+    .hljs-deletion {
       color: var(--error);
       background: var(--diff-removed-bg);
       display: inline-block;
       width: 100%;
     }
 
-    .hl-list {
+    .hljs-bullet {
       color: var(--studio-list-marker-text, var(--md-list-bullet));
       font-weight: 600;
     }
 
-    .hl-quote {
+    .hljs-quote {
       color: var(--studio-markdown-marker-text, var(--md-quote));
       font-style: normal;
-      font-weight: 600;
     }
 
-    .hl-link {
-      color: var(--studio-link, var(--md-link));
-      text-decoration: underline;
-      text-decoration-color: var(--studio-link-decoration, currentColor);
-      text-underline-offset: 0.13em;
+    .hljs-strong {
+      font-weight: 700;
     }
 
-    .hl-url {
+    .hljs-emphasis {
+      font-style: italic;
+    }
+
+    .hljs-link {
       color: var(--studio-link-url, var(--studio-link, var(--md-link-url)));
       font-weight: 500;
     }
 
-    .hl-annotation {
+    .hl-annotation,
+    .hljs-annotation {
       color: color-mix(in srgb, var(--accent) 72%, var(--text));
       background: color-mix(in srgb, var(--accent-soft) 58%, transparent);
       border: 0;
@@ -1358,8 +1366,11 @@
       box-shadow: inset 0 -0.08em 0 color-mix(in srgb, var(--accent) 26%, transparent);
     }
 
-    .hl-annotation-muted {
+    .hl-annotation-muted,
+    body.studio-annotations-hidden .hljs-annotation {
       color: var(--muted);
+      background: none;
+      box-shadow: none;
       opacity: 0.65;
     }
 
