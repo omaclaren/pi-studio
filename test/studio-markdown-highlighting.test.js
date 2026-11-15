@@ -16,7 +16,11 @@ context.annotationHelpers = context.PiStudioAnnotationHelpers;
 const start = client.indexOf("      function highlightMarkdown(");
 const end = client.indexOf("\n      function ", start + 10);
 vm.runInContext(client.slice(start, end), context);
-context.normalizeFenceLanguage = (language) => ({ js: "javascript", py: "python" }[language.trim()] || language.trim());
+const languagesStart = client.indexOf("      var LANG_EXT_MAP =");
+const languagesEnd = client.indexOf("      var SUPPORTED_LANGUAGES", languagesStart);
+const normalizeStart = client.indexOf("      function normalizeFenceLanguage(");
+const normalizeEnd = client.indexOf("\n      function ", normalizeStart + 10);
+vm.runInContext(client.slice(languagesStart, languagesEnd) + client.slice(normalizeStart, normalizeEnd), context);
 
 function textContent(html) {
   return html.replace(/<[^>]*>/g, "").replace(/&#39;/g, "'").replace(/&quot;/g, '"')
@@ -59,6 +63,35 @@ for (const fence of ["```", "~~~~", "````"]) {
     assert.doesNotMatch(html, /class="(?:hl-annotation|[^"]*\b(?:tok-strong|tok-heading)\b)/);
   });
 }
+
+test("canonical Prism language names and existing extension aliases both select their grammar", () => {
+  for (const language of ["ruby", "rb", "ruby linenos=1", ".ruby"]) {
+    assert.match(highlight("```" + language + "\ndef answer\n  42\nend\n```"), /class="[^"]*keyword[^"]*">def<\/span>/);
+  }
+});
+
+test("block code is masked before annotation collection and many inline spans stay bounded", () => {
+  const original = context.annotationHelpers;
+  context.annotationHelpers = { ...original, collectInlineAnnotationMarkers(line) {
+    assert.doesNotMatch(line, /block-protected/, "block code must not reach the annotation scanner");
+    return original.collectInlineAnnotationMarkers(line);
+  } };
+  try {
+    const literal = "block-protected [an:".repeat(4000);
+    const fenced = highlight("```unknown\n" + literal + "\n```\n[an: prose]");
+    assert.equal((fenced.match(/class="hl-annotation"/g) || []).length, 1);
+    const many = highlight("`code` ".repeat(5000) + "[an: note] ".repeat(5000));
+    assert.equal((many.match(/class="hl-annotation"/g) || []).length, 5000);
+    assert.equal((highlight("[an: before] `protected [an:` [an: after]").match(/class="hl-annotation"/g) || []).length, 2);
+  } finally { context.annotationHelpers = original; }
+});
+
+test("inline code retains the annotation scanner's backtick escaping rules", () => {
+  const source = '[an: `x\\`] tail]';
+  assert.equal(context.annotationHelpers.collectInlineAnnotationMarkers(source).length, 0);
+  assert.doesNotMatch(highlight(source), /class="hl-annotation/);
+  assert.match(highlight('[an: `x`] tail]'), /class="hl-annotation/);
+});
 
 test("code tokens map through quote/list prefixes and retain multiline string state", () => {
   const quote = highlight("> ```python\n> def answer():\n>     return 42\n> ```");

@@ -42,14 +42,15 @@ export function highlightMarkdown(source, { annotationsEnabled, normalizeLanguag
 
   tree.iterate({ enter(node) {
     if (node.name === "InlineCode") {
-      codeBlocks.push({ start: node.from, end: node.to });
+      codeBlocks.push({ start: node.from, end: node.to, inline: true });
       return false;
     }
     if (node.name !== "FencedCode" && node.name !== "CodeBlock") return;
     codeBlocks.push({ start: node.from, end: node.to });
     const contents = node.node.getChildren("CodeText");
     const info = node.node.getChild("CodeInfo");
-    const language = info ? normalizeLanguage(source.slice(info.from, info.to)) : "";
+    const name = info ? source.slice(info.from, info.to).trim().split(/\s+/)[0].replace(/^\./, "").toLowerCase() : "";
+    const language = normalizeLanguage(name) || name;
     let offset = 0;
     const parts = contents.map((content) => {
       const part = { from: content.from, length: content.to - content.from, offset };
@@ -60,11 +61,22 @@ export function highlightMarkdown(source, { annotationsEnabled, normalizeLanguag
     codeTokens(prism.languages[language] ? prism.tokenize(text, prism.languages[language]) : text, 0, { parts, index: 0 });
   } });
 
+  // PI/OpenAI: Mask block code, but retain inline code for the annotation scanner's escape rules.
+  let annotationSource = "";
+  let codeEnd = 0;
+  for (const block of codeBlocks) {
+    if (block.inline) continue;
+    annotationSource += source.slice(codeEnd, block.start) + source.slice(block.start, block.end).replace(/[^\n]/g, " ");
+    codeEnd = block.end;
+  }
+  annotationSource += source.slice(codeEnd);
   let lineStart = 0;
-  for (const line of source.split("\n")) {
+  let codeIndex = 0;
+  for (const line of annotationSource.split("\n")) {
     for (const marker of collectAnnotations(line)) {
       const start = lineStart + marker.start;
-      if (codeBlocks.some((block) => block.start <= start && block.end > start)) continue;
+      while (codeIndex < codeBlocks.length && codeBlocks[codeIndex].end <= start) codeIndex += 1;
+      if (codeIndex < codeBlocks.length && codeBlocks[codeIndex].start <= start) continue;
       spans.push({ start, end: lineStart + marker.end,
         classes: annotationsEnabled === false ? "hl-annotation-muted" : "hl-annotation", priority: 2 });
     }
