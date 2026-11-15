@@ -22845,24 +22845,31 @@
       // highlight.js loads deferred from the CDN; until it does (or if blocked) overlays show plain text.
       function extendHljsMarkdown(hljs) {
         const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const fences = hljs.listLanguages().filter((name) => name !== "markdown").map((name) => ({
-          begin: new RegExp("^[ \\t]*(?:`{3,}|~{3,})[ \\t]*(?:" + [name, ...(hljs.getLanguage(name).aliases || [])].map(escapeRegExp).join("|") + ")(?=[\\s{]|$).*$"),
+        const fence = (info) => ({
+          begin: new RegExp("^[ \\t]*(?:`{3,}|~{3,})" + info + ".*$"),
           end: /^[ \t]*(?:`{3,}|~{3,})[ \t]*$/,
-          beginScope: "code",
-          endScope: "code",
-          subLanguage: name,
           // Close only on the opening fence's character with at least its length.
           "on:begin": (match, response) => { response.data.fence = match[0].trim().match(/^(`+|~+)/)[0]; },
           "on:end": (match, response) => {
             const close = match[0].trim();
             if (close[0] !== response.data.fence[0] || close.length < response.data.fence.length) response.ignoreMatch();
           },
+        });
+        const languageFences = hljs.listLanguages().filter((name) => name !== "markdown").map((name) => ({
+          ...fence("[ \\t]*\\.?(?:" + [name, ...(hljs.getLanguage(name).aliases || [])].map(escapeRegExp).join("|") + ")(?=[\\s{]|$)"),
+          beginScope: "code",
+          endScope: "code",
+          subLanguage: name,
         }));
         // Single-line approximation of the [an: ...] scanner in studio-annotation-helpers.js.
-        const annotation = { scope: "annotation", begin: /(?<!\\)\[an:(?:\\.|`[^`\n]*`|\[[^\]\n]*\]|[^\]\\`[\n])*\]/i };
+        const annotation = { scope: "annotation", begin: /(?<!\\)\[an:(?:\\.|`[^`\n]*`|\[[^\]\n]*\]|[^\]\\`[\n])*\]/ };
         const markdown = hljs.getLanguage("markdown");
-        markdown.contains.unshift(annotation, ...fences);
-        markdown.contains.find((mode) => mode.scope === "quote" || mode.className === "quote").contains.push(annotation);
+        markdown.case_insensitive = true;
+        markdown.contains.unshift(annotation, ...languageFences, { ...fence(""), scope: "code" });
+        const isInline = (mode) => ["quote", "strong", "emphasis"].includes(mode.scope || mode.className);
+        for (const mode of markdown.contains.filter(isInline)) {
+          [mode, ...mode.contains.filter(isInline)].forEach((inline) => inline.contains.push(annotation));
+        }
       }
 
       window.addEventListener("DOMContentLoaded", () => {
