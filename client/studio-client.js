@@ -4344,6 +4344,7 @@
       if (!annotationHelpers || typeof annotationHelpers.collectInlineAnnotationMarkers !== "function") {
         throw new Error("Studio annotation helpers failed to load.");
       }
+      const syntaxHighlighter = await import(buildAuthedStudioUrl("/studio-syntax-highlighting.js"));
       const EMPTY_OVERLAY_LINE = "\u200b";
       const mermaidHelpers = globalThis.PiStudioMermaidHelpers || null;
       const MERMAID_CDN_URL = mermaidHelpers && mermaidHelpers.MERMAID_CDN_URL
@@ -22816,57 +22817,6 @@
         );
       }
 
-      function highlightInlineMarkdownWithoutAnnotations(text) {
-        const source = String(text || "");
-        const pattern = /(\x60[^\x60]*\x60)|(\[[^\]]+\]\([^)]+\))/g;
-        let lastIndex = 0;
-        let out = "";
-
-        let match;
-        while ((match = pattern.exec(source)) !== null) {
-          const token = match[0] || "";
-          const start = typeof match.index === "number" ? match.index : 0;
-
-          if (start > lastIndex) {
-            out += escapeHtml(source.slice(lastIndex, start));
-          }
-
-          if (match[1]) {
-            out += wrapHighlight("hl-md-code", token);
-          } else if (match[2]) {
-            const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-            if (linkMatch) {
-              out += wrapHighlight("hl-link", "[" + linkMatch[1] + "]");
-              out += "(" + wrapHighlight("hl-url", linkMatch[2]) + ")";
-            } else {
-              out += escapeHtml(token);
-            }
-          } else {
-            out += escapeHtml(token);
-          }
-
-          lastIndex = start + token.length;
-        }
-
-        if (lastIndex < source.length) {
-          out += escapeHtml(source.slice(lastIndex));
-        }
-
-        return out;
-      }
-
-      function highlightInlineMarkdown(text) {
-        return annotationHelpers.replaceInlineAnnotationMarkers(
-          String(text || ""),
-          function(marker) {
-            return highlightInlineAnnotations(marker.raw || "");
-          },
-          function(segment) {
-            return highlightInlineMarkdownWithoutAnnotations(segment);
-          },
-        );
-      }
-
       function normalizeFenceLanguage(info) {
         const raw = String(info || "").trim();
         if (!raw) return "";
@@ -23134,79 +23084,12 @@
       }
 
       function highlightMarkdown(text) {
-        const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
-        const out = [];
-        let inFence = false;
-        let fenceChar = null;
-        let fenceLength = 0;
-        let fenceLanguage = "";
-
-        for (const line of lines) {
-          const fenceMatch = line.match(/^(\s*)([\x60]{3,}|~{3,})(.*)$/);
-          if (fenceMatch) {
-            const marker = fenceMatch[2] || "";
-            const markerChar = marker.charAt(0);
-            const markerLength = marker.length;
-
-            if (!inFence) {
-              inFence = true;
-              fenceChar = markerChar;
-              fenceLength = markerLength;
-              fenceLanguage = normalizeFenceLanguage(fenceMatch[3] || "");
-            } else if (fenceChar === markerChar && markerLength >= fenceLength) {
-              inFence = false;
-              fenceChar = null;
-              fenceLength = 0;
-              fenceLanguage = "";
-            }
-
-            out.push(wrapHighlight("hl-fence", line));
-            continue;
-          }
-
-          if (inFence) {
-            if (line.length === 0) {
-              out.push(EMPTY_OVERLAY_LINE);
-            } else if (fenceLanguage) {
-              out.push(highlightCodeLine(line, fenceLanguage));
-            } else {
-              out.push(wrapHighlight("hl-md-code", line));
-            }
-            continue;
-          }
-
-          if (line.length === 0) {
-            out.push(EMPTY_OVERLAY_LINE);
-            continue;
-          }
-
-          const headingMatch = line.match(/^(\s{0,3})(#{1,6}\s+)(.*)$/);
-          if (headingMatch) {
-            out.push(escapeHtml(headingMatch[1] || "") + wrapHighlight("hl-heading", (headingMatch[2] || "") + (headingMatch[3] || "")));
-            continue;
-          }
-
-          const quoteMatch = line.match(/^(\s{0,3}>\s?)(.*)$/);
-          if (quoteMatch) {
-            out.push(wrapHighlight("hl-quote", quoteMatch[1] || "") + highlightInlineMarkdown(quoteMatch[2] || ""));
-            continue;
-          }
-
-          const listMatch = line.match(/^(\s*)([-*+]|\d+\.)(\s+)(.*)$/);
-          if (listMatch) {
-            out.push(
-              escapeHtml(listMatch[1] || "")
-              + wrapHighlight("hl-list", listMatch[2] || "")
-              + escapeHtml(listMatch[3] || "")
-              + highlightInlineMarkdown(listMatch[4] || ""),
-            );
-            continue;
-          }
-
-          out.push(highlightInlineMarkdown(line));
-        }
-
-        return out.join("<br>");
+        return syntaxHighlighter.highlightMarkdown(String(text || "").replace(/\r\n/g, "\n"), {
+          annotationsEnabled,
+          normalizeLanguage: normalizeFenceLanguage,
+          collectAnnotations: annotationHelpers.collectInlineAnnotationMarkers,
+          prism: globalThis.Prism,
+        });
       }
 
       function highlightCode(text, language, annotationRenderMode) {

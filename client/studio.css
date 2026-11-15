@@ -1122,6 +1122,11 @@
       background: transparent;
     }
 
+    /* PI/OpenAI: Preserve the textarea's final empty line without changing the highlighted source. */
+    .editor-highlight::after {
+      content: "\200b";
+    }
+
     .editor-highlight::-webkit-scrollbar {
       width: 0;
       height: 0;
@@ -1259,9 +1264,57 @@
       display: none !important;
     }
 
-    .hl-heading {
+    :is(.editor-highlight, .response-markdown-highlight) .tok-heading {
       color: var(--md-heading);
       font-weight: 700;
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) .tok-strong {
+      font-weight: 700;
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) .tok-emphasis {
+      font-style: italic;
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) .tok-strikethrough {
+      text-decoration: line-through;
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) :is(.token.code, .tok-monospace) {
+      color: var(--md-code);
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) :is(.token.punctuation, .token.comment, .tok-meta, .tok-quote) {
+      color: var(--muted);
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) :is(.token.keyword, .token.boolean, .token.atrule) {
+      color: var(--syntax-keyword);
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) :is(.token.string, .token.char, .token.attr-value) {
+      color: var(--syntax-string);
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) .token.number {
+      color: var(--syntax-number);
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) .token.function {
+      color: var(--syntax-function);
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) :is(.token.class-name, .token.builtin) {
+      color: var(--syntax-type);
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) :is(.token.operator, .token.url, .token.variable) {
+      color: var(--syntax-variable);
+    }
+
+    :is(.editor-highlight, .response-markdown-highlight) :is(.tok-link, .tok-url) {
+      color: var(--md-link);
     }
 
     .hl-fence {

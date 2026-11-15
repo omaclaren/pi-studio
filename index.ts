@@ -23,6 +23,7 @@ import {
 	transformStudioMarkdownOutsideFences,
 } from "./shared/studio-annotation-scanner.js";
 import { stripStudioMarkdownHtmlComments } from "./shared/studio-markdown-html-comments.js";
+import { buildStudioPrismScript, buildStudioSyntaxModuleScript, rewriteStudioSyntaxImports, STUDIO_SYNTAX_MODULES } from "./shared/studio-syntax-assets.js";
 import { createStudioFileWatcher } from "./shared/studio-file-watcher.js";
 import { createStudioRunLifecycle } from "./shared/studio-run-lifecycle.js";
 import {
@@ -249,6 +250,7 @@ interface StudioQuartoPreviewState {
 const STUDIO_PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url));
 const STUDIO_CSS_URL = new URL("./client/studio.css", import.meta.url);
 const STUDIO_ANNOTATION_HELPERS_URL = new URL("./client/studio-annotation-helpers.js", import.meta.url);
+const STUDIO_SYNTAX_HIGHLIGHTING_URL = new URL("./client/studio-syntax-highlighting.js", import.meta.url);
 const STUDIO_MERMAID_HELPERS_URL = new URL("./client/studio-mermaid-helpers.js", import.meta.url);
 const STUDIO_NAVIGATION_HELPERS_URL = new URL("./client/studio-navigation-helpers.js", import.meta.url);
 const STUDIO_PREVIEW_RESOURCE_HELPERS_URL = new URL("./client/studio-preview-resource-helpers.js", import.meta.url);
@@ -13709,6 +13711,7 @@ function buildStudioHtml(
 	const cssVarsBlock = Object.entries(vars).map(([k, v]) => `      ${k}: ${v};`).join("\n");
 	const stylesheetHref = `/studio.css?token=${encodeURIComponent(studioToken ?? "")}`;
 	const annotationHelpersScriptHref = `/studio-annotation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
+	const prismScriptHref = `/studio-prism.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const mermaidHelpersScriptHref = `/studio-mermaid-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const navigationHelpersScriptHref = `/studio-navigation-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
 	const previewResourceHelpersScriptHref = `/studio-preview-resource-helpers.js?token=${encodeURIComponent(studioToken ?? "")}`;
@@ -14194,6 +14197,7 @@ ${cssVarsBlock}
     window.__PI_STUDIO_BOOT__ = ${bootConfigJson};
   </script>
   <script src="${annotationHelpersScriptHref}"></script>
+  <script src="${prismScriptHref}"></script>
   <script src="${mermaidHelpersScriptHref}"></script>
   <script src="${navigationHelpersScriptHref}"></script>
   <script src="${previewResourceHelpersScriptHref}"></script>
@@ -19452,6 +19456,9 @@ export default function (pi: ExtensionAPI) {
 
 		if (
 			requestUrl.pathname === "/studio-annotation-helpers.js"
+			|| requestUrl.pathname === "/studio-prism.js"
+			|| requestUrl.pathname === "/studio-syntax-highlighting.js"
+			|| Object.hasOwn(STUDIO_SYNTAX_MODULES, requestUrl.pathname)
 			|| requestUrl.pathname === "/studio-mermaid-helpers.js"
 			|| requestUrl.pathname === "/studio-navigation-helpers.js"
 			|| requestUrl.pathname === "/studio-preview-resource-helpers.js"
@@ -19475,6 +19482,8 @@ export default function (pi: ExtensionAPI) {
 
 			const targetUrl = requestUrl.pathname === "/studio-annotation-helpers.js"
 				? STUDIO_ANNOTATION_HELPERS_URL
+				: requestUrl.pathname === "/studio-syntax-highlighting.js"
+					? STUDIO_SYNTAX_HIGHLIGHTING_URL
 				: requestUrl.pathname === "/studio-mermaid-helpers.js"
 					? STUDIO_MERMAID_HELPERS_URL
 					: requestUrl.pathname === "/studio-navigation-helpers.js"
@@ -19505,7 +19514,13 @@ export default function (pi: ExtensionAPI) {
 										: "studio client script";
 
 			try {
-				const clientScript = readFileSync(targetUrl, "utf-8");
+				const clientScript = requestUrl.pathname === "/studio-prism.js"
+					? buildStudioPrismScript()
+					: Object.hasOwn(STUDIO_SYNTAX_MODULES, requestUrl.pathname)
+						? buildStudioSyntaxModuleScript(requestUrl.pathname, token)
+						: requestUrl.pathname === "/studio-syntax-highlighting.js"
+							? rewriteStudioSyntaxImports(readFileSync(targetUrl, "utf-8"), token)
+							: readFileSync(targetUrl, "utf-8");
 				res.writeHead(200, {
 					"Content-Type": "application/javascript; charset=utf-8",
 					"Cache-Control": "no-store",

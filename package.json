@@ -50,6 +50,10 @@
     "@sinclair/typebox": "*"
   },
   "dependencies": {
+    "@lezer/common": "1.5.5",
+    "@lezer/highlight": "1.2.5",
+    "@lezer/markdown": "1.8.1",
+    "prismjs": "1.30.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {
