@@ -19,6 +19,7 @@ function harness(overrides = {}) {
     recoveryConsentIsCurrent: consent => consent.token === "open", activeFileImport: null,
     finishFileImport: op => { calls.push(["finish", op]); if (c.activeFileImport === op) c.activeFileImport = null; },
     setRightView: view => { calls.push(["view", view]); c.rightView = view; }, renderFilesView: () => calls.push(["render"]),
+    restoreDocumentFollowScroll: top => calls.push(["hold", top]),
     setStatus: (...a) => calls.push(["status", ...a]), getCurrentResourceDirValue: () => "/cwd",
     getFileBrowserLocalLinkContext: () => ({ ctx: "files" }),
     getPreviewLocalLinkKind: path => /\.pdf$/.test(path) ? "pdf" : /\.png$/.test(path) ? "image" : /\.docx$/.test(path) ? "office" : "text",
@@ -34,6 +35,33 @@ test("Open file… picks in Files and opens the absolute path in the buffer you 
   assert.equal(await c.completeStudioFilePick("/notes/l8.md"), true);
   assert.deepEqual(c.calls.find(x => x[0] === "open"), ["open", "/notes/l8.md", { ctx: "files" }, "document"]);
   assert.equal(c.rightView, "preview", "the right pane returns to what it showed");
+});
+
+// Oliver, 16 Nov: File → Open file… then a click on a file's row did nothing once the Files list
+// had been scrolled. The pane's scroll position changed as the list gave way to the view it came
+// from; the buffer recorded that as newer work, and the open, which needs the buffer unchanged
+// from its start, gave up without a word. The place is now held by the buffer's own restore.
+test("leaving a pick holds the pane's place through the redraw, before the open starts", async () => {
+  const c = harness(); c.startStudioFilePick("open"); c.critiqueViewEl.scrollTop = 371; // the Files list, scrolled
+  assert.equal(await c.completeStudioFilePick("/notes/l8.md"), true);
+  const order = c.calls.map(x => x[0]).filter(name => ["view", "hold", "open"].includes(name));
+  assert.deepEqual(order, ["view", "view", "hold", "open"], "Files, back to the view it came from, the hold, then the open");
+  assert.deepEqual(c.calls.find(x => x[0] === "hold"), ["hold", 40], "the place from before the pick, not the list's");
+  assert.equal(c.critiqueViewEl.scrollTop, 371, "the pane isn't scrolled by hand: a view that hasn't redrawn would clamp it");
+  const d = harness(); d.startStudioFilePick("open"); d.cancelStudioFilePick();
+  assert.deepEqual(d.calls.find(x => x[0] === "hold"), ["hold", 40], "Cancel returns to the same place");
+  const e = harness({ rightView: "files" }); e.startStudioFilePick("open"); e.cancelStudioFilePick();
+  assert.equal(e.calls.some(x => x[0] === "hold"), false, "a pick started in Files stays where the list is");
+  // The hold is the buffer's restore: captures read it in place of the pane until the view has redrawn.
+  assert.match(source, /function restoreDocumentFollowScroll\(scrollTop\) \{[\s\S]{0,400}?bufferViewRestore\.right = scrollTop;\n\s+bufferViewRestore\.owners\.right = captureStudioBufferScrollOwner\("right"\);\n\s+scheduleStudioBufferScrollRestore\(critiqueViewEl\);/);
+  assert.match(source, /return bufferViewRestore\?\.bufferId === state\?\.selectedBufferId && typeof bufferViewRestore\[pane\] === "number"\n\s+\? bufferViewRestore\[pane\] : fallback;/);
+});
+
+test("Enter or Esc in the picker doesn't count as scrolling the pane by hand, so the hold survives the key", () => {
+  // The picker's key handler runs first and takes the key; the pane's own listener would then drop the hold.
+  assert.match(source, /if \(event\.key === "Escape"\) \{ event\.preventDefault\(\); event\.stopPropagation\(\); cancelStudioFilePick\(\); return; \}/);
+  assert.match(source, /if \(input && event\.key === "Enter" && String\(input\.value \|\| ""\)\.trim\(\)\) \{ event\.preventDefault\(\); void completeStudioFilePick\(input\.value\); \}/);
+  assert.match(source, /for \(const type of \["wheel", "touchstart", "pointerdown", "keydown"\]\) element\.addEventListener\(type, event => \{ if \(bufferViewRestore && !\(type === "keydown" && event\.defaultPrevented\)\) bufferViewRestore\[pane\] = null; \}, \{ passive: true \}\);/);
 });
 
 test("Open a copy… keeps the full guarded import operation and passes an absolute path", async () => {

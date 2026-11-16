@@ -7,6 +7,9 @@ All notable changes to `pi-studio` are documented here.
 ### Added
 - `/studio --no-browser --copy-url` starts Studio without opening a browser and copies its URL, so you can paste it into a browser you already have open, such as a Muxy browser pane beside Pi. It works with a file too: `/studio notes.md --no-browser --copy-url`. `/studio --copy-url` on its own still copies the running Studio's URL without starting one. Copying needs Pi's terminal interface, as before.
 
+### Fixed
+- **File → Open file…** opens the file you choose when the Files list has been scrolled. Before, with a file already open, clicking a file's row could do nothing, and so could pasting a path after scrolling. The right pane's scroll position changed as the list gave way to the view it came from; Studio took that for newer work in the buffer and cancelled the open without a message. **Open in Document** in the Files view wasn't affected. Esc and Cancel still return the pane to where it was.
+
 ## [0.11.15] — 2026-11-11
 
 ### Fixed

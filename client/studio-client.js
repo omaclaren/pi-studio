@@ -19455,7 +19455,8 @@
           if (bufferViewRestore) bufferViewRestore.editor = null;
         }, { passive: true, capture: true });
         for (const [element, pane] of [[sourcePreviewEl, "source"], [critiqueViewEl, "right"]]) {
-          for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) element.addEventListener(type, () => { if (bufferViewRestore) bufferViewRestore[pane] = null; }, { passive: true });
+          // A key another handler took, such as Enter or Esc in the file picker, isn't scrolling by hand.
+          for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) element.addEventListener(type, event => { if (bufferViewRestore && !(type === "keydown" && event.defaultPrevented)) bufferViewRestore[pane] = null; }, { passive: true });
           element.addEventListener("scroll", () => scheduleWorkspacePersistence(), { passive: true });
         }
         syncStudioBufferSwitcher();
@@ -19497,9 +19498,11 @@
         if (rightView !== "files") return;
         if (!pick.returnView || pick.returnView === "files") { renderFilesView(); return; }
         setRightView(pick.returnView);
-        window.requestAnimationFrame(() => {
-          if (rightView === pick.returnView) { critiqueViewEl.scrollTop = pick.returnTop || 0; critiqueViewEl.scrollLeft = pick.returnLeft || 0; }
-        });
+        // The pane's place is the buffer's again, and is held at what it was until the view has
+        // redrawn. Left to the pane, it changed as the Files list gave way, which counted as newer
+        // work in the buffer and silently cancelled the open that follows (Oliver, 16 Nov).
+        restoreDocumentFollowScroll(pick.returnTop || 0);
+        window.requestAnimationFrame(() => { if (rightView === pick.returnView) critiqueViewEl.scrollLeft = pick.returnLeft || 0; });
       }
       function cancelStudioFilePick(options = {}) {
         const pick = studioFilePick;
