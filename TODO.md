@@ -29,6 +29,7 @@ Known limits at `0.11.15`, none of them a hold:
 - [ ] If wanted, a `/studio --url-file <path>` beside `PI_STUDIO_URL_FILE` (#7), for people who'd rather not set a variable.
 - [ ] LFortran sends through pi-repl's helper, if wanted. Studio refuses to paste into that session now.
 - [ ] Take pi-repl's generalised `repl-session-stop.js` and `repl-gnuplot-processes.js` with LFortran, if it comes.
+- [ ] Rust, if wanted: pi-repl `0.13.0`'s experimental `rust` runtime (evcxr's REPL). Read from the code, not run: Studio lists a `pi-repl-rust` session as "REPL" and refuses to paste into it or interrupt it, as with LFortran, and can't start one. A small first step is to name it "Rust" in the session list. Starting and sending from Studio needs pi-repl's paste-at-the-prompt logic (`shared/repl-rust.js` and its send path in pi-repl's `index.ts`), a port the size of gnuplot's or C++'s. Wait for an evcxr release with the fix for input lost while a cell runs ([evcxr#526](https://github.com/evcxr/evcxr/pull/526)).
 
 ## Earlier: opt-in prerelease
 
