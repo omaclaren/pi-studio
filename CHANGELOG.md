@@ -4,6 +4,8 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+## [0.11.18] — 2026-11-17
+
 ### Changed
 - A cell you type at LFortran's own prompt (`lfortran --connect`, in a `pi-repl-lfortran` session) is named in the REPL record and in what the agent is told as, for example, `Oliver · via LFortran prompt`. pi-repl 0.13.1 records these cells; Studio showed them as `User`. The name is the session's person by assumption: pi-repl's helper sees that another client of the kernel ran the cell, not who it was. For these cells `captured` means the kernel finished the cell, not that it succeeded or that all its output was caught.
 
