@@ -61,6 +61,9 @@ const PERSON_CHANNELS = [
 	{ prefix: /^pi:(?:send|env):/, origin: "pi-repl", channel: "Pi" },
 	{ prefix: /^cli:(?:send|env):/, origin: "pi-repl", channel: "terminal" },
 	{ prefix: /^studio:(?:send|note):/, origin: "pi-studio", channel: "Pi Studio" },
+	// Cells another client of an LFortran kernel ran, recorded by pi-repl's helper (pi-repl 0.13.1):
+	// the person's own `lfortran` prompt, by assumption.
+	{ prefix: /^lfortran:prompt:/, origin: "pi-repl", channel: "LFortran prompt" },
 ];
 
 /*

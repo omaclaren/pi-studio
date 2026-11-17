@@ -96,6 +96,13 @@ These are conventions within version 1. They add no fields, so older writers kee
 | `cli:send:<uuid>`, `cli:env:<uuid>` | `pi-repl` | `agent-repl send` and `agent-repl env` | terminal |
 | `studio:send:<uuid>` | `pi-studio` | Pi Studio's editor sends | Pi Studio |
 | `studio:note:<uuid>` | `pi-studio` | both of Pi Studio's note routes, assigned when the note is created | Pi Studio |
+| `lfortran:prompt:<32 hex>` | `pi-repl` | LFortran's helper, for a cell another client of its kernel ran | LFortran prompt |
+
+**LFortran prompt cells.** LFortran's helper sees every cell its kernel runs on the kernel's IOPub broadcast. It records each cell that another client ran, from that client's `execute_input` until IOPub `status: idle` for it, with `mode: "raw"`. The 32 hex characters are the start of SHA-256 over the helper's kernel lifetime, the client's session and its request's `msg_id`, so an entry is scoped to one kernel run and one client. Three things a reader should know:
+
+- **The name is assumed.** The helper can't tell clients apart. The label is the session's person's name, because the client is normally the person's `lfortran --connect` prompt. A client an agent connected by hand would be recorded the same way.
+- **`captured` claims only that the kernel went idle for the cell.** It doesn't mean the cell succeeded, or that its output is whole: the helper never sees the other client's `execute_reply`, and IOPub can drop messages under load. A failure shows only as what the kernel published for the cell. `error` means the helper stopped following the cell before idle: the kernel or connection ended, or too many such cells were unfinished at once.
+- **Clients send through the helper.** pi-repl-family clients send LFortran cells through the helper's socket, so they are the helper's own entries. A client with its own Jupyter connection to the kernel would have its cells recorded here, under the person's name.
 
 The label is a chosen name only under one of these prefixes, on its matching origin. The prefix is a hint for display, not identity, authorisation or idempotency, and request IDs stay unique. Names are self-declared, so they suit collaborators who trust each other, not auditing. pi-repl's clients take the name from `PI_REPL_USER_NAME`, then the account's shared setting (`person.json` in `$XDG_CONFIG_HOME/pi-repl/`, else `~/.config/pi-repl/`), then `User`. Names are trimmed, at most 80 characters, with no control characters. Older person entries, with `command:send:` or `command:env:` and labels such as `/repl send`, keep them; records aren't rewritten.
 
@@ -107,6 +114,16 @@ The label is a chosen name only under one of these prefixes, on its matching ori
 
 Readers escape labels for HTML and for terminals.
 
+## Agents told of entries
+
+Clients can tell their agents of other clients' entries (pi-repl's and Pi Studio's do). These are readers: they never set metadata or the key, create a record, a directory or a lock, or change a mode. What they show follows the order above.
+
+**An entry's version** is the first 24 hex characters of SHA-256 over the JSON array `[requestId, origin, label, mode, status, prose, code, output, codeOmittedChars, proseOmittedChars, outputOmittedChars, skippedChunks]` (`replEntryVersion` in `repl-record-activity.js`). A changed version is told again as an update; times alone don't change it.
+
+**A client's own sends** are known by entry ID, never by label: pi-repl's entries, and LFortran's helper's, are `pi-repl:` followed by `recordEntryKey(requestId)`. LFortran's helper writes its entries from its own process, so an entry, or its settled version, can land after the sender has its result.
+
+**One view per agent.** When pi-repl and Pi Studio run in one Pi, pi-repl holds the view of the `pi-repl-*` sessions, and Studio tells it what its agent and pane use over Pi's event bus, on `pi-repl:record-activity:v1`: `{ kind: "probe", reply }`, answered at once with `{ protocol: 2 }`; `{ kind: "used", sessionName }`; `{ kind: "pane", sessionName | null }`; `{ kind: "own", sessionName, id, version, text }`, where `text` is how Studio's result is recognised in what the model is given; and, from protocol 2, `{ kind: "report", cwd, budget, own?, reply }`. A report request is answered once, with what a `repl_send` result would carry for those sessions within `budget` (at most 8,000 characters), or `""` when record activity is off, there is nothing to tell, or the request is malformed. Studio puts the text at the head of its tool's result, and it counts once it's in what the model is given, as a result's does. `own` is `{ sessionName, id, text, shown, final? }`: Studio's own send, marked told while the entry has a status in `shown`, or at every later version when `final` is true, once `text`, from Studio's result, is in what the model is given. Studio uses the channel only from protocol 2, and sends `used` before a report that should cover that session. Studio keeps its own sessions in its own view.
+
 ## Concurrency and bounds
 
 Record updates take a short cross-process directory lock, read the latest snapshot, upsert by stable entry ID, and replace the snapshot atomically. A stale lock can be recovered. The implementation retains at most 300 entries, bounds individual prose/code/output fields, and caps the serialized record at 16 MiB by dropping the oldest entries first.
@@ -115,7 +132,7 @@ Attribution-sensitive sends also take a separate cross-client send lease. A comp
 
 ## Clean record versus raw history
 
-The clean record includes submissions whose semantic boundaries are known to a compatible client, plus explicit literate notes. Code typed directly into tmux is retained only in the raw pane/history mirror unless future runtime-specific instrumentation can establish reliable boundaries. Clients must not present raw `pipe-pane` output as reliably parsed code/output.
+The clean record includes submissions whose semantic boundaries are known to a compatible client, plus explicit literate notes. Code typed directly into tmux is retained only in the raw pane/history mirror unless future runtime-specific instrumentation can establish reliable boundaries. LFortran's helper records the cells sent through it and, best effort, those other clients of its kernel ran, such as LFortran's own prompt (see "LFortran prompt cells" above). Clients must not present raw `pipe-pane` output as reliably parsed code/output.
 
 Canonical Markdown exports identify origin, mode, status, runtime, and timestamp and include this direct-input limitation.
 

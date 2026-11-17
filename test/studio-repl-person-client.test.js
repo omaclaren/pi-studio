@@ -60,6 +60,7 @@ test("the page names who sent an entry as Studio tells its agent", () => {
 	const routes = [
 		["pi:send:1", "pi-repl"], ["pi:env:1", "pi-repl"], ["cli:send:1", "pi-repl"], ["cli:env:1", "pi-repl"],
 		["studio:send:1", "pi-studio"], ["studio:note:1", "pi-studio"],
+		["lfortran:prompt:0123456789abcdef0123456789abcdef", "pi-repl"], ["lfortran:prompt:0123456789abcdef0123456789abcdef", "pi-studio"],
 		// A prefix on the other origin, an older route, and none.
 		["pi:send:1", "pi-studio"], ["studio:send:1", "pi-repl"], ["command:send:1", "pi-repl"], ["tool:mcp-1", "pi-repl"], ["c74-1", "pi-studio"], ["", "pi-studio"], [undefined, "pi-repl"],
 	];

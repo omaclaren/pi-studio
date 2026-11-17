@@ -2685,6 +2685,7 @@
           { prefix: /^pi:(?:send|env):/, origin: "pi-repl", channel: "Pi" },
           { prefix: /^cli:(?:send|env):/, origin: "pi-repl", channel: "terminal" },
           { prefix: /^studio:(?:send|note):/, origin: "pi-studio", channel: "Pi Studio" },
+          { prefix: /^lfortran:prompt:/, origin: "pi-repl", channel: "LFortran prompt" },
         ];
         const person = channels.find((candidate) => candidate.origin === entry.origin && candidate.prefix.test(entry.requestId || ""));
         if (person) return (oneLine(entry.label) || "User") + " · via " + person.channel;

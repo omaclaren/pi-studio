@@ -59,6 +59,10 @@ test("who sent an entry follows D5's reading of the record", () => {
 	assert.equal(describeReplEntrySender({ mode: "raw", label: "Sam", origin: "pi-repl", requestId: "pi:send:1" }), "Sam · via Pi");
 	assert.equal(describeReplEntrySender({ mode: "raw", label: "Sam", origin: "pi-repl", requestId: "cli:env:1" }), "Sam · via terminal");
 	assert.equal(describeReplEntrySender({ mode: "literate", label: "Ana", origin: "pi-studio", requestId: "studio:note:1" }), "Ana · via Pi Studio");
+	// A cell typed at LFortran's own prompt, recorded by pi-repl's helper (pi-repl 0.13.1).
+	assert.equal(describeReplEntrySender({ mode: "raw", label: "Sam", origin: "pi-repl", requestId: `lfortran:prompt:${"a".repeat(32)}` }), "Sam · via LFortran prompt");
+	assert.equal(describeReplEntrySender({ mode: "raw", label: "", origin: "pi-repl", requestId: `lfortran:prompt:${"a".repeat(32)}` }), "User · via LFortran prompt");
+	assert.equal(describeReplEntrySender({ mode: "raw", label: "Sam", origin: "pi-studio", requestId: `lfortran:prompt:${"a".repeat(32)}` }), "User · via Pi Studio");
 	// A prefix vouches for a name only on its own origin; older labels describe the send.
 	assert.equal(describeReplEntrySender({ mode: "raw", label: "Sam", origin: "pi-studio", requestId: "pi:send:1" }), "User · via Pi Studio");
 	assert.equal(describeReplEntrySender({ mode: "raw", label: "selection", origin: "pi-studio", requestId: "c74-1" }), "User · via Pi Studio");
