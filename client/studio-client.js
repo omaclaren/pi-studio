@@ -17993,6 +17993,16 @@
         if (typeof state.responseHistoryIndex === "number" && Number.isFinite(state.responseHistoryIndex)) {
           responseHistoryIndex = Math.max(-1, Math.floor(state.responseHistoryIndex));
         }
+        // A hosted Studio connects before this restore, so the session's responses can be here
+        // already with the latest one showing. The selection has to stay with what is shown: a new
+        // Studio read 0/6 over the latest response (Oliver, 17 Nov). A saved place the history
+        // still has is shown; anything else is the latest, as when the history arrives afterwards.
+        if (responseHistory.length) {
+          if (responseHistoryIndex < 0 || responseHistoryIndex >= responseHistory.length) responseHistoryIndex = responseHistory.length - 1;
+          applySelectedHistoryItem({ resetScroll: false, render: false });
+          syncTraceForSelectedHistoryItem();
+          updateHistoryControls();
+        }
         const maxIndex = String(sourceTextEl.value || "").length;
         const start = Math.max(0, Math.min(Math.floor(Number(state.selectionStart) || 0), maxIndex));
         const end = Math.max(start, Math.min(Math.floor(Number(state.selectionEnd) || start), maxIndex));

@@ -4,6 +4,9 @@ All notable changes to `pi-studio` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- A new Studio opened on a session that already has responses shows the latest one with its number, such as `6/6`. Before, it showed the latest response under `0/6`, and the count stayed wrong until you moved to another response. Studio received the session's responses and selected the latest, then restored its workspace, and the restore put its saved "none selected" over that selection without changing what was shown. A reload while reading an older response could show the latest one under the older one's number in the same way; it now returns to the older response.
+
 ## [0.11.16] — 2026-11-16
 
 ### Added
