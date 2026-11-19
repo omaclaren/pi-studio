@@ -14190,6 +14190,7 @@ ${cssVarsBlock}
 
   <!-- Defer sanitizer script so studio can boot/connect even if CDN is slow or blocked. -->
   <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/combine/npm/@highlightjs/cdn-assets@11.11.1/highlight.min.js,npm/@highlightjs/cdn-assets@11.11.1/languages/julia.min.js,npm/@highlightjs/cdn-assets@11.11.1/languages/fortran.min.js,npm/@highlightjs/cdn-assets@11.11.1/languages/matlab.min.js,npm/@highlightjs/cdn-assets@11.11.1/languages/latex.min.js"></script>
   <script>
     window.__PI_STUDIO_BOOT__ = ${bootConfigJson};
   </script>

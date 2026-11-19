@@ -22830,57 +22830,6 @@
         );
       }
 
-      function highlightInlineMarkdownWithoutAnnotations(text) {
-        const source = String(text || "");
-        const pattern = /(\x60[^\x60]*\x60)|(\[[^\]]+\]\([^)]+\))/g;
-        let lastIndex = 0;
-        let out = "";
-
-        let match;
-        while ((match = pattern.exec(source)) !== null) {
-          const token = match[0] || "";
-          const start = typeof match.index === "number" ? match.index : 0;
-
-          if (start > lastIndex) {
-            out += escapeHtml(source.slice(lastIndex, start));
-          }
-
-          if (match[1]) {
-            out += wrapHighlight("hl-md-code", token);
-          } else if (match[2]) {
-            const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-            if (linkMatch) {
-              out += wrapHighlight("hl-link", "[" + linkMatch[1] + "]");
-              out += "(" + wrapHighlight("hl-url", linkMatch[2]) + ")";
-            } else {
-              out += escapeHtml(token);
-            }
-          } else {
-            out += escapeHtml(token);
-          }
-
-          lastIndex = start + token.length;
-        }
-
-        if (lastIndex < source.length) {
-          out += escapeHtml(source.slice(lastIndex));
-        }
-
-        return out;
-      }
-
-      function highlightInlineMarkdown(text) {
-        return annotationHelpers.replaceInlineAnnotationMarkers(
-          String(text || ""),
-          function(marker) {
-            return highlightInlineAnnotations(marker.raw || "");
-          },
-          function(segment) {
-            return highlightInlineMarkdownWithoutAnnotations(segment);
-          },
-        );
-      }
-
       function normalizeFenceLanguage(info) {
         const raw = String(info || "").trim();
         if (!raw) return "";
@@ -22907,232 +22856,46 @@
         return EXT_TO_LANG[first] || "";
       }
 
-      function highlightCodeTokens(line, pattern, classifyMatch) {
-        const source = String(line || "");
-        let out = "";
-        let lastIndex = 0;
-        pattern.lastIndex = 0;
-
-        let match;
-        while ((match = pattern.exec(source)) !== null) {
-          const token = match[0] || "";
-          const start = typeof match.index === "number" ? match.index : 0;
-
-          if (start > lastIndex) {
-            out += escapeHtml(source.slice(lastIndex, start));
-          }
-
-          const className = classifyMatch(match) || "hl-code";
-          out += wrapHighlight(className, token);
-
-          lastIndex = start + token.length;
-          if (token.length === 0) {
-            pattern.lastIndex += 1;
-          }
+      // highlight.js loads deferred from the CDN; until it does (or if blocked) overlays show plain text.
+      function extendHljsMarkdown(hljs) {
+        const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const fence = (info) => ({
+          begin: new RegExp("^[ \\t]*(?:`{3,}|~{3,})" + info + ".*$"),
+          end: /^[ \t]*(?:`{3,}|~{3,})[ \t]*$/,
+          // Close only on the opening fence's character with at least its length.
+          "on:begin": (match, response) => { response.data.fence = match[0].trim().match(/^(`+|~+)/)[0]; },
+          "on:end": (match, response) => {
+            const close = match[0].trim();
+            if (close[0] !== response.data.fence[0] || close.length < response.data.fence.length) response.ignoreMatch();
+          },
+        });
+        const languageFences = hljs.listLanguages().filter((name) => name !== "markdown").map((name) => ({
+          ...fence("[ \\t]*\\.?(?:" + [name, ...(hljs.getLanguage(name).aliases || [])].map(escapeRegExp).join("|") + ")(?=[\\s{]|$)"),
+          beginScope: "code",
+          endScope: "code",
+          subLanguage: name,
+        }));
+        // Single-line approximation of the [an: ...] scanner in studio-annotation-helpers.js.
+        const annotation = { scope: "annotation", begin: /(?<!\\)\[an:(?:\\.|`[^`\n]*`|\[[^\]\n]*\]|[^\]\\`[\n])*\]/ };
+        const markdown = hljs.getLanguage("markdown");
+        markdown.case_insensitive = true;
+        markdown.contains.unshift(annotation, ...languageFences, { ...fence(""), scope: "code" });
+        const isInline = (mode) => ["quote", "strong", "emphasis"].includes(mode.scope || mode.className);
+        for (const mode of markdown.contains.filter(isInline)) {
+          [mode, ...mode.contains.filter(isInline)].forEach((inline) => inline.contains.push(annotation));
         }
-
-        if (lastIndex < source.length) {
-          out += escapeHtml(source.slice(lastIndex));
-        }
-
-        return out;
       }
+
+      window.addEventListener("DOMContentLoaded", () => {
+        if (!globalThis.hljs) return;
+        extendHljsMarkdown(globalThis.hljs);
+        scheduleEditorHighlightRender();
+      });
 
       function highlightCodeLine(line, language, annotationRenderMode) {
         const source = String(line || "");
         const lang = normalizeFenceLanguage(language);
         const renderMode = annotationRenderMode === "preview" ? "preview" : "overlay";
-
-        if (!lang) {
-          return wrapHighlight("hl-code", source);
-        }
-
-        if (lang === "javascript" || lang === "typescript") {
-          const jsPattern = /(\/\/.*$|\/\*.*?\*\/)|(`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:const|let|var|function|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|new|class|extends|import|from|export|default|async|await|true|false|null|undefined|typeof|instanceof|interface|implements|enum|type|public|private|protected|readonly|abstract|declare|this|super)\b)|(\b[A-Za-z_$][A-Za-z0-9_$]*(?=\s*\())|(\b[A-Z][A-Za-z0-9_$]*\b)|(\b\d+(?:\.\d+)?\b)/g;
-          const highlighted = highlightCodeTokens(source, jsPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-fn";
-            if (match[5]) return "hl-code-type";
-            if (match[6]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "python") {
-          const pyPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[A-Za-z_][A-Za-z0-9_]*)|(\b(?:def|class|return|if|elif|else|for|while|try|except|finally|import|from|as|with|lambda|yield|True|False|None|and|or|not|in|is|pass|break|continue|raise|global|nonlocal|assert)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d+(?:\.\d+)?\b)/g;
-          const highlighted = highlightCodeTokens(source, pyPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-fn";
-            if (match[4]) return "hl-code-kw";
-            if (match[5]) return "hl-code-fn";
-            if (match[6]) return "hl-code-type";
-            if (match[7]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "bash") {
-          const shPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'[^']*')|(\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*)|(\b(?:if|then|else|fi|for|in|do|done|case|esac|function|local|export|readonly|return|break|continue|while|until)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\(\s*\)))|(\b\d+\b)/g;
-          const highlighted = highlightCodeTokens(source, shPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-var";
-            if (match[4]) return "hl-code-kw";
-            if (match[5]) return "hl-code-fn";
-            if (match[6]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "json") {
-          const jsonPattern = /("(?:[^"\\]|\\.)*"\s*:)|("(?:[^"\\]|\\.)*")|(\b(?:true|false|null)\b)|(\b-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g;
-          const highlighted = highlightCodeTokens(source, jsonPattern, (match) => {
-            if (match[1]) return "hl-code-key";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "rust") {
-          const rustPattern = /(\/\/.*$)|("(?:[^"\\]|\\.)*")|(\b[A-Za-z_][A-Za-z0-9_]*!(?=\s*(?:\(|\{|\[)))|(\b(?:fn|let|mut|const|struct|enum|impl|trait|pub|mod|use|crate|self|super|match|if|else|for|while|loop|return|break|continue|where|as|in|ref|move|async|await|unsafe|extern|type|static|true|false|Some|None|Ok|Err|Self)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d[\d_]*(?:\.\d[\d_]*)?(?:f32|f64|u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize)?\b)/g;
-          const highlighted = highlightCodeTokens(source, rustPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-fn";
-            if (match[4]) return "hl-code-kw";
-            if (match[5]) return "hl-code-fn";
-            if (match[6]) return "hl-code-type";
-            if (match[7]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "c" || lang === "cpp") {
-          const cPattern = /(\/\/.*$|\/\*.*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)')|(#\s*\w+)|(\b(?:if|else|for|while|do|switch|case|break|continue|return|goto|struct|union|enum|typedef|sizeof|void|int|char|short|long|float|double|unsigned|signed|const|static|extern|volatile|register|inline|auto|restrict|true|false|NULL|nullptr|class|public|private|protected|virtual|override|template|typename|namespace|using|new|delete|try|catch|throw|noexcept|constexpr|auto|decltype|static_cast|dynamic_cast|reinterpret_cast|const_cast|std|include|define|ifdef|ifndef|endif|pragma)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[fFlLuU]*\b)/g;
-          const highlighted = highlightCodeTokens(source, cPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-kw";
-            if (match[5]) return "hl-code-fn";
-            if (match[6]) return "hl-code-type";
-            if (match[7]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "julia") {
-          const jlPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[A-Za-z_][A-Za-z0-9_]*)|(\b(?:function|end|if|elseif|else|for|while|begin|let|local|global|const|return|break|continue|do|try|catch|finally|throw|module|import|using|export|struct|mutable|abstract|primitive|where|macro|quote|true|false|nothing|missing|in|isa|typeof)\b)|(\b[A-Za-z_][A-Za-z0-9_]*!?(?=\s*\())|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g;
-          const highlighted = highlightCodeTokens(source, jlPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-fn";
-            if (match[4]) return "hl-code-kw";
-            if (match[5]) return "hl-code-fn";
-            if (match[6]) return "hl-code-type";
-            if (match[7]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "fortran") {
-          const fPattern = /(!.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:program|end|subroutine|function|module|use|implicit|none|integer|real|double|precision|complex|character|logical|dimension|allocatable|intent|in|out|inout|parameter|data|do|if|then|else|elseif|endif|enddo|call|return|write|read|print|format|stop|contains|type|class|select|case|where|forall|associate|block|procedure|interface|abstract|extends|allocate|deallocate|cycle|exit|go|to|common|equivalence|save|external|intrinsic)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b\d+(?:\.\d+)?(?:[dDeE][+-]?\d+)?\b)/gi;
-          const highlighted = highlightCodeTokens(source, fPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-fn";
-            if (match[5]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "r") {
-          const rPattern = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:function|if|else|for|while|repeat|in|next|break|return|TRUE|FALSE|NULL|NA|NA_integer_|NA_real_|NA_complex_|NA_character_|Inf|NaN|library|require|source|local|switch)\b)|(<-|->|<<-|->>)|(\b[A-Za-z.][A-Za-z0-9._]*(?=\s*\())|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[Li]?\b)/g;
-          const highlighted = highlightCodeTokens(source, rPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-op";
-            if (match[5]) return "hl-code-fn";
-            if (match[6]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "matlab") {
-          const matPattern = /(%.*$)|('(?:[^']|'')*'|"(?:[^"\\]|\\.)*")|(\b(?:function|end|if|elseif|else|for|while|switch|case|otherwise|try|catch|return|break|continue|global|persistent|classdef|properties|methods|events|enumeration|true|false)\b)|(\b[A-Za-z_][A-Za-z0-9_]*(?=\s*\())|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[i]?\b)/g;
-          const highlighted = highlightCodeTokens(source, matPattern, (match) => {
-            if (match[1]) return "hl-code-com";
-            if (match[2]) return "hl-code-str";
-            if (match[3]) return "hl-code-kw";
-            if (match[4]) return "hl-code-fn";
-            if (match[5]) return "hl-code-num";
-            return "hl-code";
-          });
-          return "<span class='hl-code'>" + highlighted + "</span>";
-        }
-
-        if (lang === "latex") {
-          const texPattern = /(%.*$)|(\[an:\s*[^\]]+\])|(\\(?:documentclass|usepackage|newtheorem|begin|end|section|subsection|subsubsection|chapter|part|title|author|date|maketitle|tableofcontents|includegraphics|caption|label|ref|eqref|cite|textbf|textit|texttt|emph|footnote|centering|newcommand|renewcommand|providecommand|bibliography|bibliographystyle|bibitem|item|input|include)\b)|(\\[A-Za-z]+)|(\{|\})|(\$\$?(?:[^$\\]|\\.)+\$\$?)|(\[(?:.*?)\])/gi;
-          let out = "";
-          let lastIndex = 0;
-          texPattern.lastIndex = 0;
-
-          let match;
-          while ((match = texPattern.exec(source)) !== null) {
-            const token = match[0] || "";
-            const start = typeof match.index === "number" ? match.index : 0;
-
-            if (start > lastIndex) {
-              out += escapeHtml(source.slice(lastIndex, start));
-            }
-
-            if (match[1]) {
-              out += wrapHighlight("hl-code-com", token);
-            } else if (match[2]) {
-              out += highlightInlineAnnotations(token, renderMode);
-            } else if (match[3]) {
-              out += wrapHighlight("hl-code-kw", token);
-            } else if (match[4]) {
-              out += wrapHighlight("hl-code-fn", token);
-            } else if (match[5]) {
-              out += wrapHighlight("hl-code-op", token);
-            } else if (match[6]) {
-              out += wrapHighlight("hl-code-str", token);
-            } else if (match[7]) {
-              out += wrapHighlight("hl-code-num", token);
-            } else {
-              out += escapeHtml(token);
-            }
-
-            lastIndex = start + token.length;
-            if (token.length === 0) {
-              texPattern.lastIndex += 1;
-            }
-          }
-
-          if (lastIndex < source.length) {
-            out += escapeHtml(source.slice(lastIndex));
-          }
-
-          return out;
-        }
-
         if (lang === "diff") {
           var highlightedDiff = highlightInlineAnnotations(source, renderMode);
           if (/^@@/.test(source)) return "<span class=\"hl-code-fn\">" + highlightedDiff + "</span>";
@@ -23143,84 +22906,23 @@
           if (/^index /.test(source)) return "<span class=\"hl-code-com\">" + highlightedDiff + "</span>";
           return highlightedDiff;
         }
-
-        return wrapHighlight("hl-code", source);
+        const hljs = globalThis.hljs;
+        const highlight = (text) => (hljs && hljs.getLanguage(lang)
+          ? hljs.highlight(text, { language: lang, ignoreIllegals: true }).value
+          : escapeHtml(text));
+        if (lang === "latex") {
+          return annotationHelpers.replaceInlineAnnotationMarkers(source, (marker) => highlightInlineAnnotations(marker.raw, renderMode), highlight);
+        }
+        return "<span class='hl-code'>" + highlight(source) + "</span>";
       }
 
       function highlightMarkdown(text) {
-        const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
-        const out = [];
-        let inFence = false;
-        let fenceChar = null;
-        let fenceLength = 0;
-        let fenceLanguage = "";
-
-        for (const line of lines) {
-          const fenceMatch = line.match(/^(\s*)([\x60]{3,}|~{3,})(.*)$/);
-          if (fenceMatch) {
-            const marker = fenceMatch[2] || "";
-            const markerChar = marker.charAt(0);
-            const markerLength = marker.length;
-
-            if (!inFence) {
-              inFence = true;
-              fenceChar = markerChar;
-              fenceLength = markerLength;
-              fenceLanguage = normalizeFenceLanguage(fenceMatch[3] || "");
-            } else if (fenceChar === markerChar && markerLength >= fenceLength) {
-              inFence = false;
-              fenceChar = null;
-              fenceLength = 0;
-              fenceLanguage = "";
-            }
-
-            out.push(wrapHighlight("hl-fence", line));
-            continue;
-          }
-
-          if (inFence) {
-            if (line.length === 0) {
-              out.push(EMPTY_OVERLAY_LINE);
-            } else if (fenceLanguage) {
-              out.push(highlightCodeLine(line, fenceLanguage));
-            } else {
-              out.push(wrapHighlight("hl-md-code", line));
-            }
-            continue;
-          }
-
-          if (line.length === 0) {
-            out.push(EMPTY_OVERLAY_LINE);
-            continue;
-          }
-
-          const headingMatch = line.match(/^(\s{0,3})(#{1,6}\s+)(.*)$/);
-          if (headingMatch) {
-            out.push(escapeHtml(headingMatch[1] || "") + wrapHighlight("hl-heading", (headingMatch[2] || "") + (headingMatch[3] || "")));
-            continue;
-          }
-
-          const quoteMatch = line.match(/^(\s{0,3}>\s?)(.*)$/);
-          if (quoteMatch) {
-            out.push(wrapHighlight("hl-quote", quoteMatch[1] || "") + highlightInlineMarkdown(quoteMatch[2] || ""));
-            continue;
-          }
-
-          const listMatch = line.match(/^(\s*)([-*+]|\d+\.)(\s+)(.*)$/);
-          if (listMatch) {
-            out.push(
-              escapeHtml(listMatch[1] || "")
-              + wrapHighlight("hl-list", listMatch[2] || "")
-              + escapeHtml(listMatch[3] || "")
-              + highlightInlineMarkdown(listMatch[4] || ""),
-            );
-            continue;
-          }
-
-          out.push(highlightInlineMarkdown(line));
-        }
-
-        return out.join("<br>");
+        const source = String(text || "").replace(/\r\n/g, "\n");
+        const html = globalThis.hljs
+          ? globalThis.hljs.highlight(source, { language: "markdown", ignoreIllegals: true }).value
+          : escapeHtml(source);
+        // pre-wrap drops a trailing newline's empty line; keep the overlay as tall as the textarea.
+        return source.endsWith("\n") ? html + EMPTY_OVERLAY_LINE : html;
       }
 
       function highlightCode(text, language, annotationRenderMode) {
@@ -29015,6 +28717,7 @@
 
       function setAnnotationsEnabled(enabled, _options) {
         annotationsEnabled = Boolean(enabled);
+        document.body.classList.toggle("studio-annotations-hidden", !annotationsEnabled);
         persistAnnotationsEnabled(annotationsEnabled);
         updateAnnotationModeUi();
 
